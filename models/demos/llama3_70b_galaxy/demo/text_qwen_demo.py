@@ -141,7 +141,7 @@ def create_tt_qwen_model(
         dummy_weights=dummy_weights,
     )
     # When running running prefill-only profile, run just 1 layer
-    tt_model_args.n_layers = num_layers
+    tt_model_args.n_layers = num_layers if not prefill_profile else 1
 
     state_dict = tt_model_args.load_state_dict()
     page_table = None
@@ -453,7 +453,7 @@ def create_tt_qwen_model(
     "device_params",
     [
         {
-            "trace_region_size": 21925888,
+            "trace_region_size": 102000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             # "worker_l1_size": 1345000,
@@ -534,8 +534,8 @@ def test_qwen_demo_text(
         stop_at_eos = request.config.getoption("--stop_at_eos")
     print_outputs = True
 
-    enable_trace = False  # Use tracing for better perf
-    prefill_enable_trace = False  # repeat_batches > 1
+    enable_trace = True  # Use tracing for better perf
+    prefill_enable_trace = True
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 64 and instruct  # if using instruct weights it must be full model
     input_lengths = (
@@ -891,7 +891,7 @@ def test_qwen_demo_text(
             )
             if iteration > 0:
                 ttnn.event_synchronize(read_events.pop(0)[0])
-                tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
+                tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 

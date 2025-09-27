@@ -96,6 +96,7 @@ def test_qwen_model_ttt_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 2  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
+    # dtype = ttnn.bfloat16
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
