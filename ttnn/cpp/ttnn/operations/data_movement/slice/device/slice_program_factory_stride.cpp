@@ -103,21 +103,12 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     // Extract dimensions for N-dimensional tensors
     uint32_t tensor_rank = input_shape.rank();
 
-    // Create vectors for all dimensions
-    std::vector<uint32_t> input_dims(tensor_rank);
-    std::vector<uint32_t> output_dims(tensor_rank);
-    std::vector<uint32_t> slice_starts(tensor_rank);
-    std::vector<uint32_t> slice_ends(tensor_rank);
-    std::vector<uint32_t> slice_steps(tensor_rank);
-
-    // Fill dimension vectors
-    for (uint32_t i = 0; i < tensor_rank; ++i) {
-        input_dims[i] = input_shape[i];
-        output_dims[i] = output_shape[i];
-        slice_starts[i] = slice_start[i];
-        slice_ends[i] = slice_end[i];
-        slice_steps[i] = slice_step[i];
-    }
+    // Create vectors for all dimensions by copying from shapes
+    std::vector<uint32_t> input_dims(input_shape.cbegin(), input_shape.cend());
+    std::vector<uint32_t> output_dims(output_shape.cbegin(), output_shape.cend());
+    std::vector<uint32_t> slice_starts(slice_start.cbegin(), slice_start.cend());
+    std::vector<uint32_t> slice_ends(slice_end.cbegin(), slice_end.cend());
+    std::vector<uint32_t> slice_steps(slice_step.cbegin(), slice_step.cend());
 
     // For backward compatibility, extract specific 4D dimensions if needed
     uint32_t input_n = (tensor_rank >= 4) ? input_dims[tensor_rank - 4] : 1;
