@@ -653,9 +653,15 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
         coords.push_back(coord);
     }
-    DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
+    DeviceStorage device_storage(std::move(mesh_buffer), coords);
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(std::move(device_storage), tensor_spec, TensorTopology{});
+    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
+    for (size_t i = 0; i < device->shape().dims(); i++) {
+        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    }
+
+    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
+    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {

@@ -39,9 +39,9 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     std::vector<Tensor>& output_tensors,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -57,8 +57,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -138,11 +138,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     std::vector<uint32_t> writer_compile_args = {
-        src0_cb_index,              // cb0_id
-        num_pages_per_packet,       // packet_size_in_pages
+        src0_cb_index,                               // cb0_id
+        num_pages_per_packet,                        // packet_size_in_pages
         input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
-        num_targets_forward,        // num_targets_forward_direction
-        num_targets_backward,       // num_targets_backward_direction
+        num_targets_forward,                         // num_targets_forward_direction
+        num_targets_backward,                        // num_targets_backward_direction
     };
 
     if (!tilized) {
@@ -159,11 +159,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
     std::vector<uint32_t> mcast_forward_args(2, 0);
     std::vector<uint32_t> mcast_backward_args(2, 0);
-    if (forward_device.has_value()) {
+    if (forward_coord.has_value()) {
         mcast_forward_args[0] = 1;
         mcast_forward_args[1] = num_targets_forward;
     }
-    if (backward_device.has_value()) {
+    if (backward_coord.has_value()) {
         mcast_backward_args[0] = 1;
         mcast_backward_args[1] = num_targets_backward;
     }
@@ -249,24 +249,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             barrier_core.x,                                  // barrier_sem_noc0_x
             barrier_core.y                                   // barrier_sem_noc0_y
         };
-        auto num_connections = (int)forward_device.has_value() + (int)backward_device.has_value();
+        auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
         writer_rt_args.push_back(num_connections);
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 
-        const auto sender_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
         dst_nodes.reserve(num_connections);
-        if (forward_device.has_value()) {
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-            dst_nodes.push_back(forward_device_fabric_node_id);
+        if (forward_coord.has_value()) {
+            const auto forward_coord_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+            dst_nodes.push_back(forward_coord_fabric_node_id);
         }
-        if (backward_device.has_value()) {
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-            dst_nodes.push_back(backward_device_fabric_node_id);
+        if (backward_coord.has_value()) {
+            const auto backward_coord_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+            dst_nodes.push_back(backward_coord_fabric_node_id);
         }
 
         append_routing_plane_connection_manager_rt_args(
