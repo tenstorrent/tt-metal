@@ -131,35 +131,6 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None, user_id=0, start_pos=0):
-        """
-        Inputs are torch tensors or python types. This function returns ttnn
-        tensors on host.
-        """
-        host_inputs = self.prepare_inputs_prefill(
-            tokens,
-            start_pos=start_pos,
-            page_table=page_table,
-            chunk_page_table=chunk_page_table,
-            trace_enabled=True,
-            user_id=user_id,
-        )
-        return host_inputs
-
-    def transform_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table, user_id):
-        tt_tokens = self.embd(tokens)
-        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        return tt_tokens, tt_page_table, tt_chunk_page_table, user_id
-
-    def prepare_inputs_prefill(
-        self,
-        tokens,
-        start_pos=0,
-        page_table=None,
-        chunk_page_table=None,
-        trace_enabled=False,
-        user_id=0,
-    ):
         if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
             # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
             # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
@@ -185,7 +156,29 @@ class Transformer(LightweightModule):
             self.decode_sliding_mask_mat = None
             self.device_decode_sliding_mask = None
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None, user_id=0, start_pos=0):
+        """
+        Inputs are torch tensors or python types. This function returns ttnn
+        tensors on host.
+        """
+        host_inputs = self.prepare_inputs_prefill(
+            tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            user_id=user_id,
+        )
+        return host_inputs
+
+    def transform_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table, user_id):
+        tt_tokens = self.embd(tokens)
+        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        return tt_tokens, tt_page_table, tt_chunk_page_table, user_id
+
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, user_id=0
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
