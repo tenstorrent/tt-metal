@@ -12,6 +12,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
 from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
@@ -204,12 +205,19 @@ class TtTransformer(LightweightModule):
 
         # Slice the rot mats to the prefill seqlen
         if tt_rot_mats_prefill is None and self.tt_rot_mats_prefill is None:
-            tt_rot_mats_prefill = get_prefill_rot_mat(
-                self.args.head_dim,
-                self.args.max_seq_len,
-                self.mesh_device,
+            # tt_rot_mats_prefill = get_prefill_rot_mat(
+            #     self.args.head_dim,
+            #     self.args.max_seq_len,
+            #     self.mesh_device,
+            #     seq_len=self.args.max_seq_len,
+            #     scale_factor=self.args.rope_scaling_factor,
+            # )
+            tt_rot_mats_prefill = get_rot_mats(
+                head_dim=self.args.head_dim,
+                device=self.mesh_device,
                 seq_len=self.args.max_seq_len,
-                scale_factor=self.args.rope_scaling_factor,
+                theta=self.args.rope_theta,
+                rope_scaling=self.args.rope_scaling_factor,
             )
             self.tt_rot_mats_prefill = tt_rot_mats_prefill
         else:
