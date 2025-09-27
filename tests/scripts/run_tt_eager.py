@@ -20,9 +20,6 @@ from tests.scripts.common import (
     TestSuiteType,
     get_git_home_dir_str,
     filter_empty,
-    void_for_whb0,
-    void_for_gs,
-    void_for_bh,
 )
 from tests.scripts.cmdline_args import (
     get_tt_metal_arguments_from_cmdline_args,
@@ -33,7 +30,7 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
     TestEntry("tt_eager/tests/ops/test_bcast_op", "ops/test_bcast_op"),
     TestEntry("tt_eager/tests/ops/test_bmm_op", "ops/test_bmm_op"),
-    void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"))),
+    # void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"))),
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
     TestEntry(
@@ -47,7 +44,7 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
 )
 
 TT_EAGER_SLOW_DISPATCH_TEST_ENTRIES = (
-    void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu"))),
+    # void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_sfpu", "ops/test_sfpu"))),
 )
 
 

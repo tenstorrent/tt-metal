@@ -15,21 +15,6 @@ from operator import ne, truth
 from loguru import logger
 
 
-def is_blackhole():
-    ARCH_NAME = os.getenv("ARCH_NAME")
-    return "blackhole" in ARCH_NAME
-
-
-def is_wormhole_b0():
-    ARCH_NAME = os.getenv("ARCH_NAME")
-    return "wormhole_b0" in ARCH_NAME
-
-
-def is_grayskull():
-    ARCH_NAME = os.getenv("ARCH_NAME")
-    return "grayskull" in ARCH_NAME
-
-
 class TestSuiteType(Enum):
     BUILD_KERNELS_FOR_RISCV = auto()
     LLRT = auto()
@@ -40,18 +25,6 @@ class TestSuiteType(Enum):
 
 
 TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_params"], defaults=[""])
-
-
-def void_for_whb0(x):
-    return (not is_wormhole_b0()) and x or None
-
-
-def void_for_gs(x):
-    return (not is_grayskull()) and x or None
-
-
-def void_for_bh(x):
-    return (not is_blackhole()) and x or None
 
 
 def filter_empty(fn):
