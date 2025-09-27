@@ -78,16 +78,16 @@ def test_eltwise_exp(device):
 
     reader_kernel_descriptor = ttnn.KernelDescriptor(
         kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        source_type=ttnn.SourceType.FILE_PATH,
-        core_ranges=core_grid,        
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
         compile_time_args=reader_compile_time_args,
         runtime_args=[[reader_rt_args]],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer_kernel_descriptor = ttnn.KernelDescriptor(
         kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-        source_type=ttnn.SourceType.FILE_PATH,
-        core_ranges=core_grid,        
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_grid,
         compile_time_args=writer_compile_time_args,
         runtime_args=[[writer_rt_args]],
         config=ttnn.WriterConfigDescriptor(),
@@ -96,7 +96,7 @@ def test_eltwise_exp(device):
     sfpu_defines = [("SFPU_OP_EXP_INCLUDE", "1"), ("SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);")]
     compute_kernel_descriptor = ttnn.KernelDescriptor(
         kernel_source="tt_metal/kernels/compute/eltwise_sfpu.cpp",
-        #source_type=ttnn.SourceType.FILE_PATH, expecting this is the default value
+        # source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH, expecting this to be the default value
         core_ranges=core_grid,
         compile_time_args=compute_compile_time_args,
         defines=sfpu_defines,
