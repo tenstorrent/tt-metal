@@ -55,9 +55,6 @@ class TtLlamaMLP(LightweightModule):
         else:
             cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
 
-        w1_cache_name = cache_name("w1_sharded")
-        logger.info(f"cache_name in MLP: {w1_cache_name}")
-
         w1_w3_mem_config = self.model_config[
             "W1W3_RING_MEMCFG"
         ]  # args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
