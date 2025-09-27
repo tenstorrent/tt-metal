@@ -109,8 +109,8 @@ std::vector<Tensor> LerpBackwardOperation::invoke(
     const Tensor& weight,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result_1 =
-        ttnn::multiply(grad, ttnn::rsub(weight, 1.0, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
+    Tensor result_1 = ttnn::multiply(
+        grad, ttnn::rsub(weight, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_1);
     Tensor result_2 = ttnn::multiply(grad, weight, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(result_2);

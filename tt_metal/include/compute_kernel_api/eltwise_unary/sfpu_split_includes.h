@@ -64,8 +64,8 @@
 #include "compute_kernel_api/eltwise_unary/trigonometry.h"
 #endif
 
-#if SFPU_OP_REVERSE_FAMILY_INCLUDE
-#include "compute_kernel_api/eltwise_unary/reverseops.h"
+#if SFPU_OP_RSUB_INCLUDE
+#include "compute_kernel_api/eltwise_unary/rsub.h"
 #endif
 
 #if SFPU_OP_IDENTITY_INCLUDE
