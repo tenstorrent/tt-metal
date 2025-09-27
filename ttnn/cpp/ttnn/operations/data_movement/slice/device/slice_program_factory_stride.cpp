@@ -47,12 +47,7 @@ inline uint32_t calculate_total_output_rows(const ttnn::Shape& output_shape) {
     }
 
     // For N-dimensional tensors, calculate product of all dimensions except the last
-    uint32_t total_rows = 1;
-    for (int32_t i = 0; i < rank - 1; ++i) {
-        total_rows *= output_shape[i];
-    }
-
-    return total_rows;
+    return output_shape.volume() / output_shape[-1];
 }
 
 /**
