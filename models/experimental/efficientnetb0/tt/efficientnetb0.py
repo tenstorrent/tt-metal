@@ -5,13 +5,6 @@
 import ttnn
 import math
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class EfficientNetb0Conv2D:
     def __init__(
@@ -73,9 +66,6 @@ class EfficientNetb0Conv2D:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="EfficientNetb0Conv2D Start")
-
         [x, [out_h, out_w], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weights,
@@ -97,9 +87,6 @@ class EfficientNetb0Conv2D:
             return_output_dim=True,
             dtype=ttnn.bfloat8_b,
         )
-
-        if use_signpost:
-            signpost(header="EfficientNetb0Conv2D End")
 
         return x
 
@@ -225,9 +212,6 @@ class MBConvBlock:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="MBConvBlock Start")
-
         if not self.is_depthwise_first:
             x = self._expand_conv(x)
             x = x * ttnn.sigmoid_accurate(x)
@@ -257,8 +241,6 @@ class MBConvBlock:
 
         x = self._project_conv(x)
 
-        if use_signpost:
-            signpost(header="MBConvBlock End")
         return x
 
 
@@ -426,94 +408,70 @@ class Efficientnetb0:
         nhwc = ttnn.reallocate(nhwc)
         x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
 
-        if use_signpost:
-            signpost(header="_conv_stem")
         x = self._conv_stem(x)
 
         x = ttnn.swish(x)
-        if use_signpost:
-            signpost(header="_blocks0")
+
         x = self._blocks0(x)
 
-        if use_signpost:
-            signpost(header="_blocks1")
         x_1 = self._blocks1(x)
 
-        if use_signpost:
-            signpost(header="_blocks2")
         x = self._blocks2(x_1)
 
         x = ttnn.add(x, x_1)
         ttnn.deallocate(x_1)
-        if use_signpost:
-            signpost(header="_blocks3")
+
         x_3 = self._blocks3(x)
 
-        if use_signpost:
-            signpost(header="_blocks4")
         x = self._blocks4(x_3)
 
         x = x + x_3
         ttnn.deallocate(x_3)
-        if use_signpost:
-            signpost(header="_blocks5")
+
         x_5 = self._blocks5(x)
-        if use_signpost:
-            signpost(header="_blocks6")
+
         x = self._blocks6(x_5)
 
         x_7_in = x + x_5
         ttnn.deallocate(x_5)
-        if use_signpost:
-            signpost(header="_blocks7")
+
         x = self._blocks7(x_7_in)
 
         x = x_7_in + x
         ttnn.deallocate(x_7_in)
-        if use_signpost:
-            signpost(header="_blocks8")
+
         x_8 = self._blocks8(x)
 
-        if use_signpost:
-            signpost(header="_blocks9")
         x = self._blocks9(x_8)
 
         x_10_in = x + x_8
         ttnn.deallocate(x_8)
-        if use_signpost:
-            signpost(header="_blocks10")
+
         x = self._blocks10(x_10_in)
 
         x = x + x_10_in
         ttnn.deallocate(x_10_in)
-        if use_signpost:
-            signpost(header="_blocks11")
+
         x_11 = self._blocks11(x)
 
-        if use_signpost:
-            signpost(header="_blocks12")
         x = self._blocks12(x_11)
 
         x_13_in = x + x_11
         ttnn.deallocate(x_11)
-        if use_signpost:
-            signpost(header="_blocks13")
+
         x = self._blocks13(x_13_in)
 
         x_14_in = x + x_13_in
         ttnn.deallocate(x_13_in)
         ttnn.deallocate(x)
-        if use_signpost:
-            signpost(header="_blocks14")
+
         x = self._blocks14(x_14_in)
 
         x = x_14_in + x
         ttnn.deallocate(x_14_in)
-        if use_signpost:
-            signpost(header="_blocks15")
+
         x = self._blocks15(x)
-        if use_signpost:
-            signpost(header="_conv_head")
+
         x = self._conv_head(x)
 
         x = x * ttnn.sigmoid_accurate(x)
