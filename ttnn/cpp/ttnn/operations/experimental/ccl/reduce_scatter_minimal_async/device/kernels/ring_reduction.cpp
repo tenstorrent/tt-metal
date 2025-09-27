@@ -30,8 +30,8 @@ void MAIN {
         for (uint32_t i = 0; i < ring_size - 1; i++) {  // Don't reduce on the first slice
 
             for (uint32_t c = 0; c < input_tensor_C; c++) {
-                uint32_t tiles_read = start_tiles_read / input_tensor_C;
-                uint32_t tiles_to_read = start_tiles_to_read / input_tensor_C;
+                uint32_t tiles_read = start_tiles_read;
+                uint32_t tiles_to_read = start_tiles_to_read;
 
                 if constexpr (!direction) {
                     uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
