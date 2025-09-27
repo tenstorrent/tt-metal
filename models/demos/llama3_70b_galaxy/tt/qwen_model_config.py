@@ -40,7 +40,6 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     LlamaOptimizations,
     num_to_core_range_set,
     num_to_coregrid,
-    set_tg_attention_config,
 )
 
 
@@ -368,8 +367,8 @@ class TtQwenModelArgs(TtModelArgs):
                         1,
                         1,
                         32,
-                        self.dim_per_tp // num_cores_ln,
-                    ),  # (1, 1, 32, 2048 // num_cores_ln) originally
+                        1280 // num_cores_ln,
+                    ),
                     core_grid=ttnn.CoreRangeSet(
                         [
                             core_range,
@@ -578,7 +577,7 @@ class TtQwenModelArgs(TtModelArgs):
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
-                        per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        per_core_N=math.ceil(1280 / 32 / 5),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
                         fuse_batch=seq_len <= 2048,
@@ -904,7 +903,7 @@ class TtQwenModelArgs(TtModelArgs):
                 else ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
-                        self.hidden_dim // attn_input_grid.num_cores,
+                        self.dim // attn_input_grid.num_cores,
                     ),  # Shard shape: [32, 128] -> 1 shard per core
                     attn_input_grid,
                     ttnn.ShardStrategy.WIDTH,
@@ -995,9 +994,9 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
-                1,
-                32,
-                5120 // 4,
+                1,  # B
+                32,  # M
+                5120 // 4,  # K = 1280
                 3840,  # Use padded N
                 RING_SIZE,
             )
@@ -1041,7 +1040,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
             self.model_config["MUL_IN_MEMCFG"] = ttnn.create_sharded_memory_config(
                 # shape=(32, 3584 // 28),  # Use padded K
-                shape=(32, 3200 // 28),  # Use padded K
+                shape=(32, 3840 // 28),  # Use padded K
                 core_grid=mul_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1070,7 +1069,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
             LM_HEAD_RING_SIZE = 24
             # self.lm_head_shape = (self.dim // 4, 151936 // 8)
-            self.lm_head_shape = (6144 // 4, 24576)
+            self.lm_head_shape = (6144 // 4, 155648 // 8)
 
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
@@ -1127,7 +1126,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
             self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 # shape=(32, 16896 // LM_HEAD_RING_SIZE),  # padded shape
-                shape=(32, 24576 // LM_HEAD_RING_SIZE),  # padded shape
+                shape=(32, 19968 // LM_HEAD_RING_SIZE),  # padded shape
                 core_grid=lm_head_ring_core_output_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1146,7 +1145,8 @@ class TtQwenModelArgs(TtModelArgs):
                 # self.dim // 4,
                 6144 // 4,
                 # 16896,  # use padded shape
-                19200,
+                # 155648 // 8,
+                19968,
                 LM_HEAD_RING_SIZE,
                 prefetch=False,
             )
@@ -1922,10 +1922,8 @@ class TtQwenModelArgs(TtModelArgs):
         out_block_w = N // num_cores // ttnn.TILE_SIZE  # 24
 
         num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1  # 1
-        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 25
-        num_blocks_total = num_blocks_y * num_blocks_x  # 25
-
-        print(num_blocks_total, num_cores)
+        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1  # 24
+        num_blocks_total = num_blocks_y * num_blocks_x  # 24
 
         if num_blocks_total != num_cores:
             assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
