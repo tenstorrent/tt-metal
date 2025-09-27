@@ -140,15 +140,24 @@ void kernel_main() {
 
             uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
-
-            uint32_t input_pages_read_in_row = start_pages_read_in_row;
-            uint32_t input_row_offset = start_row_offset;
-
-            uint32_t intermediate_pages_read_in_row = input_pages_read_in_row;
-            uint32_t intermediate_row_offset = input_row_offset;
             for (uint32_t c = 0; c < input_tensor_C; ++c) {
-                uint32_t tiles_read = start_tiles_read / input_tensor_C;
-                uint32_t tiles_to_read = start_tiles_to_read / input_tensor_C;
+                if (c != 0) {
+                    input_tile_id_start += batch_num_pages / input_tensor_C;
+                    intermediate_tile_id_start += batch_num_pages / input_tensor_C;
+                }
+
+                // if (my_chip_id == 0) {
+                //     DPRINT << c << ": " << input_tile_id_start << ENDL();
+                // }
+
+                uint32_t input_pages_read_in_row = start_pages_read_in_row;
+                uint32_t input_row_offset = start_row_offset;
+
+                uint32_t intermediate_pages_read_in_row = input_pages_read_in_row;
+                uint32_t intermediate_row_offset = input_row_offset;
+
+                uint32_t tiles_read = start_tiles_read;
+                uint32_t tiles_to_read = start_tiles_to_read;
 
                 if constexpr (!direction) {
                     uint32_t backwards_offset = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
@@ -191,6 +200,9 @@ void kernel_main() {
                     uint32_t l1_write_addr = get_write_ptr(cb_in0);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
+                        // if (my_chip_id == 0) {
+                        //     DPRINT << c << "-" << tile_id << ENDL();
+                        // }
                         uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
                         noc_async_read(noc_read_addr, l1_write_addr, page_size);
                         l1_write_addr += page_size;
