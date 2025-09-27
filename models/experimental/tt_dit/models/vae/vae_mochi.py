@@ -178,25 +178,21 @@ class ResBlock:
             },
         }
         self.num_out_blocks_map = {
-            # small latent, medium latent, large latent
+            # small latent, large latent
             768: {
-                30 * 53: 2,
-                40 * 76: 4,
+                40 * 50: 2,
                 60 * 106: 8,
             },
             512: {
-                60 * 106: 3,
-                80 * 152: 5,
+                80 * 100: 4,
                 120 * 212: 10,
             },
             256: {
-                120 * 212: 10,
-                160 * 304: 20,
+                160 * 200: 15,
                 240 * 424: 40,
             },
             128: {
-                240 * 424: 35,
-                320 * 608: 70,
+                320 * 400: 50,
                 480 * 848: 140,
             },
         }
@@ -494,13 +490,6 @@ class CausalUpsampleBlock:
         padding_mode: str = "replicate",
         bias: bool = True,
     ):
-        self.reshard_time_map = {
-            # small latent, medium latent, large,latent
-            512: 82,
-            256: 163,
-            128: 163,
-        }
-
         assert causal
         assert not prune_bottleneck
         assert not has_attention
@@ -572,12 +561,13 @@ class CausalUpsampleBlock:
 
             return x_NTHWC
 
-    def reshard_output(self, x_NTHWC):
+    def reshard_output(self, x_NTHWC, input_T):
         if self.parallel_config.time_parallel.factor > 1 and self.temporal_expansion > 1 and self.temporal_offset > 0:
             HW = x_NTHWC.shape[2] * x_NTHWC.shape[3]
             C = x_NTHWC.shape[4]
             num_devices = self.parallel_config.time_parallel.factor
-            padded_T = ((self.reshard_time_map[C] + num_devices - 1) // num_devices) * num_devices
+            expected_T = input_T * self.temporal_expansion - self.temporal_offset
+            padded_T = ((expected_T + num_devices - 1) // num_devices) * num_devices
             x_NTHWC = ttnn.squeeze(x_NTHWC, 0)
             x_NTHWC = vae_slice_reshard(
                 self.ccl_manager,
@@ -591,12 +581,13 @@ class CausalUpsampleBlock:
         return x_NTHWC
 
     def __call__(self, x_NTHWC):
+        N, T, H, W, C = x_NTHWC.shape
         for block in self.blocks:
             x_NTHWC = block(x_NTHWC)
         x_NTHWO = self.proj(x_NTHWC)
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
         ttnn.deallocate(x_NTHWO)
-        x_NTHWC = self.reshard_output(x_NTHWC)
+        x_NTHWC = self.reshard_output(x_NTHWC, T)
         return x_NTHWC
 
 

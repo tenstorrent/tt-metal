@@ -176,22 +176,17 @@ def create_random_resblock_models(mesh_device, parallel_config, ccl_manager, in_
     "N, C, T, H, W",
     [
         # small latent
-        (1, 768, 28, 30, 53),  # 28 -> 32
-        (1, 512, 82, 60, 106),  # 82 -> 88
-        (1, 256, 163, 120, 212),  # 163 -> 168
-        (1, 128, 163, 240, 424),  # 163 -> 168
-        # medium latent
-        (1, 768, 28, 40, 76),  # 28 -> 32
-        (1, 512, 82, 80, 152),  # 82 -> 88
-        (1, 256, 163, 160, 304),  # 163 -> 168
-        (1, 128, 163, 360, 608),  # 163 -> 168
+        (1, 768, 28, 40, 50),
+        (1, 512, 84, 80, 100),
+        (1, 256, 168, 160, 200),
+        (1, 128, 168, 320, 400),
         # large latent
-        (1, 768, 28, 60, 106),  # 28 -> 32
-        (1, 512, 82, 120, 212),  # 82 -> 88
-        (1, 256, 163, 240, 424),  # 163 -> 168
-        (1, 128, 163, 480, 848),  # 163 -> 168
+        (1, 768, 28, 60, 106),
+        (1, 512, 84, 120, 212),
+        (1, 256, 168, 240, 424),
+        (1, 128, 168, 480, 848),
     ],
-    ids=["s768", "s512", "s256", "s128", "m768", "m512", "m256", "m128", "l768", "l512", "l256", "l128"],
+    ids=["s768", "s512", "s256", "s128", "l768", "l512", "l256", "l128"],
 )
 @pytest.mark.parametrize("num_links", [4, 1], ids=["4links", "1link"])
 @vae_device_config
@@ -295,7 +290,7 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     for i in range(T):
         ref_output_slice = ref_output[:, :, i, :, :]
         tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
-        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.999)
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.9998)
 
 
 def create_random_causalupsampleblock_models(
@@ -336,6 +331,7 @@ def create_random_causalupsampleblock_models(
     return reference_model, tt_model
 
 
+# Test case configurations for different input sizes
 @pytest.mark.parametrize(
     "config",
     [
@@ -373,8 +369,42 @@ def create_random_causalupsampleblock_models(
             "input_shape": [1, 256, 168, 240, 424],
             "expected_output_shape": (1, 128, 168, 480, 848),
         },
+        # small latent
+        # First upsample block (768->512)
+        {
+            "name": "block1_768-512",
+            "in_channels": 768,
+            "out_channels": 512,
+            "num_res_blocks": 6,
+            "temporal_expansion": 3,
+            "spatial_expansion": 2,
+            "input_shape": [1, 768, 28, 40, 50],
+            "expected_output_shape": (1, 512, 84, 80, 100),
+        },
+        # Second upsample block (512->256)
+        {
+            "name": "block2_512-256",
+            "in_channels": 512,
+            "out_channels": 256,
+            "num_res_blocks": 4,
+            "temporal_expansion": 2,
+            "spatial_expansion": 2,
+            "input_shape": [1, 512, 84, 80, 100],
+            "expected_output_shape": (1, 256, 168, 160, 200),
+        },
+        # Third upsample block (256->128)
+        {
+            "name": "block3_256-128",
+            "in_channels": 256,
+            "out_channels": 128,
+            "num_res_blocks": 3,
+            "temporal_expansion": 1,
+            "spatial_expansion": 2,
+            "input_shape": [1, 256, 168, 160, 200],
+            "expected_output_shape": (1, 128, 168, 320, 400),
+        },
     ],
-    ids=["l768", "l512", "l256"],
+    ids=["l768", "l512", "l256", "s768", "s512", "s256"],
 )
 @pytest.mark.parametrize("num_links", [4, 1], ids=["4links", "1link"])
 @vae_device_config
@@ -500,7 +530,7 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     for i in range(T * temporal_expansion - temporal_offset):
         ref_output_slice = ref_output[:, :, i, :, :]
         tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
-        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.989)
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.9995)
 
 
 def create_decoder_models(
@@ -552,6 +582,23 @@ def create_decoder_models(
 # Test case configurations for different input sizes
 decoder_test_configs = [
     {
+        "name": "small_latent",
+        "input_shape": [1, 12, 28, 40, 50],
+        "out_channels": 3,
+        "base_channels": 128,
+        "channel_multipliers": [1, 2, 4, 6],
+        "temporal_expansions": [1, 2, 3],
+        "spatial_expansions": [2, 2, 2],
+        "num_res_blocks": [3, 3, 4, 6, 3],
+        "latent_dim": 12,
+        "has_attention": [False, False, False, False, False],
+        "output_norm": False,
+        "nonlinearity": "silu",
+        "output_nonlinearity": "silu",
+        "causal": True,
+        # Expected output will be approximately: (1, 3, 168, 320, 400)
+    },
+    {
         "name": "large_latent",
         "input_shape": [1, 12, 28, 60, 106],
         "out_channels": 3,
@@ -566,7 +613,7 @@ decoder_test_configs = [
         "nonlinearity": "silu",
         "output_nonlinearity": "silu",
         "causal": True,
-        # Expected output will be approximately: (1, 3, 163, 480, 848)
+        # Expected output will be approximately: (1, 3, 168, 480, 848)
     },
 ]
 
@@ -704,6 +751,6 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
     for i in range(ref_output.shape[2]):
         ref_output_slice = ref_output[:, :, i, :, :]
         tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
-        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.99)
+        assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.995)
 
         logger.info("assert quality")
