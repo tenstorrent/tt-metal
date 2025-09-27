@@ -130,9 +130,7 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-    def prepare_prefill_inputs_host(
-        self, tokens, page_table=None, chunk_page_table=None, user_id=0, start_pos=0, prefill_seq_len=None
-    ):
+    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None, user_id=0, start_pos=0):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
@@ -144,7 +142,6 @@ class Transformer(LightweightModule):
             chunk_page_table=chunk_page_table,
             trace_enabled=True,
             user_id=user_id,
-            prefill_seq_len=prefill_seq_len,
         )
         return host_inputs
 
@@ -161,7 +158,6 @@ class Transformer(LightweightModule):
         chunk_page_table=None,
         trace_enabled=False,
         user_id=0,
-        prefill_seq_len=None,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -194,9 +190,8 @@ class Transformer(LightweightModule):
             trace_enabled and self.tt_rot_mats_prefill_global is None
         ):  # currently, this only covers the case where we don't have chunked_prefill, so start_pos is always 0
             self.tt_rot_mats_prefill_global = [
-                self.rope_setup.cos_matrix[
-                    :, :, start_pos : start_pos + self.args.max_seq_len, :
-                ],  # ovo nije fiksno, ali mora da bude fiksne velicine da spadne u sve opsege u kojima ce trace da se radi
+                self.rope_setup.cos_matrix[:, :, start_pos : start_pos + self.args.max_seq_len, :],
+                # ovo nije fiksno, ali mora da bude fiksne velicine da spadne u sve opsege u kojima ce trace da se radi
                 self.rope_setup.sin_matrix[:, :, start_pos : start_pos + self.args.max_seq_len, :],
             ]
         else:
