@@ -52,6 +52,7 @@ jobs:
           - name: debug_tools and device and dispatch
             cmd: |
               ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER
+              ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_device --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
           - name: llk

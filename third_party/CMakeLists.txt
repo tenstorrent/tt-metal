@@ -342,3 +342,8 @@ CPMAddPackage(
         "CMAKE_CXX_EXTENSIONS ON"
     CUSTOM_CACHE_KEY "1_2_0_patched"
 )
+
+if(capnproto_ADDED)
+    target_compile_options(kj-async PRIVATE -Wno-deprecated-this-capture)
+    target_compile_options(kj-http PRIVATE -Wno-deprecated-this-capture)
+endif()
