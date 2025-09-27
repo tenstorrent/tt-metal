@@ -9,18 +9,24 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
 from models.common.utility_functions import skip_for_n_dev, skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
+def ti_cond_skip(condition, reason):
+    if condition:
+        pytest.skip("Skipping unsupported case: " + reason)
+
+
 def validate_test(num_devices, topology, shape, cluster_axis):
-    if 1 == num_devices:
-        pytest.skip("Can't run a CCL test on 1 device")
-    if (2 == num_devices) and (topology == ttnn.Topology.Ring):
-        pytest.skip("Test_Infrastructure_Skip: Ring configuration requires more than 2 devices")
-    if (shape[cluster_axis] != num_devices) and (topology == ttnn.Topology.Ring):
-        pytest.skip("Test_Infrastructure_Skip: Ring configuration requires the entire row or column so it loops around")
-    if shape[cluster_axis] < num_devices:
-        pytest.skip("Test_Infrastructure_Skip: Test requires more devices than are available on this platform")
+    ti_cond_skip((1 == num_devices), "Can't run a CCL test on 1 device")
+    ti_cond_skip(
+        ((2 == num_devices) and (topology == ttnn.Topology.Ring)), "Ring configuration requires more than 2 devices"
+    )
+    ti_cond_skip(
+        ((shape[cluster_axis] != num_devices) and (topology == ttnn.Topology.Ring)),
+        "Ring configuration requires the entire row or column so it loops around",
+    )
+    ti_cond_skip((shape[cluster_axis] < num_devices), "Test requires more devices than are available on this platform")
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
@@ -127,7 +133,7 @@ def test_all_gather_linear_2D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(
@@ -236,7 +242,7 @@ def test_all_gather_linear_4D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1_link", "2_links"])
 @pytest.mark.parametrize(

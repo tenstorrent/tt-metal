@@ -411,7 +411,7 @@ def test_all_gather_only(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This is a blackhole test")
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [

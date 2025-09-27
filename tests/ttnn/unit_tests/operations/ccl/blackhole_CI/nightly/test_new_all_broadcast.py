@@ -233,7 +233,7 @@ def run_all_broadcast_impl(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: Test_Infrastructure_Skip: test is for blackhole only")
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
@@ -284,7 +284,7 @@ def test_all_broadcast(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: Test_Infrastructure_Skip: test is for blackhole only")
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
@@ -335,7 +335,7 @@ def test_all_broadcast_trace(
     )
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: Test_Infrastructure_Skip: test is for blackhole only")
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize(
     "num_devices, output_shape, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [

@@ -117,7 +117,7 @@ def test_all_gather_2d(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
@@ -214,7 +214,7 @@ def test_all_gather_2D_line(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",
@@ -311,7 +311,7 @@ def test_all_gather_4D_line(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout",
@@ -408,7 +408,7 @@ def test_all_gather_ring(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(7)
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout",

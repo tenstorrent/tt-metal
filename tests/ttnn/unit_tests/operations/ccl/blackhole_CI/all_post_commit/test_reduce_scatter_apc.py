@@ -95,7 +95,7 @@ def test_rs_row_2d(
 ):
     if bh_2d_mesh_device.shape[0] != 1 and bh_2d_mesh_device.shape[1] != 1:
         pytest.skip("2D dynamic requires one dimension to be 1")
-    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
+    validate_test(num_devices, rs_topology, bh_2d_mesh_device.shape, 0)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_reduce_scatter_impl(
@@ -119,7 +119,7 @@ def test_rs_row_2d(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(1)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
@@ -217,7 +217,7 @@ def test_rs_row_2D_nightly_linear(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
@@ -315,7 +315,7 @@ def test_rs_row_4D_nightly_linear(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
@@ -414,7 +414,7 @@ def test_rs_row_nightly_ring(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("Test_Infrastructure_Skip: This test is for blackhole")
+@skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(7)
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
 @pytest.mark.parametrize(
