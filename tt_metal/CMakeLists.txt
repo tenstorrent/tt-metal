@@ -15,6 +15,8 @@ set_target_properties(
             Metalium
 )
 
+target_link_options(tt_metal PRIVATE "LINKER:-Bsymbolic")
+
 include(flatbuffers)
 GENERATE_FBS_HEADER(
     api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs
@@ -188,7 +190,7 @@ target_include_directories(
     PRIVATE
         api/tt-metalium # FIXME: Re-home the tests and remove this
 )
-target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
+target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast -fno-semantic-interposition)
 add_dependencies(tt_metal hw_toolchain)
 
 set_target_properties(
