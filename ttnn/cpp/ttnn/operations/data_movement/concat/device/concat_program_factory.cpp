@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include <algorithm>
@@ -312,10 +313,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
     auto input_0_stride = output_stick_size - input_0_stick_size;
     auto input_1_stride = output_stick_size - input_1_stick_size;
     uint32_t num_output_rows_per_core = input_tensors[0].shard_spec().value().shape[0];
-    auto num_pages_per_risc = div_up(num_output_rows_per_core, 2);
+    auto num_pages_per_risc = ttsl::math::div_up(num_output_rows_per_core, 2);
 
     uint32_t num_output_rows_per_core_last = num_output_rows % num_output_rows_per_core;
-    auto num_pages_per_risc_last = div_up(num_output_rows_per_core_last, 2);
+    auto num_pages_per_risc_last = ttsl::math::div_up(num_output_rows_per_core_last, 2);
 
     std::vector<uint32_t> compile_time_args_0 = {
         cb_dst_id,
@@ -492,8 +493,8 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     uint32_t curr_input_write_offset = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto shard_spec = input_tensors[input_id].shard_spec().value();
-        input_num_pages_per_stick[input_id] = div_up(shard_spec.shape[1], elements_per_page_width);
-        input_num_sticks[input_id] = div_up(shard_spec.shape[0], elements_per_page_height);
+        input_num_pages_per_stick[input_id] = ttsl::math::div_up(shard_spec.shape[1], elements_per_page_width);
+        input_num_sticks[input_id] = ttsl::math::div_up(shard_spec.shape[0], elements_per_page_height);
         input_write_offsets[input_id] = curr_input_write_offset;
 
         const uint32_t input_num_pages = input_num_pages_per_stick[input_id] * input_num_sticks[input_id];
@@ -509,8 +510,8 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
 
     // Output CB
     const auto output_shard_spec = output.shard_spec().value();
-    const uint32_t output_num_pages_per_stick = div_up(output_shard_spec.shape[1], elements_per_page_width);
-    const uint32_t output_num_sticks = div_up(output_shard_spec.shape[0], elements_per_page_height);
+    const uint32_t output_num_pages_per_stick = ttsl::math::div_up(output_shard_spec.shape[1], elements_per_page_width);
+    const uint32_t output_num_sticks = ttsl::math::div_up(output_shard_spec.shape[0], elements_per_page_height);
     const tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(
             page_size * output_num_sticks * output_num_pages_per_stick, {{cb_dst_id, cb_data_format}})
@@ -524,7 +525,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-        const auto input_num_sticks_per_risc = div_up(input_num_sticks[input_id], 2);
+        const auto input_num_sticks_per_risc = ttsl::math::div_up(input_num_sticks[input_id], 2);
         runtime_args_0.push_back(input_num_pages_per_stick[input_id]);
         runtime_args_0.push_back(input_num_sticks_per_risc);
         runtime_args_0.push_back(input_write_offsets[input_id]);
@@ -616,7 +617,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
     auto input_cores = input_tensors[0].shard_spec().value().grid;
-    uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
+    uint32_t num_output_rows_per_core = ttsl::math::div_up(num_output_rows, input_cores.num_cores());
 
     uint32_t core_id = 0;
     for (auto core : cores) {
@@ -658,7 +659,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
             auto input_cores = input_tensors[0].shard_spec().value().grid;
             uint32_t num_output_rows = output_tensors[0].padded_shape()[-1];
-            uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
+            uint32_t num_output_rows_per_core = ttsl::math::div_up(num_output_rows, input_cores.num_cores());
             for (auto core : cores) {
                 uint32_t curr_num_input_tensors;
                 uint32_t curr_num_output_rows;

@@ -10,8 +10,6 @@
 
 #include <optional>
 
-#include <tt-metalium/math.hpp>
-
 namespace ttnn::operations::experimental::auto_format {
 
 struct FormatParams {

@@ -40,7 +40,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "mesh_device.hpp"
 #include "program_device_map.hpp"
 #include "tt-metalium/program.hpp"
@@ -577,7 +577,7 @@ BatchedTransfers assemble_runtime_args_commands(
                         constants.max_prefetch_command_size,
                         constants.packed_write_max_unicast_sub_cmds,
                         false);
-                command_count += div_up(num_sub_cmds, max_packed_cmds);
+                command_count += ttsl::math::div_up(num_sub_cmds, max_packed_cmds);
             }
         }
     }
@@ -651,7 +651,7 @@ BatchedTransfers assemble_runtime_args_commands(
                             constants.max_prefetch_command_size,
                             constants.packed_write_max_unicast_sub_cmds,
                             true);
-                    command_count += div_up(num_sub_cmds, max_packed_cmds);
+                    command_count += ttsl::math::div_up(num_sub_cmds, max_packed_cmds);
                 } else {
                     uint32_t num_sub_cmds = kernel->logical_coreranges().size();
                     uint32_t max_packed_cmds =
@@ -660,7 +660,7 @@ BatchedTransfers assemble_runtime_args_commands(
                             constants.max_prefetch_command_size,
                             constants.packed_write_max_unicast_sub_cmds,
                             true);
-                    command_count += div_up(num_sub_cmds, max_packed_cmds);
+                    command_count += ttsl::math::div_up(num_sub_cmds, max_packed_cmds);
                 }
             }
         }

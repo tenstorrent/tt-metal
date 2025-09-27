@@ -6,6 +6,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/device/all_gather_command_processor_async_op.hpp"
 #include <tt-metalium/fabric.hpp>
@@ -176,7 +177,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
         num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
     } else if (topology == ccl::Topology::Ring) {
         // TODO: Commonize
-        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_forward = ttsl::math::div_up(ring_size - 1, 2);
         num_targets_backward = ring_size - 1 - num_targets_forward;
         if (ring_index % 2 == 0) {
             std::swap(num_targets_forward, num_targets_backward);

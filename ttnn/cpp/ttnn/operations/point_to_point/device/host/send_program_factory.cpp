@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
@@ -48,7 +49,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     // Note this ID is hardcoded in the reader kernel
     constexpr auto sender_cb_id = tt::CBIndex::c_0;
     constexpr auto cb_num_pages = 2;
-    const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
+    const uint32_t aligned_input_page_size_bytes = ttsl::math::round_up(input_page_size_bytes, l1_alignment);
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_sender_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * aligned_input_page_size_bytes, {{sender_cb_id, input_dataformat}})

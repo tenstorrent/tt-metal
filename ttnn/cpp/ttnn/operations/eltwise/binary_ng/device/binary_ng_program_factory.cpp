@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -145,8 +146,8 @@ public:
         auto tile_width = tensor.tensor_spec().tile().get_width();
 
         shard_shape = {
-            tt::round_up(shard_spec.shape[0], tile_height) / tile_height,
-            tt::round_up(shard_spec.shape[1], tile_width) / tile_width};
+            ttsl::math::round_up(shard_spec.shape[0], tile_height) / tile_height,
+            ttsl::math::round_up(shard_spec.shape[1], tile_width) / tile_width};
 
         TT_FATAL(
             shard_shape[0] != 0 and shard_shape[1] != 0,
@@ -157,8 +158,8 @@ public:
         const auto [D, N, C, Ht, Wt] = get_shape_dims(tensor);
         const auto unrolled_Ht = D * N * C * Ht;
         last_shard_shape = {
-            shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
-            shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
+            shard_shape[0] - (ttsl::math::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
+            shard_shape[1] - (ttsl::math::round_up(Wt, shard_shape[1]) - Wt),
         };
     }
     std::array<uint32_t, 2> operator()(CoreCoord core) const {

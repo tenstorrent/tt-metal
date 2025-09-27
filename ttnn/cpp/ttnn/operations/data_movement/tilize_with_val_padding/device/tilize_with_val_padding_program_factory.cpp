@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+#include <tt_stl/math.hpp>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -352,7 +353,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
 
     uint32_t total_num_rows = a.logical_shape()[-2];
 
-    if (output.padded_shape()[-2] > tt::round_up(total_num_rows, tile_height)) {
+    if (output.padded_shape()[-2] > ttsl::math::round_up(total_num_rows, tile_height)) {
         total_num_rows = output.padded_shape()[-2];
     }
 

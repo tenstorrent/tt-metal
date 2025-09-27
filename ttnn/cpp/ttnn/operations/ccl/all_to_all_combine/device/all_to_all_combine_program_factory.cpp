@@ -6,6 +6,7 @@
 #include <vector>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
@@ -161,8 +162,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     // perform work-split across cores
     uint32_t tokens_per_device = batch_size * seq_size;
-    uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
-    uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
+    uint32_t tokens_per_core = ttsl::math::div_up(tokens_per_device, num_links);
+    uint32_t num_cores = std::min(num_links, ttsl::math::div_up(tokens_per_device, tokens_per_core));
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
         subdevice_cores.at(0), num_cores, operation_attributes.worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);

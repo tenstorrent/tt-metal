@@ -13,7 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 
 namespace ttnn::operations::grid_sample {
 
@@ -75,7 +75,7 @@ static uint32_t get_aligned_stick_size(const ttnn::Shape& shape, const Tensor& t
     const uint32_t alignment = tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                    ? tt::tt_metal::hal::get_dram_alignment()
                                    : tt::tt_metal::hal::get_l1_alignment();
-    return tt::round_up(stick_nbytes, alignment);
+    return ttsl::math::round_up(stick_nbytes, alignment);
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "transpose_op.hpp"
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -148,7 +149,7 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
                 break;
             } else {
                 uint32_t C = output_shape[1];
-                uint32_t C_p = tt::round_up(C, input_tensor.tensor_spec().tile().get_height());
+                uint32_t C_p = ttsl::math::round_up(C, input_tensor.tensor_spec().tile().get_height());
                 uint32_t H = output_shape[2];
                 output_shape[1] = H;
                 output_shape[2] = C;

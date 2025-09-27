@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_op.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -67,8 +68,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
         packed_fill_value = std::bit_cast<uint32_t>(fill_value);
     }
 
-    uint32_t padded_height = tt::div_up(height, tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
-    uint32_t padded_width = tt::div_up(width, tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    uint32_t padded_height = ttsl::math::div_up(height, tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
+    uint32_t padded_width = ttsl::math::div_up(width, tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
     uint32_t tiles_per_2d_tensor =
         padded_height / tt::constants::TILE_HEIGHT * padded_width / tt::constants::TILE_HEIGHT;
     uint32_t tiles_per_tile_row = padded_width / tt::constants::TILE_HEIGHT;

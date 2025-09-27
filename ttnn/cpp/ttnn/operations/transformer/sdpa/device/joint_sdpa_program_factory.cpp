@@ -11,7 +11,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt_stl/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
@@ -54,10 +54,10 @@ operation::ProgramWithCallbacks joint_sdpa(
     const uint32_t L = joint_q_shape[2];
 
     // Calculate padded sequence length
-    const uint32_t padded_Nq = tt::round_up(N, q_chunk_size);
-    const uint32_t padded_Nk = tt::round_up(N, k_chunk_size);
-    const uint32_t padded_Lq = tt::round_up(L, q_chunk_size);
-    const uint32_t padded_Lk = tt::round_up(L, k_chunk_size);
+    const uint32_t padded_Nq = ttsl::math::round_up(N, q_chunk_size);
+    const uint32_t padded_Nk = ttsl::math::round_up(N, k_chunk_size);
+    const uint32_t padded_Lq = ttsl::math::round_up(L, q_chunk_size);
+    const uint32_t padded_Lk = ttsl::math::round_up(L, k_chunk_size);
 
     const uint32_t padded_Nqt = padded_Nq / TILE_HEIGHT;
     const uint32_t padded_Nkt = padded_Nk / TILE_HEIGHT;
@@ -65,8 +65,8 @@ operation::ProgramWithCallbacks joint_sdpa(
     const uint32_t padded_Lkt = padded_Lk / TILE_HEIGHT;
 
     // Find unpadded sequence lengths in tiles
-    const uint32_t valid_Nt = tt::div_up(N, TILE_HEIGHT);
-    const uint32_t valid_Lt = tt::div_up(L, TILE_HEIGHT);
+    const uint32_t valid_Nt = ttsl::math::div_up(N, TILE_HEIGHT);
+    const uint32_t valid_Lt = ttsl::math::div_up(L, TILE_HEIGHT);
 
     // Compute kernel operates on concatenated Q and K
     const uint32_t cat_Sq = padded_Nq + padded_Lq;
@@ -175,9 +175,9 @@ operation::ProgramWithCallbacks joint_sdpa(
     log_debug(tt::LogOp, "q_parallel_factor: {}", q_parallel_factor);
 
     // Ceiling divide to allow for non-perfect divisions
-    const uint32_t batch_per_core = tt::div_up(B, batch_parallel_factor);
-    const uint32_t nh_per_core = tt::div_up(NH, nh_parallel_factor);
-    const uint32_t q_per_core = tt::div_up(q_num_chunks, q_parallel_factor);
+    const uint32_t batch_per_core = ttsl::math::div_up(B, batch_parallel_factor);
+    const uint32_t nh_per_core = ttsl::math::div_up(NH, nh_parallel_factor);
+    const uint32_t q_per_core = ttsl::math::div_up(q_num_chunks, q_parallel_factor);
 
     const uint32_t q_buffer_factor = (q_per_core > 1) ? 2 : 1;
 

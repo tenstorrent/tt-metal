@@ -16,7 +16,7 @@
 #include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
+#include <tt_stl/math.hpp>
 #include "tile.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
@@ -123,7 +123,7 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
     uint32_t num_float_in_tile = subtiles_in_tile_row * subtiles_in_tile_col * subtile_rows * subtile_cols;
     uint32_t fp32_element_index = 0;
 
-    uint32_t num_exp_words = tt::round_up(num_faces * face_H, l1_alignment) / num_exps_in_dword;
+    uint32_t num_exp_words = ttsl::math::round_up(num_faces * face_H, l1_alignment) / num_exps_in_dword;
     uint32_t num_tile_words = tile_HW / num_elements_in_dword;
     int num_bfp_dwords_in_tile = num_tile_words + num_exp_words;
     int num_dwords_per_row = subtile_cols / num_elements_in_dword;

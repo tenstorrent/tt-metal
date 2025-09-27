@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <tt_stl/math.hpp>
 #include "chunk.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -21,7 +22,7 @@ std::vector<ttnn::Tensor> ChunkOperation::invoke(const ttnn::Tensor& input_tenso
         num_dims > dim, "... Invalid dimension for chunk operation, {} needs to be greater than {}", num_dims, dim);
 
     int size_along_dim = size[dim];
-    int chunk_size = tt::div_up(size_along_dim, num_chunks);
+    int chunk_size = ttsl::math::div_up(size_along_dim, num_chunks);
 
     std::vector<ttnn::Tensor> chunks;
     int start = 0;
