@@ -30,7 +30,7 @@ bool use_composite_reduce_scatter(
     }
 
     // Use composite if scattering on a dim that isn't 2 or 3
-    if (scatter_dim != 2 && scatter_dim != 3) {
+    if (scatter_dim != 1 && scatter_dim != 2 && scatter_dim != 3) {
         return true;
     }
 

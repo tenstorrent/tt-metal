@@ -244,8 +244,12 @@ void kernel_main() {
                     tile_id_start = actual_slice_idx * slice_Wt;
                 } else if constexpr (dim == 2) {
                     tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
+                } else if constexpr (dim == 1) {
+                    tile_id_start = actual_slice_idx * input_channel_num_pages * slice_C;
+                } else {
+                    ASSERT(false);
                 }
-                for (uint32_t c = 0; c < input_tensor_C; ++c) {
+                for (uint32_t c = 0; c < slice_C; ++c) {
                     uint32_t pages_read_in_row = start_pages_read_in_row;
                     uint32_t row_offset = start_row_offset;
 
@@ -383,9 +387,9 @@ void kernel_main() {
                 noc_async_writes_flushed();
             } else {
                 // Otherwise, on the last slice, write it to output buffer
-                constexpr uint32_t output_channel_num_pages = batch_slice_num_pages / input_tensor_C;
+                constexpr uint32_t output_channel_num_pages = batch_slice_num_pages / slice_C;
                 uint32_t tile_id_start = batch_slice_offset;
-                for (uint32_t c = 0; c < input_tensor_C; ++c) {
+                for (uint32_t c = 0; c < slice_C; ++c) {
                     uint32_t tiles_read = start_tiles_read;
                     uint32_t tiles_to_read = start_tiles_to_read;
 

@@ -11,6 +11,7 @@
 
 namespace ttnn {
 
+// TODO: (GR) Dim and topology specific validation
 void ReduceScatterMinimalAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
@@ -23,8 +24,8 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         "reduce_scatter_minimal_async currently requires aligned pages");
 
     TT_FATAL(
-        this->dim == 3 || this->dim == 2,
-        "reduce_scatter_minimal_async currently only supports reducing on dim 2 or 3");
+        this->dim == 3 || this->dim == 2 || this->dim == 1,
+        "reduce_scatter_minimal_async currently only supports reducing on dim 1, 2, or 3");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(

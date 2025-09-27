@@ -147,8 +147,13 @@ void kernel_main() {
             } else if constexpr (dim == 2) {
                 input_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt + batch_offset;
                 intermediate_tile_id_start = actual_slice_idx * slice_Ht * slice_Wt;
+            } else if constexpr (dim == 1) {
+                input_tile_id_start = actual_slice_idx * input_channel_num_pages * slice_C + batch_offset;
+                intermediate_tile_id_start = actual_slice_idx * input_channel_num_pages * slice_C;
+            } else {
+                ASSERT(false);
             }
-            for (uint32_t c = 0; c < input_tensor_C; ++c) {
+            for (uint32_t c = 0; c < slice_C; ++c) {
                 uint32_t input_pages_read_in_row = start_pages_read_in_row;
                 uint32_t input_row_offset = start_row_offset;
 

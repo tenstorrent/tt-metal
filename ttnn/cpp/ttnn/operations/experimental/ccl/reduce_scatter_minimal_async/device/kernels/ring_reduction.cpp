@@ -14,7 +14,7 @@ void MAIN {
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
     constexpr uint32_t ring_size = get_compile_time_arg_val(4);
     constexpr uint32_t input_tensor_B = get_compile_time_arg_val(5);
-    constexpr uint32_t input_tensor_C = get_compile_time_arg_val(6);
+    constexpr uint32_t slice_C = get_compile_time_arg_val(6);
     constexpr bool direction = get_compile_time_arg_val(7);
 
     uint32_t arg_idx = 0;
@@ -29,7 +29,7 @@ void MAIN {
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         // Don't reduce on the first slice
         for (uint32_t i = 0; i < ring_size - 1; i++) {
-            for (uint32_t c = 0; c < input_tensor_C; c++) {
+            for (uint32_t c = 0; c < slice_C; c++) {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t tiles_to_read = start_tiles_to_read;
 
