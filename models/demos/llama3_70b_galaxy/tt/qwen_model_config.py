@@ -21,7 +21,7 @@ from models.tt_transformers.tt.common import (
     nearest_multiple,
 )
 from typing import Tuple
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     load_hf_state_dict,
