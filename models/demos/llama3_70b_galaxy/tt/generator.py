@@ -111,7 +111,7 @@ class Generator:
             use_batched_prefill = True
 
         if return_logits:
-            tt_out_logits_all_users = torch.zeros(batch, 1, 131072)
+            tt_out_logits_all_users = torch.zeros(batch, 1, 155648)
 
         all_users = [0] if use_batched_prefill else empty_slots
 
