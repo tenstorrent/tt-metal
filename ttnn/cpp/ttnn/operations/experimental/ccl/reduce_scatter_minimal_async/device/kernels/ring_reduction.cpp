@@ -27,8 +27,8 @@ void MAIN {
     add_tiles_init(input_cb_id, intermediate_cb, false);
 
     for (uint32_t b = 0; b < input_tensor_B; b++) {
-        for (uint32_t i = 0; i < ring_size - 1; i++) {  // Don't reduce on the first slice
-
+        // Don't reduce on the first slice
+        for (uint32_t i = 0; i < ring_size - 1; i++) {
             for (uint32_t c = 0; c < input_tensor_C; c++) {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t tiles_to_read = start_tiles_to_read;
