@@ -236,10 +236,10 @@ void kernel_main() {
             uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
             if (i < (ring_size - 1)) {
                 chunk_count = 0;
-                for (uint32_t c = 0; c < input_tensor_C; ++c) {
-                    uint32_t tile_id_start =
-                        actual_slice_idx * slice_Wt + c * (batch_slice_num_pages * ring_size) / input_tensor_C;
 
+                constexpr uint32_t input_channel_num_pages = (batch_slice_num_pages * ring_size) / input_tensor_C;
+                uint32_t tile_id_start = actual_slice_idx * slice_Wt;
+                for (uint32_t c = 0; c < input_tensor_C; ++c) {
                     uint32_t pages_read_in_row = start_pages_read_in_row;
                     uint32_t row_offset = start_row_offset;
 
@@ -360,6 +360,7 @@ void kernel_main() {
                                 });
                         }
                     }
+                    tile_id_start += input_channel_num_pages;
                 }
 
                 if (chunk_count % chunks_per_sync != 0) {
@@ -376,9 +377,9 @@ void kernel_main() {
                 noc_async_writes_flushed();
             } else {
                 // Otherwise, on the last slice, write it to output buffer
+                constexpr uint32_t output_channel_num_pages = batch_slice_num_pages / input_tensor_C;
+                uint32_t tile_id_start = batch_slice_offset;
                 for (uint32_t c = 0; c < input_tensor_C; ++c) {
-                    uint32_t tile_id_start = batch_slice_offset + c * batch_slice_num_pages / input_tensor_C;
-
                     uint32_t tiles_read = start_tiles_read;
                     uint32_t tiles_to_read = start_tiles_to_read;
 
@@ -422,6 +423,7 @@ void kernel_main() {
                             tiles_read += tiles_to_read_in_other_direction;
                         }
                     }
+                    tile_id_start += output_channel_num_pages;
                 }
 
                 // 2. mcast half batch ready semaphore

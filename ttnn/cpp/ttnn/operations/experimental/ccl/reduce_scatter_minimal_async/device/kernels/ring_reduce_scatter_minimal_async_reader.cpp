@@ -107,7 +107,8 @@ void kernel_main() {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
 
-    constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
+    constexpr uint32_t input_batch_num_pages = batch_slice_num_pages * ring_size;
+    constexpr uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
 
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
@@ -117,7 +118,7 @@ void kernel_main() {
             matmul_receiver.wait_for_matmul_batch(b);
         }
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
-        uint32_t batch_offset = batch_num_pages * b;
+        uint32_t batch_offset = input_batch_num_pages * b;
 
         // Loop over the slices, starting from the furthest, and working backwards until we get to ourselves
         // Read our local slice at this slice idx into cb_input_id or cb_output_id
@@ -137,19 +138,9 @@ void kernel_main() {
             }
 
             chunk_count = 0;
-
             uint32_t input_tile_id_start = actual_slice_idx * slice_Wt + batch_offset;
             uint32_t intermediate_tile_id_start = actual_slice_idx * slice_Wt;
             for (uint32_t c = 0; c < input_tensor_C; ++c) {
-                if (c != 0) {
-                    input_tile_id_start += batch_num_pages / input_tensor_C;
-                    intermediate_tile_id_start += batch_num_pages / input_tensor_C;
-                }
-
-                // if (my_chip_id == 0) {
-                //     DPRINT << c << ": " << input_tile_id_start << ENDL();
-                // }
-
                 uint32_t input_pages_read_in_row = start_pages_read_in_row;
                 uint32_t input_row_offset = start_row_offset;
 
@@ -200,9 +191,6 @@ void kernel_main() {
                     uint32_t l1_write_addr = get_write_ptr(cb_in0);
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
-                        // if (my_chip_id == 0) {
-                        //     DPRINT << c << "-" << tile_id << ENDL();
-                        // }
                         uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
                         noc_async_read(noc_read_addr, l1_write_addr, page_size);
                         l1_write_addr += page_size;
@@ -216,8 +204,7 @@ void kernel_main() {
                     }
 
                     if (do_reduce) {
-                        // read the next intermediate slice out of the intermediate buffer, and put it in intermediate
-                        // CB
+                        // read next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                         cb_reserve_back(cb_intermediate_id, tile_granularity);
                         uint32_t intermediate_l1_write_addr = get_write_ptr(cb_intermediate_id);
                         for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
@@ -265,6 +252,8 @@ void kernel_main() {
                         intermediate_row_offset = input_row_offset;
                     }
                 }
+                input_tile_id_start += input_channel_num_pages;
+                intermediate_tile_id_start += input_channel_num_pages;
             }
 
             // Next slice idx
