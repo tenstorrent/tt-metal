@@ -519,6 +519,8 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     if (stall_prefetcher) {
         command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
     }
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        std::vector<uint32_t>{command_size_16B}.data(), sizeof(uint32_t), this->prefetcher_cores[cq_id], 0x60);
     this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
