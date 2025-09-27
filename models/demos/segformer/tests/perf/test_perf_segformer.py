@@ -11,7 +11,7 @@ from transformers import SegformerImageProcessor
 from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import profiler, skip_for_grayskull
+from models.common.utility_functions import profiler
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
@@ -68,7 +68,6 @@ def move_to_device(object, device):
         return object
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_for_semantic_segmentation(device, model_location_generator):
     processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")

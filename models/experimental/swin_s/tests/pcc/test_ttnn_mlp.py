@@ -8,7 +8,6 @@ from torch import nn
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_s.reference.mlp import MLP
 from models.experimental.swin_s.tt.tt_mlp import TtMLP
@@ -56,7 +55,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_S_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size",

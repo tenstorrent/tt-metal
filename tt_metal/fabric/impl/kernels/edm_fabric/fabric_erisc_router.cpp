@@ -1601,7 +1601,8 @@ void run_sender_channel_step_impl(
                 // instead because these connections will be read/write counter based instead
                 local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
                 if (channel_connection_established) {
-                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
+                    local_sender_channel_worker_interface
+                        .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
                 } else {
                     local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
                     // If not connected, we update the read counter in L1 as well so the next connecting worker
@@ -1623,7 +1624,8 @@ void run_sender_channel_step_impl(
                     .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>();
             } else {
                 if (channel_connection_established) {
-                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
+                    local_sender_channel_worker_interface
+                        .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
                 } else {
                     ASSERT(
                         local_sender_channel_worker_interface.local_write_counter.counter >
@@ -2153,7 +2155,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[0]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[0],
-                get_credits_init_val<0>());
+                get_credits_init_val<0>(),
+                notify_worker_of_read_counter_update_src_address);
     }
     {
         auto connection_live_semaphore_ptr =
@@ -2166,7 +2169,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[1]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[1],
-                get_credits_init_val<1>());
+                get_credits_init_val<1>(),
+                notify_worker_of_read_counter_update_src_address);
     }
 #ifdef FABRIC_2D
     {
@@ -2180,7 +2184,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[2]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[2],
-                get_credits_init_val<2>());
+                get_credits_init_val<2>(),
+                notify_worker_of_read_counter_update_src_address);
     }
     {
         auto connection_live_semaphore_ptr =
@@ -2193,7 +2198,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[3]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[3],
-                get_credits_init_val<3>());
+                get_credits_init_val<3>(),
+                notify_worker_of_read_counter_update_src_address);
     }
 #endif
     if constexpr (NUM_SENDER_CHANNELS == 3 || NUM_SENDER_CHANNELS == 5) {
@@ -2212,7 +2218,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                         local_sender_flow_control_semaphores[VC1_SENDER_CHANNEL]),
                     reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                     sender_channel_ack_cmd_buf_ids[VC1_SENDER_CHANNEL],
-                    get_credits_init_val<VC1_SENDER_CHANNEL>());
+                    get_credits_init_val<VC1_SENDER_CHANNEL>(),
+                    notify_worker_of_read_counter_update_src_address);
         }
     }
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -336,7 +336,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
-            unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config);
+            ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
         }
     }
 }

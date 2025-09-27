@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -983,12 +983,14 @@ void DeviceCommand<hugepage_write>::memcpy(void* __restrict dst, const void* __r
     }
 }
 
-static uint32_t random_padding_value_cached = []() {
+namespace {
+uint32_t random_padding_value_cached = []() {
     std::random_device rd;
     std::mt19937_64 gen(rd());
     std::uniform_int_distribution<uint32_t> dist(1u, 0xFFFFFFFFu);
     return dist(gen);
 }();
+}  // namespace
 
 template <bool hugepage_write>
 uint32_t DeviceCommand<hugepage_write>::random_padding_value() {

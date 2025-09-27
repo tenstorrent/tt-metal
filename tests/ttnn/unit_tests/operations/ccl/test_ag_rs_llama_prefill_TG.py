@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
-from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     report_mismatches,
     print_tile_corners_of_tensor,
@@ -558,7 +557,6 @@ def run_reduce_scatter_on_TG(
     assert passed, f"FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("seq_len", [128, 4096, 8192], ids=["128_seq", "4k_seq", "8k_seq"])
 @pytest.mark.parametrize(
     "num_devices, num_links, width, dim, layout, input_dtype, cluster_axis, replication_factor",
@@ -621,7 +619,6 @@ def test_all_gather_TG(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("seq_len", [128, 4096, 8192], ids=["128_seq", "4k_seq", "8k_seq"])
 @pytest.mark.parametrize(
     "num_devices, num_links, width, dim, layout, input_dtype, cluster_axis, replication_factor",
