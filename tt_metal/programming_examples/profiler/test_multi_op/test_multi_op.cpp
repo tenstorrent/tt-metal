@@ -44,7 +44,7 @@ void RunCustomCycle(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         all_cores,
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     for (int i = 0; i < fastDispatch; i++) {
         // Enqueue the same mesh workload multiple times to generate profiler traffic
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);

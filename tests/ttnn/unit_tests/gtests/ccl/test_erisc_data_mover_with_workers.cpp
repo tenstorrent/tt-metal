@@ -331,12 +331,12 @@ bool RunWriteBWTest(
 
     distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program_{};
-    distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program_), device_range);
+    sender_workload.add_program(device_range, std::move(sender_program_));
     auto& sender_program = sender_workload.get_programs().at(device_range);
 
     distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program_{};
-    distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program_), device_range);
+    receiver_workload.add_program(device_range, std::move(receiver_program_));
     auto& receiver_program = receiver_workload.get_programs().at(device_range);
 
     auto& sender_cq = sender_mesh_device->mesh_command_queue();

@@ -95,7 +95,7 @@ SetRuntimeArgs(
         dst_l1_buffer->address(),
     });
 
-distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
 ```
 

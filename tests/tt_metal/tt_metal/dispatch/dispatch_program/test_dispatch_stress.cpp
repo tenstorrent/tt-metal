@@ -82,8 +82,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     }
 
     distributed::MeshWorkload workload;
-    distributed::AddProgramToMeshWorkload(
-        workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
 

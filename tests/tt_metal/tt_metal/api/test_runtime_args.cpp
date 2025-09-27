@@ -83,7 +83,7 @@ distributed::MeshWorkload initialize_program_data_movement(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return workload;
 }
 
@@ -119,7 +119,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = dm_defines});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return workload;
 }
 
@@ -170,7 +170,7 @@ std::pair<distributed::MeshWorkload, tt::tt_metal::KernelHandle> initialize_prog
 
     auto kernel_id =
         initialize_program_compute(mesh_device, program, core_range_set, num_unique_rt_args, num_common_rt_args);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_id};
 }
 
@@ -191,7 +191,7 @@ initialize_program_compute_multi_range_sets(
         kernel_ids.push_back(
             initialize_program_compute(mesh_device, program, core_range_set, num_unique_rt_args, num_common_rt_args));
     }
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_ids};
 }
 

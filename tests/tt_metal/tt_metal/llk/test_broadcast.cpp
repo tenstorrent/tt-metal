@@ -358,7 +358,7 @@ void run_single_core_broadcast(
     distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
     distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data;

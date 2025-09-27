@@ -48,7 +48,7 @@ int main() {
 
     // Configure program and enqueue it as a mesh workload (non-blocking)
     SetRuntimeArgs(program, void_compute_kernel_id, core, {});
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     fmt::print("Hello, Core (0, 0) on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");
 
