@@ -81,6 +81,7 @@ jobs:
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 3
       pytest_markers: "perf"
+      timeout_minutes: 120
 
   setup-and-test-blackhole:
     name: "🕳️ Performance tests (Blackhole)"
@@ -95,6 +96,7 @@ jobs:
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 3
       pytest_markers: "perf"
+      timeout_minutes: 120
 
   check-all-green:
     name: "✅ Check all green"
