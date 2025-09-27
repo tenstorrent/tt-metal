@@ -82,30 +82,88 @@ ResultWithOptions conv2d(
     bool return_output_dim,
     bool return_weights_and_bias) {
     if (dram_slice_config_.has_value()) {
-        return result_to_result_with_options(
-            conv2d_DRAM(
-                input_tensor,
-                weight_tensor,
-                device,
-                in_channels,
-                out_channels,
-                batch_size,
-                input_height,
-                input_width,
-                kernel_size,
-                stride,
-                padding,
-                dilation,
-                groups,
-                dtype,
-                bias_tensor,
-                conv_config_,
-                compute_config_,
-                memory_config_,
-                dram_slice_config_.value()),
-            return_output_dim,
-            return_weights_and_bias);
+        if (dram_slice_config_.value().slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
+            return result_to_result_with_options(
+                conv2d_L1(
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_),
+                return_output_dim,
+                return_weights_and_bias);
+        } else {
+            return result_to_result_with_options(
+                conv2d_DRAM(
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_,
+                    dram_slice_config_),
+                return_output_dim,
+                return_weights_and_bias);
+        }
     } else {
+        bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor);
+        if (input_is_on_device && input_tensor.memory_config().is_dram()) {
+            if (std::getenv("TTNN_CONV2D_DISABLE_AUTO_DRAM") != nullptr) {
+                TT_THROW("Automatically selected Conv2D DRAM when it's disabled");
+            }
+            log_info(
+                LogOp,
+                "Using conv dram without slice config as input tensor {} is in DRAM",
+                input_tensor.logical_shape());
+            return result_to_result_with_options(
+                conv2d_DRAM(
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_,
+                    std::nullopt),
+                return_output_dim,
+                return_weights_and_bias);
+        }
         return result_to_result_with_options(
             conv2d_L1(
                 input_tensor,
@@ -159,15 +217,109 @@ Result conv2d_DRAM(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    Conv2dSliceConfig dram_slice_config) {
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
+    bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
-    TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
+    ttnn::Tensor input_tensor_on_device = input_tensor;
+
+    if (conv_config.enable_kernel_stride_folding) {
+        auto folding_result = compute_kernel_stride_folding_params(
+            input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
+        input_tensor_on_device = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
+        if (conv_config.deallocate_activation) {
+            Tensor input_tensor_pre_folded = input_tensor;
+            input_tensor_pre_folded.deallocate(true);
+        }
+
+        // Update the input tensor parameters to the folding result
+        input_height = folding_result.input_height;
+        input_width = folding_result.input_width;
+        in_channels = folding_result.in_channels;
+        stride = folding_result.stride;
+        kernel_size = folding_result.kernel_size;
+        mm_conv = folding_result.mm_conv;
+        conv_config.output_layout = Layout::ROW_MAJOR;  // Output of fold is row major.
+    }
+    if (!is_device_tensor(input_tensor_on_device)) {
+        input_tensor_on_device =
+            ttnn::operations::core::to_device(input_tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
+    }
+
+    ttnn::Tensor weight_tensor_on_device;
+    std::optional<ttnn::Tensor> bias_tensor_on_device;
+    if (mm_conv) {
+        const uint32_t input_channels_alignment = get_input_channels_alignment(
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            input_tensor.layout(),
+            BufferType::DRAM,
+            mm_conv,
+            std::nullopt);
+        // Configure weight and bias preparation parameters
+        Conv2dWeightsBiasPrepConfig params(
+            input_channels_alignment,
+            conv_config.weights_dtype,
+            1,  // Set to 1 as it doesn't matter in Interleaved MM.
+            1,  // Set to 1 as it doesn't matter in Interleaved MM.
+            std::nullopt,
+            std::nullopt,
+            groups,
+            1,  // Set to 1 as it doesn't matter in Interleaved MM.
+            input_width,
+            true,  // DRAM MM Convs are always interleaved
+            bias_tensor.has_value(),
+            true,  // parameters_on_device
+            conv_config.enable_kernel_stride_folding,
+            conv_config.full_inner_dim,
+            conv_config.enable_activation_reuse,
+            kernel_size,
+            stride,
+            padding_n4);
+
+        // Prepare weights and move to device if necessary
+        if (!is_device_tensor(weight_tensor)) {
+            log_debug(tt::LogOp, "conv2d: Preprocessing weights for MM DRAM Interleaved.");
+            std::tie(weight_tensor_on_device, bias_tensor_on_device) =
+                prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
+        } else {
+            weight_tensor_on_device = weight_tensor;
+            if (bias_tensor.has_value()) {
+                bias_tensor_on_device = bias_tensor.value();
+            }
+        }
+        // run conv as matmul
+        std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
+        std::optional<MemoryConfig> mm_output_memory_config = std::nullopt;
+        std::optional<std::string> linear_activation = std::nullopt;
+
+        // Matmul expects inputs to be in Tile Layout
+        tilize_with_optional_deallocation(input_tensor_on_device, conv_config.deallocate_activation);
+        Tensor matmul_output = ttnn::linear(
+            input_tensor_on_device,
+            weight_tensor_on_device,
+            bias_tensor_on_device,
+            false,
+            false,
+            mm_output_memory_config,
+            output_dtype,
+            program_config,
+            linear_activation,
+            compute_config);
+        if (conv_config.deallocate_activation) {
+            input_tensor_on_device.deallocate(true);
+        }
+        return {matmul_output, input_height, input_width, weight_tensor_on_device, bias_tensor_on_device};
+    }
+    if (memory_config_.has_value()) {
+        log_warning(
+            tt::LogOp,
+            "Conv2D DRAM doesn't support specifying memory config, as the output will always be DRAM Interleaved");
+    }
+
     TT_FATAL(
         !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),
         "Conv output can't be in Row Major if output dtype is BFloat8_B.");
@@ -175,75 +327,56 @@ Result conv2d_DRAM(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
+    Conv2dSliceConfig dram_slice_config = determine_conv2d_slice_config(
+        dram_slice_config_,
+        ConvDRAMParamters{
+            .in_channels = in_channels,
+            .out_channels = out_channels,
+            .batch_size = batch_size,
+            .input_height = input_height,
+            .input_width = input_width,
+            .output_height = output_height,
+            .output_width = output_width,
+            .kernel_size = kernel_size,
+            .stride = stride,
+            .padding_n4 = padding_n4,
+            .dilation = dilation,
+            .groups = groups,
+            .conv_config = conv_config,
+            .compute_kernel_config = compute_config,
+            .compute_grid = compute_grid_size,
+            .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
+            .input_datatype = input_tensor.dtype(),
+            .output_datatype = output_dtype,
+            .input_layout = input_tensor.layout(),
+            .enable_bias = bias_tensor.has_value(),
+            .mm_conv = mm_conv,
+        },
+        device);
+    log_info(
+        tt::LogOp,
+        "Conv2D DRAM Slicing: Using slice_config : {}, provided : {}",
+        dram_slice_config,
+        dram_slice_config_);
+    TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
+
     const uint32_t output_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
-    // If num_slices is not set, automatically determine a value for num_slices that would be functional.
-    if (dram_slice_config.num_slices == 0) {
-        auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
-        uint32_t current_num_slices = 2;
-        log_debug(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
-        while (current_num_slices < output_sliced_dim) {
-            dram_slice_config.num_slices = current_num_slices;
-            if (L1_stats.total_free_bytes >=
-                calculate_conv_dram_slice_L1_usage(
-                    ConvDRAMParamters{
-                        .in_channels = in_channels,
-                        .out_channels = out_channels,
-                        .batch_size = batch_size,
-                        .input_height = input_height,
-                        .input_width = input_width,
-                        .output_height = output_height,
-                        .output_width = output_width,
-                        .kernel_size = kernel_size,
-                        .stride = stride,
-                        .padding_n4 = padding_n4,
-                        .dilation = dilation,
-                        .groups = groups,
-                        .conv_config = conv_config,
-                        .compute_kernel_config = compute_config,
-                        .compute_grid = compute_grid_size,
-                        .weights_shape = weight_tensor.padded_shape(),
-                        .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
-                        .input_datatype = input_tensor.dtype(),
-                        .output_datatype = output_dtype,
-                        .input_layout = input_tensor.layout(),
-                        .enable_bias = bias_tensor.has_value(),
-                        .mm_conv = mm_conv,
-                    },
-                    device,
-                    dram_slice_config)) {
-                break;
-            }
-            current_num_slices++;
-        }
-        TT_FATAL(
-            current_num_slices <= output_sliced_dim,
-            "Could not find a suitable number of slices for Conv2D DRAM Slicing. "
-            "Either increase the number of slices or reduce the output dimension being sliced.");
-        log_debug(tt::LogOp, "Conv2D DRAM Slicing: Automatically determined number of slices: {}", current_num_slices);
-    }
-    TT_FATAL(dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
-    TT_FATAL(
-        dram_slice_config.num_slices < output_sliced_dim,
-        " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
-        dram_slice_config.num_slices,
-        output_sliced_dim);
-
-    ttnn::Tensor input_tensor_on_device;
-    if (!is_device_tensor(input_tensor)) {
-        input_tensor_on_device = ttnn::operations::core::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+    if (output_sliced_dim == 1) {
+        dram_slice_config.num_slices = 1;
     } else {
-        input_tensor_on_device = input_tensor;
+        TT_ASSERT(
+            dram_slice_config.num_slices < output_sliced_dim,
+            " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
+            dram_slice_config.num_slices,
+            output_sliced_dim);
     }
 
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
     input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
 
-    ttnn::Tensor weight_tensor_on_device;
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
-    std::optional<ttnn::Tensor> bias_tensor_on_device;
-
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
@@ -259,10 +392,9 @@ Result conv2d_DRAM(
                     BufferType::DRAM,
                 })),
         device);
-
     uint32_t slice_rounding_value = 1;
     if (conv_config.output_layout == tt_metal::Layout::TILE &&
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH) {
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
@@ -293,7 +425,7 @@ Result conv2d_DRAM(
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
         int pad_top, pad_bottom, pad_left, pad_right;
-        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
             output_slice_width_start = 0;
@@ -431,6 +563,7 @@ Result conv2d_DRAM(
             sliced_input_tensor_memory_config);
 
         auto conv_config_l1 = conv_config;
+
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
@@ -459,8 +592,7 @@ Result conv2d_DRAM(
                 output_dtype,
                 first_run ? bias_tensor : (std::optional<const ttnn::Tensor>)(bias_tensor_on_device),
                 conv_config_l1,
-                compute_config_,
-                memory_config_);
+                compute_config_);
 
         // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
         // supported.
@@ -531,7 +663,10 @@ Result conv2d_L1(
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     // Store the original stride size for weight folding
     auto orig_stride = stride;
-    if (conv_config.enable_kernel_stride_folding) {
+
+    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
+    // also need to be folded.
+    if (conv_config.enable_kernel_stride_folding && (stride[0] > 1 || stride[1] > 1)) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
         input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
@@ -780,14 +915,8 @@ Result conv2d_L1(
         }
         return {conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
     } else {
-        if (input_tensor_post_tm.layout() != Layout::TILE) {
-            Tensor input_tensor_post_tm_tilized = ttnn::to_layout(input_tensor_post_tm, Layout::TILE);
-            if (conv_config.deallocate_activation) {
-                input_tensor_post_tm.deallocate(/*force*/ true);
-                input_tensor_post_tm_tilized = ttnn::move(input_tensor_post_tm_tilized);
-            }
-            input_tensor_post_tm = input_tensor_post_tm_tilized;
-        }
+        // Matmul expects inputs to be in Tile Layout
+        tilize_with_optional_deallocation(input_tensor_post_tm, conv_config.deallocate_activation);
 
         // run conv as matmul
         std::optional<ttnn::operations::matmul::MatmulProgramConfig> program_config = std::nullopt;
