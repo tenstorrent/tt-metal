@@ -253,10 +253,7 @@ def from_torch(
     cq_id: Optional[int] = None,
 ) -> ttnn.Tensor:
     """
-    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. For bfloat8_b or bfloat4_b format, the function itself is called twice,
-    first call runs in bfloat16 format, and calls to_layout to convert from row_major layout to tile layout (for padding purpose in case input
-    is not tile padded). Second call runs in desired format and does not call to_layout for bfloat8_b or bfloat4_b as we now convert
-    to tile layout during tensor creation (ttnn.Tensor).
+    Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
 
     Args:
         tensor (torch.Tensor): the input tensor.
