@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -336,7 +336,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
-            unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config);
+            ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
         }
     }
 }
@@ -367,7 +367,7 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
     uint32_t ncrisc_num_pages_to_read = ((brisc_base_addr - ncrisc_base_addr) / page_size) * num_drams;
 
     std::vector<uint32_t> brisc_compile_time_args = {};
-    tt_metal::TensorAccessorArgs().append_to(brisc_compile_time_args);
+    tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(brisc_compile_time_args);
 
     tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
         program_,
@@ -385,7 +385,7 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
         {brisc_base_addr, page_size, l1_address, brisc_num_pages_to_read, num_iterations});
 
     std::vector<uint32_t> ncrisc_compile_time_args = {};
-    tt_metal::TensorAccessorArgs().append_to(ncrisc_compile_time_args);
+    tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(ncrisc_compile_time_args);
 
     tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
         program_,
