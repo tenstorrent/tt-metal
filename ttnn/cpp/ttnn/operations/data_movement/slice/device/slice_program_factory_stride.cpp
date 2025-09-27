@@ -96,8 +96,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t total_output_rows,
     const std::string& reader_kernel_path,
     const std::string& writer_kernel_path) {
-    auto input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
+    const auto& output_shape = output_tensor.padded_shape();
     uint32_t element_size = input_tensor.element_size();
 
     // Extract dimensions for N-dimensional tensors
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_stride(
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     const auto& input_shape = input_tensor.padded_shape();
-    auto output_shape = output_tensor.padded_shape();
+    const auto& output_shape = output_tensor.padded_shape();
     uint32_t element_size = input_tensor.element_size();
 
     // Calculate total output rows based on tensor rank - this is what we distribute across cores
