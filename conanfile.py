@@ -10,32 +10,28 @@ from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
 
 
-class TTMetaliumConan(ConanFile):
-    name = "tt-metalium"
+class TTNNConan(ConanFile):
+    name = "ttnn"
     package_type = "library"
     license = "Apache-2.0"
     url = "https://github.com/tenstorrent/tt-metal"
-    description = "Tenstorrent Metalium runtime library"
+    description = "Tenstorrent Neural Network library"
     topics = ("ai", "ml", "runtime", "tenstorrent")
 
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
-        "with_python_bindings": [True, False],
         "build_examples": [True, False],
         "build_tests": [True, False],
         "enable_distributed": [True, False],
         "enable_profiler": [True, False],
-        "enable_tt_train": [True, False],
     }
     default_options = {
         "shared": True,
-        "with_python_bindings": True,
         "build_examples": False,
         "build_tests": False,
         "enable_distributed": True,
         "enable_profiler": False,
-        "enable_tt_train": False,
     }
 
     def export(self):
@@ -47,11 +43,11 @@ class TTMetaliumConan(ConanFile):
             "CMakePresets.json",
             "cmake/**",
             "third_party/**",
+            "tools/**",
             ".clang-tidy",
             # exclude build artifacts
             "!**/*.o",
             "!**/*.out",
-            "!**/*.bin",
             "!**/*.obj",
             "!**/*.a",
             "!**/*.lib",
@@ -87,7 +83,7 @@ class TTMetaliumConan(ConanFile):
         tc = CMakeToolchain(self)
         tc.generator = "Ninja"
 
-        tc.variables["BUILD_TT_TRAIN"] = bool(self.options.enable_tt_train)
+        tc.variables["BUILD_TT_TRAIN"] = False
 
         tc.variables["TT_UNITY_BUILDS"] = True
         tc.variables["ENABLE_CCACHE"] = False
@@ -99,7 +95,7 @@ class TTMetaliumConan(ConanFile):
 
         #########################################################
         tc.variables["TT_INSTALL"] = True
-        tc.variables["WITH_PYTHON_BINDINGS"] = bool(self.options.with_python_bindings)
+        tc.variables["WITH_PYTHON_BINDINGS"] = False
         tc.variables["ENABLE_DISTRIBUTED"] = bool(self.options.enable_distributed)
         tc.variables["ENABLE_FAKE_KERNELS_TARGET"] = False
 
@@ -128,20 +124,11 @@ class TTMetaliumConan(ConanFile):
         cmake.install()
 
     def package_info(self):
-        # If profiler(Tracy) is enabled, we need to propagate additional compiler flags to the user of the library
+        # # If profiler(Tracy) is enabled, we need to propagate additional compiler flags to the user of the library
         if self.options.enable_profiler:
             self.cpp_info.cxxflags = ["-fno-omit-frame-pointer"]
             self.cpp_info.link_options = ["-rdynamic"]
 
         self.cpp_info.libs = ["tt_stl", "ttnn", "tt_metal"]
-
-        self.cpp_info.components["tt_stl"].libs = ["tt_stl"]
-        self.cpp_info.components["tt_stl"].defines = ["SPDLOG_FMT_EXTERNAL", "FMT_HEADER_ONLY"]
-
-        self.cpp_info.components["tt-metalium"].libs = ["tt_metal"]
-        self.cpp_info.components["tt-metalium"].requires = ["tt_stl"]
-
-        self.cpp_info.components["ttnn"].libs = ["ttnn"]
-        self.cpp_info.components["ttnn"].requires = ["tt-metalium"]
-
+        self.cpp_info.defines = ["SPDLOG_FMT_EXTERNAL", "FMT_HEADER_ONLY"]
         self.runenv_info.define("TT_METAL_HOME", str(self.package_folder) + "/bin/tt-metalium/")
