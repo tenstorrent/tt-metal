@@ -988,10 +988,6 @@ def skip_for_wormhole_b0(reason_str="not a wormhole test"):
     return ti_skip(is_wormhole_b0(), reason=reason_str)
 
 
-def skip_for_grayskull(reason_str="not a grayskull test"):
-    return ti_skip(is_grayskull(), reason=reason_str)
-
-
 def run_for_blackhole(reason_str="only runs for Blackhole"):
     return ti_skip(not is_blackhole(), reason=reason_str)
 
