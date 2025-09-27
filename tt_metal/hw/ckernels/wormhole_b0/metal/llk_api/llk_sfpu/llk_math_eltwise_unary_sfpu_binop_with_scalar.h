@@ -29,4 +29,11 @@ inline void llk_math_eltwise_unary_sfpu_binop_with_scalar_add_int32(
         ckernel::sfpu::calculate_add_int32<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, scalar);
 }
 
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_binop_with_scalar_sub_int32(
+    uint dst_index, uint32_t scalar, int vector_mode = VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_sub_int32<APPROXIMATE, ITERATIONS>, dst_index, vector_mode, scalar);
+}
+
 }  // namespace ckernel
