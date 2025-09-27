@@ -127,7 +127,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle, tt
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     std::vector<uint32_t> reader_receiver_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_receiver_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_receiver_compile_time_args);
     auto mm_reader_kernel_receiver = tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in1_mcast_receiver.cpp",
