@@ -200,7 +200,7 @@ void test_deit_for_image_classification_with_teacher_inference(const std::string
     }
 
     // Clean up device resources
-    ttnn::distributed::close_mesh_device(device);
+    device->close();
 }
 
 /**

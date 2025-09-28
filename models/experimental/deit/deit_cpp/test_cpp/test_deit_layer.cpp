@@ -159,7 +159,7 @@ void test_deit_layer_inference(const std::string& model_path) {
     }
 
     // Clean up device resources
-    ttnn::distributed::close_mesh_device(device);
+    device->close();
 }
 
 } // anonymous namespace
