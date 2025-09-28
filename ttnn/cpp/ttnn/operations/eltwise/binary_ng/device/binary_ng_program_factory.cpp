@@ -199,9 +199,14 @@ bool is_native_L1_sharding(
     }
 
     // a and b identical shape, no broadcast on any dimension
-    if (b.has_value() && a.logical_shape() == b->logical_shape() &&
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE) {
-        if (a.memory_config().is_sharded() || b->memory_config().is_sharded() || c.memory_config().is_sharded()) {
+    if (b.has_value() && a.logical_shape() == b->logical_shape()) {
+        if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
+            return true;
+        }
+        if (b->memory_config().is_sharded() && b->memory_config().buffer_type() == BufferType::L1) {
+            return true;
+        }
+        if (c.memory_config().is_sharded() && c.memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
     }

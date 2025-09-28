@@ -33,68 +33,52 @@ struct fmt::formatter<ttnn::operations::binary_ng::Lowercase> : fmt::formatter<s
 namespace ttnn::operations::binary_ng {
 
 BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcast_type) {
-    // TODO: complete remove old kernels and its old kernel parameters
+    // TODO: completely remove old kernels and its old kernel parameters
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE:
             reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            // writer_kernel = KernelName::WriterNoBcast;
+            writer_kernel = KernelName::WriterScalar;
             bcast_input = std::nullopt;
             break;
 
-        case SubtileBroadcastType::SCALAR_A:
-            // reader_kernel = KernelName::ReaderScalarBcast;
+        case SubtileBroadcastType::SCALAR_A:;
             compute_kernel = KernelName::ComputeBcast;
-            // writer_kernel = KernelName::WriterNoBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::SCALAR_B:
-            // reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeBcast;
-            // writer_kernel = KernelName::WriterScalarBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_A:
-            // reader_kernel = KernelName::ReaderRowBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            // writer_kernel = KernelName::WriterNoBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::ROW_B:
-            // reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            // writer_kernel = KernelName::WriterRowBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::COL_A:
-            // reader_kernel = KernelName::ReaderColBcast;
             compute_kernel = KernelName::ComputeBcast;
-            // writer_kernel = KernelName::WriterNoBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::COL_B:
-            // reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeBcast;
-            // writer_kernel = KernelName::WriterColBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_A_COL_B:
-            // reader_kernel = KernelName::ReaderRowBcast;
             compute_kernel = KernelName::ComputeBcast;
-            // writer_kernel = KernelName::WriterColBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_B_COL_A:
-            // reader_kernel = KernelName::ReaderColBcast;
             compute_kernel = KernelName::ComputeBcast;
-            // writer_kernel = KernelName::WriterRowBcast;
             bcast_input = 0;
             break;
     }
