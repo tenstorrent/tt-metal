@@ -21,7 +21,9 @@ set(COMMON_LIBRARIES_BASIC
 
 set(COMMON_LIBRARIES_WITH_OPENCV
     ${TORCH_LIBRARIES}
-    ${OpenCV_LIBS}
+    opencv_core
+    opencv_imgproc
+    opencv_imgcodecs
     ttnncpp
     tt_metal
     pthread
@@ -35,7 +37,6 @@ set(COMMON_COMPILE_OPTIONS
     -Wno-error=unused-parameter
     -Wno-error
 )
-
 
 # Function to create a test executable with helper_funcs.cpp only
 function(add_deit_basic_test TARGET_NAME MAIN_SOURCE)
@@ -54,12 +55,14 @@ function(add_deit_basic_test TARGET_NAME MAIN_SOURCE)
     target_link_libraries(${TARGET_NAME} ${COMMON_LIBRARIES_BASIC})
 
     # Set include directories
-    target_include_directories(${TARGET_NAME} PRIVATE 
-        ${COMMON_INCLUDE_DIRS}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-        ${libtorch_SOURCE_DIR}/include
-        ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
-        ${OpenCV_INCLUDE_DIRS}
+    target_include_directories(
+        ${TARGET_NAME}
+        PRIVATE
+            ${COMMON_INCLUDE_DIRS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+            ${libtorch_SOURCE_DIR}/include
+            ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
+            ${OpenCV_INCLUDE_DIRS}
     )
 
     # Set C++ standard
@@ -94,12 +97,14 @@ function(add_deit_image_test TARGET_NAME MAIN_SOURCE)
     target_link_libraries(${TARGET_NAME} ${COMMON_LIBRARIES_WITH_OPENCV})
 
     # Set include directories
-    target_include_directories(${TARGET_NAME} PRIVATE 
-        ${COMMON_INCLUDE_DIRS}
-        ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-        ${libtorch_SOURCE_DIR}/include
-        ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
-        ${OpenCV_INCLUDE_DIRS}
+    target_include_directories(
+        ${TARGET_NAME}
+        PRIVATE
+            ${COMMON_INCLUDE_DIRS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../../..
+            ${libtorch_SOURCE_DIR}/include
+            ${libtorch_SOURCE_DIR}/include/torch/csrc/api/include
+            ${OpenCV_INCLUDE_DIRS}
     )
 
     # Set C++ standard
@@ -167,4 +172,22 @@ add_deit_image_test(test_deit_for_image_classification_with_teacher test_deit_fo
 )
 
 # Add simple device test
-add_deit_basic_test(test_device test_device.cpp)
+# add_deit_image_test(test_device test_device.cpp)
+
+add_executable(test_device test_device.cpp)
+target_link_libraries(
+    test_device
+    PRIVATE
+        ttnncpp
+        tt_metal
+        opencv_core
+        opencv_imgproc
+        opencv_imgcodecs
+)
+target_include_directories(
+    test_device
+    PRIVATE
+        ttnn
+        tt_metal
+        ${OpenCV_INCLUDE_DIRS}
+)
