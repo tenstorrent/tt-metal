@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,11 +6,18 @@
 
 #include <memory>
 #include "impl/program/program_impl.hpp"
+#include "mesh_coord.hpp"
 
 namespace tt::tt_metal {
 
+namespace distributed {
+class MeshDevice;
+class MeshWorkloadImpl;
+}
+
 namespace inspector {
 class Data;
+class RpcServer;
 }
 
 class Inspector {
@@ -18,6 +25,7 @@ public:
     static bool is_enabled();
 
     static std::unique_ptr<inspector::Data> initialize();
+    static void serialize_rpc();
 
     static void program_created(
         const detail::ProgramImpl* program) noexcept;
@@ -44,6 +52,30 @@ public:
         const detail::ProgramImpl* program,
         const IDevice* device,
         uint32_t build_key) noexcept;
+
+    static void mesh_device_created(
+        const distributed::MeshDevice* mesh_device,
+        std::optional<int> parent_mesh_id) noexcept;
+    static void mesh_device_destroyed(
+        const distributed::MeshDevice* mesh_device) noexcept;
+    static void mesh_device_initialized(
+        const distributed::MeshDevice* mesh_device) noexcept;
+
+    static void mesh_workload_created(
+        const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
+    static void mesh_workload_destroyed(
+        const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
+    static void mesh_workload_add_program(
+        const distributed::MeshWorkloadImpl* mesh_workload,
+        const distributed::MeshCoordinateRange& device_range,
+        std::size_t program_id) noexcept;
+    static void mesh_workload_set_program_binary_status(
+        const distributed::MeshWorkloadImpl* mesh_workload,
+        std::size_t mesh_id,
+        ProgramBinaryStatus status) noexcept;
+
+    static inspector::RpcServer& get_rpc_server();
+
 };
 
 }  // namespace tt::tt_metal

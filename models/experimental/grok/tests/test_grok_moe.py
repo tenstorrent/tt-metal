@@ -19,12 +19,14 @@ from models.experimental.grok.tt.grok_mlp import TtGrokMLP
 from models.experimental.grok.tt.grok_moe import TtMoeLayer
 from models.experimental.grok.reference.model import MoeBlock
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 @pytest.mark.timeout(600)
 def test_grok_moe_inference(t3k_mesh_device, reset_seeds):
     pcc = 0.87  # real weights = 0.99

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -262,6 +262,7 @@ TYPED_TEST(WritePackedCommandTest, RandomAddDispatchWritePacked) {
 
         uint32_t data[2001] = {};
         std::vector<std::pair<const void*, uint32_t>> data_collection;
+        data_collection.reserve(num_sub_cmds);
         for (size_t j = 0; j < num_sub_cmds; j++) {
             data_collection.push_back({data, sub_cmd_sizeB});
         }

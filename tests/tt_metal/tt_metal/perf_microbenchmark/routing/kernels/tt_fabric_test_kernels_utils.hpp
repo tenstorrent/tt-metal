@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,13 +7,50 @@
 #include <array>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
+
+struct LocalArgsBuffer {
+    uint32_t base_address = 0;
+    uint32_t buffer_size = 0;
+    uint32_t end_address = 0;
+
+    void init(uint32_t base_addr, uint32_t buf_size) {
+        base_address = base_addr;
+        buffer_size = buf_size;
+        end_address = base_address + buffer_size;
+    }
+
+    template <typename T>
+    FORCE_INLINE T get_arg_val(size_t arg_idx) {
+        static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
+
+        uint32_t current_offset = arg_idx * sizeof(T);
+        ASSERT(current_offset + sizeof(T) <= end_address);  // Check bounds
+
+        tt_l1_ptr T* local_args_ptr = reinterpret_cast<tt_l1_ptr T*>(base_address);
+        return local_args_ptr[arg_idx];
+    }
+};
+
+// Global instance of the local args buffer manager
+static LocalArgsBuffer local_args_buffer;
+
+inline void init_local_args(uint32_t base_address, uint32_t buffer_size) {
+    local_args_buffer.init(base_address, buffer_size);
+}
+
+template <typename T>
+FORCE_INLINE T get_local_arg_val(size_t arg_idx) {
+    return local_args_buffer.get_arg_val<T>(arg_idx);
+}
 
 inline uint32_t prng_next(uint32_t n) {
     uint32_t x = n;
@@ -21,6 +58,32 @@ inline uint32_t prng_next(uint32_t n) {
     x ^= x >> 17;
     x ^= x << 5;
     return x;
+}
+
+// Helper functions for writing test results
+inline void write_test_status(uint32_t result_buffer_base, uint32_t status) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_STATUS_INDEX] = status;
+}
+
+inline void write_test_cycles(uint32_t result_buffer_base, uint64_t cycles) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_CYCLES_INDEX] = static_cast<uint32_t>(cycles);
+    result_buffer[TT_FABRIC_CYCLES_INDEX + 1] = static_cast<uint32_t>(cycles >> 32);
+}
+
+inline void write_test_packets(uint32_t result_buffer_base, uint64_t packets) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    result_buffer[TT_FABRIC_WORD_CNT_INDEX] = static_cast<uint32_t>(packets);
+    result_buffer[TT_FABRIC_WORD_CNT_INDEX + 1] = static_cast<uint32_t>(packets >> 32);
+}
+
+inline void clear_test_results(uint32_t result_buffer_base, uint32_t result_buffer_size) {
+    auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
+    uint32_t num_words = result_buffer_size / sizeof(uint32_t);
+    for (uint32_t i = 0; i < num_words; i++) {
+        result_buffer[i] = 0;
+    }
 }
 
 struct SequentialDataPattern {
@@ -127,15 +190,15 @@ struct SenderTrafficConfigMetadata {
 
 private:
     SenderTrafficConfigMetadata(size_t& arg_idx) {
-        this->num_packets = get_arg_val<uint32_t>(arg_idx++);
-        this->seed = get_arg_val<uint32_t>(arg_idx++);
-        this->payload_buffer_size = get_arg_val<uint32_t>(arg_idx++);
+        this->num_packets = get_local_arg_val<uint32_t>(arg_idx++);
+        this->seed = get_local_arg_val<uint32_t>(arg_idx++);
+        this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx++);
     }
 };
 
 struct ChipUnicastFields1D {
     static ChipUnicastFields1D build_from_args(size_t& arg_idx) {
-        uint32_t num_hops = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t num_hops = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipUnicastFields1D(num_hops);
     }
 
@@ -146,10 +209,10 @@ struct ChipUnicastFields1D {
 
 struct ChipUnicastFields2D {
     static ChipUnicastFields2D build_from_args(size_t& arg_idx) {
-        uint16_t src_device_id = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t dst_device_id = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t ew_dim = get_arg_val<uint32_t>(arg_idx++);
+        uint16_t src_device_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t ew_dim = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipUnicastFields2D(src_device_id, dst_device_id, dst_mesh_id, ew_dim);
     }
 
@@ -164,8 +227,8 @@ struct ChipUnicastFields2D {
 
 struct ChipMulticastFields1D {
     static ChipMulticastFields1D build_from_args(size_t& arg_idx) {
-        uint32_t mcast_start_hops = get_arg_val<uint32_t>(arg_idx++);
-        uint32_t num_hops = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t mcast_start_hops = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t num_hops = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipMulticastFields1D(mcast_start_hops, num_hops);
     }
 
@@ -178,12 +241,12 @@ struct ChipMulticastFields1D {
 
 struct ChipMulticastFields2D {
     static ChipMulticastFields2D build_from_args(size_t& arg_idx) {
-        uint16_t dst_device_id = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t num_hops_n = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t num_hops_s = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t num_hops_e = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t num_hops_w = get_arg_val<uint32_t>(arg_idx++);
+        uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t num_hops_n = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t num_hops_s = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t num_hops_e = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t num_hops_w = get_local_arg_val<uint32_t>(arg_idx++);
         return ChipMulticastFields2D(dst_device_id, dst_mesh_id, num_hops_n, num_hops_s, num_hops_e, num_hops_w);
     }
 
@@ -212,11 +275,11 @@ struct ChipMulticastFields2D {
 struct NocUnicastWriteFields {
     template <bool IS_SOURCE>
     static NocUnicastWriteFields build_from_args(size_t& arg_idx) {
-        uint32_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
-        uint32_t dst_address = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_noc_encoding = 0;
         if constexpr (IS_SOURCE) {
-            dst_noc_encoding = get_arg_val<uint32_t>(arg_idx++);
+            dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
         return NocUnicastWriteFields(payload_size_bytes, dst_address, dst_noc_encoding);
     }
@@ -232,12 +295,12 @@ struct NocUnicastWriteFields {
 struct NocUnicastAtomicIncFields {
     template <bool IS_SOURCE>
     static NocUnicastAtomicIncFields build_from_args(size_t& arg_idx) {
-        uint16_t atomic_inc_val = get_arg_val<uint32_t>(arg_idx++);
-        uint16_t atomic_inc_wrap = get_arg_val<uint32_t>(arg_idx++);
-        uint32_t dst_address = get_arg_val<uint32_t>(arg_idx++);
+        uint16_t atomic_inc_val = get_local_arg_val<uint32_t>(arg_idx++);
+        uint16_t atomic_inc_wrap = get_local_arg_val<uint32_t>(arg_idx++);
+        uint32_t dst_address = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t dst_noc_encoding = 0;
         if constexpr (IS_SOURCE) {
-            dst_noc_encoding = get_arg_val<uint32_t>(arg_idx++);
+            dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
         }
         return NocUnicastAtomicIncFields(atomic_inc_val, atomic_inc_wrap, dst_address, dst_noc_encoding);
     }
@@ -270,13 +333,52 @@ struct NocUnicastWriteAtomicIncFields {
     NocUnicastAtomicIncFields atomic_inc_fields;
 };
 
+struct NocUnicastScatterWriteFields {
+    static constexpr uint32_t MAX_CHUNKS = 2;
+
+    template <bool IS_SOURCE>
+    static NocUnicastScatterWriteFields build_from_args(size_t& arg_idx) {
+        uint32_t payload_size_bytes = get_local_arg_val<uint32_t>(arg_idx++);
+
+        std::array<uint32_t, MAX_CHUNKS> dst_addresses;
+        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+            dst_addresses[i] = get_local_arg_val<uint32_t>(arg_idx++);
+        }
+
+        uint32_t dst_noc_encoding = 0;
+        if constexpr (IS_SOURCE) {
+            dst_noc_encoding = get_local_arg_val<uint32_t>(arg_idx++);
+        }
+
+        std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
+        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
+            chunk_sizes[i] = get_local_arg_val<uint32_t>(arg_idx++);
+        }
+
+        return NocUnicastScatterWriteFields(payload_size_bytes, dst_addresses, chunk_sizes, dst_noc_encoding);
+    }
+
+    NocUnicastScatterWriteFields(
+        uint32_t payload_size_bytes,
+        const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
+        const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
+        uint32_t dst_noc_encoding) :
+        payload_size_bytes(payload_size_bytes),
+        dst_addresses(dst_addresses),
+        chunk_sizes(chunk_sizes),
+        dst_noc_encoding(dst_noc_encoding) {}
+
+    uint32_t payload_size_bytes;
+    std::array<uint32_t, MAX_CHUNKS> dst_addresses;
+    std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
+    uint32_t dst_noc_encoding;
+};
+
 template <typename T>
-void setup_2d_unicast_route(
-    uint32_t packet_header_address, eth_chan_directions outgoing_direction, const ChipUnicastFields2D& unicast_fields) {
+void setup_2d_unicast_route(uint32_t packet_header_address, const ChipUnicastFields2D& unicast_fields) {
     // Template constraint: T must be MeshPacketHeader or LowLatencyMeshPacketHeader
     fabric_set_unicast_route(
         (T*)packet_header_address,
-        outgoing_direction,
         unicast_fields.src_device_id,
         unicast_fields.dst_device_id,
         unicast_fields.dst_mesh_id,
@@ -334,12 +436,13 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING
         volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         WorkerToFabricEdmSender* fabric_connection_handle) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
-        const auto outgoing_direction = (eth_chan_directions)fabric_connection_handle->direction;
         if constexpr (USE_DYNAMIC_ROUTING) {
-            setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, outgoing_direction, unicast_fields);
+            setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, unicast_fields);
         } else {
-            setup_2d_unicast_route<LowLatencyMeshPacketHeader>(
-                packet_header_address, outgoing_direction, unicast_fields);
+            fabric_set_unicast_route(
+                (LowLatencyMeshPacketHeader*)packet_header_address,
+                unicast_fields.dst_device_id,
+                unicast_fields.dst_mesh_id);
         }
     }
 };
@@ -404,6 +507,93 @@ struct NocFusedSenderOperations {
     static void update_header_impl(SenderKernelTrafficConfig* config);
 };
 
+struct NocScatterWriteSenderOperations {
+    static void parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig* config);
+};
+
+// line sync for each fabric connection.
+struct LineSyncConfig {
+    LineSyncConfig(
+        WorkerToFabricEdmSender* fabric_connection_handle,
+        const uint32_t packet_header_address,
+        const uint32_t line_sync_val) :
+        fabric_connection_handle(fabric_connection_handle), line_sync_val(line_sync_val) {
+        packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+    }
+
+    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
+        // setup header fields. 2 rt args for 1D
+        ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+            arg_idx, packet_header_address, packet_header, fabric_connection_handle);
+
+        // set up noc fields, 4 rt args
+        auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
+        line_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fields.dst_address);
+
+        uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+        packet_header->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
+    }
+
+    void global_sync_start() {
+        // send packet to remote devices
+        fabric_connection_handle->wait_for_empty_write_slot();
+        fabric_connection_handle->send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    void global_sync_finish(uint8_t sync_iter) {
+        // sync wait
+        noc_semaphore_wait_min(line_sync_ptr, line_sync_val * (sync_iter + 1));
+    }
+
+private:
+    WorkerToFabricEdmSender* fabric_connection_handle;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
+    volatile tt_l1_ptr uint32_t* line_sync_ptr;
+    uint32_t line_sync_val;
+};
+
+template <bool IS_MASTER_CORE, uint8_t NUM_LOCAL_CORES>
+struct LocalSyncConfig {
+    LocalSyncConfig(const uint32_t sync_address, const uint32_t sync_val) :
+        sync_address(sync_address), sync_val(sync_val) {
+        sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_address);
+    }
+
+    void setup_core_coordinates(size_t& arg_idx) {
+        // Get core coordinates from runtime args
+        for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
+            sync_core_xy_encoding_[i] = get_local_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+
+    void local_sync(uint8_t sync_iter) {
+        if constexpr (IS_MASTER_CORE) {
+            // Master core: signal all local cores
+            for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
+                auto dest_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[i], sync_address);
+                noc_semaphore_inc(dest_noc_addr, 1);
+            }
+            // Wait for all local cores to acknowledge
+            noc_semaphore_wait(sync_ptr, NUM_LOCAL_CORES * (sync_iter + 1));
+        } else {
+            noc_semaphore_wait(sync_ptr, (sync_iter + 1));
+            // send ack back to master sender
+            auto master_sender_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[0], sync_address);
+            noc_semaphore_inc(master_sender_noc_addr, 1);
+        }
+    }
+
+private:
+    std::array<uint32_t, NUM_LOCAL_CORES> sync_core_xy_encoding_;
+    uint32_t sync_address;
+    volatile tt_l1_ptr uint32_t* sync_ptr;
+    uint32_t sync_val;
+};
+
 struct SenderKernelTrafficConfig {
     SenderKernelTrafficConfig(
         WorkerToFabricEdmSender* fabric_connection_handle,
@@ -422,7 +612,7 @@ struct SenderKernelTrafficConfig {
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void parse_and_setup_chip_send_type(size_t& arg_idx, uint32_t packet_header_address) {
-        ChipSendType chip_send_type = static_cast<ChipSendType>(get_arg_val<uint32_t>(arg_idx++));
+        ChipSendType chip_send_type = static_cast<ChipSendType>(get_local_arg_val<uint32_t>(arg_idx++));
 
         if (chip_send_type == ChipSendType::CHIP_UNICAST) {
             ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
@@ -436,7 +626,7 @@ struct SenderKernelTrafficConfig {
     }
 
     void parse_and_setup_noc_send_type(size_t& arg_idx) {
-        uint32_t noc_type_raw = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t noc_type_raw = get_local_arg_val<uint32_t>(arg_idx++);
         noc_send_type_ = static_cast<NocSendType>(noc_type_raw);
 
         // Validate NOC send type and set up operations
@@ -452,6 +642,10 @@ struct SenderKernelTrafficConfig {
             case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
                 noc_ops_.parse_and_setup = NocFusedSenderOperations::parse_and_setup_impl;
                 noc_ops_.update_header = NocFusedSenderOperations::update_header_impl;
+                break;
+            case NocSendType::NOC_UNICAST_SCATTER_WRITE:
+                noc_ops_.parse_and_setup = NocScatterWriteSenderOperations::parse_and_setup_impl;
+                noc_ops_.update_header = NocScatterWriteSenderOperations::update_header_impl;
                 break;
             default: ASSERT(false); break;
         }
@@ -480,7 +674,6 @@ struct SenderKernelTrafficConfig {
             num_packets_to_send = metadata.num_packets;
         }
 
-        uint64_t start_timestamp = get_timestamp();
         for (uint32_t i = 0; i < num_packets_to_send; i++) {
             fabric_connection_handle->wait_for_empty_write_slot();
 
@@ -497,6 +690,9 @@ struct SenderKernelTrafficConfig {
                 (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
             if constexpr (!BENCHMARK_MODE) {
+                // avoid race condition where we update the ptrs but fabric write is not done yet.
+                noc_async_writes_flushed();
+
                 if (payload_size_bytes > 0 && payload_buffer_) {
                     payload_buffer_->advance();
                     update_header_for_next_packet();
@@ -505,8 +701,38 @@ struct SenderKernelTrafficConfig {
             }
         }
 
-        elapsed_cycles += get_timestamp() - start_timestamp;
         num_packets_processed += num_packets_to_send;
+    }
+
+    // Round-robin version: always sends exactly one packet
+    template <bool BENCHMARK_MODE>
+    void send_one_packet() {
+        fabric_connection_handle->wait_for_empty_write_slot();
+
+        if constexpr (!BENCHMARK_MODE) {
+            if (payload_size_bytes > 0 && payload_buffer_) {
+                payload_buffer_->fill_data(metadata.seed);
+
+                fabric_connection_handle->send_payload_without_header_non_blocking_from_address(
+                    payload_buffer_->get_physical_address(), payload_size_bytes);
+            }
+        }
+
+        fabric_connection_handle->send_payload_flush_non_blocking_from_address(
+            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
+        if constexpr (!BENCHMARK_MODE) {
+            // avoid race condition where we update the ptrs but fabric write is not done yet.
+            noc_async_writes_flushed();
+
+            if (payload_size_bytes > 0 && payload_buffer_) {
+                payload_buffer_->advance();
+                update_header_for_next_packet();
+            }
+            metadata.seed = prng_next(metadata.seed);
+        }
+
+        num_packets_processed += 1;  // Always increment by 1
     }
 
     void advance_dst_address() {
@@ -529,6 +755,7 @@ struct SenderKernelTrafficConfig {
     friend struct NocWriteSenderOperations;
     friend struct NocAtomicSenderOperations;
     friend struct NocFusedSenderOperations;
+    friend struct NocScatterWriteSenderOperations;
 
 private:
     void update_header_for_next_packet() {
@@ -553,6 +780,7 @@ private:
         NocUnicastWriteFields write_fields;
         NocUnicastAtomicIncFields atomic_inc_fields;
         NocUnicastWriteAtomicIncFields write_atomic_inc_fields;
+        NocUnicastScatterWriteFields scatter_write_fields;
 
         // Constructor needed because member types have user-defined constructors
         NocFields() {}  // Will be properly initialized later based on NOC type
@@ -633,10 +861,75 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
         fields.write_fields.payload_size_bytes);
 }
 
-struct SenderKernelMemoryAllocator {
-    SenderKernelMemoryAllocator() {}
+inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
+    auto fields = NocUnicastScatterWriteFields::build_from_args<true>(arg_idx);
 
-    static SenderKernelMemoryAllocator build_from_args(size_t& arg_idx) { return SenderKernelMemoryAllocator(arg_idx); }
+    // Build the scatter command header
+    NocUnicastScatterCommandHeader scatter_header;
+    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_addresses[i]);
+    }
+    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
+    }
+
+    config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
+    config->noc_fields_.scatter_write_fields = fields;
+    config->payload_size_bytes = fields.payload_size_bytes;
+}
+
+inline void NocScatterWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+    const auto& fields = config->noc_fields_.scatter_write_fields;
+    uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
+
+    // Build the scatter command header with updated addresses
+    NocUnicastScatterCommandHeader scatter_header;
+    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+        uint32_t dest_address = fields.dst_addresses[i] + buffer_offset;
+        scatter_header.noc_address[i] = get_noc_addr_helper(fields.dst_noc_encoding, dest_address);
+    }
+    for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+        scatter_header.chunk_size[i] = fields.chunk_sizes[i];
+    }
+
+    config->packet_header->to_noc_unicast_scatter_write(scatter_header, fields.payload_size_bytes);
+}
+
+struct CommonMemoryMap {
+    CommonMemoryMap() = default;
+    static CommonMemoryMap build_from_args(size_t& arg_idx) { return CommonMemoryMap(arg_idx); }
+
+    uint32_t local_args_base;
+    uint32_t local_args_size;
+    uint32_t result_buffer_base;
+    uint32_t result_buffer_size;
+    uint32_t kernel_config_base;
+    uint32_t kernel_config_size;
+
+private:
+    CommonMemoryMap(size_t& arg_idx) {
+        // Extract and initialize local args system first
+        local_args_base = get_arg_val<uint32_t>(arg_idx++);
+        local_args_size = get_arg_val<uint32_t>(arg_idx++);
+        init_local_args(local_args_base, local_args_size);
+
+        // Then parse the rest
+        result_buffer_base = get_arg_val<uint32_t>(arg_idx++);
+        result_buffer_size = get_arg_val<uint32_t>(arg_idx++);
+        kernel_config_base = get_arg_val<uint32_t>(arg_idx++);
+        kernel_config_size = get_arg_val<uint32_t>(arg_idx++);
+    }
+};
+
+struct SenderKernelMemoryMap {
+    // Encapsulated common memory map
+    CommonMemoryMap common;
+
+    SenderKernelMemoryMap() {}
+
+    static SenderKernelMemoryMap build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return SenderKernelMemoryMap(common_map, rt_args_idx);
+    }
 
     uint32_t get_packet_header_address() {
         uint32_t addr = curr_packet_header_address_;
@@ -655,10 +948,12 @@ struct SenderKernelMemoryAllocator {
     }
 
 private:
-    SenderKernelMemoryAllocator(size_t& arg_idx) {
-        packet_header_region_base_ = get_arg_val<uint32_t>(arg_idx++);
-        payload_buffer_region_base_ = get_arg_val<uint32_t>(arg_idx++);
-        highest_usable_address_ = get_arg_val<uint32_t>(arg_idx++);
+    SenderKernelMemoryMap(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        // Use pre-parsed common memory map and parse only sender-specific args
+        common = common_map;
+        packet_header_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
+        payload_buffer_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
+        highest_usable_address_ = get_arg_val<uint32_t>(rt_args_idx++);
 
         // set the current addresses to the base
         curr_packet_header_address_ = packet_header_region_base_;
@@ -673,20 +968,36 @@ private:
 };
 
 /* Layout for the run time args for sender
-1. Memory map args
+1. Memory map args (unified: common + sender-specific args parsed together)
 2. Fabric connection args
 3. Traffic config args
 3.1. TrafficConfigCommonFields
 3.2. Chip send type fields
 3.3. Noc send type fields
 */
-template <uint8_t NUM_FABRIC_CONNECTIONS, uint8_t NUM_TRAFFIC_CONFIGS, bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+template <
+    uint8_t NUM_FABRIC_CONNECTIONS,
+    uint8_t NUM_TRAFFIC_CONFIGS,
+    bool IS_2D_FABRIC,
+    bool USE_DYNAMIC_ROUTING,
+    bool LINE_SYNC,
+    uint8_t NUM_LOCAL_SYNC_CORES>
 struct SenderKernelConfig {
-    static SenderKernelConfig build_from_args(size_t& arg_idx) { return SenderKernelConfig(arg_idx); }
+    static constexpr bool MASTER_SYNC_CORE = false;
+
+    static SenderKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return SenderKernelConfig(common_map, rt_args_idx);
+    }
 
     void open_connections() {
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
             fabric_connections()[i].open();
+        }
+    }
+
+    void local_sync(uint8_t sync_iter) {
+        if constexpr (LINE_SYNC) {
+            local_sync_config().local_sync(sync_iter);
         }
     }
 
@@ -696,9 +1007,11 @@ struct SenderKernelConfig {
         }
     }
 
-    SenderKernelMemoryAllocator memory_allocator;
+    SenderKernelMemoryMap memory_map;
     alignas(WorkerToFabricEdmSender)
         std::array<char, NUM_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> fabric_connections_storage;
+    alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
+        std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
     alignas(SenderKernelTrafficConfig)
         std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(SenderKernelTrafficConfig)> traffic_configs_storage;
@@ -708,24 +1021,47 @@ struct SenderKernelConfig {
     WorkerToFabricEdmSender* fabric_connections() {
         return reinterpret_cast<WorkerToFabricEdmSender*>(fabric_connections_storage.data());
     }
+    LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
+        return *reinterpret_cast<LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>*>(
+            local_sync_config_storage.data());
+    }
     SenderKernelTrafficConfig* traffic_configs(uint8_t idx) {
         return reinterpret_cast<SenderKernelTrafficConfig*>(
             traffic_configs_storage.data() + idx * sizeof(SenderKernelTrafficConfig));
     }
     SenderKernelTrafficConfig* get_traffic_config(uint8_t idx) { return traffic_config_ptrs[idx]; }
 
-private:
-    SenderKernelConfig(size_t& arg_idx) {
-        this->memory_allocator = SenderKernelMemoryAllocator::build_from_args(arg_idx);
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return memory_map.common.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
 
-        // Initialize fabric connections using placement new
+private:
+    SenderKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        // Use separate indices for runtime args vs local args
+        size_t local_args_idx = 0;  // Start from 0 for local args
+
+        // Parse memory map args from runtime args using pre-parsed common map
+        this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
+
+        // Initialize fabric connections using placement new - these use normal runtime args
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-            auto connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+            auto connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
             new (&fabric_connections()[i]) WorkerToFabricEdmSender(connection);
         }
 
+        // add line sync initializations here, for each fabric connection, ex, forward and backward connection, run line
+        // sync for all.
+        if constexpr (LINE_SYNC) {
+            uint32_t sync_address = get_local_arg_val<uint32_t>(local_args_idx++);
+            uint32_t sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
+            new (&local_sync_config()) LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>(sync_address, sync_val);
+
+            // setup core coordinates
+            local_sync_config().setup_core_coordinates(local_args_idx);
+        }
+
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            traffic_config_to_fabric_connection_map[i] = get_arg_val<uint32_t>(arg_idx++);
+            traffic_config_to_fabric_connection_map[i] = get_local_arg_val<uint32_t>(local_args_idx++);
         }
 
         // Initialize traffic config pointers
@@ -734,11 +1070,11 @@ private:
         }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            auto metadata = SenderTrafficConfigMetadata::build_from_args(arg_idx);
+            auto metadata = SenderTrafficConfigMetadata::build_from_args(local_args_idx);
             const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
             ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
 
-            uint32_t packet_header_address = this->memory_allocator.get_packet_header_address();
+            uint32_t packet_header_address = this->memory_map.get_packet_header_address();
             // Get pointer to pre-allocated storage and initialize with placement new
             SenderKernelTrafficConfig* config_ptr = traffic_configs(i);
             traffic_config_ptrs[i] = config_ptr;
@@ -747,15 +1083,15 @@ private:
                 &fabric_connections()[fabric_connection_idx], metadata, packet_header_address);
 
             traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
-                arg_idx, packet_header_address);
-            traffic_config_ptrs[i]->parse_and_setup_noc_send_type(arg_idx);
+                local_args_idx, packet_header_address);
+            traffic_config_ptrs[i]->parse_and_setup_noc_send_type(local_args_idx);
 
             // the payload buffer size here is the virtual size of the buffer, not the physical size
             // this virtual size is used to keep track of the physical buffer on the receiver side
             // on the sender side, the physical buffer will only be the size of the payload
             uint32_t payload_buffer_size = metadata.payload_buffer_size;
             uint32_t payload_buffer_address =
-                this->memory_allocator.get_payload_buffer_address(traffic_config_ptrs[i]->payload_size_bytes);
+                this->memory_map.get_payload_buffer_address(traffic_config_ptrs[i]->payload_size_bytes);
             traffic_config_ptrs[i]->setup_payload_buffer(payload_buffer_address, payload_buffer_size);
         }
     };
@@ -775,9 +1111,9 @@ struct ReceiverTrafficConfigMetadata {
 
 private:
     ReceiverTrafficConfigMetadata(size_t& arg_idx) {
-        this->num_packets = get_arg_val<uint32_t>(arg_idx++);
-        this->seed = get_arg_val<uint32_t>(arg_idx++);
-        this->payload_buffer_size = get_arg_val<uint32_t>(arg_idx++);
+        this->num_packets = get_local_arg_val<uint32_t>(arg_idx++);
+        this->seed = get_local_arg_val<uint32_t>(arg_idx++);
+        this->payload_buffer_size = get_local_arg_val<uint32_t>(arg_idx++);
     }
 };
 
@@ -952,41 +1288,263 @@ struct WriteAtomicIncValidationConfig : public TrafficValidationConfigBase {
     uint32_t expected_atomic_value;
 };
 
+struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
+    ScatterWriteValidationConfig(
+        const NocUnicastScatterWriteFields& scatter_write_fields, const ReceiverTrafficConfigMetadata& metadata) :
+        TrafficValidationConfigBase(metadata) {
+        // Set up function pointers
+        ops.poll = poll_impl;
+        ops.validate = validate_impl;
+        ops.update = update_impl;
+
+        // Store base addresses and chunk sizes
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+            base_dst_addresses[i] = scatter_write_fields.dst_addresses[i];
+            dst_addresses[i] = scatter_write_fields.dst_addresses[i];
+        }
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+            chunk_sizes[i] = scatter_write_fields.chunk_sizes[i];
+        }
+
+        // Last chunk size is implicit (remaining payload)
+        uint32_t chunk_size = 0;
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+            chunk_size += chunk_sizes[i];
+        }
+        last_chunk_size = scatter_write_fields.payload_size_bytes - chunk_size;
+
+        payload_size_bytes = scatter_write_fields.payload_size_bytes;
+        current_offset = 0;
+    }
+
+    static bool poll_impl(TrafficValidationConfigBase* base_config) {
+        auto* config = static_cast<ScatterWriteValidationConfig*>(base_config);
+
+        // Check if all chunks have been written by polling the last word of each chunk
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+            uint32_t chunk_size = config->chunk_sizes[i];
+            if (!SequentialDataPattern::poll(
+                    config->dst_addresses[i], chunk_size, config->metadata.seed + offset / sizeof(uint32_t))) {
+                return false;
+            }
+            offset += chunk_size;
+        }
+
+        // Check the last chunk
+        if (!SequentialDataPattern::poll(
+                config->dst_addresses[NocUnicastScatterWriteFields::MAX_CHUNKS - 1],
+                config->last_chunk_size,
+                config->metadata.seed + offset / sizeof(uint32_t))) {
+            return false;
+        }
+
+        return true;
+    }
+
+    static bool validate_impl(TrafficValidationConfigBase* base_config) {
+        auto* config = static_cast<ScatterWriteValidationConfig*>(base_config);
+
+        // Validate all chunks
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS - 1; i++) {
+            uint32_t chunk_size = config->chunk_sizes[i];
+            if (!SequentialDataPattern::validate(
+                    config->dst_addresses[i], chunk_size, config->metadata.seed + offset / sizeof(uint32_t))) {
+                return false;
+            }
+            offset += chunk_size;
+        }
+
+        // Validate the last chunk
+        if (!SequentialDataPattern::validate(
+                config->dst_addresses[NocUnicastScatterWriteFields::MAX_CHUNKS - 1],
+                config->last_chunk_size,
+                config->metadata.seed + offset / sizeof(uint32_t))) {
+            return false;
+        }
+
+        return true;
+    }
+
+    static void update_impl(TrafficValidationConfigBase* base_config) {
+        auto* config = static_cast<ScatterWriteValidationConfig*>(base_config);
+        config->metadata.seed = prng_next(config->metadata.seed);
+
+        // Advance buffer offset (similar to ReceiverPayloadBuffer::advance())
+        config->current_offset += config->payload_size_bytes;
+        if (config->current_offset >= config->metadata.payload_buffer_size) {
+            config->current_offset = 0;  // Wrap around
+        }
+
+        // Update all destination addresses based on new offset
+        for (uint32_t i = 0; i < NocUnicastScatterWriteFields::MAX_CHUNKS; i++) {
+            config->dst_addresses[i] = config->base_dst_addresses[i] + config->current_offset;
+        }
+    }
+
+    std::array<uint32_t, NocUnicastScatterWriteFields::MAX_CHUNKS> base_dst_addresses;
+    std::array<uint32_t, NocUnicastScatterWriteFields::MAX_CHUNKS> dst_addresses;
+    std::array<uint16_t, NocUnicastScatterWriteFields::MAX_CHUNKS - 1> chunk_sizes;
+    uint32_t last_chunk_size;
+    uint32_t payload_size_bytes;
+    uint32_t current_offset;
+};
+
+/* Layout for the run time args for receiver
+1. Memory map args (unified: result buffer only, as receivers don't allocate memory)
+2. Traffic config args
+2.1. TrafficConfigCommonFields
+2.2. Noc send type fields
+*/
 template <uint8_t NUM_TRAFFIC_CONFIGS>
 struct ReceiverKernelConfig {
-    static ReceiverKernelConfig build_from_args(size_t& arg_idx) { return ReceiverKernelConfig(arg_idx); }
+    static ReceiverKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return ReceiverKernelConfig(common_map, rt_args_idx);
+    }
 
-    alignas(TrafficValidationConfigBase)
-        std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(WriteAtomicIncValidationConfig)> validation_configs_storage;
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return common_memory_map.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return common_memory_map.result_buffer_size; }
+
+    CommonMemoryMap common_memory_map;
+    alignas(TrafficValidationConfigBase) std::array<
+        char,
+        NUM_TRAFFIC_CONFIGS * std::max(
+                                  {sizeof(WriteValidationConfig),
+                                   sizeof(AtomicIncValidationConfig),
+                                   sizeof(WriteAtomicIncValidationConfig),
+                                   sizeof(ScatterWriteValidationConfig)})> validation_configs_storage;
     std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs;
 
 private:
-    ReceiverKernelConfig(size_t& arg_idx) {
+    ReceiverKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        // Receivers only use local args (no fabric connections)
+        size_t local_args_idx = 0;  // Start from 0 for local args
+
+        // Use pre-parsed common memory map
+        this->common_memory_map = common_map;
+
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_configs[i] = nullptr;
         }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            const auto metadata = ReceiverTrafficConfigMetadata::build_from_args(arg_idx);
-            NocSendType noc_send_type = static_cast<NocSendType>(get_arg_val<uint32_t>(arg_idx++));
+            const auto metadata = ReceiverTrafficConfigMetadata::build_from_args(local_args_idx);
+            NocSendType noc_send_type = static_cast<NocSendType>(get_local_arg_val<uint32_t>(local_args_idx++));
 
             // Get pointer to pre-allocated storage for this config
-            char* config_storage = validation_configs_storage.data() + i * sizeof(WriteAtomicIncValidationConfig);
+            constexpr size_t max_config_size = std::max(
+                {sizeof(WriteValidationConfig),
+                 sizeof(AtomicIncValidationConfig),
+                 sizeof(WriteAtomicIncValidationConfig),
+                 sizeof(ScatterWriteValidationConfig)});
+            char* config_storage = validation_configs_storage.data() + i * max_config_size;
 
             if (noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
-                const auto write_fields = NocUnicastWriteFields::build_from_args<false>(arg_idx);
+                const auto write_fields = NocUnicastWriteFields::build_from_args<false>(local_args_idx);
                 traffic_configs[i] = new (config_storage) WriteValidationConfig(write_fields, metadata);
             } else if (noc_send_type == NocSendType::NOC_UNICAST_ATOMIC_INC) {
-                const auto atomic_inc_fields = NocUnicastAtomicIncFields::build_from_args<false>(arg_idx);
+                const auto atomic_inc_fields = NocUnicastAtomicIncFields::build_from_args<false>(local_args_idx);
                 traffic_configs[i] = new (config_storage) AtomicIncValidationConfig(atomic_inc_fields, metadata);
             } else if (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
-                const auto write_atomic_inc_fields = NocUnicastWriteAtomicIncFields::build_from_args<false>(arg_idx);
+                const auto write_atomic_inc_fields =
+                    NocUnicastWriteAtomicIncFields::build_from_args<false>(local_args_idx);
                 traffic_configs[i] =
                     new (config_storage) WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata);
+            } else if (noc_send_type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+                const auto scatter_write_fields = NocUnicastScatterWriteFields::build_from_args<false>(local_args_idx);
+                traffic_configs[i] = new (config_storage) ScatterWriteValidationConfig(scatter_write_fields, metadata);
             } else {
                 ASSERT(false);
             }
         }
+    }
+};
+
+/* ********************
+ * SyncKernelConfig   *
+ **********************/
+template <
+    uint8_t NUM_SYNC_FABRIC_CONNECTIONS,
+    bool IS_2D_FABRIC,
+    bool USE_DYNAMIC_ROUTING,
+    uint8_t NUM_LOCAL_SYNC_CORES>
+struct SyncKernelConfig {
+    static SyncKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return SyncKernelConfig(common_map, rt_args_idx);
+    }
+
+    void global_sync(uint8_t sync_iter) {
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            sync_fabric_connections()[i].open();
+        }
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            line_sync_configs()[i].global_sync_start();
+        }
+        // only need one of the config to check for the acks
+        line_sync_configs()[0].global_sync_finish(sync_iter);
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            sync_fabric_connections()[i].close();
+        }
+    }
+
+    void local_sync(uint8_t sync_iter) { local_sync_config().local_sync(sync_iter); }
+
+    // Result buffer convenience methods
+    uint32_t get_result_buffer_address() const { return memory_map.common.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
+
+    SenderKernelMemoryMap memory_map;
+    alignas(WorkerToFabricEdmSender)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> sync_fabric_connections_storage;
+    alignas(LineSyncConfig)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfig)> line_sync_configs_storage;
+    alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
+        std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
+
+    // Helper accessors
+    WorkerToFabricEdmSender* sync_fabric_connections() {
+        return reinterpret_cast<WorkerToFabricEdmSender*>(sync_fabric_connections_storage.data());
+    }
+    LineSyncConfig* line_sync_configs() { return reinterpret_cast<LineSyncConfig*>(line_sync_configs_storage.data()); }
+    LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
+        return *reinterpret_cast<LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>*>(local_sync_config_storage.data());
+    }
+
+private:
+    SyncKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        // Use separate indices for runtime args vs local args
+        size_t local_args_idx = 0;  // Start from 0 for local args
+
+        // Parse memory map args from runtime args using pre-parsed common map
+        this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
+
+        // Initialize sync fabric connections using placement new - these use normal runtime args
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            auto sync_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+            new (&sync_fabric_connections()[i]) WorkerToFabricEdmSender(sync_connection);
+        }
+
+        // Initialize line sync configurations
+        uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            uint32_t packet_header_address = this->memory_map.get_packet_header_address();
+            new (&line_sync_configs()[i])
+                LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
+
+            // setup packet header fields
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+                local_args_idx, packet_header_address);
+        }
+
+        // Initialize local sync config
+        uint32_t sync_address = get_local_arg_val<uint32_t>(local_args_idx++);
+        uint32_t sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
+        new (&local_sync_config()) LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>(sync_address, sync_val);
+
+        // setup core coordinates
+        local_sync_config().setup_core_coordinates(local_args_idx);
     }
 };
 

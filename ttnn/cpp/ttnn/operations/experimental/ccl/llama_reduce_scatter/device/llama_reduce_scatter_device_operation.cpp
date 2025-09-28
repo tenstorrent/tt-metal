@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,7 +72,6 @@ LlamaReduceScatterDeviceOperation::spec_return_value_t LlamaReduceScatterDeviceO
     const auto& input_spec = input_tensor.tensor_spec();
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto input_grid = input_shard_spec.grid;
-    auto input_shard_height = input_shard_spec.shape[0];
     auto input_shard_width = input_shard_spec.shape[1];
     auto input_num_cores = input_grid.num_cores();
     auto input_shape = input_spec.logical_shape();

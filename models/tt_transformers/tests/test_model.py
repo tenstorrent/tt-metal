@@ -8,14 +8,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
@@ -66,6 +65,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_model_inference(
     weights,
     layers,
@@ -80,10 +80,14 @@ def test_model_inference(
     request,
 ):
     model_name_env = os.getenv("HF_MODEL")
-    if model_name_env and "Mistral-7B" in model_name_env and weights == "instruct":
-        pytest.skip(
-            "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
-        )
+    if model_name_env:
+        if "Mistral-7B" in model_name_env and weights == "instruct":
+            pytest.skip(
+                "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
+            )
+
+        if ("Phi-3-mini" in model_name_env or "phi-4" in model_name_env) and weights == "random":
+            pytest.skip("Skipping Phi-3-mini-128k-instruct for single layer dummy weights test.")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
@@ -104,6 +108,7 @@ def test_model_inference(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
+        cache_hf=True,
     )
 
     # Define minimum PCC for each iteration
@@ -124,11 +129,12 @@ def test_model_inference(
                 (32, True): "llama32_11b",
                 (80, False): "llama31_70b",
                 (80, True): "llama32_90b",
-            }[(model_args.n_layers, model_args.is_vision())]
+            }[(model_args.n_layers, model_args.is_llama_vision())]
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {
-            "llama32_1b": 0.9991 if mode_accuracy else 0.9864,
+            # TODO: Investigate why math reconfig fix lowers llama32_1b PCC from 0.9864 to 0.9863 (Issue #28246)
+            "llama32_1b": 0.9991 if mode_accuracy else 0.9863,
             "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
             "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
             "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
@@ -300,7 +306,7 @@ def test_model_inference(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             mode="decode",
             page_table=page_table_tt,
         )

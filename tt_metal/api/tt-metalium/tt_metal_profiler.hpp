@@ -49,19 +49,24 @@ void InitDeviceProfiler(IDevice* device);
  * */
 void ProfilerSync(ProfilerSyncState state);
 
+// clang-format off
 /**
- * Traverse all cores and read device side profiler data and dump results into device side CSV log
+ * Read device side profiler data for the device
+ *
+ * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
  * Return value: void
  *
- * | Argument      | Description                                       | Type | Valid Range               | Required |
- * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | Device * |                           | True |
- * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
+ * | Argument      | Description                                           | Type                     | Valid Range               | Required |
+ * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
+ * | device        | The device to be profiled                             | IDevice*                 |                           | Yes      |
+ * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
+ * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
-void DumpDeviceProfileResults(
+// clang-format on
+void ReadDeviceProfilerResults(
     IDevice* device,
-    ProfilerDumpState = ProfilerDumpState::NORMAL,
+    ProfilerReadState = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 /**

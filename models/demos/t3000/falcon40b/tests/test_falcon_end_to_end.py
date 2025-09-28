@@ -7,16 +7,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    profiler,
-    skip_for_grayskull,
-)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_and_get_pcc, comp_pcc
 from ttnn import ConcatMeshToTensor
 
@@ -379,7 +374,6 @@ def run_test_FalconCausalLM_end_to_end(
         assert does_pass
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
@@ -430,6 +424,7 @@ def run_test_FalconCausalLM_end_to_end(
         ),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,

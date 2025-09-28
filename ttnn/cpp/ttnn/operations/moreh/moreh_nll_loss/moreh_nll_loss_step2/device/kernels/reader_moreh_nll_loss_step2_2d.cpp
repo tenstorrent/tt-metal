@@ -40,29 +40,19 @@ void kernel_main() {
     const uint32_t divisor_tile_bytes = get_tile_size(cb_divisor);
     const auto divisor_data_format = get_dataformat(cb_divisor);
 
-    constexpr bool input_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool target_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool weight_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool divisor_is_dram = get_compile_time_arg_val(3) == 1;
+    constexpr auto input_args = TensorAccessorArgs<0>();
+    constexpr auto target_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
+    constexpr auto divisor_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGen<input_is_dram> addrg_input = {
-        .bank_base_address = input_addr,
-        .page_size = input_tile_bytes,
-    };
-
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
-
-    const InterleavedAddrGen<weight_is_dram> addrg_weight = {
-        .bank_base_address = weight_addr,
-        .page_size = weight_tile_bytes,
-    };
+    const auto addrg_input = TensorAccessor(input_args, input_addr, input_tile_bytes);
+    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     constexpr uint32_t onetile = 1;
 
 #if defined(DIVISOR)
-    const InterleavedAddrGenFast<divisor_is_dram> addrg_divisor = {
-        .bank_base_address = divisor_addr, .page_size = divisor_tile_bytes, .data_format = divisor_data_format};
+    const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr, divisor_tile_bytes);
 
     read_tile(cb_divisor, addrg_divisor, 0);
 #endif

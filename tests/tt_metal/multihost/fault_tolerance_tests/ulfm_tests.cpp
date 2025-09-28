@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <tt-metalium/distributed_context.hpp>
@@ -16,7 +16,7 @@ TEST(FaultTolerance, ShrinkAfterRankFailure) {
     //----------------------------------------------------------------------
     // 0 · Create world communicator and install MPI_ERRORS_RETURN
     //----------------------------------------------------------------------
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
 
     const int world = *ctx->size();
     const int self_rank = *ctx->rank();

@@ -68,7 +68,7 @@ inline void reblock_and_untilize(
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_untilize_dst<out_subblock_w, out_block_w>(out_cb_id, 1, n);
+            pack_untilize_dest<out_subblock_w, out_block_w>(out_cb_id, 1, n);
             tile_regs_release();
             block_offset += out_subblock_num_tiles;
         }
@@ -108,6 +108,8 @@ void MAIN {
     constexpr uint32_t batch = get_compile_time_arg_val(13);                   // batch dim
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
+    // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(16);
 
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
@@ -115,6 +117,9 @@ void MAIN {
     constexpr uint32_t in1_cb_id = tt::CBIndex::c_1;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t mm_partials_cb_id = tt::CBIndex::c_5;
+    // Reader will use this CB to pass the number of non-zero (nnz) entries in the sparsity tensor.
+    constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
+    volatile uint32_t* nnz_addr_ptr;
 
     constexpr uint32_t untilize_mode_out_cb_id = untilize_out ? mm_partials_cb_id : out_cb_id;
 
@@ -140,6 +145,22 @@ void MAIN {
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
+        if constexpr (get_batch_from_reader) {
+            // Check whether this batch is valid
+            cb_wait_front(nnz_cb_id, 1);
+            tensix_sync();
+            cb_get_tile(nnz_cb_id, 0, &nnz_addr_ptr);
+            // The first 4 entries have metadata, so we look at the 5th entry
+            // for our value pushed from the reader.
+            uint32_t nnz = nnz_addr_ptr[4];
+            cb_release_tile(nnz_cb_id);
+            cb_pop_front(nnz_cb_id, 1);
+
+            if (nnz == 0) {
+                continue;
+            }
+        }
+
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 bool enable_reload = false;
@@ -244,7 +265,7 @@ void MAIN {
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                                pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
@@ -270,7 +291,7 @@ void MAIN {
 #endif
 
                                 uint32_t start_dst_index = 0;
-                                matmul_pack_tile(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                                pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                                 tile_regs_release();
                                 cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
@@ -384,7 +405,7 @@ void MAIN {
                     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 #endif  // FUSE_BIAS
-                    pack_untilize_dst_init_short<out_subblock_w, out_block_w>(out_cb_id);
+                    pack_untilize_dest_init<out_subblock_w, out_block_w>(out_cb_id);
                     copy_tile_to_dst_init_short(mm_partials_cb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(

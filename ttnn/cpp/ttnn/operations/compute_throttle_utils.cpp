@@ -42,7 +42,8 @@ void add_stagger_defines_if_needed(
     }
 }
 
-void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<std::string, std::string>& mm_kernel_defines) {
+void throttle_mm_perf(
+    tt::ARCH arch, int num_cores, std::map<std::string, std::string>& mm_kernel_defines, ThrottleLevel throttle_level) {
     // Empirically deduced di/dt problems appear for OPs calling matmul using more than 48 cores on WH_B0
     constexpr uint32_t WH_B0_MM_MAX_CORES_NO_THROTTLE = 48;
     // TODO: determine min core threshold for throttle to be needed on BH
@@ -50,29 +51,45 @@ void throttle_mm_perf(const tt::ARCH arch, const int num_cores, std::map<std::st
     const bool mm_throttle_needed = (arch == tt::ARCH::WORMHOLE_B0 && num_cores > WH_B0_MM_MAX_CORES_NO_THROTTLE) ||
                                     (arch == tt::ARCH::BLACKHOLE && num_cores > BH_MM_MAX_CORES_NO_THROTTLE);
 
+    if (!mm_throttle_needed) {
+        return;
+    }
+
     // Limit matmul compute throughput by inserting NOP instructions between MVMUL instructions of matmul kernel
     // This will slow down the OP if UNPACK/PACK threads are capable of feeding data sufficiently fast (MATH compute
     // bound)
-    const bool enable_throttle_mm_perf = std::getenv("TT_MM_THROTTLE_PERF");
-    const uint32_t throttle_level = enable_throttle_mm_perf ? std::stoi(std::getenv("TT_MM_THROTTLE_PERF")) : 0;
-    if (throttle_level && mm_throttle_needed) {
-        mm_kernel_defines["MM_THROTTLE"] = std::to_string(throttle_level);
-        if (throttle_level == 5) {
-            log_info(tt::LogOp, "Throttle matmul perf to max 33%");
-        } else if (throttle_level == 4) {
-            log_info(tt::LogOp, "Throttle matmul perf to max 40%");
-        } else if (throttle_level == 3) {
-            log_info(tt::LogOp, "Throttle matmul perf to max 50%");
-        } else if (throttle_level == 2) {
-            log_info(tt::LogOp, "Throttle matmul perf to max 67%");
-        } else if (throttle_level == 1) {
-            log_info(tt::LogOp, "Throttle matmul perf to max 73%");
-        } else {
-            mm_kernel_defines["MM_THROTTLE"] = std::to_string(0);
-            log_error(
-                tt::LogOp,
-                "Throttle matmul perf ignored: invalid throttle level requested - only {{1,2,3,4,5}} are supported");
-        }
+    const bool mm_throttle_env_enabled = std::getenv("TT_MM_THROTTLE_PERF");
+
+    uint32_t uint_throttle_level = static_cast<uint32_t>(throttle_level);
+
+    // If environment variable is set, this overrides the throttle level parameter
+    if (mm_throttle_env_enabled) {
+        uint_throttle_level = std::stoi(std::getenv("TT_MM_THROTTLE_PERF"));
+    }
+
+    // No throttling requested
+    if (uint_throttle_level == 0) {
+        return;
+    }
+
+    mm_kernel_defines["MM_THROTTLE"] = std::to_string(uint_throttle_level);
+
+    if (uint_throttle_level == 5) {
+        log_info(tt::LogOp, "Throttle matmul perf to max 33%");
+    } else if (uint_throttle_level == 4) {
+        log_info(tt::LogOp, "Throttle matmul perf to max 40%");
+    } else if (uint_throttle_level == 3) {
+        log_info(tt::LogOp, "Throttle matmul perf to max 50%");
+    } else if (uint_throttle_level == 2) {
+        log_info(tt::LogOp, "Throttle matmul perf to max 67%");
+    } else if (uint_throttle_level == 1) {
+        log_info(tt::LogOp, "Throttle matmul perf to max 73%");
+    } else {
+        mm_kernel_defines["MM_THROTTLE"] = std::to_string(0);
+        log_error(
+            tt::LogOp,
+            "Throttle matmul perf ignored: invalid throttle level {} requested - only {{1,2,3,4,5}} are supported",
+            uint_throttle_level);
     }
 }
 

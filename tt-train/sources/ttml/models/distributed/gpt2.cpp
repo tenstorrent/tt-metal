@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/scoped.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"

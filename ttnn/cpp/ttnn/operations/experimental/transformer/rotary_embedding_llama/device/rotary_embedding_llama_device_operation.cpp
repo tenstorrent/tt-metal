@@ -99,7 +99,11 @@ void RotaryEmbeddingLlama::validate(const std::vector<Tensor>& input_tensors) co
             "Input tensor must be interleaved in prefill mode");
 
         // Checks for cos and sin
-        TT_FATAL(cos.logical_shape()[0] == 1 && cos.logical_shape()[-1] == head_dim, "Cos dims must match input dims");
+        TT_FATAL(
+            cos.logical_shape()[0] == 1 && cos.logical_shape()[-1] == head_dim,
+            "Cos dims must match input dims: cos.shape = {}, head_dim = {}",
+            cos.logical_shape(),
+            head_dim);
         // Check num_heads in cos/sin
         TT_FATAL(
             cos.logical_shape()[1] == input_tensor.logical_shape()[1] || cos.logical_shape()[1] == 1,

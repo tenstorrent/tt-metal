@@ -6,7 +6,6 @@
 
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
@@ -14,7 +13,6 @@
 namespace ttnn::operations::embedding {
 
 ttnn::Tensor EmbeddingOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_arg,
     const Tensor& weight_arg,
     const std::optional<int>& pad_token,
@@ -33,7 +31,6 @@ ttnn::Tensor EmbeddingOperation::invoke(
         mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
-    auto padded_hidden_embedding_dim = mutable_weight.padded_shape()[-1];
     auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
 
     // If indices tensor is 1 dimensional, batch size is 1
@@ -46,7 +43,8 @@ ttnn::Tensor EmbeddingOperation::invoke(
 
     // If layout is row major, OR if the input tensor is not a multiple of TILE_HEIGHT, then we cannot use tilized
     bool fused_tilized = false;
-    if (input_tensor.padded_shape()[-1] % TILE_HEIGHT == 0 && weight.padded_shape()[-1] % TILE_WIDTH == 0) {
+    if (input_tensor.padded_shape()[-1] % tt::constants::TILE_HEIGHT == 0 &&
+        weight.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0) {
         if (layout.has_value()) {
             if (layout.value() == ttnn::TILE_LAYOUT) {
                 fused_tilized = true;
@@ -73,26 +71,6 @@ ttnn::Tensor EmbeddingOperation::invoke(
     }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     return embeddings;
-}
-ttnn::Tensor EmbeddingOperation::invoke(
-    const Tensor& input_tensor_arg,
-    const Tensor& weight_arg,
-    const std::optional<int>& pad_token,
-    const std::optional<ttnn::Layout>& layout,
-    EmbeddingsType embeddings_type,
-    const std::optional<const DataType> dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_arg,
-        weight_arg,
-        pad_token,
-        layout,
-        embeddings_type,
-        dtype,
-        memory_config,
-        std::move(optional_output_tensor));
 }
 
 }  // namespace ttnn::operations::embedding

@@ -23,7 +23,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -40,7 +40,6 @@ namespace tt_metal {
 class IDevice;
 }  // namespace tt_metal
 }  // namespace tt
-// #include "tt_gdb/tt_gdb.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -69,7 +68,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
                 tt_metal::CircularBufferConfig(
                     num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src0_cb_index, single_tile_size);
-            auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
             uint32_t ouput_cb_index = tt::CBIndex::c_16;
             uint32_t num_output_tiles = 1;
@@ -77,7 +76,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
                 tt_metal::CircularBufferConfig(
                     num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(ouput_cb_index, single_tile_size);
-            auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_output_config);
         }
     }
 
@@ -95,7 +94,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         all_cores,
@@ -217,9 +216,7 @@ bool test_multi_core_kernel_same_runtime_args(tt_metal::IDevice* device) {
         .buffer_type = tt_metal::BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     auto dst_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup
@@ -284,13 +281,9 @@ bool test_multi_core_kernel_unique_runtime_args(tt_metal::IDevice* device) {
         .buffer_type = tt_metal::BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     auto dst_dram_buffer_1 = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr_1 = dst_dram_buffer_1->address();
     auto dst_dram_buffer_2 = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr_2 = dst_dram_buffer_2->address();
     auto dst_dram_buffer_3 = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr_3 = dst_dram_buffer_3->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                  Compile Time Args Setup

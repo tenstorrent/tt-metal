@@ -17,8 +17,7 @@
 #include <string>
 #include <vector>
 
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace stl {
@@ -42,7 +41,7 @@ struct fmt::formatter<CoreCoord> {
     auto format(const CoreCoord& core_coord, format_context& ctx) const -> format_context::iterator;
 };
 
-constexpr inline bool operator<=(const CoreCoord& a, const CoreCoord& b) { return (a < b) or (a == b); }
+constexpr bool operator<=(const CoreCoord& a, const CoreCoord& b) { return (a < b) or (a == b); }
 
 struct RelativeCoreCoord {
     long x = 0;
@@ -51,11 +50,9 @@ struct RelativeCoreCoord {
     std::string str() const;
 };
 
-constexpr inline bool operator==(const RelativeCoreCoord& a, const RelativeCoreCoord& b) {
-    return a.x == b.x && a.y == b.y;
-}
+constexpr bool operator==(const RelativeCoreCoord& a, const RelativeCoreCoord& b) { return a.x == b.x && a.y == b.y; }
 
-constexpr inline bool operator!=(const RelativeCoreCoord& a, const RelativeCoreCoord& b) { return !(a == b); }
+constexpr bool operator!=(const RelativeCoreCoord& a, const RelativeCoreCoord& b) { return !(a == b); }
 
 CoreCoord get_core_coord_from_relative(const RelativeCoreCoord& in, const CoreCoord& grid_size);
 
@@ -142,9 +139,11 @@ public:
 
     CoreRangeSet(const CoreRange& core_range);
 
+    CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords);
+
     CoreRangeSet() = default;
 
-    friend void swap(CoreRangeSet& first, CoreRangeSet& second);
+    friend void swap(CoreRangeSet& first, CoreRangeSet& second) noexcept;
 
     CoreRangeSet(const CoreRangeSet& other);
 
@@ -218,8 +217,22 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
 std::vector<CoreCoord> corerange_to_cores(
     const CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false);
 
-CoreRangeSet select_from_corerange(
+// Select a CoreRangeSet of cores from a CoreRangeSet.
+// The method will traverse the given CoreRangeSet in row-wise order and return a subset of cores based on start_index
+// and end_index (inclusive), where each core is represented by it's own CoreRange in the returned CoreRangeSet. Example
+// usage: CoreRangeSet crs = {{0, 0, 2, 2}, {4, 0, 5, 2}}; CoreRangeSet selected_cores = select_from_corerangeset(crs,
+// 0, 3); selected_cores = {{0,0}, {1,0}, {2,0}, {4,0}}
+CoreRangeSet select_from_corerangeset(
     const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise = false);
+
+// Select a contiguous CoreRange of cores from a CoreRangeSet.
+// The method will select an x by y contiguous CoreRange of cores from the given CoreRangeSet. If multiple CoreRanges of
+// size x by y are found, the method will return the lower leftmost subset of cores in the first available CoreRange.
+// Example usage:
+// CoreRangeSet crs = {{0, 0, 2, 2}, {4, 0, 5, 2}};
+// CoreRange selected_core_range = select_contiguous_range_from_corerangeset(crs, 3, 1);
+// selected_core_range = {{0,0}, {2,1}}
+std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRangeSet& crs, uint32_t x, uint32_t y);
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 

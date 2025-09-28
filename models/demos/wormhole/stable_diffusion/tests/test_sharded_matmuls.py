@@ -6,12 +6,11 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import comp_pcc, torch2tt_tensor, tt2torch_tensor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import round_up_to_tile_dim
-from models.utility_functions import comp_pcc, skip_for_grayskull, torch2tt_tensor, tt2torch_tensor
 
 
 # Test matmul attention sequence with InterleavedToShardedPartialOp
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "W0, Z0, W1, Z1, M, K, N, input_dtype, output_dtype, bias, output_mem_config, input_mem_config, program_config_type, grid_size, in0_block_w, out_subblock_h, out_subblock_w, per_core_M, per_core_N, transpose_mcast, fused_activation, fuse_batch, mcast_in0",
     [

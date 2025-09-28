@@ -4,12 +4,12 @@
 
 import pytest
 
+import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
-from models.utility_functions import disable_persistent_kernel_cache, skip_for_grayskull
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
@@ -57,6 +57,7 @@ from models.utility_functions import disable_persistent_kernel_cache, skip_for_g
         ),
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconCausalLM_end_to_end_with_program_cache(
     num_devices,
     model_version,

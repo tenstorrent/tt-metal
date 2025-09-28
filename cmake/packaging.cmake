@@ -6,29 +6,29 @@ set(CPACK_PACKAGE_NAME tt)
 # Suppress the summary so that we can have per-component summaries
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "")
 set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
-set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_SECTION "devel")
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SECTION "libs")
 set(CPACK_DEBIAN_METALIUM-EXAMPLES_PACKAGE_SECTION "doc")
 set(CPACK_DEBIAN_METALIUM-VALIDATION_PACKAGE_SECTION "utils")
 set(CPACK_DEBIAN_NN_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_NN-DEV_PACKAGE_SECTION "devel")
+set(CPACK_DEBIAN_NN-EXAMPLES_PACKAGE_SECTION "doc")
 set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
 
 set(CPACK_DEB_COMPONENT_INSTALL YES)
-set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
-set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
-
 set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
 
-string(TOLOWER "${CMAKE_BUILD_TYPE}" CMAKE_BUILD_TYPE_LOWER)
-if(CMAKE_BUILD_TYPE_LOWER STREQUAL "asan" OR CMAKE_BUILD_TYPE_LOWER STREQUAL "tsan")
-    set(CPACK_DEBIAN_DEBUGINFO_PACKAGE FALSE)
-else()
-    set(CPACK_DEBIAN_METALIUM_DEBUGINFO_PACKAGE TRUE)
-    set(CPACK_DEBIAN_METALIUM-VALIDATION_DEBUGINFO_PACKAGE TRUE)
-    set(CPACK_DEBIAN_METALIUM-DEV_DEBUGINFO_PACKAGE TRUE)
-    set(CPACK_DEBIAN_METALIUM-EXAMPLES_DEBUGINFO_PACKAGE TRUE)
-    set(CPACK_DEBIAN_JIT-BUILD_DEBUGINFO_PACKAGE FALSE) # Some binaries don't have a Build ID; we cannot split dbgsyms
-endif()
+# Use project config file to defer build-type-specific configuration to packaging time
+# This is necessary for multi-config generators.
+configure_file(
+    "${CMAKE_CURRENT_LIST_DIR}/packaging.d/cpack-project-config.cmake.in"
+    "${PROJECT_BINARY_DIR}/cpack-project-config.cmake"
+    @ONLY
+)
+set(CPACK_PROJECT_CONFIG_FILE "${PROJECT_BINARY_DIR}/cpack-project-config.cmake")
+
+set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 
 set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
     OWNER_READ
@@ -45,8 +45,8 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
 
-# FIXME(afuller): Sucks for Ubuntu 22.04, but I'm not about to start packaging Boost.
-set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "libboost-dev (>= 1.78) | libboost1.81-dev")
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "nlohmann-json3-dev (>= 3.10)")
+set(CPACK_DEBIAN_NN-DEV_PACKAGE_DEPENDS "libxtensor-dev (>= 0.23.10)")
 
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
@@ -67,6 +67,24 @@ install(
     COMPONENT metalium-dev
 )
 
+write_basic_package_version_file(
+    ${PROJECT_BINARY_DIR}/tt-nn-config-version.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+configure_package_config_file(
+    ${CMAKE_CURRENT_LIST_DIR}/packaging.d/tt-nn-config.cmake.in
+    ${PROJECT_BINARY_DIR}/tt-nn-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn
+)
+install(
+    FILES
+        ${PROJECT_BINARY_DIR}/tt-nn-config.cmake
+        ${PROJECT_BINARY_DIR}/tt-nn-config-version.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn
+    COMPONENT ttnn-dev
+)
+
 get_cmake_property(CPACK_COMPONENTS_ALL COMPONENTS)
 list(
     REMOVE_ITEM
@@ -77,6 +95,7 @@ list(
     msgpack-cxx
     Headers
     Library
+    json-dev
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
@@ -93,8 +112,7 @@ cpack_add_component(tracy GROUP metalium)
 cpack_add_component_group(metalium-dev)
 cpack_add_component(metalium-dev DEPENDS metalium GROUP metalium-dev DESCRIPTION "TT-Metalium SDK")
 cpack_add_component(fmt-core GROUP metalium-dev)
-cpack_add_component(json-dev GROUP metalium-dev)
-cpack_add_component(magic-enum-dev GROUP metalium-dev)
+cpack_add_component(enchantum GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component(spdlog-dev GROUP metalium-dev)
 cpack_add_component(tt-logger-dev GROUP metalium-dev)
@@ -115,6 +133,21 @@ cpack_add_component(gtest GROUP metalium-validation)
 cpack_add_component_group(nn)
 cpack_add_component(nn DEPENDS metalium GROUP nn DESCRIPTION "TT-NN runtime library")
 cpack_add_component(ttnn-runtime GROUP nn)
+
+cpack_add_component_group(nn-dev)
+cpack_add_component(
+    nn-dev
+    DEPENDS
+        metalium-dev
+        nn
+    GROUP nn-dev
+    DESCRIPTION "TT-NN SDK"
+)
+cpack_add_component(ttnn-dev GROUP nn-dev)
+
+cpack_add_component_group(nn-examples)
+cpack_add_component(nn-examples DEPENDS nn-dev GROUP nn-examples DESCRIPTION "TT-NN examples")
+cpack_add_component(ttnn-examples GROUP nn-examples)
 
 cpack_add_component_group(nn-validation)
 cpack_add_component(

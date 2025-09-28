@@ -23,10 +23,11 @@ on:
 jobs:
   umd-unit-tests:
     name: UMD tests ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - cloud-virtual-machine
-      - in-service
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -50,4 +51,6 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
       - name: Run UMD unit tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: build/test/umd/${{ inputs.arch }}/unit_tests
+        run: |
+          ./build/test/umd/${{ inputs.arch }}/unit_tests
+          ./build/test/umd/api/api_tests

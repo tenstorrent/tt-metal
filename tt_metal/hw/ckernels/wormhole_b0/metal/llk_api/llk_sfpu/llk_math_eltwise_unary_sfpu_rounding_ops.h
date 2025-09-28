@@ -9,8 +9,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_rounding_op_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused, APPROXIMATE>();
@@ -56,6 +54,18 @@ template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_round(uint dst_index, int decimals, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::_calculate_round_<APPROXIMATE>, dst_index, vector_mode, decimals);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_frac(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_calculate_frac_<APPROXIMATE>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_frac_float32(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_calculate_frac_<APPROXIMATE, true>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

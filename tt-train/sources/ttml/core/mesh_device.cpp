@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "mesh_device.hpp"
+
+#include <core/ttnn_all_includes.hpp>
 
 namespace ttml::core {
 
@@ -21,6 +23,10 @@ MeshDevice::MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const 
 [[nodiscard]] ttnn::distributed::MeshDevice& MeshDevice::get_device() {
     assert(m_mesh_device);
     return *m_mesh_device;
+}
+
+[[nodiscard]] std::shared_ptr<ttnn::distributed::MeshDevice> MeshDevice::get_device_ptr() const {
+    return m_mesh_device;
 }
 
 MeshDevice::~MeshDevice() {

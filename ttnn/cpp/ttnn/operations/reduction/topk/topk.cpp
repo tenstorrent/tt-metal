@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,6 @@
 #include "topk.hpp"
 #include "device/topk_op.hpp"
 #include "device/topk_constants.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -28,7 +27,7 @@ uint32_t get_nearest_supported_k_value(uint32_t k) {
 }
 
 // one stop for all transformations needed after executing top-k
-// do we need seperate function for each case? revisit this later
+// do we need separate function for each case? revisit this later
 std::vector<Tensor> post_topk_transform_tensor(
     const Tensor& input_tensor,
     std::vector<Tensor>& result,
@@ -38,7 +37,8 @@ std::vector<Tensor> post_topk_transform_tensor(
     const uint32_t adjusted_k,
     const Shape& original_lshape,
     const MemoryConfig& input_memory_config,
-    const CoreRangeSet& sub_core_grids) {
+    const CoreRangeSet& sub_core_grids,
+    const std::optional<Tensor>& indices_tensor = std::nullopt) {
     const auto& input_shape = input_tensor.padded_shape();
     const auto orig_rank = input_shape.rank();
 
@@ -101,7 +101,6 @@ std::vector<Tensor> post_topk_transform_tensor(
 }  // namespace
 
 std::vector<Tensor> ExecuteTopK::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const uint32_t k,
     const int8_t dim,
@@ -109,6 +108,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     const bool sorted,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Tensor>& indices_tensor,
     std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
@@ -136,7 +136,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
         0);
     const auto pad_val = largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max();
     if (pad_amount > 0) {
-        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
+        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
         padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val);
     }
 
@@ -146,11 +146,10 @@ std::vector<Tensor> ExecuteTopK::invoke(
     auto output_tensor_vec = tt::tt_metal::operation::run(
         TopK{adjusted_k, -1, largest, sorted, input_memory_config, used_sub_core_grids},
         {padded_tensor},
-        {},
+        {indices_tensor},
         optional_output_tensors.has_value()
             ? reduction_common::tuple_to_vector_optional(optional_output_tensors.value())
-            : std::vector<std::optional<Tensor>>{},
-        queue_id);
+            : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt});
 
     return CMAKE_UNIQUE_NAMESPACE::post_topk_transform_tensor(
         transposed_tensor,
@@ -161,7 +160,8 @@ std::vector<Tensor> ExecuteTopK::invoke(
         adjusted_k,
         original_lshape,
         input_memory_config,
-        used_sub_core_grids);
+        used_sub_core_grids,
+        indices_tensor);
 }
 
 }  // namespace ttnn::operations::reduction

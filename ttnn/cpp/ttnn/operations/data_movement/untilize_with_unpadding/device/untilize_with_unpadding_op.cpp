@@ -7,6 +7,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/run_operation.hpp"
 #include "untilize_with_unpadding_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -65,6 +66,13 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
         TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
         TT_FATAL(this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
     }
+
+    // Pack untilize is what allows uint32/int32 support, so if it is not enabled, we do not support uint32/int32
+    if (!this->use_pack_untilize) {
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::UINT32 && input_tensor_a.dtype() != DataType::INT32,
+            "Pack untilize must be enabled to support uint32/int32 data types");
+    }
 }
 
 std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
@@ -82,7 +90,7 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     if (input_tensor_a.memory_config().is_sharded() && this->output_mem_config.is_sharded()) {
         uint32_t fused_height = output_shape.volume() / output_shape[-1];
         uint32_t num_cores = input_tensor_a.shard_spec().value().num_cores();
-        std::array<uint32_t, 2> shard_shape;
+        std::array<uint32_t, 2> shard_shape{};
         ShardSpec shard_spec = input_tensor_a.shard_spec().value();
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
             const auto tile = input_tensor_a.tensor_spec().tile();
@@ -98,6 +106,32 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     }
 
     return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), output_mem_config))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+UntilizeWithUnpadding::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
+    uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
+    int compute_cycles = 0;
+    const int max_tiles_per_row = 8;
+    const int latency_untilize = 390;      // measured latency for untilize_block
+    const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
+    if (std::ceil((float)input_tensor.padded_shape()[-1] / (float)tile_width) <= max_tiles_per_row) {
+        compute_cycles = num_tiles * latency_pack_untilize;
+    } else {
+        compute_cycles = num_tiles * latency_untilize;
+    }
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(

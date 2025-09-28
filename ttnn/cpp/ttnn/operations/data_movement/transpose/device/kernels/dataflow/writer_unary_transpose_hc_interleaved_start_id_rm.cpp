@@ -11,23 +11,13 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(1);
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(3) == 1;
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(4);
-#else
-    constexpr uint32_t page_size = get_compile_time_arg_val(4);
-#endif
-#if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<dst_is_dram> s = {.bank_base_address = dst_addr, .page_size = page_size};
-#endif
+    constexpr uint32_t page_size = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
+    const auto s = TensorAccessor(dst_args, dst_addr, page_size);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {

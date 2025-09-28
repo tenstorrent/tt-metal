@@ -8,7 +8,7 @@ from loguru import logger
 from functools import partial
 
 import ttnn
-from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -64,7 +64,7 @@ def test_prod(shapes, device):
     logger.info("Torch Output")
     logger.info(torch_output)
 
-    # test for equivalance
+    # test for equivalence
     # TODO(Dongjin) : check while changing rtol after enabling fp32_dest_acc_en
     rtol = atol = 0.12
     # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)

@@ -240,8 +240,9 @@ void MAIN {
     uint32_t out_block_hw_last = out_block_hw_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
-        num_out_blocks_padded++;
-        out_block_h_last = (block_h % num_out_blocks);
+        uint32_t residual = block_h - (num_out_blocks * out_block_h_normal);
+        num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        out_block_h_last = residual % out_block_h_normal;
         out_block_hw_last = out_block_h_last * block_w;
     }
     uint32_t cb_ex_external_tiles_required =
@@ -522,13 +523,9 @@ void MAIN {
             add_tiles_init(cb_ex2_global, cb_eps);
             add_tiles(cb_ex2_global, cb_eps, 0, 0, dst0);
             tile_regs_wait();
-            // sqrt(Var + eps)
-            sqrt_tile_init();
-            sqrt_tile(dst0);
-            tile_regs_wait();
             // 1/[sqrt(Var + eps)]
-            recip_tile_init();
-            recip_tile(dst0);
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_ex2pe);
@@ -772,7 +769,7 @@ void MAIN {
 
 #ifdef UNTILIZE_OUT
                 // untilize
-                untilize_init_short(cb_untilize_in);
+                untilize_init(cb_untilize_in);
                 cb_wait_front(cb_untilize_in, per_core_MN);
                 for (uint32_t m = 0; m < per_core_M; ++m) {
                     cb_reserve_back(cb_untilize_out, per_core_N);

@@ -10,14 +10,14 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 
 
 @pytest.mark.parametrize(
-    "warmup_iters, arch_type, stage, perf_target_us",
+    "warmup_iters, arch_type, stage, perf_target_max_us, perf_target_min_us",
     [
-        (5, "6U", "decode", 590),
-        (5, "TG", "decode", 590),
-        (5, "T3K", "decode", 590),
-        (1, "6U", "prefill", 75000),
-        (1, "TG", "prefill", 75000),
-        (1, "T3K", "prefill", 75000),
+        (5, "6U", "decode", 17, 12),
+        (5, "TG", "decode", 61, 52),
+        (5, "T3K", "decode", 38, 32),  # huge variance among machines for T3K
+        (1, "6U", "prefill", 800, 700),
+        (1, "TG", "prefill", 2700, 2000),
+        (1, "T3K", "prefill", 4300, 3800),
     ],
     ids=["6U_decode", "TG_decode", "T3K_decode", "6U_prefill", "TG_prefill", "T3K_prefill"],
 )
@@ -26,7 +26,8 @@ def test_all_to_all_dispatch_perf(
     warmup_iters,
     arch_type,
     stage,
-    perf_target_us,
+    perf_target_max_us,
+    perf_target_min_us,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -65,7 +66,7 @@ def test_all_to_all_dispatch_perf(
     measured_std = results[cols[0]]["STD"]
     measured_max_us = measured_max / 1000
 
-    logger.info(f"Measured performance: {measured_max_us:.3f} us vs. target: {perf_target_us} us")
+    logger.info(f"Measured performance: {measured_max_us:.3f} us vs. target: {perf_target_max_us} us")
 
     # Save the measurement
     benchmark_data.add_measurement(profiler, 0, step_name, f"{op_name}-min", measured_min)
@@ -78,4 +79,9 @@ def test_all_to_all_dispatch_perf(
         ml_model_name="moe",
     )
 
-    assert measured_max_us < perf_target_us, f"Performance target not met: {measured_max_us} us > {perf_target_us} us"
+    assert (
+        measured_max_us <= perf_target_max_us
+    ), f"Performance target not met due a regression (measured vs expected max): {measured_max_us} us > {perf_target_max_us} us"
+    assert (
+        measured_max_us >= perf_target_min_us
+    ), f"Performance target not met due a performance improvement (measured vs expected min): {measured_max_us} us < {perf_target_min_us} us"

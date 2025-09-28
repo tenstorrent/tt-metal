@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -8,18 +8,21 @@ import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_timesteps import TtTimesteps
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from loguru import logger
 
 
 @pytest.mark.parametrize(
     "input_shape, module_path, num_channels", [((1,), "time_proj", 320), ((6,), "add_time_proj", 256)]
 )
-def test_timesteps(device, input_shape, module_path, num_channels, reset_seeds):
+def test_timesteps(device, input_shape, module_path, num_channels, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="unet",
+        local_files_only=is_ci_env,
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 

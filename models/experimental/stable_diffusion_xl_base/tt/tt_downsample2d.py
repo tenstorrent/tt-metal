@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 
 
-class TtDownsample2D(nn.Module):
+class TtDownsample2D(LightweightModule):
     def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups, model_config):
         super().__init__()
 
@@ -23,13 +23,11 @@ class TtDownsample2D(nn.Module):
 
         self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv_config = model_config.get_conv_config(conv_path=module_path)
-        self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device,
+        self.compute_config = model_config.get_conv_compute_config(module_path=module_path)
+        self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
             weights,
             bias,
             self.conv_config.weights_dtype,
-            fp32_dest_acc_en=(self.conv_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
     def forward(self, hidden_states, input_shape):

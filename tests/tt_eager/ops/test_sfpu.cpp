@@ -6,7 +6,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
@@ -27,7 +27,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -42,13 +42,13 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
 namespace tt_metal {
 class IDevice;
 }  // namespace tt_metal
 }  // namespace tt
-// #include "tt_gdb/tt_gdb.hpp"
 
 using std::vector;
 
@@ -69,7 +69,7 @@ void update_sfpu_op_to_hlk_op() {
         } else if (unary_op_name == "RECIPROCAL") {
             unary_op_name = "RECIP";
         }
-        auto unary_op_type = magic_enum::enum_cast<UnaryOpType>(unary_op_name).value();
+        auto unary_op_type = enchantum::cast<UnaryOpType>(unary_op_name).value();
         if (ttnn::operations::unary::utils::is_parametrized_type(unary_op_type)) {
             if (unary_op_type == UnaryOpType::EXP) {
                 sfpu_op_to_hlk_op_name[sfpu_op_name] =
@@ -136,7 +136,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, src_cb_config);
+        tt_metal::CreateCircularBuffer(program, core, src_cb_config);
 
         // no need for c_in2 buffer since scaler=0 in the reader kernel
 
@@ -146,23 +146,31 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
             tt_metal::CircularBufferConfig(
                 num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, output_cb_config);
+        tt_metal::CreateCircularBuffer(program, core, output_cb_config);
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_time_args);
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_eager/kernels/dataflow/reader_unary_8bank.cpp"
                       : "tests/tt_eager/kernels/dataflow/reader_unary_push_4.cpp",
             core,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .compile_args = reader_compile_time_args});
 
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             multibank ? "tests/tt_eager/kernels/dataflow/writer_unary_8bank.cpp"
                       : "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = writer_compile_time_args});
 
         std::vector<uint32_t> compute_kernel_args = {
             (uint)num_tiles,
@@ -173,7 +181,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
 
         // defines macro expands per SFPU ops
         std::map<std::string, std::string> hlk_op_name = sfpu_op_to_hlk_op_name.at(sfpu_name);
-        auto eltwise_unary_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             hlk_kernel_name,
             core,

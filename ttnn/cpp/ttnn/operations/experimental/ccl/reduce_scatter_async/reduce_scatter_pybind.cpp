@@ -107,7 +107,6 @@ void py_bind_reduce_scatter_async(pybind11::module& module) {
         module,
         ttnn::experimental::reduce_scatter_async,
         R"doc(
-
         Performs an reduce_scatter operation on multi-device :attr:`input_tensor` across all devices.  This operation requires a persistent
         fabric to be enabled in order to function.
 
@@ -118,7 +117,7 @@ void py_bind_reduce_scatter_async(pybind11::module& module) {
             mesh_device (MeshDevice): Device mesh to perform the line-reduce-scatter operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
 
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.

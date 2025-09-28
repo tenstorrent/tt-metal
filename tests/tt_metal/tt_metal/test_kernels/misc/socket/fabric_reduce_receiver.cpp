@@ -1,7 +1,8 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
 #include "socket_api.h"
 
@@ -11,8 +12,7 @@ void kernel_main() {
     constexpr uint32_t socket1_config_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
-    constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(4);
 
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender receiver0_fabric_connection =
@@ -22,12 +22,8 @@ void kernel_main() {
     receiver0_fabric_connection.open_start();
     receiver1_fabric_connection.open_start();
     // Sanity
-    cb_reserve_back(fabric_packet_header_cb_id, 2);
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket0_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket1_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            get_write_ptr(fabric_packet_header_cb_id) + sizeof(PACKET_HEADER_TYPE));
+    auto* socket0_packet_header_addr = PacketHeaderPool::allocate_header();
+    auto* socket1_packet_header_addr = PacketHeaderPool::allocate_header();
 
     // Create Socket Interface
     SocketReceiverInterface receiver0_socket = create_receiver_socket_interface(socket0_config_addr);

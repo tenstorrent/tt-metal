@@ -14,9 +14,10 @@
 #include <vector>
 
 #include <tt-metalium/allocator_types.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/math.hpp>
 
 namespace tt {
 
@@ -27,6 +28,7 @@ class Buffer;
 // Fwd declares
 enum class BufferType;
 
+// THREAD SAFETY: Allocator is thread safe.
 class Allocator {
 public:
     Allocator(const AllocatorConfig& alloc_config);
@@ -38,7 +40,8 @@ public:
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
-    const std::unordered_set<Buffer*>& get_allocated_buffers() const;
+    std::unordered_set<Buffer*> get_allocated_buffers() const;
+    size_t get_num_allocated_buffers() const;
 
     uint32_t get_num_banks(const BufferType& buffer_type) const;
     DeviceAddr get_bank_size(const BufferType& buffer_type) const;
@@ -84,6 +87,8 @@ protected:
 private:
     void verify_safe_allocation() const;
 
+    mutable std::mutex mutex_;
+
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
@@ -98,8 +103,26 @@ private:
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids_;
     std::unordered_set<Buffer*> allocated_buffers_;
 
-    AllocatorConfig config_;
+    const AllocatorConfig config_;
 };
+
+namespace detail {
+
+// This is only used by the move operation in ttnn and is not intended for public use
+// (it's in the detail namespace)
+constexpr DeviceAddr calculate_bank_size_spread(
+    DeviceAddr size_bytes, DeviceAddr page_size_bytes, uint32_t num_banks, uint32_t alignment_bytes) {
+    TT_ASSERT(
+        page_size_bytes == 0 ? size_bytes == 0 : size_bytes % page_size_bytes == 0,
+        "Page size {} should be divisible by buffer size {}",
+        page_size_bytes,
+        size_bytes);
+    DeviceAddr num_pages = page_size_bytes == 0 ? 0 : size_bytes / page_size_bytes;
+    DeviceAddr num_equally_distributed_pages = num_pages == 0 ? 0 : 1 + ((num_pages - 1) / num_banks);
+    return num_equally_distributed_pages * round_up(page_size_bytes, static_cast<DeviceAddr>(alignment_bytes));
+}
+
+}  // namespace detail
 
 }  // namespace tt_metal
 

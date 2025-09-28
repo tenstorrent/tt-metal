@@ -4,7 +4,6 @@
 
 #include "unary_device_operation.hpp"
 
-#include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -79,7 +78,7 @@ void UnaryDeviceOperation::validate_on_program_cache_miss(
     auto arch = input_tensor.device()->arch();
     auto input_datatype = input_tensor.dtype();
     for (const auto& unary_op : args.op_chain) {
-        validate_supported_arch_dtype(arch, input_datatype, output_datatype, unary_op.op_type);
+        validate_supported_arch_dtype(arch, input_datatype, output_datatype, unary_op.type());
     }
 
     TT_FATAL(
@@ -178,7 +177,7 @@ bool UnaryDeviceOperation::skip_launch(
 std::tuple<UnaryDeviceOperation::operation_attributes_t, UnaryDeviceOperation::tensor_args_t>
 UnaryDeviceOperation::invoke(
     const Tensor& input,
-    const std::vector<UnaryWithParam>& op_chain,
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     bool fp32_dest_acc_en,

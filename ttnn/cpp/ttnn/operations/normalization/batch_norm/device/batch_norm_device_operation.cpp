@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "batch_norm_utils.hpp"
 
 namespace ttnn::operations::normalization {
 
@@ -163,7 +164,7 @@ tt::stl::hash::hash_t BatchNormOperation::compute_program_hash(
 }
 
 tt::stl::hash::hash_t BatchNormOperation::operation_attributes_t::to_hash() const {
-    return tt::stl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype());
+    return tt::stl::hash::hash_objects_with_default_seed(eps, memory_config, get_dtype(), compute_kernel_config);
 }
 
 std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tensor_args_t> BatchNormOperation::invoke(
@@ -174,8 +175,13 @@ std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tenso
     std::optional<Tensor> weight,
     std::optional<Tensor> bias,
     std::optional<Tensor> output,
-    const std::optional<MemoryConfig>& memory_config) {
-    operation_attributes_t operation_attributes{eps, memory_config.value_or(input.memory_config()), input.dtype()};
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    operation_attributes_t operation_attributes{
+        eps,
+        memory_config.value_or(input.memory_config()),
+        batch_norm::utils::resolve_compute_kernel_config(compute_kernel_config, input),
+        input.dtype()};
     tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
     return {operation_attributes, tensor_args};
 }

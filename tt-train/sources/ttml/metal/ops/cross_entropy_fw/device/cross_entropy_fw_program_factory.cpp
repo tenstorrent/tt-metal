@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,9 @@
 
 #include <bit>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "cross_entropy_fw_device_operation_types.hpp"
 #include "metal/ops/common/program_utils.hpp"
@@ -45,7 +47,6 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_11;
 
 constexpr uint32_t kNumTargetIndexesTiles = 1U;
 constexpr uint32_t kNumMaskTiles = 1U;
-constexpr uint32_t kNumMaxValueTiles = 1U;
 constexpr uint32_t kNumInputTilesByIndx = 1U;
 constexpr uint32_t kMaxValueBeforeReductionTiles = 2U;
 constexpr uint32_t kNumTargetLogitsTiles = 2U;
@@ -74,71 +75,6 @@ struct CrossEntropyForwardKernels {
     tt::tt_metal::KernelHandle compute_group_1;
     tt::tt_metal::KernelHandle compute_group_2;
 };
-
-/**
- *   Create and configure a circular buffer, returning both the configuration and the handle.
- */
-tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size,
-    uint32_t num_tiles) {
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-            .set_page_size(cb_index, single_tile_size);
-
-    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return cb_handle;
-}
-
-/**
- *   Create a reader kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_reader_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
-}
-
-/**
- *   Create a writer kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_writer_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
-}
-
-/**
- * Create a compute kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_compute_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program,
-        kernel_path,
-        core_ranges,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = true,
-            .math_approx_mode = false,
-            .compile_args = compile_time_args,
-            .defines = defines});
-}
 
 /**
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
@@ -205,8 +141,8 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
 
-    uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
+    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
     auto padded_tensor_volume = input.physical_volume();
@@ -228,7 +164,6 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // get the number of inner dimension
@@ -271,31 +206,30 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     const uint32_t num_input_tiles = (everything_fits_in_l1) ? Wt : twice_block_size;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
-    auto precise_data_format = tt::DataFormat::Float32;
     auto target_indexes_data_format = tt::DataFormat::UInt32;
 
-    auto cb_input = create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    auto cb_target = create_circular_buffer(
+    [[maybe_unused]] auto cb_target = create_circular_buffer(
         program, all_cores, kTargetCbIndex, target_indexes_data_format, uint32_read_page_size, kNumTargetIndexesTiles);
 
-    auto cb_mask = create_circular_buffer(
+    [[maybe_unused]] auto cb_mask = create_circular_buffer(
         program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    auto cb_max_mask = create_circular_buffer(
+    [[maybe_unused]] auto cb_max_mask = create_circular_buffer(
         program, all_cores, kMaxMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    auto cb_scaler = create_circular_buffer(
+    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    auto cb_input_tile_by_idx = create_circular_buffer(
+    [[maybe_unused]] auto cb_input_tile_by_idx = create_circular_buffer(
         program, all_cores, kInputTileCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumInputTilesByIndx);
 
-    auto cb_target_inputs = create_circular_buffer(
+    [[maybe_unused]] auto cb_target_inputs = create_circular_buffer(
         program, all_cores, kTargetLogitsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumTargetLogitsTiles);
 
-    auto cb_max_value_before_reduction = create_circular_buffer(
+    [[maybe_unused]] auto cb_max_value_before_reduction = create_circular_buffer(
         program,
         all_cores,
         kMaxValueBeforeReductionCbIndex,
@@ -303,7 +237,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kMaxValueBeforeReductionTiles);
 
-    auto cb_max_value_after_reduction = create_circular_buffer(
+    [[maybe_unused]] auto cb_max_value_after_reduction = create_circular_buffer(
         program,
         all_cores,
         kMaxValueAfterReductionCbIndex,
@@ -311,7 +245,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kNumMaxValueAfterReductionTiles);
 
-    auto cb_exp_sum_before_reduction = create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_before_reduction = create_circular_buffer(
         program,
         all_cores,
         kExpSumBeforeReductionCbIndex,
@@ -319,7 +253,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
-    auto cb_exp_sum_after_refuction = create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_after_refuction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,
@@ -327,7 +261,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
-    auto cb_output = create_circular_buffer(
+    [[maybe_unused]] auto cb_output = create_circular_buffer(
         program,
         all_cores,
         kOutputCbIndex,
@@ -343,19 +277,19 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* target_buffer = target.buffer();
     TT_FATAL(
         target_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Target buffer must be in DRAM. Target buffer of type {}",
-        magic_enum::enum_name(target_buffer->buffer_type()));
+        enchantum::to_string(target_buffer->buffer_type()));
 
     auto* output_buffer = output.buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        magic_enum::enum_name(output_buffer->buffer_type()));
+        enchantum::to_string(output_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;
@@ -376,16 +310,15 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     CrossEntropyForwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */
-        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size},
-        defines,
-        kReaderKernelPath);
+    std::vector<uint32_t> reader_compile_time_args{
+        block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_compile_time_args);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
+    std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for cross_entropy_fw
@@ -398,8 +331,8 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         Wt                          // num_inner / TILE_W
     };
 
-    kernels.compute_group_1 =
-        create_compute_kernel(program, core_group_1, compute_group_1_args, defines, kComputeKernelPath);
+    kernels.compute_group_1 = create_compute_kernel(
+        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // Group 2 (if present) compile-time arguments
     std::vector<uint32_t> compute_group_2_args = {
@@ -408,8 +341,8 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         Wt                          // num_inner / TILE_W
     };
 
-    kernels.compute_group_2 =
-        create_compute_kernel(program, core_group_2, compute_group_2_args, defines, kComputeKernelPath);
+    kernels.compute_group_2 = create_compute_kernel(
+        program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     // -------------------------------------------------------------------------
     // 5) Assign runtime args for each core
@@ -455,7 +388,6 @@ void CrossEntropyForwardProgramFactory::override_runtime_arguments(
     auto& cross_entropy_fw_writer_kernel_id = shared_variables.writer_kernel_id;
     auto& cross_entropy_fw_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
     auto& cross_entropy_fw_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
-    auto& core_group_1 = shared_variables.core_group_1;
     auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
@@ -470,9 +402,9 @@ void CrossEntropyForwardProgramFactory::override_runtime_arguments(
     auto& writer_runtime_args = GetRuntimeArgs(program, cross_entropy_fw_writer_kernel_id);
     auto& group_1_runtime_args = GetRuntimeArgs(program, cross_entropy_fw_kernel_group_1_id);
     // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
-    auto& group_2_runtime_args = core_group_2.ranges().empty()
-                                     ? group_1_runtime_args
-                                     : GetRuntimeArgs(program, cross_entropy_fw_kernel_group_2_id);
+    [[maybe_unused]] auto& group_2_runtime_args = core_group_2.ranges().empty()
+                                                      ? group_1_runtime_args
+                                                      : GetRuntimeArgs(program, cross_entropy_fw_kernel_group_2_id);
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

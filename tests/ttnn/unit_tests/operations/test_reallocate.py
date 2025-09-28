@@ -9,7 +9,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-from models.utility_functions import is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 @pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
@@ -19,9 +19,6 @@ def test_reallocate_interleaved(device, mem_config, num_allocs):
     height = 128
     depth = 2
     batch = 2
-
-    # https://github.com/tenstorrent/tt-metal/issues/23236
-    device.disable_and_clear_program_cache()
 
     if num_allocs == 2 and mem_config == ttnn.DRAM_MEMORY_CONFIG:
         pytest.xfail("#7732: dram tensor corruption after move")

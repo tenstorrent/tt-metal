@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-import transformers
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import divup
+from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
 from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
-from models.utility_functions import divup
 
 
 class VitTestInfra:
@@ -22,6 +22,7 @@ class VitTestInfra:
         weights_mesh_mapper=None,
         output_mesh_composer=None,
         use_random_input_tensor=False,
+        model_location_generator=None,
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -42,8 +43,9 @@ class VitTestInfra:
         model_name = "google/vit-base-patch16-224"
         sequence_size = 224
 
-        config = transformers.ViTConfig.from_pretrained(model_name)
-        model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
+        model = load_torch_model(model_location_generator, embedding=True)
+        config = model.config
+
         self.config = ttnn_optimized_sharded_vit_wh.update_model_config(config, batch_size)
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
@@ -159,6 +161,7 @@ def create_test_infra(
     weights_mesh_mapper=None,
     output_mesh_composer=None,
     use_random_input_tensor=False,
+    model_location_generator=None,
 ):
     return VitTestInfra(
         device,
@@ -167,4 +170,5 @@ def create_test_infra(
         weights_mesh_mapper,
         output_mesh_composer,
         use_random_input_tensor,
+        model_location_generator=model_location_generator,
     )

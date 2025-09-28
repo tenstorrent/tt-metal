@@ -52,7 +52,7 @@ void py_bind_conv_transpose2d(py::module& module) {
         :param ttnn.Tensor input_tensor:  the input tensor.
         :param ttnn.Tensor weight_tensor: the weight tensor.
         :param ttnn.Tensor, None bias_tensor:   optional bias tensor. Default: None
-        :param ttnn.IDevice device:  the device to use.
+        :param ttnn.MeshDevice device:  the device to use.
         :param int in_channels:  number of input channels.
         :param int out_channels:  number of output channels.
         :param int batch_size:  batch size.
@@ -67,7 +67,6 @@ void py_bind_conv_transpose2d(py::module& module) {
         :param ttnn.Conv2dConfig, None conv_config: configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: configuration for compute kernel. Default: None
         :param bool mirror_kernel: Determines if the op should mirror the kernel internally. Should be set to True if the kernel has already been mirrored.
-        :param int queue_id: the queue id to use for the operation. Default: `0`.
         :param bool return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
         :param bool return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
 
@@ -78,80 +77,6 @@ void py_bind_conv_transpose2d(py::module& module) {
         :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height and width, if return_weights_and_bias = True
         :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: the output tensor, and it's height and width, if return_output_dim = True and return_weights_and_bias = True
         )doc",
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::conv_transpose2d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               ttnn::IDevice* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_height,
-               uint32_t input_width,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
-               std::array<uint32_t, 2> output_padding,
-               std::array<uint32_t, 2> dilation,
-               uint32_t groups,
-               const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
-               const std::optional<const Conv2dConfig>& conv_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_config,
-               const std::optional<const MemoryConfig>& memory_config,
-               bool mirror_kernel,
-               const bool return_output_dim,
-               const bool return_weights_and_bias,
-               QueueId queue_id) -> Result {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_height,
-                    input_width,
-                    kernel_size,
-                    stride,
-                    padding,
-                    output_padding,
-                    dilation,
-                    groups,
-                    dtype,
-                    bias_tensor,
-                    conv_config,
-                    compute_config,
-                    memory_config,
-                    mirror_kernel,
-                    return_output_dim,
-                    return_weights_and_bias);
-            },
-            py::kw_only(),
-            py::arg("input_tensor"),
-            py::arg("weight_tensor"),
-            py::arg("device"),
-            py::arg("in_channels"),
-            py::arg("out_channels"),
-            py::arg("batch_size"),
-            py::arg("input_height"),
-            py::arg("input_width"),
-            py::arg("kernel_size"),
-            py::arg("stride") = std::array<uint32_t, 2>{1, 1},
-            py::arg("padding") = std::array<uint32_t, 2>{0, 0},
-            py::arg("output_padding") = std::array<uint32_t, 2>{0, 0},
-            py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
-            py::arg("groups") = 1,
-            py::arg("dtype") = std::nullopt,
-            py::arg("bias_tensor") = std::nullopt,
-            py::arg("conv_config") = std::nullopt,
-            py::arg("compute_config") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("mirror_kernel") = true,
-            py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv_transpose2d)& self,
@@ -176,10 +101,8 @@ void py_bind_conv_transpose2d(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                bool mirror_kernel,
                const bool return_output_dim,
-               const bool return_weights_and_bias,
-               QueueId queue_id) -> Result {
+               const bool return_weights_and_bias) -> Result {
                 return self(
-                    queue_id,
                     input_tensor,
                     weight_tensor,
                     device,
@@ -225,38 +148,11 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
             py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("return_weights_and_bias") = false});
 
     module.def(
         "prepare_conv_transpose2d_weights",
-        prepare_conv_transpose2d_weights<ttnn::IDevice>,
-        py::kw_only(),
-        py::arg("weight_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("input_layout"),
-        py::arg("weights_format"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("has_bias"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("input_dtype"),
-        py::arg("output_dtype") = std::nullopt,
-        py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt,
-        py::arg("mirror_kernel") = true);
-
-    module.def(
-        "prepare_conv_transpose2d_weights",
-        prepare_conv_transpose2d_weights<ttnn::MeshDevice>,
+        prepare_conv_transpose2d_weights,
         py::kw_only(),
         py::arg("weight_tensor"),
         py::arg("input_memory_config"),
@@ -282,30 +178,7 @@ void py_bind_conv_transpose2d(py::module& module) {
 
     module.def(
         "prepare_conv_transpose2d_bias",
-        prepare_conv_transpose2d_bias<ttnn::IDevice>,
-        py::kw_only(),
-        py::arg("bias_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("input_layout"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("input_dtype"),
-        py::arg("output_dtype") = std::nullopt,
-        py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
-
-    module.def(
-        "prepare_conv_transpose2d_bias",
-        prepare_conv_transpose2d_bias<ttnn::MeshDevice>,
+        prepare_conv_transpose2d_bias,
         py::kw_only(),
         py::arg("bias_tensor"),
         py::arg("input_memory_config"),

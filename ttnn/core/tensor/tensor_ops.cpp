@@ -5,6 +5,7 @@
 #include "tensor/tensor_ops.hpp"
 
 #include "tt_stl/overloaded.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -30,35 +31,23 @@
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, target_device, mem_config);
-    if (input_tensor.storage_type() == StorageType::DEVICE) {
-        TT_FATAL(input_tensor.device() == target_device, "Currently do not support moving between devices");
-        GraphTracker::instance().track_function_end(input_tensor);
-        return input_tensor;
-    }
-    auto device_tensor = tensor_impl::to_device_wrapper(input_tensor, target_device, mem_config, cq_id);
-    device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
-    GraphTracker::instance().track_function_end(device_tensor);
-    return device_tensor;
-}
-
-Tensor tensor_to_device(
-    const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
+    const Tensor& input_tensor,
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> mem_config,
+    std::optional<QueueId> cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
     if (input_tensor.storage_type() == StorageType::DEVICE) {
-        TT_ASSERT(input_tensor.mesh_device() == mesh_device, "Currently do not support moving between devices");
+        TT_ASSERT(input_tensor.device() == mesh_device, "Currently do not support moving between devices");
         GraphTracker::instance().track_function_end(input_tensor);
         return input_tensor;
     }
-    auto device_tensor = tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config, cq_id);
+    auto device_tensor = tensor_impl::to_device_wrapper(input_tensor, mesh_device, mem_config, cq_id);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
 }
 
-Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
+Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_id) {
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         return input_tensor;
     }
@@ -66,17 +55,10 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
 
-    if (input_tensor.mesh_device_.has_value()) {
-        auto output = tensor_impl::to_host_mesh_tensor_wrapper(input_tensor, blocking, cq_id);
-        output = tt::tt_metal::set_tensor_id(output);
-        GraphTracker::instance().track_function_end(output);
-        return output;
-    }
-
-    Tensor host_tensor = tensor_impl::to_host_wrapper(input_tensor, blocking, cq_id);
-    host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
-    GraphTracker::instance().track_function_end(host_tensor);
-    return host_tensor;
+    auto output = tensor_impl::to_host_wrapper(input_tensor, blocking, cq_id);
+    output = tt::tt_metal::set_tensor_id(output);
+    GraphTracker::instance().track_function_end(output);
+    return output;
 }
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout) {
@@ -104,8 +86,7 @@ Tensor tensor_pad(
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::pad", input_tensor, output_padded_shape, input_tensor_start, pad_value);
-    TT_ASSERT(
-        is_cpu_tensor(input_tensor) || is_multi_device_host_tensor(input_tensor), "Tensor must be on host for padding");
+    TT_ASSERT(is_cpu_tensor(input_tensor), "Tensor must be on host for padding");
     // TODO: Flip to assert when we remove use cases in python and c++
     if (input_tensor.layout() != Layout::ROW_MAJOR) {
         log_warning(

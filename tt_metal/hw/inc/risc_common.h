@@ -151,8 +151,39 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
 //  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
 //  Need to invalidate any address written by noc that may have been previously read by riscv
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
-#if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
+#if defined(ARCH_BLACKHOLE)
     asm("fence");
+#endif
+}
+
+template <bool enable = true>
+inline __attribute__((always_inline)) void set_l1_data_cache() {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (enable) {
+        asm(R"ASM(
+            li t1, 0x8
+            csrrc zero, 0x7c0, t1
+             )ASM" ::
+            : "t1");
+#if !defined(ENABLE_HW_CACHE_INVALIDATION)
+    // Disable gathering to stop HW from invalidating the data cache after 128 transactions by setting bit 24
+    // This is default enabled
+    asm(R"ASM(
+            li   t1, 0x1
+            slli t1, t1, 24
+            fence
+            csrrs zero, 0x7c0, t1
+            )ASM" ::
+            : "t1");
+#endif
+    } else {
+        asm(R"ASM(
+            fence
+            li t1, 0x8
+            csrrs zero, 0x7c0, t1
+             )ASM" ::
+            : "t1");
+    }
 #endif
 }
 
@@ -191,14 +222,34 @@ inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {
-        asm("nop");
+        __asm__ volatile("nop");
     }
 #else
 #pragma GCC unroll 128
     for (int i = 0; i < 128; i++) {
-        asm("nop");
+        __asm__ volatile("nop");
     }
 #endif
+}
+
+// Zero a buffer in L1 memory
+void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
+    for (uint32_t i = 0; i < size_bytes / 4; i++) {
+        buf[i] = 0;
+    }
+}
+
+// Get the wall clock timestamp. Reading RISCV_DEBUG_REG_WALL_CLOCK_L samples/freezes (for readback)
+// upper 32 bits of the 64-bit timestamp. Upper 32 bits are read from RISCV_DEBUG_REG_WALL_CLOCK_H.
+inline uint64_t get_timestamp() {
+    volatile uint timestamp_low = *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    volatile uint timestamp_high = *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_H);
+    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
+}
+
+// Get only the lower 32 bits of the wall clock timestamp
+inline uint32_t get_timestamp_32b() {
+    return *reinterpret_cast<volatile uint tt_reg_ptr*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 }
 
 #endif

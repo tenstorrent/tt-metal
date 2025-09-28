@@ -1,0 +1,35 @@
+# Physical mesh configuration (optional)
+physical_mesh:
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml"
+   eth_coord_mapping: [
+    [[0, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 1, 1, 0, 0]],
+    [[0, 2, 0, 0, 0], [0, 3, 0, 0, 0], [0, 2, 1, 0, 0], [0, 3, 1, 0, 0]]
+    ]
+
+# Fabric configuration (required)
+fabric_config:
+  topology: Mesh
+  routing_type: Dynamic
+
+# Test definitions (required)
+tests:
+  - name: "all_to_all_test"
+    num_iterations: 1
+    memory_config:
+      fifo_size: [1024, 2048]
+      page_size: [256, 512]
+      data_size: 4096
+      num_transactions: 15
+    pattern_expansions:
+      - type: "all_to_all_device_unicast"
+        core_coord: [0, 0]
+  - name: "all_device_broadcast_pattern_test"
+    num_iterations: 20
+    memory_config:
+      fifo_size: 2048
+      page_size: 512
+      data_size: 4096
+      num_transactions: 15
+    pattern_expansions:
+      - type: "all_device_broadcast"
+        core_coord: [0, 0]

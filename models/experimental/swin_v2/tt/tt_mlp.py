@@ -265,5 +265,5 @@ class TtMLP:
                 ),
             )
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
         return x

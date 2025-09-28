@@ -4,6 +4,7 @@ target_sources(
     PRIVATE
         main.cpp
         test_visible_devices_mp.cpp
+        test_sanity.cpp
 )
 set_target_properties(
     distributed_multiprocess_tests

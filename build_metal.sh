@@ -3,9 +3,16 @@
 set -eo pipefail
 
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-MAJOR=${VERSION%.*}
 ARCH=`uname -m`
+
+# VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
+source /etc/os-release
+VERSION="unknown-version"
+if [[ -v "$VERSION_ID" ]]; then
+    VERSION="${VERSION_ID}"
+elif [[ -v "$BUILD_ID" ]]; then
+    VERSION="${BUILD_ID}"
+fi
 
 # Function to display help
 show_help() {
@@ -24,6 +31,8 @@ show_help() {
     echo "  --build-umd-tests                Build umd Testcases."
     echo "  --build-programming-examples     Build programming examples."
     echo "  --build-tt-train                 Build tt-train."
+    echo "  --build-packages                 Build installation packages (.deb)"
+    echo "  --build-telemetry                Build tt-telemetry server."
     echo "  --build-all                      Build all optional components."
     echo "  --release                        Set the build type as Release."
     echo "  --development                    Set the build type as RelWithDebInfo."
@@ -42,6 +51,7 @@ show_help() {
     echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
+    echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
 }
 
 clean() {
@@ -66,9 +76,11 @@ build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
 build_tt_train="OFF"
+build_telemetry="OFF"
 build_static_libs="OFF"
 unity_builds="ON"
 light_metal_trace="ON"
+build_packages="OFF"
 build_all="OFF"
 cxx_compiler_path=""
 cpm_source_cache=""
@@ -86,6 +98,7 @@ configure_only="OFF"
 enable_coverage="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
+enable_fake_kernels_target="OFF"
 
 declare -a cmake_args
 
@@ -106,6 +119,8 @@ build-metal-tests
 build-umd-tests
 build-programming-examples
 build-tt-train
+build-packages
+build-telemetry
 build-static-libs
 disable-unity-builds
 disable-light-metal-trace
@@ -123,6 +138,7 @@ configure-only
 enable-coverage
 without-distributed
 without-python-bindings
+enable-fake-kernels-target
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -172,6 +188,10 @@ while true; do
             build_programming_examples="ON";;
         --build-tt-train)
             build_tt_train="ON";;
+        --build-packages)
+            build_packages="ON";;
+        --build-telemetry)
+            build_telemetry="ON";;
         --build-static-libs)
             build_static_libs="ON";;
         --build-all)
@@ -182,6 +202,8 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
+        --enable-fake-kernels-target)
+            enable_fake_kernels_target="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -329,6 +351,10 @@ if [ "$build_tt_train" = "ON" ]; then
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
 fi
 
+if [ "$build_telemetry" = "ON" ]; then
+    cmake_args+=("-DBUILD_TELEMETRY=ON")
+fi
+
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
     cmake_args+=("-DTT_INSTALL=OFF")
@@ -351,6 +377,7 @@ if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
+    cmake_args+=("-DBUILD_TELEMETRY=ON")
 fi
 
 if [ "$light_metal_trace" = "ON" ]; then
@@ -374,6 +401,12 @@ else
     cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
 fi
 
+if [ "$enable_fake_kernels_target" = "ON" ]; then
+    cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=ON")
+else
+    cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
+fi
+
 # toolchain and cxx_compiler settings would conflict with eachother
 # only use toolchain if not setting cxx compiler directly
 if [ "$cxx_compiler_path" == "" ]; then
@@ -385,8 +418,14 @@ echo "INFO: Configuring Project"
 echo "INFO: Running: cmake "${cmake_args[@]}""
 cmake "${cmake_args[@]}"
 
+if [ "$build_packages" == "ON" ];  then
+  target="package"
+else
+  target="install"
+fi
+
 # Build libraries and cpp tests
 if [ "$configure_only" = "OFF" ]; then
     echo "INFO: Building Project"
-    cmake --build $build_dir --target install
+    cmake --build $build_dir --target $target
 fi

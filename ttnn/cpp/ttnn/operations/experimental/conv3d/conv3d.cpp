@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,17 +17,12 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::conv3d {
 
 ttnn::Tensor ExecuteConv3d::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
     const Conv3dConfig& config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE
-                    ? input_tensor.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
@@ -38,8 +33,7 @@ ttnn::Tensor ExecuteConv3d::invoke(
                    .compute_kernel_config = kernel_config_val},
                {input_tensor, weight_tensor},
                {bias_tensor},
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 

@@ -6,6 +6,8 @@ set(CMAKE_CXX_CLANG_TIDY "")
 set(CMAKE_VERIFY_INTERFACE_HEADER_SETS FALSE)
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 
+add_compile_options(-Wno-unused-variable)
+
 ############################################################################################################################
 # NUMA
 ############################################################################################################################
@@ -49,18 +51,24 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
-add_library(span INTERFACE)
-target_link_libraries(
-    span
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::core>" # FIXME: this is a hack so we do not need to package up Boost
-)
+############################################################################################################################
+# protobuf
+############################################################################################################################
 
-add_library(small_vector INTERFACE)
-target_link_libraries(
-    small_vector
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::container>" # FIXME: this is a hack so we do not need to package up Boost
+CPMAddPackage(
+    NAME protobuf
+    GITHUB_REPOSITORY protocolbuffers/protobuf
+    GIT_TAG
+        v21.12 # Using 21.12 to avoid using abseil and utf8_range
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "protobuf_BUILD_TESTS OFF"
+        "CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations -Wno-invalid-noreturn"
+        "protobuf_INSTALL OFF"
+        "BUILD_TESTING OFF"
+        "protobuf_BUILD_EXAMPLES OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
 
 ############################################################################################################################
@@ -121,9 +129,13 @@ endif()
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME magic-enum-dev)
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 OPTIONS "MAGIC_ENUM_OPT_INSTALL TRUE")
-set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
+CPMAddPackage(
+    NAME enchantum
+    GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
+    GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
@@ -307,8 +319,31 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.4
+    VERSION 1.1.5
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
 )
+
+####################################################################################################################
+# Cap'n Proto : https://github.com/capnproto/capnproto
+####################################################################################################################
+CPMAddPackage(
+    NAME capnproto
+    GITHUB_REPOSITORY capnproto/capnproto
+    GIT_TAG
+        d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
+    PATCHES
+        capnp.patch # We need to patch capnp until bug is properly fixed: https://github.com/capnproto/capnproto/issues/2418
+    OPTIONS
+        "BUILD_TESTING OFF"
+        "CAPNP_LITE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_CXX_EXTENSIONS ON"
+    CUSTOM_CACHE_KEY "1_2_0_patched"
+)
+
+if(capnproto_ADDED)
+    target_compile_options(kj-async PRIVATE -Wno-deprecated-this-capture)
+    target_compile_options(kj-http PRIVATE -Wno-deprecated-this-capture)
+endif()

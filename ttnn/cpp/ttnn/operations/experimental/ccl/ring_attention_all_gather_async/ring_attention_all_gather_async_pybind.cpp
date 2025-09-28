@@ -67,7 +67,6 @@ void py_bind_ring_attention_all_gather_async(pybind11::module& module) {
         module,
         ttnn::experimental::ring_attention_all_gather_async,
         R"doc(
-
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
 
         Args:
@@ -77,7 +76,7 @@ void py_bind_ring_attention_all_gather_async(pybind11::module& module) {
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
 
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
@@ -89,8 +88,7 @@ void py_bind_ring_attention_all_gather_async(pybind11::module& module) {
 
         Example:
             >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
+            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
             >>> ttnn_tensor = ttnn.from_torch(
                             full_tensor,
                             dtype=input_dtype,

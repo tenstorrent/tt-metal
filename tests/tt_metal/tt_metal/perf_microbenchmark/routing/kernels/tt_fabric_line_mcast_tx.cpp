@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,11 @@
 #include "debug/dprint.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 // clang-format on
 
@@ -56,7 +56,6 @@ void kernel_main() {
     using namespace tt::tt_fabric;
 
     size_t rt_args_idx = 0;
-    uint32_t packet_header_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
@@ -77,18 +76,11 @@ void kernel_main() {
     fwd_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
-
-    zero_l1_buf((uint32_t*)packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE));
+    fwd_packet_header = PacketHeaderPool::allocate_header();
+    zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     fabric_set_mcast_route(
-        (MeshPacketHeader*)packet_header_buffer_address,
-        fwd_dev_id,
-        fwd_mesh_id,
-        num_hops_e,
-        num_hops_w,
-        num_hops_n,
-        num_hops_s);
+        (MeshPacketHeader*)fwd_packet_header, fwd_dev_id, fwd_mesh_id, num_hops_e, num_hops_w, num_hops_n, num_hops_s);
 
     setup_connection_and_headers(fwd_fabric_connection, fwd_packet_header, noc_dest_addr, packet_payload_size_bytes);
 

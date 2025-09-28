@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"
@@ -61,16 +61,16 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (tile_hw * 2);
         case DataFormat::Float32: return (tile_hw * 4);
-        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
-        case DataFormat::Int8: return tile_hw;
-        case DataFormat::Lf8: return tile_hw;
-        case DataFormat::UInt8: return tile_hw;
-        case DataFormat::UInt16: return (tile_hw * 2);
-        case DataFormat::UInt32: return (tile_hw * 4);
+        case DataFormat::Int8:
+        case DataFormat::Lf8:
+        case DataFormat::UInt8:
         case DataFormat::RawUInt8: return tile_hw;
+        case DataFormat::UInt16:
         case DataFormat::RawUInt16: return (tile_hw * 2);
-        case DataFormat::Int32: return (tile_hw * 4);
+        case DataFormat::UInt32:
+        case DataFormat::Int32:
         case DataFormat::RawUInt32: return (tile_hw * 4);
+        case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Invalid: throw std::invalid_argument("Invalid data format");
         default: throw std::invalid_argument("Unknown format");
     }

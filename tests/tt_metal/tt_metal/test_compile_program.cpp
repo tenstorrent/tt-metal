@@ -2,38 +2,43 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <errno.h>
-#include <fmt/base.h>
-#include <stdint.h>
-#include <sys/types.h>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <cstring>
 #include <exception>
+#include <errno.h>
 #include <filesystem>
 #include <map>
+#include <stdint.h>
 #include <string>
+#include <sys/types.h>
 #include <unordered_map>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <fmt/base.h>
+
+#include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "hostdevcommon/kernel_structs.h"
-#include "jit_build/build.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+
+#include "hal_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "jit_build/build.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
+
+// Access to internal API: ProgramImpl::num_kernel, get_kernel
+#include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 using std::vector;
 using namespace tt;
@@ -53,8 +58,8 @@ void ClearKernelCache(const std::string& kernel_root_path) {
 std::unordered_map<std::string, std::string> get_last_program_binary_path(
     const Program& program, const std::string& kernel_root_path) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        auto kernel = program.impl().get_kernel(kernel_id);
         if (not std::filesystem::exists(kernel_root_path + kernel->name())) {
             continue;
         }
@@ -62,7 +67,7 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(
         std::filesystem::path kernel_path{kernel_root_path + kernel->name()};
         std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
         std::string latest_hash;
-        for (auto const& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
+        for (const auto& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
             auto kbtime = std::filesystem::last_write_time(dir_entry.path());
             if (kbtime > ftime) {
                 ftime = kbtime;
@@ -93,7 +98,7 @@ KernelCacheStatus CompileProgramTestWrapper(IDevice* device, Program& program, b
         if (pre_compile_kernel_to_hash_str.find(kernel_name) == pre_compile_kernel_to_hash_str.end()) {
             kernel_cache_status.kernel_name_to_cache_hit.insert({kernel_name, false});
         } else {
-            auto prev_hash_str = pre_compile_kernel_to_hash_str.at(kernel_name);
+            const auto& prev_hash_str = pre_compile_kernel_to_hash_str.at(kernel_name);
             bool cache_hit = hash_str == prev_hash_str;
             kernel_cache_status.kernel_name_to_cache_hit.insert({kernel_name, cache_hit});
         }
@@ -130,23 +135,23 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
         tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size, {{program_attributes.src_cb_index, program_attributes.data_format}})
             .set_page_size(program_attributes.src_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t num_output_tiles = 1;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{program_attributes.output_cb_index, program_attributes.data_format}})
             .set_page_size(program_attributes.output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = program_attributes.reader_processor, .noc = program_attributes.reader_noc});
 
-    auto unary_writer_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
@@ -157,7 +162,7 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
         uint(program_attributes.num_tiles)  // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core,
@@ -173,8 +178,8 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
 void assert_kernel_binary_path_exists(
     const Program& program, const std::string& kernel_root_path, const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        auto kernel = program.impl().get_kernel(kernel_id);
         auto hash = kernel_name_to_hash.at(kernel->name());
         auto kernel_binary_path = kernel_root_path + kernel->name() + "/" + hash;
         TT_FATAL(std::filesystem::exists(kernel_binary_path), "Expected {} folder to exist!", kernel_binary_path);
@@ -184,8 +189,8 @@ void assert_kernel_binary_path_exists(
 void assert_program_cache_hit_status(
     const Program& program, bool hit_expected, const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        auto kernel = program.impl().get_kernel(kernel_id);
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
         TT_FATAL(
             hit_status == hit_expected,
@@ -265,14 +270,14 @@ bool test_compile_program_after_clean_kernel_binary_directory(IDevice* device) {
 void assert_hash_comparison_for_kernel_type(
     const Program& program,
     const std::unordered_map<std::string, std::string>& prev_kernel_name_to_hash,
-    const std::unordered_map<tt::RISCV, bool>& type_to_same_hash_expected,
+    const std::unordered_map<HalProcessorClassType, bool>& type_to_same_hash_expected,
     const KernelCacheStatus& kernel_cache_status) {
     auto curr_kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        auto kernel = program.impl().get_kernel(kernel_id);
         auto prev_hash = prev_kernel_name_to_hash.at(kernel->name());
         auto curr_hash = curr_kernel_name_to_hash.at(kernel->name());
-        bool same_hash_expected = type_to_same_hash_expected.at(kernel->processor());
+        bool same_hash_expected = type_to_same_hash_expected.at(kernel->get_kernel_processor_class());
         if (same_hash_expected) {
             TT_FATAL(prev_hash == curr_hash, "Expected same hashes for {}", kernel->name());
         } else {
@@ -283,12 +288,12 @@ void assert_hash_comparison_for_kernel_type(
 
 void assert_cache_hit_status_for_kernel_type(
     const Program& program,
-    const std::unordered_map<tt::RISCV, bool>& type_to_cache_hit_status,
+    const std::unordered_map<HalProcessorClassType, bool>& type_to_cache_hit_status,
     const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
-        bool hit_expected = type_to_cache_hit_status.at(kernel->processor());
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        auto kernel = program.impl().get_kernel(kernel_id);
+        bool hit_expected = type_to_cache_hit_status.at(kernel->get_kernel_processor_class());
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
         TT_FATAL(
             hit_status == hit_expected,
@@ -302,7 +307,7 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
     IDevice* device,
     const ProgramAttributes& attributes,
     const std::unordered_map<std::string, std::string>& prev_kernel_name_to_hash,
-    const std::unordered_map<tt::RISCV, bool>& kernel_type_to_cache_hit_status) {
+    const std::unordered_map<HalProcessorClassType, bool>& kernel_type_to_cache_hit_status) {
     auto program = create_program(device, attributes);
     auto kernel_cache_status = CompileProgramTestWrapper(device, program);
     assert_kernel_binary_path_exists(
@@ -319,17 +324,17 @@ std::unordered_map<std::string, std::string> compile_program_with_modified_kerne
 bool test_compile_program_with_modified_program(IDevice* device) {
     bool pass = true;
 
-    const static std::unordered_map<tt::RISCV, bool> compute_miss_data_movement_hit = {
-        {tt::RISCV::COMPUTE, false}, {tt::RISCV::BRISC, true}, {tt::RISCV::NCRISC, true}};
+    const static std::unordered_map<HalProcessorClassType, bool> compute_miss_data_movement_hit = {
+        {HalProcessorClassType::COMPUTE, false}, {HalProcessorClassType::DM, true}};
 
-    const static std::unordered_map<tt::RISCV, bool> compute_hit_data_movement_miss = {
-        {tt::RISCV::COMPUTE, true}, {tt::RISCV::BRISC, false}, {tt::RISCV::NCRISC, false}};
+    const static std::unordered_map<HalProcessorClassType, bool> compute_hit_data_movement_miss = {
+        {HalProcessorClassType::COMPUTE, true}, {HalProcessorClassType::DM, false}};
 
-    const static std::unordered_map<tt::RISCV, bool> compute_hit_data_movement_hit = {
-        {tt::RISCV::COMPUTE, true}, {tt::RISCV::BRISC, true}, {tt::RISCV::NCRISC, true}};
+    const static std::unordered_map<HalProcessorClassType, bool> compute_hit_data_movement_hit = {
+        {HalProcessorClassType::COMPUTE, true}, {HalProcessorClassType::DM, true}};
 
-    const static std::unordered_map<tt::RISCV, bool> compute_miss_data_movement_miss = {
-        {tt::RISCV::COMPUTE, false}, {tt::RISCV::BRISC, false}, {tt::RISCV::NCRISC, false}};
+    const static std::unordered_map<HalProcessorClassType, bool> compute_miss_data_movement_miss = {
+        {HalProcessorClassType::COMPUTE, false}, {HalProcessorClassType::DM, false}};
 
     ClearKernelCache(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env.get_out_kernel_root_path());
@@ -399,8 +404,6 @@ int main(int argc, char** argv) {
     try {
         int device_id = 0;
         IDevice* device = CreateDevice(device_id);
-
-        constexpr bool profile_device = true;
 
         pass &= test_compile_program_in_loop(device);
 

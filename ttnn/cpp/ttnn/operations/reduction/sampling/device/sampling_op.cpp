@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,9 @@ void Sampling::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_values_tensor = input_tensors.at(0);
     const auto& input_indices_tensor = input_tensors.at(1);
+    const auto& k = input_tensors.at(2);
+    const auto& p = input_tensors.at(3);
+    const auto& temp = input_tensors.at(4);
 
     TT_FATAL(
         input_values_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -57,15 +60,16 @@ void Sampling::validate_with_output_tensors(
             "Only INTERLEAVED memory layout is supported for outputs!");
     }
 
-    // Check all elements of k are <= 32
-    for (const auto& value : k) {
-        TT_FATAL(value <= 32, "All elements of k must be less than or equal to 32.");
-    }
-
-    // Check all elements of p are between 0 and 1 (inclusive)
-    for (const auto& value : p) {
-        TT_FATAL(value >= 0.0f && value <= 1.0f, "All elements of p must be between 0 and 1 (inclusive).");
-    }
+    // Check size, layout and dtype of k, p, temp
+    TT_FATAL(k.dtype() == DataType::UINT32, "Only UINT32 dtypes are supported for k!");
+    TT_FATAL(p.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for p!");
+    TT_FATAL(temp.dtype() == DataType::BFLOAT16, "Only BFLOAT16 dtypes are supported for temp!");
+    TT_FATAL(k.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for k!");
+    TT_FATAL(p.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for p!");
+    TT_FATAL(temp.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for temp!");
+    TT_FATAL(k.logical_shape() == Shape({32}), "k must have shape [32]!");
+    TT_FATAL(p.logical_shape() == Shape({32}), "p must have shape [32]!");
+    TT_FATAL(temp.logical_shape() == Shape({32}), "temp must have shape [32]!");
 }
 
 std::vector<TensorSpec> Sampling::compute_output_specs(
@@ -94,11 +98,8 @@ std::vector<Tensor> Sampling::create_output_tensors(
 
 operation::ProgramWithCallbacks Sampling::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    const auto& input_values_tensor = input_tensors.at(0);
-    const auto& input_indices_tensor = input_tensors.at(1);
     auto& output_tensor = output_tensors.at(0);
-    return detail::sampling_multicore_interleaved(
-        input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids, output_tensor);
+    return detail::sampling_multicore_interleaved(input_tensors, seed, sub_core_grids, output_tensor);
 }
 
 }  // namespace ttnn::operations::reduction

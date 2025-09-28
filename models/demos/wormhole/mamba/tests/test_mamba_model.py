@@ -16,7 +16,6 @@ from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedMo
 from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
-from models.utility_functions import skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
@@ -104,7 +103,6 @@ buildings, agriculture and land use are among the main sectors causing greenhous
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, mode, batch, seq_len, num_layers, iterations, pcc",
     (
@@ -170,7 +168,6 @@ def test_inference(
     )
 
 
-@skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "iterations",
     (1, 2),

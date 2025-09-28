@@ -10,8 +10,25 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_binary
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            binary.hpp
+            binary_composite.hpp
+            common/binary_op_types.hpp
+            common/binary_op_utils.hpp
+            device/binary_composite_op.hpp
+            device/binary_device_operation.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         binary.cpp
         common/binary_op_utils.cpp
@@ -26,16 +43,6 @@ target_sources(
         device/broadcast_height_multi_core_sharded_program_factory.cpp
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
-target_sources(
-    ttnn_op_eltwise_binary
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
-)
-
 target_include_directories(ttnn_op_eltwise_binary PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_eltwise_binary
@@ -47,6 +54,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_eltwise_binary
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/binary

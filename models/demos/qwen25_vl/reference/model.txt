@@ -1,0 +1,67 @@
+Full model structure:
+lm_head/
+  weight: (151936, 2048) (bfloat16)
+model/
+  embed_tokens/
+    weight: (151936, 2048) (bfloat16)
+  layers/
+    0/
+      input_layernorm/
+        weight: (2048,) (bfloat16)
+      mlp/
+        down_proj/
+          weight: (2048, 11008) (bfloat16)
+        gate_proj/
+          weight: (11008, 2048) (bfloat16)
+        up_proj/
+          weight: (11008, 2048) (bfloat16)
+      post_attention_layernorm/
+        weight: (2048,) (bfloat16)
+      self_attn/
+        k_proj/
+          bias: (256,) (bfloat16)
+          weight: (256, 2048) (bfloat16)
+        o_proj/
+          weight: (2048, 2048) (bfloat16)
+        q_proj/
+          bias: (2048,) (bfloat16)
+          weight: (2048, 2048) (bfloat16)
+        v_proj/
+          bias: (256,) (bfloat16)
+          weight: (256, 2048) (bfloat16)
+  norm/
+    weight: (2048,) (bfloat16)
+visual/
+  blocks/
+    0/
+      attn/
+        proj/
+          bias: (1280,) (bfloat16)
+          weight: (1280, 1280) (bfloat16)
+        qkv/
+          bias: (3840,) (bfloat16)
+          weight: (3840, 1280) (bfloat16)
+      mlp/
+        down_proj/
+          bias: (1280,) (bfloat16)
+          weight: (1280, 3420) (bfloat16)
+        gate_proj/
+          bias: (3420,) (bfloat16)
+          weight: (3420, 1280) (bfloat16)
+        up_proj/
+          bias: (3420,) (bfloat16)
+          weight: (3420, 1280) (bfloat16)
+      norm1/
+        weight: (1280,) (bfloat16)
+      norm2/
+        weight: (1280,) (bfloat16)
+  merger/
+    ln_q/
+      weight: (1280,) (bfloat16)
+    mlp/
+      0/
+        bias: (5120,) (bfloat16)
+        weight: (5120, 5120) (bfloat16)
+  patch_embed/
+    proj/
+      weight: (1280, 3, 2, 14, 14) (bfloat16)

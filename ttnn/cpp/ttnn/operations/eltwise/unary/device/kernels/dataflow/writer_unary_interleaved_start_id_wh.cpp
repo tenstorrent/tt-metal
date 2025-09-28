@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,18 +11,16 @@ void kernel_main() {
     uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-    const uint32_t num_tiles_per_2d = get_compile_time_arg_val(2);
-    const uint32_t third_dim = get_compile_time_arg_val(3);
-    uint32_t total_tiles_per_row = get_compile_time_arg_val(4);
+    constexpr uint32_t num_tiles_per_2d = get_compile_time_arg_val(1);
+    constexpr uint32_t third_dim = get_compile_time_arg_val(2);
+    constexpr uint32_t total_tiles_per_row = get_compile_time_arg_val(3);
+    constexpr auto dst_args = TensorAccessorArgs<4>();
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
 #ifdef BACKWARDS
     for (uint32_t dim = 0; dim > -third_dim; dim--) {

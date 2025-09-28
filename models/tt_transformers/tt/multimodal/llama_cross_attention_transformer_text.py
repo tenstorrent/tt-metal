@@ -10,11 +10,11 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.tt_transformers.tt.rope import RotarySetup
-from models.utility_functions import nearest_32
 
 
 def _get_full_row_masked_out_mask(
@@ -36,6 +36,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -48,19 +49,23 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         assert self.vocab_size > 0
         self.n_layers = configuration.n_layers
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.model_config = configuration.get_model_config()
         self.grid_size = configuration.max_grid_size
         state_dict_prefix = configuration.get_state_dict_prefix("", None)
         self.configuration = configuration
         self.model_config = configuration.get_model_config()
-        self.state_dict = state_dict
 
         # NOTE: Running all embeddings in torch for now since learnable embeddings use complex indexing ops which must be in torch
         self.tok_embeddings = torch.nn.Embedding(configuration.vocab_size, configuration.dim)
         tok_embedding_prefix = f"{state_dict_prefix}tok_embeddings."
         self.tok_embeddings.load_state_dict(
-            {k[len(tok_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(tok_embedding_prefix)}
+            {
+                k[len(tok_embedding_prefix) :]: v[: configuration.vocab_size]
+                for k, v in state_dict.items()
+                if k.startswith(tok_embedding_prefix)
+            }
         )
 
         self.norm = DistributedNorm(
@@ -75,12 +80,14 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 is_distributed=configuration.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                tt_ccl=self.tt_ccl,
             ),
             configuration,
+            self.tt_ccl,
         )
 
         # TODO: Generalize LMHead, maybe use llama_model's single-tile-sequence LMHead
-        lm_head_torch = self.state_dict[f"{state_dict_prefix}output.weight"].transpose(-1, -2)
+        lm_head_torch = state_dict[f"{state_dict_prefix}output.weight"].transpose(-1, -2)
         total_splits = 8  # Arbitrary value which allows whole-tile splits in LM Head
         num_splits = total_splits // self.configuration.num_devices
         lm_head_torch = torch.chunk(lm_head_torch, num_splits, dim=-1)
@@ -111,9 +118,17 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             configuration.dim,
         )
         learn_embedding_prefix = f"{state_dict_prefix}learnable_embedding."
-        self.learnable_embedding.load_state_dict(
-            {k[len(learn_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(learn_embedding_prefix)}
-        )
+        emb_state_dict = {
+            k[len(learn_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(learn_embedding_prefix)
+        }
+        if len(emb_state_dict) == 0:
+            # HF weights combines tok_embedding and learn_embedding into single weights
+            emb_state_dict = {
+                k[len(tok_embedding_prefix) :]: v[-8:]
+                for k, v in state_dict.items()
+                if k.startswith(tok_embedding_prefix)
+            }
+        self.learnable_embedding.load_state_dict(emb_state_dict)
         self.num_frozen_embeddings = self.tok_embeddings.num_embeddings
         self._thresh = self.num_frozen_embeddings - 1
 
@@ -123,8 +138,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             configuration.head_dim,
             configuration.max_seq_len,
             configuration.rope_theta,
-            configuration.rope_scaling_factor,
-            configuration.orig_context_len,
+            configuration.rope_scaling,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -136,6 +150,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             block = TransformerBlock(
                 configuration,
                 mesh_device,
+                self.tt_ccl,
                 dtype,
                 state_dict,
                 layer_id,
@@ -148,6 +163,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 xa_layer_id = self.fusion_schedule.index(layer_id)
                 block = TtLlamaCrossAttentionTransformerBlock(
                     mesh_device,
+                    self.tt_ccl,
                     state_dict,
                     f"{state_dict_prefix}cross_attention_layers.{xa_layer_id}.",
                     weight_cache_path,
@@ -268,7 +284,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         full_text_row_masked_out_mask_11SD: ttnn.Tensor,
         xattn_caches,
         current_pos,
-        rot_mats=None,
+        rot_mats_global=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -303,7 +319,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             h = layer(
                 h,
                 current_pos,
-                rot_mats=rot_mats,
+                rot_mats_global=rot_mats_global,
                 user_id=user_id,
                 mode=mode,
                 page_table=page_table,
@@ -339,7 +355,18 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             )
 
             if self.configuration.num_devices > 1:
-                output = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                output = ttnn.experimental.all_gather_async(
+                    output,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
             outputs.append(output)
 
         output = ttnn.concat(outputs, dim=-1)

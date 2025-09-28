@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,12 +15,12 @@
 
 namespace tt::tt_metal {
 
-class Event;
+struct Event;
 class Program;
 class Kernel;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
-class TraceDescriptor;
+struct TraceDescriptor;
 
 class CommandQueue {
 public:
@@ -32,7 +32,10 @@ public:
     virtual void record_end() = 0;
 
     virtual void reset_worker_state(
-        bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) = 0;
+        bool reset_launch_msg_state,
+        uint32_t num_sub_devices,
+        const vector_aligned<uint32_t>& go_signal_noc_data,
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) = 0;
 
     virtual void set_go_signal_noc_data_and_dispatch_sems(
         uint32_t num_dispatch_sems, const vector_aligned<uint32_t>& noc_mcast_unicast_data) = 0;
@@ -48,8 +51,6 @@ public:
 
     // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
-
-    virtual void enqueue_trace(uint32_t trace_id, bool blocking) = 0;
 
     virtual void enqueue_program(Program& program, bool blocking) = 0;
 

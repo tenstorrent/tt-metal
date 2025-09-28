@@ -14,7 +14,20 @@ from operator import ne, truth
 
 from loguru import logger
 
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_blackhole
+
+def is_blackhole():
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    return "blackhole" in ARCH_NAME
+
+
+def is_wormhole_b0():
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    return "wormhole_b0" in ARCH_NAME
+
+
+def is_grayskull():
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    return "grayskull" in ARCH_NAME
 
 
 class TestSuiteType(Enum):
@@ -70,7 +83,13 @@ def is_test_suite_type_that_uses_silicon(test_suite_type: TestSuiteType) -> bool
 
 def run_process_and_get_result(command, extra_env={}, capture_output=True):
     full_env = copy.deepcopy(os.environ)
-    full_env.update(extra_env)
+
+    # Handle None values in extra_env - remove keys with None values
+    for key, value in extra_env.items():
+        if value is None:
+            full_env.pop(key, None)  # Remove the key if it exists
+        else:
+            full_env[key] = value
 
     result = sp.run(command, shell=True, capture_output=capture_output, env=full_env)
 
@@ -252,34 +271,34 @@ def error_out_if_test_report_has_failures(test_report):
 # Device helpers to be shared with top-level conftest.py and other conftest.py files that will handle open/close of devices.
 
 
-def get_dispatch_core_type():
-    import ttnn
-
-    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    return dispatch_core_type
-
-
 def get_updated_device_params(device_params):
     import ttnn
 
-    dispatch_core_type = get_dispatch_core_type()
     new_device_params = device_params.copy()
 
-    is_blackhole = ttnn.get_arch_name() == "blackhole"
     dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
+    dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
+    fabric_tensix_config = new_device_params.get("fabric_tensix_config", None)
 
-    # Set default if not specified
-    if dispatch_core_axis is None:
-        dispatch_core_axis = ttnn.DispatchCoreAxis.COL if is_blackhole else ttnn.DispatchCoreAxis.ROW
+    if ttnn.device.is_blackhole():
+        # If fabric_tensix_config is not specified but fabric_config is specified on Blackhole,
+        # default to MUX mode
+        fabric_config = new_device_params.get("fabric_config", None)
+        if fabric_config and not fabric_tensix_config:
+            fabric_tensix_config = ttnn.FabricTensixConfig.MUX
+            dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
+            new_device_params["fabric_tensix_config"] = fabric_tensix_config
+            logger.warning(
+                "Blackhole with fabric enabled, defaulting to fabric_tensix_config=MUX and use DispatchCoreAxis.ROW"
+            )
+        elif not fabric_config and not fabric_tensix_config:
+            if dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
+                logger.warning(
+                    "when fabric_tensix_config disabled, blackhole arch does not support DispatchCoreAxis.ROW, using DispatchCoreAxis.COL instead."
+                )
+                dispatch_core_axis = ttnn.DispatchCoreAxis.COL
 
-    # Force COL for blackhole regardless of user setting
-    if is_blackhole and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
-        logger.warning("blackhole arch does not support DispatchCoreAxis.Row, using DispatchCoreAxis.COL instead.")
-        dispatch_core_axis = ttnn.DispatchCoreAxis.COL
-
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis, fabric_tensix_config)
     new_device_params["dispatch_core_config"] = dispatch_core_config
+
     return new_device_params

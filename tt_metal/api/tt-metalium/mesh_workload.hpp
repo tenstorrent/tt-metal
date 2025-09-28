@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 
 namespace tt::tt_metal::distributed {
 
+class MeshWorkload;
 class MeshWorkloadImpl;
 
 class MeshCommandQueue;
@@ -45,7 +46,6 @@ public:
 private:
     std::unique_ptr<MeshWorkloadImpl> pimpl_;
 
-private:
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
 };

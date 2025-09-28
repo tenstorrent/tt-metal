@@ -27,7 +27,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     echo "Watcher dump minimal test - Pass"
 
     # Now run with all watcher features, expect it to throw.
-    TT_METAL_WATCHER_KEEP_ERRORS=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherAssertBrisc
+    TT_METAL_WATCHER_KEEP_ERRORS=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTests/*Brisc
     ./build/tools/watcher_dump -d=0 -w &> tmp.log || { echo "Above failure is expected."; }
 
     # Verify the error we expect showed up in the program output.
@@ -58,9 +58,9 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     if [[ "$ARCH_NAME" == "wormhole_b0" ]]; then
         echo "Running clean init tests - FD-on-Eth"
         echo "First run, no teardown"
-        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/tt_metal/test_clean_init --skip-teardown || { echo "Above failure is expected."; }
+        env ./build/test/tt_metal/test_clean_init --skip-teardown || { echo "Above failure is expected."; }
         echo "Second run, expect clean init"
-        timeout 10 env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Eth) failed."; exit 1; }
+        timeout 10 env ./build/test/tt_metal/test_clean_init || { echo "Error: second run timed out, clean init (FD-on-Eth) failed."; exit 1; }
         echo "Clean init tests - FD-on-Eth passed!"
     fi
 fi

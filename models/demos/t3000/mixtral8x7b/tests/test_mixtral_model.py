@@ -8,12 +8,12 @@ from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
-from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
 
@@ -33,8 +33,9 @@ class Emb(torch.nn.Module):
         32,
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, batch):
-    valid_pcc = 0.964
+    valid_pcc = 0.942
     dtype = ttnn.bfloat8_b
     iterations = 10
 

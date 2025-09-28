@@ -5,17 +5,18 @@
 #pragma once
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <stdint.h>
 #include <map>
 #include <string>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_xy_pair.h>
-
-enum class CoreType;
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <tt_stl/tt_stl/reflection.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -183,7 +184,7 @@ protected:
     tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
     tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
-    FDKernelType kernel_type_;
+    FDKernelType kernel_type_ = FDKernelType::UNSET;
     chip_id_t device_id_;
     chip_id_t servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing
     int node_id_;
@@ -202,10 +203,10 @@ template <>
 struct hash<tt::tt_metal::TerminationInfo> {
     std::size_t operator()(const tt::tt_metal::TerminationInfo& info) const {
         size_t hash = 0;
-        tt::utils::hash_combine(hash, info.logical_core);
-        tt::utils::hash_combine(hash, info.core_type);
-        tt::utils::hash_combine(hash, info.address);
-        tt::utils::hash_combine(hash, info.val);
+        ttsl::hash::hash_combine(hash, info.logical_core);
+        ttsl::hash::hash_combine(hash, info.core_type);
+        ttsl::hash::hash_combine(hash, info.address);
+        ttsl::hash::hash_combine(hash, info.val);
         return hash;
     }
 };

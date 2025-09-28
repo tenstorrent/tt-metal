@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@ import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.utility_functions import skip_for_grayskull
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
@@ -465,64 +464,6 @@ def test_fabric_reduce_scatter_regular_grid_2_dev(
         warmup_iters,
         trace_mode,
         num_links=1,
-        scheme="random",
-        use_regular_grid=True,
-        input_grid=input_grid,
-        output_grid=output_grid,
-        dtype=dtype,
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "trace_region_size": 100000,
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        (8, 4),  # TODO: Once fabric can be initialized on a SubMesh, revert to (1, 4)
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("shard_height", [32])
-@pytest.mark.parametrize("shard_width", [64])
-@pytest.mark.parametrize("input_grid", [(5, 5)])
-@pytest.mark.parametrize("output_grid", [(5, 1)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-def test_fabric_reduce_scatter_regular_grid_4_dev(
-    mesh_device, trace_mode, shard_height, shard_width, input_grid, output_grid, dtype
-):
-    # Only run these tests on unharvested TG
-    device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
-    if device_grid != (8, 8):
-        pytest.skip("Not TG!")
-
-    dim = 3
-    num_devices_scatter = 4
-    num_devices_fracture = 8
-    num_cores = input_grid[0] * input_grid[1] - 5  # test padding
-    num_iters = 30
-    warmup_iters = 0
-    run_reduce_scatter_test(
-        mesh_device,
-        dim,
-        shard_height,
-        shard_width,
-        num_devices_scatter,
-        num_devices_fracture,
-        num_cores,
-        num_iters,
-        warmup_iters,
-        trace_mode,
-        num_links=3,
         scheme="random",
         use_regular_grid=True,
         input_grid=input_grid,

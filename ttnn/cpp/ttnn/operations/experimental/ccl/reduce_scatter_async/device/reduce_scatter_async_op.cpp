@@ -6,6 +6,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/run_operation.hpp"
 
 #include <ranges>
 #include <algorithm>
@@ -31,7 +32,7 @@ void ReduceScatterAsync::validate_with_output_tensors(
             "Reduce scatter input tensor shape on dim {} must be divisible by ring size",
             this->scatter_dim);
     }
-    if (output_tensors.size() > 0 && output_tensors[0].has_value()) {
+    if (!output_tensors.empty() && output_tensors[0].has_value()) {
         TT_FATAL(
             output_tensors.size() == 5,
             "Error, Number of output tensors should be 5 but has {}",
@@ -91,6 +92,9 @@ void ReduceScatterAsync::validate_with_output_tensors(
             }
         }
     }
+    TT_FATAL(
+        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        "Only 1D fabric config is supported for generic reduce scatter");
 }
 
 std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -169,9 +173,9 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     }
 
     auto target_device =
-        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+        input_tensors[0].device() ? input_tensors[0].device()->get_device(coord) : input_tensors[0].device();
 
-    ttnn::ccl::SenderRecieverConfig config =
+    ttnn::ccl::SenderReceiverConfig config =
         ttnn::ccl::get_device_sender_receiver_config(target_device, devices, this->topology);
 
     TT_FATAL(
@@ -231,6 +235,11 @@ operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tenso
         this->ring_size,
         this->topology,
         this->cluster_axis,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -289,7 +298,7 @@ Tensor reduce_scatter_impl(
         rank - 1,
         dim);
 
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ttnn::ReduceScatterAsync(
                    devices,
                    /*mesh_device=*/nullptr,
@@ -326,7 +335,7 @@ Tensor reduce_scatter_impl(
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(reduce_op);
     int16_t rank = input_tensor.logical_shape().rank();
     int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -336,7 +345,7 @@ Tensor reduce_scatter_impl(
         persistent_output_tensors
             ? std::vector<std::optional<Tensor>>(persistent_output_tensors->begin(), persistent_output_tensors->end())
             : std::vector<std::optional<Tensor>>{};
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ttnn::ReduceScatterAsync(
                    /*devices=*/{},
                    &mesh_device,
@@ -390,11 +399,6 @@ std::vector<Tensor> reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> num_links_preferred,
     std::optional<SubDeviceId> worker_subdevice_id_opt) {
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -408,7 +412,7 @@ std::vector<Tensor> reduce_scatter(
             topology,
             num_links_preferred,
             worker_subdevice_id_opt,
-            devices));
+            ttnn::ccl::get_active_physical_devices(input_tensors)));
     }
     return output_tensors;
 }

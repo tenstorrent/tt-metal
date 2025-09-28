@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,9 +76,9 @@ public:
     }
 };
 
-template <bool is_dram = true, uint32_t tile_bytes>
+template <uint32_t tile_bytes, typename ReaderType>
 void read_chunk_with_padding(
-    const InterleavedAddrGenFast<is_dram>& reader,
+    const ReaderType& reader,
     const uint32_t cb_id,
     uint32_t start_tile_id,
     const uint32_t src_rows,
@@ -86,7 +86,8 @@ void read_chunk_with_padding(
     const uint32_t dst_rows,
     const uint32_t dst_cols,
     const uint32_t barrier_threshold,
-    const bool transpose = false) {
+    const bool transpose = false,
+    const uint32_t skip_src_cols = 0) {
     /*
     Method always reads tiles from memory in row-major order.
     It assumes that the block of rows x cols in stored in contiguous tile order.
@@ -115,6 +116,7 @@ void read_chunk_with_padding(
                 barrier_count = 0;
             }
         }
+        start_tile_id += skip_src_cols;  // Skip src cols if needed
     }
 
     // Zero out the padding
@@ -132,9 +134,9 @@ void read_chunk_with_padding(
     cb_push_back(cb_id, num_tiles);
 }
 
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, bool is_dram = true>
+template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt, typename ReaderType>
 void read_paged_chunk_with_padding(
-    const InterleavedAddrGenFast<is_dram>& reader,
+    const ReaderType& reader,
     const uint32_t cb_id,
     const uint32_t cur_head,
     const uint32_t chunk_start_row,
@@ -145,7 +147,8 @@ void read_paged_chunk_with_padding(
     const uint32_t tile_bytes,
     const uint32_t barrier_threshold,
     const volatile tt_l1_ptr uint32_t* const page_table_ptr,
-    const bool transpose = false) {
+    const bool transpose = false,
+    const uint32_t skip_src_cols = 0) {
     const uint32_t num_tiles = dst_rows * dst_cols;
     cb_reserve_back(cb_id, num_tiles);
     const uint32_t base_write_ptr = get_write_ptr(cb_id);
@@ -171,6 +174,7 @@ void read_paged_chunk_with_padding(
                 barrier_count = 0;
             }
         }
+        physical_tile_id += skip_src_cols;  // Skip src cols if needed
     }
     noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
@@ -471,19 +475,20 @@ void generate_noncausal_padded_mask(uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, ui
     cb_push_back(cb_mask_in, mask_size_tiles);
 }
 
+template <typename FirstReaderType, typename SecondReaderType>
 struct CatAddrGenerator {
-    InterleavedAddrGenFast<true> first_reader;
-    InterleavedAddrGenFast<true> second_reader;
+    FirstReaderType first_reader;
+    SecondReaderType second_reader;
     TensorTileShape first_shape;
     TensorTileShape second_shape;
     uint32_t first_seq_padded;
     uint32_t second_seq_padded;
 
     CatAddrGenerator(
-        const InterleavedAddrGenFast<true>& first_reader,
+        const FirstReaderType& first_reader,
         TensorTileShape first_logical_shape,
         uint32_t first_seq_padded,
-        const InterleavedAddrGenFast<true>& second_reader,
+        const SecondReaderType& second_reader,
         TensorTileShape second_logical_shape,
         uint32_t second_seq_padded) :
         first_reader(first_reader),
@@ -540,8 +545,9 @@ struct Slice {
     uint32_t get_d3_size() const { return d3_end - d3_start; }
 };
 
+template <typename CatAddrGeneratorType>
 void read_block(
-    const CatAddrGenerator& cat_addr_generator,
+    const CatAddrGeneratorType& cat_addr_generator,
     const Slice& src_slice,
     const uint32_t cb_id,
     const uint32_t tile_bytes,
@@ -574,8 +580,9 @@ void read_block(
     cb_push_back(cb_id, num_tiles);
 }
 
+template <typename CatAddrGeneratorType>
 void write_block(
-    const CatAddrGenerator& cat_addr_generator,
+    const CatAddrGeneratorType& cat_addr_generator,
     const Slice& dst_slice,
     const uint32_t cb_id,
     const uint32_t tile_bytes,

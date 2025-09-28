@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,10 +8,11 @@ import ttnn
 import numpy as np
 from loguru import logger
 
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
-def _test_eltwise_exp(device):
+@skip_for_blackhole("Not tested / built for Blackhole")
+def test_eltwise_exp(device):
     num_tiles = 4
     src_bank_id = 0
     dst_bank_id = 0
@@ -68,15 +69,16 @@ def _test_eltwise_exp(device):
         format_descriptors=[out_cb_format],
     )
 
-    is_dram_input = 1
-    reader_compile_time_args = [is_dram_input]
-    writer_compile_time_args = [out_cb, is_dram_input]
+    reader_compile_time_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    writer_compile_time_args = [out_cb]
+    writer_compile_time_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     compute_compile_time_args = [num_tiles, 1]
     reader_rt_args = [input_tensor.buffer_address(), num_tiles, 0]
     writer_rt_args = [output_tensor.buffer_address(), num_tiles, 0]
 
     reader_kernel_descriptor = ttnn.KernelDescriptor(
         kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=reader_compile_time_args,
         runtime_args=[[reader_rt_args]],
@@ -84,6 +86,7 @@ def _test_eltwise_exp(device):
     )
     writer_kernel_descriptor = ttnn.KernelDescriptor(
         kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_grid,
         compile_time_args=writer_compile_time_args,
         runtime_args=[[writer_rt_args]],
@@ -93,6 +96,7 @@ def _test_eltwise_exp(device):
     sfpu_defines = [("SFPU_OP_EXP_INCLUDE", "1"), ("SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);")]
     compute_kernel_descriptor = ttnn.KernelDescriptor(
         kernel_source="tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        # source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH, expecting this to be the default value
         core_ranges=core_grid,
         compile_time_args=compute_compile_time_args,
         defines=sfpu_defines,
@@ -118,14 +122,3 @@ def _test_eltwise_exp(device):
     matching = torch.allclose(torch_golden, torch_output)
     logger.info(f"Tensors are matching: {matching}")
     assert matching
-
-
-@skip_for_blackhole("Not tested / built for Blackhole")
-def test_generic_op():
-    # Choose not to parametrize the input tensors
-    # this was chosen to highlight the operation of the Generic Op instead of testing Eltwise Op's func
-    device = ttnn.open_device(device_id=0)
-
-    _test_eltwise_exp(device)
-
-    ttnn.close_device(device)

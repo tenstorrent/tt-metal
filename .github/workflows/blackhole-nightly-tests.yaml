@@ -1,20 +1,10 @@
 name: "(Blackhole) Blackhole nightly tests"
 
+
+
 on:
   workflow_dispatch:
-    inputs:
-      runner-label:
-        description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
-        required: false
-        type: string
-        default: '["P100", "P150"]'
   workflow_call:
-    inputs:
-      runner-label:
-        description: 'Valid inputs: ["P100", "P150"] (both cards), ["P100"] (P100 only), ["P150"] (P150 only)'
-        required: false
-        type: string
-        default: '["P100", "P150"]'
   schedule:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
@@ -27,87 +17,83 @@ jobs:
     with:
       build-wheel: true
       version: 22.04
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      tracy: true
+      version: 22.04
   bh-nightly:
     needs: build-artifact
     uses: ./.github/workflows/blackhole-nightly-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix:
-        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
+        card_type: ["P100", "P150"]  # Cannot use P150b yet because CIv2 is using LFC and not MLPerf
     secrets: inherit
     with:
       runner-label: ${{ matrix.card_type }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  ttnn-unit-tests:
+  blackhole-multi-card-demo-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/ttnn-post-commit.yaml
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix:
-        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
+        test-group:
+          - name: LLMBox Demo tests
+            runner-label: BH-LLMBox
+            extra-tag: pipeline-perf
+            num_devices: 4
+          - name: DeskBox Demo tests
+            runner-label: BH-DeskBox
+            extra-tag: pipeline-perf
+            num_devices: 2
+          - name: LoudBox Demo tests
+            runner-label: BH-LoudBox
+            extra-tag: pipeline-functional
+            num_devices: 8
+    with:
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: ${{ matrix.test-group.extra-tag }}
+      num_devices: ${{ matrix.test-group.num_devices }}
+  blackhole-multi-card-unit-tests:
+    needs: build-artifact-profiler
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     with:
       arch: blackhole
-      runner-label: ${{ matrix.card_type }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  ttnn-l2-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        card_type: ${{ fromJSON(inputs.runner-label || '["P100", "P150"]') }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.card_type }}
-      timeout: 120
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  didt-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/didt-tests.yaml
-    strategy:
-      fail-fast: false
-    with:
-      arch: blackhole
-      runner-label: P150
-      timeout: 10
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  blackhole-llmbox-demo-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-demo-tests-impl.yaml
-    with:
-      runner-label: BH-LLMBox
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  blackhole-llmbox-unit-tests:
-    needs: build-artifact
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-unit-tests-impl.yaml
-    with:
-      arch: blackhole
-      runner-label: BH-LLMBox
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  blackhole-llmbox-ttnn-stress-tests:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+  blackhole-multi-card-ttnn-stress-tests:
+    # Disabled due to https://github.com/tenstorrent/tt-metal/issues/29256
+    if: false
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: LLMBox ttnn stress tests
+            runner-label: BH-LLMBox
+          - name: DeskBox ttnn stress tests
+            runner-label: BH-DeskBox
+          - name: LoudBox ttnn stress tests
+            runner-label: BH-LoudBox
     with:
       arch: blackhole
-      runner-label: BH-LLMBox
+      runner-label: ${{ matrix.test-group.runner-label }}
       timeout: 45
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

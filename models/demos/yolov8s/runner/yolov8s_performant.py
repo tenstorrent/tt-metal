@@ -22,7 +22,7 @@ def run_yolov8s_inference(
         device=device,
         batch_size=device_batch_size,
     )
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host, input_mem_config = test_infra._setup_l1_sharded_input(device)
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
@@ -55,7 +55,7 @@ def run_yolov8s_trace_inference(
         device=device,
         batch_size=device_batch_size,
     )
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host, input_mem_config = test_infra._setup_l1_sharded_input(device)
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
@@ -101,7 +101,7 @@ def run_yolov8s_trace_2cqs_inference(
         device,
         device_batch_size,
     )
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra._setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
     # Initialize the op event so we can write
@@ -118,7 +118,7 @@ def run_yolov8s_trace_2cqs_inference(
     test_infra.run()
     test_infra.validate()
     test_infra.dealloc_output()
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     # Optimized run
     ttnn.wait_for_event(1, op_event)
@@ -129,7 +129,7 @@ def run_yolov8s_trace_2cqs_inference(
     op_event = ttnn.record_event(device, 0)
     test_infra.run()
     test_infra.validate()
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     # Capture
     ttnn.wait_for_event(1, op_event)
@@ -145,7 +145,7 @@ def run_yolov8s_trace_2cqs_inference(
     input_tensor = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == input_tensor.buffer_address()
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     # More optimized run with caching
     if use_signpost:

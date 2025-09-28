@@ -7,14 +7,8 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_wormhole_b0
 
 
-def is_eth_dispatch():
-    return os.environ.get("WH_ARCH_YAML") == "wormhole_b0_80_arch_eth_dispatch.yaml"
-
-
-@pytest.mark.skipif(is_wormhole_b0() and not is_eth_dispatch(), reason="Requires eth dispatch to run on WH")
 @pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
 def test_read_write_full_synchronize(device):
     zeros = torch.zeros([1, 1, 65536, 2048]).bfloat16()
@@ -47,7 +41,6 @@ def test_read_write_full_synchronize(device):
     assert eq
 
 
-@pytest.mark.skipif(is_wormhole_b0() and not is_eth_dispatch(), reason="Requires eth dispatch to run on WH")
 @pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
 def test_read_write_cq_synchronize(device):
     zeros = torch.zeros([1, 1, 65536, 2048]).bfloat16()

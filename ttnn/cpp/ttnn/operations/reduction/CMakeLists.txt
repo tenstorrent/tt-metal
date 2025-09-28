@@ -10,18 +10,32 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    argmax/device/kernels/*
+    generic/device/kernels/*
+)
 target_sources(
     ttnn_op_reduction
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES generic/generic_reductions.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         argmax/device/argmax_op.cpp
         argmax/device/argmax_program_factory.cpp
         argmax/argmax.cpp
-        cumprod/cumprod.cpp
-        cumprod/device/cumprod_device_operation.cpp
-        cumprod/device/cumprod_program_factory.cpp
-        cumsum/cumsum.cpp
-        cumsum/device/cumsum_device_operation.cpp
-        cumsum/device/cumsum_program_factory.cpp
+        accumulation/accumulation_common.cpp
+        accumulation/cumprod/cumprod.cpp
+        accumulation/cumsum/cumsum.cpp
+        accumulation/device/accumulation_device_operation.cpp
+        accumulation/device/accumulation_program_factory.cpp
         sampling/device/sampling_op.cpp
         sampling/device/sampling_program_factory.cpp
         sampling/sampling.cpp
@@ -39,19 +53,10 @@ target_sources(
         prod/device/prod_op_all.cpp
         prod/prod.cpp
         topk/device/topk_op.cpp
+        topk/device/topk_utils.cpp
         topk/topk.cpp
         topk/device/topk_program_factory.cpp
         reduction_common/reduction_common.cpp
-)
-
-file(GLOB_RECURSE kernels argmax/device/kernels/*)
-target_sources(
-    ttnn_op_reduction
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})
@@ -65,6 +70,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_reduction
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/reduction

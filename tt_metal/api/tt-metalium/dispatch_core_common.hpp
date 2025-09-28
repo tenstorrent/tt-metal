@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include <umd/device/tt_core_coordinates.h>  // CoreType
+#include <umd/device/types/core_coordinates.hpp>  // CoreType
 
 namespace tt::tt_metal {
 
@@ -23,14 +23,6 @@ enum DispatchWorkerType : uint32_t {
     DISPATCH_H = 6,
     DISPATCH_D = 7,
     DISPATCH_S = 8,
-    MUX = 9,
-    MUX_D = 10,
-    DEMUX = 11,
-    DEMUX_D = 12,
-    US_TUNNELER_LOCAL = 13,
-    US_TUNNELER_REMOTE = 14,
-    PACKET_ROUTER_MUX = 15,
-    PACKET_ROUTER_DEMUX = 16,
     FABRIC_MUX = 17,         // Downstream from MMIO to remote mux. Tunnel index is required.
     RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
     COUNT,

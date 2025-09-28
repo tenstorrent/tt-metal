@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import skip_for_grayskull
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -38,26 +38,30 @@ def run_with_trace(
     n_buffer,
     num_iters,
 ):
+    pytest.skip(LEGACY_CCL_SKIP)
+    assert False, "Legacy ccl call removed until new implementation is done"
+
     # Compile Run
     logger.info("Compiling model")
-    output_tensor_mesh = ttnn.experimental.all_reduce(
-        input_tensor_mesh,
-        math_op=math_op,
-        num_links=num_links,
-        memory_config=output_mem_config,
-    )
+    # output_tensor_mesh = ttnn.experimental.all_reduce(
+    #     input_tensor_mesh,
+    #     math_op=math_op,
+    #     num_links=num_links,
+    #     memory_config=output_mem_config,
+    # )
     ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iters):
-        output_tensor_mesh = ttnn.experimental.all_reduce(
-            input_tensor_mesh,
-            math_op=math_op,
-            num_links=num_links,
-            memory_config=output_mem_config,
-        )
+        pass
+        # output_tensor_mesh = ttnn.experimental.all_reduce(
+        #     input_tensor_mesh,
+        #     math_op=math_op,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        # )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
 
@@ -126,15 +130,18 @@ def run_all_reduce_test(
         ),
     )
 
+    pytest.skip(LEGACY_CCL_SKIP)
+    assert False, "Legacy ccl call removed until new implementation is done"
+
     # Run the op
     for i in range(num_iters):
-        output_tensor_mesh = ttnn.experimental.all_reduce(
-            input_tensor_mesh,
-            math_op=math_op,
-            num_links=num_links,
-            memory_config=mem_config,
-            topology=topology,
-        )
+        # output_tensor_mesh = ttnn.experimental.all_reduce(
+        #     input_tensor_mesh,
+        #     math_op=math_op,
+        #     num_links=num_links,
+        #     memory_config=mem_config,
+        #     topology=topology,
+        # )
         ttnn.synchronize_device(mesh_device)
         logger.info(f"Done iteration {i}")
 
@@ -166,7 +173,6 @@ def run_all_reduce_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -238,7 +244,6 @@ def test_ring_all_reduce_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",

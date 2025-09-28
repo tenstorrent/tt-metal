@@ -10,14 +10,37 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    layernorm/device/kernels/*
+    softmax/device/kernels/*
+)
 target_sources(
     ttnn_op_normalization
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            layernorm/layernorm.hpp
+            layernorm/device/layernorm_types.hpp
+            rmsnorm/rmsnorm.hpp
+            softmax/device/softmax_operation_types.hpp
+            softmax/device/softmax_device_operation.hpp
+            softmax/device/softmax_program_factory.hpp
+            softmax/softmax.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         batch_norm/batch_norm.cpp
         batch_norm/device/batch_norm_device_operation.cpp
         batch_norm/device/batch_norm_program_factory.cpp
         batch_norm/device/running_statistics_device_operation.cpp
         batch_norm/device/running_statistics_program_factory.cpp
+        batch_norm/device/batch_norm_utils.cpp
         groupnorm/device/groupnorm_op.cpp
         groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
         groupnorm/groupnorm.cpp
@@ -31,16 +54,9 @@ target_sources(
         layernorm_distributed/layernorm_post_all_gather.cpp
         layernorm_distributed/layernorm_pre_all_gather.cpp
         rmsnorm/rmsnorm.cpp
-)
-
-file(GLOB_RECURSE kernels softmax/device/kernels/*)
-target_sources(
-    ttnn_op_normalization
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
+        softmax/softmax.cpp
+        softmax/device/softmax_device_operation.cpp
+        softmax/device/softmax_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})
@@ -54,6 +70,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_normalization
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/normalization

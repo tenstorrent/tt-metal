@@ -7,7 +7,6 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -24,6 +23,10 @@ struct MoveDeviceOperation {
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     MoveOpParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
 };
 
 tt::tt_metal::operation::ProgramWithCallbacks move_multi_core(const Tensor& input, Tensor& output);

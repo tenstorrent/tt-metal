@@ -14,13 +14,12 @@ namespace operations::ccl {
 
 struct ExecuteAllToAllCombine {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         const ttnn::Tensor& expert_metadata_tensor,
-        const GlobalSemaphore& global_semaphore,
-        uint32_t num_links = 1,
-        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
+        bool locally_reduced = 1,
+        std::optional<uint32_t> num_links = std::nullopt,
+        std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<uint32_t>& axis = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,

@@ -32,6 +32,8 @@ get_jobs_with_pagination_fallback() {
     local workflow_run_id=$2
     local attempt_number=$3
 
+    local jobs_json_file="workflow_jobs.json"
+
     # Try the original --paginate approach first, fall back to manual pagination if it fails
     set +e  # Disable exit on error
     paginated_output=$(gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate 2>&1)
@@ -40,7 +42,8 @@ get_jobs_with_pagination_fallback() {
 
     if [ $paginate_exit_code -eq 0 ]; then
         echo "Successfully fetched jobs using --paginate" >&2
-        echo "$paginated_output"
+        echo "$paginated_output" | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > "$jobs_json_file"
+        cat "$jobs_json_file"
     else
         echo "--paginate failed (exit code: $paginate_exit_code), falling back to manual pagination" >&2
         echo "Error output: $paginated_output" >&2
@@ -69,7 +72,8 @@ get_jobs_with_pagination_fallback() {
         done
 
         # Return the combined jobs in the expected format
-        echo "$all_jobs" | jq -s '{total_count: '$total_count', jobs: .[0]}'
+        echo "$all_jobs" | jq -s '{total_count: '$total_count', jobs: .[0]}' > "$jobs_json_file"
+        cat "$jobs_json_file"
     fi
 }
 

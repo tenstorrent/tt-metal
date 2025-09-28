@@ -3,9 +3,26 @@ add_library(TTNN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_tran
 
 target_precompile_headers(ttnn_op_experimental_transformer REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
+set_target_properties(
+    ttnn_op_experimental_transformer
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE nlp_kv_cache_load_slice/device/kernels/*)
 target_sources(
     ttnn_op_experimental_transformer
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.cpp
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_op.cpp
@@ -23,6 +40,9 @@ target_sources(
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp
         nlp_concat_heads_decode/device/nlp_concat_heads_decode_program_factory.cpp
         nlp_concat_heads_decode/nlp_concat_heads_decode.cpp
+        nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_device_operation.cpp
+        nlp_concat_heads_boltz/device/nlp_concat_heads_boltz_program_factory.cpp
+        nlp_concat_heads_boltz/nlp_concat_heads_boltz.cpp
         nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.cpp
         nlp_create_qkv_heads/device/nlp_create_qkv_heads_program_factory.cpp
         nlp_create_qkv_heads/nlp_create_qkv_heads.cpp
@@ -38,6 +58,9 @@ target_sources(
         nlp_create_qkv_heads_vit/device/nlp_create_qkv_heads_vit_device_operation.cpp
         nlp_create_qkv_heads_vit/device/nlp_create_qkv_heads_vit_program_factory.cpp
         nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit.cpp
+        nlp_create_qkv_heads_boltz/device/nlp_create_qkv_heads_boltz_device_operation.cpp
+        nlp_create_qkv_heads_boltz/device/nlp_create_qkv_heads_boltz_program_factory.cpp
+        nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz.cpp
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_device_operation.cpp
         nlp_kv_cache_load_slice/device/nlp_kv_cache_load_slice_program_factory.cpp
         nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.cpp
@@ -62,6 +85,18 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_transformer
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/transformer
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_experimental_transformer LIBRARY COMPONENT tar)

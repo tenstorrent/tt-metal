@@ -34,11 +34,10 @@ public:
         offset_t membytes = 0;             // Byte size of memory image.
 
     public:
-        inline Segment(std::span<word_t const> contents, address_t addr, address_t lma, offset_t membytes) :
+        Segment(std::span<const word_t> contents, address_t addr, address_t lma, offset_t membytes) :
             contents(contents), address(addr), lma(lma), membytes(membytes) {}
     };
 
-public:
     ElfFile() = default;
     ~ElfFile();
 
@@ -47,31 +46,29 @@ public:
     ElfFile operator=(ElfFile const&) = delete;
 
     // Move constructable & assignable -- take ownership
-    ElfFile(ElfFile&& s) : pimpl_(s.pimpl_), contents_(std::move(s.contents_)), segments_(std::move(s.segments_)) {
+    ElfFile(ElfFile&& s) noexcept : pimpl_(s.pimpl_), contents_(s.contents_), segments_(std::move(s.segments_)) {
         s.contents_ = std::span<std::byte>();
         s.pimpl_ = nullptr;
     }
-    ElfFile& operator=(ElfFile&& s) {
+    ElfFile& operator=(ElfFile&& s) noexcept {
         std::swap(contents_, s.contents_);
         segments_ = std::move(s.segments_);
         std::swap(pimpl_, s.pimpl_);
         return *this;
     }
 
-public:
     std::vector<Segment> const& GetSegments() const { return segments_; }
 
-public:
     // Release the implementation data, leaving the segments and
     // contents. Use this, after processing, if the elf object is long-lived.
     void ReleaseImpl();
 
     // Read an elf file, populate segments vector.
     // Path must remain live throughout processing.
-    void ReadImage(std::string_view path);
+    void ReadImage(const std::string& path);
 
     // Write the (now-processed) elf file.
-    void WriteImage(std::string const& path);
+    void WriteImage(const std::string& path);
 
     // Weaken data symbols, remove all others. Keep STRONG_NAMES
     // strong (can be non-data symbols).  Names can be exact or simple

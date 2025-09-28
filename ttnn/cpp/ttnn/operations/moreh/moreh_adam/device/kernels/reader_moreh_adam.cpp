@@ -51,46 +51,27 @@ void kernel_main() {
     constexpr uint32_t cb_id_one = tt::CBIndex::c_6;
 
     const uint32_t param_tile_bytes = get_tile_size(cb_id_param);
-    const auto param_data_format = get_dataformat(cb_id_param);
-
     const uint32_t grad_tile_bytes = get_tile_size(cb_id_grad);
-    const auto grad_data_format = get_dataformat(cb_id_grad);
-
     const uint32_t exp_avg_tile_bytes = get_tile_size(cb_id_exp_avg);
-    const auto exp_avg_data_format = get_dataformat(cb_id_exp_avg);
-
     const uint32_t exp_avg_sq_tile_bytes = get_tile_size(cb_id_exp_avg_sq);
-    const auto exp_avg_sq_data_format = get_dataformat(cb_id_exp_avg_sq);
 
-    constexpr bool param_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool grad_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool exp_avg_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool exp_avg_sq_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool max_exp_avg_sq_is_dram = get_compile_time_arg_val(4) == 1;
+    constexpr auto param_args = TensorAccessorArgs<0>();
+    constexpr auto grad_args = TensorAccessorArgs<param_args.next_compile_time_args_offset()>();
+    constexpr auto exp_avg_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
+    constexpr auto exp_avg_sq_args = TensorAccessorArgs<exp_avg_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGenFast<param_is_dram> param_addrg = {
-        .bank_base_address = param_addr, .page_size = param_tile_bytes, .data_format = param_data_format};
-
-    const InterleavedAddrGenFast<grad_is_dram> grad_addrg = {
-        .bank_base_address = grad_addr, .page_size = grad_tile_bytes, .data_format = grad_data_format};
-
-    const InterleavedAddrGenFast<exp_avg_is_dram> exp_avg_addrg = {
-        .bank_base_address = exp_avg_addr, .page_size = exp_avg_tile_bytes, .data_format = exp_avg_data_format};
-
-    const InterleavedAddrGenFast<exp_avg_sq_is_dram> exp_avg_sq_addrg = {
-        .bank_base_address = exp_avg_sq_addr,
-        .page_size = exp_avg_sq_tile_bytes,
-        .data_format = exp_avg_sq_data_format};
+    const auto param_addrg = TensorAccessor(param_args, param_addr, param_tile_bytes);
+    const auto grad_addrg = TensorAccessor(grad_args, grad_addr, grad_tile_bytes);
+    const auto exp_avg_addrg = TensorAccessor(exp_avg_args, exp_avg_addr, exp_avg_tile_bytes);
+    const auto exp_avg_sq_addrg = TensorAccessor(exp_avg_sq_args, exp_avg_sq_addr, exp_avg_sq_tile_bytes);
 
 #ifdef AMSGRAD
     constexpr uint32_t cb_id_max_exp_avg_sq = tt::CBIndex::c_4;
     const auto max_exp_avg_sq_addr = get_arg_val<uint32_t>(4);
     const uint32_t max_exp_avg_sq_tile_bytes = get_tile_size(cb_id_max_exp_avg_sq);
-    const auto max_exp_avg_sq_data_format = get_dataformat(cb_id_max_exp_avg_sq);
-    const InterleavedAddrGenFast<max_exp_avg_sq_is_dram> max_exp_avg_sq_addrg = {
-        .bank_base_address = max_exp_avg_sq_addr,
-        .page_size = max_exp_avg_sq_tile_bytes,
-        .data_format = max_exp_avg_sq_data_format};
+    constexpr auto max_exp_avg_sq_args = TensorAccessorArgs<exp_avg_sq_args.next_compile_time_args_offset()>();
+    const auto max_exp_avg_sq_addrg =
+        TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr, max_exp_avg_sq_tile_bytes);
 #endif
 
     fill_cb_with_value(cb_scalar_args, lr);

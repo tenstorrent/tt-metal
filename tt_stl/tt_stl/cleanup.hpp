@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -44,7 +44,7 @@ private:
 };
 
 template <typename Callable>
-auto make_cleanup(Callable&& callable) {
+[[nodiscard]] auto make_cleanup(Callable&& callable) {
     return Cleanup(std::forward<Callable>(callable));
 }
 

@@ -11,7 +11,7 @@ import math
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, mesh_device_fixture
 
 
@@ -34,7 +34,7 @@ parameters = {
             [1, 256, 75, 75, 2, 2, 2, 2, 0, 0, 1, 1, True],
             [1, 32, 256, 256, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 320, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 4, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],  # requires padding along C
+            [1, 4, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 480, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],
             [1, 480, 28, 28, 3, 3, 2, 2, 0, 0, 1, 1, True],
             [1, 512, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -42,7 +42,7 @@ parameters = {
             [1, 512, 19, 19, 3, 3, 1, 1, 1, 1, 1, 1, False],
             [1, 512, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 512, 38, 38, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 528, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],  # required padding along C
+            [1, 528, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],
             [1, 64, 112, 112, 3, 3, 2, 2, 0, 0, 1, 1, True],
             [1, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False],
             [1, 64, 128, 128, 2, 2, 2, 2, 0, 0, 1, 1, False],

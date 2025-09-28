@@ -109,9 +109,10 @@ from ttnn._ttnn.multi_device import (
     create_mesh_mapper,
     concat_mesh_to_tensor_composer,
     create_mesh_composer,
+    compute_distribution_to_mesh_mapping,
     aggregate_tensor,
     distribute_tensor,
-    get_t3k_physical_device_ids_ring,
+    using_distributed_env,
 )
 
 from ttnn._ttnn.events import (
@@ -129,16 +130,32 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
+)
+
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
+from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
+
+# Import cluster functions and types
+from ttnn._ttnn import cluster
 
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
+)
+
+from ttnn._ttnn.mesh_socket import (
+    create_socket_pair,
+    MeshSocket,
+    SocketConfig,
+    SocketMemoryConfig,
+    SocketConnection,
+    MeshCoreCoord,
 )
 
 from ttnn.types import (
@@ -156,6 +173,8 @@ from ttnn.types import (
     MemoryConfig,
     BufferType,
     TensorMemoryLayout,
+    ShardShapeAlignment,
+    ShardDistributionStrategy,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,
@@ -163,7 +182,6 @@ from ttnn.types import (
     L1_WIDTH_SHARDED_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
-    ShardMode,
     ShardSpec,
     NdShardSpec,
     CoreRangeSet,
@@ -176,9 +194,12 @@ from ttnn.types import (
     StorageType,
     DEVICE_STORAGE_TYPE,
     CoreGrid,
+    CoreType,
     CoreRange,
     Shape,
+    TensorSpec,
     Tensor,
+    ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
@@ -200,6 +221,7 @@ from ttnn.types import (
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    TensorAccessorArgs,
 )
 
 from ttnn.device import (
@@ -221,7 +243,7 @@ from ttnn.device import (
     CreateDevices,
     CloseDevice,
     CloseDevices,
-    DumpDeviceProfiler,
+    ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
     format_input_tensor,
@@ -230,7 +252,6 @@ from ttnn.device import (
     SubDevice,
     SubDeviceId,
     SubDeviceManagerId,
-    DefaultQueueId,
     init_device_compute_kernel_config,
 )
 
@@ -251,11 +272,10 @@ from ttnn.core import (
     LightMetalReplay,
     create_sharded_memory_config,
     create_sharded_memory_config_,
-    dump_memory_config,
-    load_memory_config,
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    get_current_command_queue_id_for_thread,
 )
 
 import ttnn.reflection
@@ -263,6 +283,7 @@ import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,
+    command_queue,
     create_module_if_not_exists,
     dump_operations,
     get_golden_function,
@@ -330,7 +351,10 @@ from ttnn.operations.normalization import (
     LayerNormShardedMultiCoreProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
+    create_group_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    dram_group_norm_params_from_torch,
 )
 
 from ttnn.operations.embedding import (
@@ -345,11 +369,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import (
-    Topology,
-    teardown_edm_fabric,
-    initialize_edm_fabric,
-)
+from ttnn.operations.ccl import Topology
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -367,6 +387,10 @@ from ttnn._ttnn.operations.conv import (
     convert_conv_weight_tensor_to_tiled_layout,
     convert_conv_weight_tensor_to_special_padding_tiled_layout,
     convert_conv_weight_tensor_to_grouped_layout,
+)
+
+from ttnn.operations.pool import (
+    prepare_grid_sample_grid,
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig

@@ -13,7 +13,7 @@ import ttnn
 
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import check_with_pcc, assert_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 
 TIMEOUT = 5
@@ -526,7 +526,7 @@ def test_matmul(
     input_layout,
     compute_kernel_config,
 ):
-    run_matmul(
+    (result, msg), e2e_perf = run_matmul(
         device,
         input_shapes,
         program_config,
@@ -543,6 +543,8 @@ def test_matmul(
         input_layout,
         compute_kernel_config,
     )
+    assert result, msg
+    logger.info(f"e2e_perf: {e2e_perf}")
 
 
 def run(

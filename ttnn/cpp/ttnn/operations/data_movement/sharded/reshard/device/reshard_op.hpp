@@ -21,6 +21,10 @@ struct ReshardDeviceOperation {
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> create_op_performance_model(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
 
     static constexpr auto attribute_names = std::make_tuple("output_mem_config");
     auto attribute_values() const { return std::make_tuple(std::cref(this->output_mem_config)); }

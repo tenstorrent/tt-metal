@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -22,21 +22,18 @@ void kernel_main() {
     // If work is not divided up nicely between the cores/ tensor too small we can use this to not run this core.
     const uint32_t nop = get_arg_val<uint32_t>(4);
 
-    constexpr bool tensor_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t original_page_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t num_repeats = get_compile_time_arg_val(2);
+    constexpr uint32_t original_page_size_bytes = get_compile_time_arg_val(0);
+    constexpr uint32_t num_repeats = get_compile_time_arg_val(1);
     // cb_id_in0 and cb_id_in1 is each 1 page of size:
     // if original_page_size_bytes is a multiple of 16, equal to original_page_size_bytes + 128
     // else if original_page_size_bytes is a multiple of 8, equal to original_page_size_bytes * 2 + 128
     // else if original_page_size_bytes is a multiple of 4, equal to original_page_size_bytes * 4 + 128
     // else if original_page_size_bytes is a multiple of 2, equal to original_page_size_bytes * 8 + 128
     // if it is an odd number equal to original_page_size_bytes * 16 + 128
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(4);
-    constexpr bool source_page_is_pow_2 = (get_compile_time_arg_val(5) == 1);
-    constexpr uint32_t source_page_pow_2 = get_compile_time_arg_val(6);
-    constexpr bool dest_page_is_pow_2 = (get_compile_time_arg_val(7) == 1);
-    constexpr uint32_t dest_page_pow_2 = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(3);
+    constexpr auto src_args = TensorAccessorArgs<4>();
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr uint32_t dest_page_size_bytes = original_page_size_bytes * num_repeats;
     // Number of times we must double the input page to make it write aligned
     constexpr uint32_t num_doublings = ((original_page_size_bytes % 16) == 0)  ? 0
@@ -51,10 +48,8 @@ void kernel_main() {
         return;
     }
 
-    const auto s = get_interleaved_addr_gen<tensor_is_dram, source_page_is_pow_2>(
-        src_addr, original_page_size_bytes, source_page_pow_2);
-    const auto d =
-        get_interleaved_addr_gen<tensor_is_dram, dest_page_is_pow_2>(dst_addr, dest_page_size_bytes, dest_page_pow_2);
+    const auto s = TensorAccessor(src_args, src_addr, original_page_size_bytes);
+    const auto d = TensorAccessor(dst_args, dst_addr, dest_page_size_bytes);
 
     // Get scratchpads guaranteed to be allocated until the function terminates
     cb_reserve_back(cb_id_in0, 1);
@@ -64,9 +59,9 @@ void kernel_main() {
     cb_push_back(cb_id_in1, 1);
     cb_push_back(cb_id_in0, 1);
 
-    constexpr uint64_t r_mask_to_use = tensor_is_dram ? MASK_64 : MASK_16;
-    constexpr uint64_t r_offset_to_use = tensor_is_dram ? OFFSET_64 : OFFSET_16;
-    constexpr uint32_t r_alignment_requirement = tensor_is_dram ? 64 : 16;
+    constexpr uint64_t r_mask_to_use = src_args.is_dram ? MASK_64 : MASK_16;
+    constexpr uint64_t r_offset_to_use = src_args.is_dram ? OFFSET_64 : OFFSET_16;
+    constexpr uint32_t r_alignment_requirement = src_args.is_dram ? 64 : 16;
     constexpr uint32_t w_alignment_requirement = 16;
     constexpr uint64_t w_mask_to_use = MASK_16;
     constexpr uint64_t w_offset_to_use = OFFSET_16;

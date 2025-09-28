@@ -70,7 +70,7 @@ class TtSwinTransformer:
             nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
         else:
             nchw = x
-        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # , memory_config=ttnn.L1_MEMORY_CONFIG)
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
         ttnn.deallocate(nchw)
         ttnn.deallocate(x)
         nhwc = ttnn.reallocate(nhwc)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -37,7 +37,6 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/trace.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -268,7 +267,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         per_core_M,
         per_core_N,
         /*transpose_mcast=*/false,
-        /*fused_activation=*/std::nullopt};
+        /*fused_activation=*/std::nullopt,
+        /*fuse_batch=*/true};
 
     const ttnn::DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),
@@ -277,7 +277,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/true,
-        /*default_dst_full_sync_en=*/false);
+        /*default_dst_full_sync_en=*/false,
+        /*default_throttle_level=*/ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
     const ttnn::MemoryConfig out_mem_config =
         out_sharded ? ttnn::MemoryConfig{ttnn::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}
@@ -308,7 +309,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             input_tensor_1,
             /*bias=*/std::nullopt,
             /*parameters=*/matmul_params);
-        Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
+        tt::tt_metal::distributed::Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
         output_tensor.deallocate();
     }
 
@@ -318,7 +319,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
 
     // Performance measurement iterations
     if (use_trace) {
-        auto tid = ttnn::operations::trace::begin_trace_capture(device_, ttnn::DefaultQueueId);
+        auto tid = ttnn::operations::trace::begin_trace_capture(device_, QueueId(0));
         for (int iter = 0; iter < num_measurement_iterations; ++iter) {
             output_tensor = ttnn::operations::matmul::matmul(
                 input_tensor_0,
@@ -327,13 +328,13 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                 /*parameters=*/matmul_params);
             output_tensor.deallocate();
         }
-        ttnn::operations::trace::end_trace_capture(device_, tid, ttnn::DefaultQueueId);
+        ttnn::operations::trace::end_trace_capture(device_, tid, QueueId(0));
 
         auto start_time = std::chrono::high_resolution_clock::now();
         {
             ZoneScopedN("Matmul trace iterations");
-            ttnn::operations::trace::execute_trace(device_, tid, ttnn::DefaultQueueId, false);
-            Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
+            ttnn::operations::trace::execute_trace(device_, tid, QueueId(0), false);
+            tt::tt_metal::distributed::Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -350,7 +351,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                     input_tensor_1,
                     /*bias=*/std::nullopt,
                     /*parameters=*/matmul_params);
-                Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
+                tt::tt_metal::distributed::Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;
                 output_tensor.deallocate();

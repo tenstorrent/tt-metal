@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
@@ -26,9 +26,6 @@ dims = [0, 1, 2, 3, 4]
 @pytest.mark.parametrize("chunksize", chunksize_list)
 @pytest.mark.parametrize("dim", dims)
 def test_split(device, layout, dtype, shape, chunksize, dim):
-    # https://github.com/tenstorrent/tt-metal/issues/23237
-    device.disable_and_clear_program_cache()
-
     if dim > len(shape) - 1:
         pytest.skip("dim greater than rank")
 
@@ -60,6 +57,29 @@ def test_split_last_dim_kernel(device, dtype):
     torch_results = torch.split(torch_input_tensor, chunksize, dim=dim)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    outputs = ttnn.split(input_tensor, chunksize, dim=dim)
+    outputs = [ttnn.to_torch(t) for t in outputs]
+
+    assert len(outputs) == len(torch_results)
+    for output, torch_result in zip(outputs, torch_results):
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+
+        assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize("shape", [(1, 256, 512, 512)])
+@pytest.mark.parametrize("chunksize", [256])
+@pytest.mark.parametrize("dim", [2, 3])
+def test_split_large_inner_dims(device, layout, dtype, shape, chunksize, dim):
+    torch_input_tensor = torch.rand(shape)
+    torch_results = torch.split(torch_input_tensor, chunksize, dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
 
     outputs = ttnn.split(input_tensor, chunksize, dim=dim)
     outputs = [ttnn.to_torch(t) for t in outputs]

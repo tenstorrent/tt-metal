@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -147,7 +147,7 @@ autograd::TensorPtr scaled_dot_product_attention(
     auto groups = value->get_value().logical_shape().to_array_4D()[1];
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
-    constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
     auto q_scaled =
         ttnn::multiply(query->get_value(), scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
     auto key_tensor = key->get_value();
@@ -189,7 +189,7 @@ autograd::TensorPtr scaled_dot_product_attention(
 
     ttml::autograd::GradFunction grad =
         [scale, query, key, value, attention_weights, out, mask, batch_num, heads, seq_len, embedding_dim, groups]() {
-            constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+            constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
             auto dL_dout = out->get_grad();  // (B, H, S, embedding_dim)
             // dL_d(softmax(σQK+mask)) = dL_dout @ value^T
             ttnn::Tensor dL_dattention_weights =

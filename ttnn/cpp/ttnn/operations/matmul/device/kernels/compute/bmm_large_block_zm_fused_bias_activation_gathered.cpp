@@ -328,7 +328,7 @@ void MAIN {
                         }
 #endif
                         if constexpr (untilize_out) {
-                            pack_untilize_dst_init_short<out_subblock_num_tiles>(mm_out_cb_id);
+                            pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_cb_id);
                         }
                         tile_regs_commit();
                         // Pack out to output buffer
@@ -346,9 +346,9 @@ void MAIN {
 
                         uint32_t start_dst_index = 0;
                         if constexpr (untilize_out) {
-                            pack_untilize_dst<out_subblock_num_tiles>(mm_out_cb_id);
+                            pack_untilize_dest<out_subblock_num_tiles>(mm_out_cb_id);
                         } else {
-                            matmul_pack_tile(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
+                            pack_tile_block(start_dst_index, mm_out_cb_id, out_subblock_num_tiles);
                         }
 
                         tile_regs_release();
@@ -372,7 +372,7 @@ void MAIN {
 #endif
 
                         uint32_t start_dst_index = 0;
-                        matmul_pack_tile(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                        pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
                         cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);

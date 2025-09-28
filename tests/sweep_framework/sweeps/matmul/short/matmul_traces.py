@@ -8,10 +8,12 @@ import pytest
 import torch
 import ttnn
 
+from loguru import logger
+
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 TIMEOUT = 70
 
@@ -2687,7 +2689,9 @@ def run_matmul(device, params, core_grid, dtype, test_bias):
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
 def test_trace(device, params, core_grid, dtype, test_bias):
-    run_matmul(device, params, core_grid, dtype, test_bias)
+    (result, msg), e2e_perf = run_matmul(device, params, core_grid, dtype, test_bias)
+    assert result, msg
+    logger.info(f"e2e_perf: {e2e_perf}")
 
 
 def run(

@@ -2,9 +2,14 @@ name: "(Single-card) Frequent model and ttnn tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      models-to-run:
+        description: "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'"
+        default: "all"
+        type: string
   workflow_call:
   schedule:
-    - cron: "0 */2 * * *"
+    - cron: "0 5,14,23 * * *"
 
 jobs:
   build-artifact:
@@ -23,3 +28,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      models-to-run: ${{ inputs.models-to-run }}

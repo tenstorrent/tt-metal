@@ -42,7 +42,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     };
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
-    const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
+    const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -55,18 +55,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const uint32_t cb_in_tiled_id = tt::CBIndex::c_1;
     const uint32_t cb_in_tiled_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_tiled_page_size = intermediary_tile_size;
-    const auto cb_in_tiled =
-        create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
+    create_circular_buffer(cb_in_tiled_id, cb_in_tiled_total_size, cb_in_tiled_page_size, intermediary_format);
 
     const uint32_t cb_in_transpose_total_size = tt::div_up(input_shard_width, TILE_WIDTH) * intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
 
     const uint32_t cb_in_transpose_id0 = tt::CBIndex::c_2;
-    const auto cb_in_transpose0 = create_circular_buffer(
+    create_circular_buffer(
         cb_in_transpose_id0, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
 
     const uint32_t cb_in_transpose_id1 = tt::CBIndex::c_3;
-    const auto cb_in_transpose1 = create_circular_buffer(
+    create_circular_buffer(
         cb_in_transpose_id1, cb_in_transpose_total_size, cb_in_transpose_page_size, intermediary_format);
 
     const uint32_t cb_out_id = tt::CBIndex::c_4;
@@ -154,7 +153,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         input_core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args1));
 
-    auto compute_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/kernels/convert_to_hwc.cpp",
         input_core_grid,

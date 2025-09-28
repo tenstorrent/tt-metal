@@ -1,17 +1,17 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
 )
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config
 
 
-class TtUpsample2D(nn.Module):
+class TtUpsample2D(LightweightModule):
     def __init__(
         self,
         device,
@@ -36,16 +36,14 @@ class TtUpsample2D(nn.Module):
         weights = state_dict[f"{module_path}.conv.weight"]
         bias = state_dict[f"{module_path}.conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        self.compute_config, self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
-            device,
+        self.compute_config = model_config.get_conv_compute_config(module_path=module_path)
+        self.conv_config = model_config.get_conv_config(conv_path=module_path)
+        self.tt_weights, self.tt_bias, self.conv_params = prepare_conv_params(
             weights,
             bias,
-            model_config.conv_w_dtype,
-            fp32_dest_acc_en=True,
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            self.conv_config.weights_dtype,
         )
         self.conv_slice_config = get_DRAM_conv_config(module_path, 1)
-        self.conv_config = model_config.get_conv_config(conv_path=module_path)
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):
@@ -56,9 +54,9 @@ class TtUpsample2D(nn.Module):
     def forward(self, input_tensor):
         hidden_state_l1, input_shape = self.interpolate(input_tensor)
         B, C, H, W = input_shape
-        if input_tensor.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
-            ttnn.deallocate(input_tensor)
 
+        ttnn.deallocate(input_tensor)
+        if hidden_state_l1.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             hidden_states = ttnn.to_memory_config(hidden_state_l1, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(hidden_state_l1)
         else:

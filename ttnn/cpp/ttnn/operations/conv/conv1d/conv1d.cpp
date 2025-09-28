@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,12 +35,10 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv1d {
 
-template <typename T>
 Result conv1d(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -80,7 +78,6 @@ Result conv1d(
 
     auto [output_tensor, output_dimensions, weights_and_bias] =
         std::get<static_cast<int>(ResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
-            queue_id,
             input_tensor_4d,
             weight_tensor,
             device,
@@ -94,8 +91,8 @@ Result conv1d(
             conv2d_padding,
             std::array<uint32_t, 2>{dilation, 1},
             groups,
-            std::move(dtype),
-            std::move(bias_tensor),
+            dtype,
+            bias_tensor,
             conv_config,
             compute_config,
             memory_config,
@@ -114,7 +111,6 @@ Result conv1d(
     };
 }
 Result Conv1dOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -135,7 +131,6 @@ Result Conv1dOperation::invoke(
     bool return_output_dim,
     bool return_weights_and_bias) {
     return conv1d(
-        queue_id,
         input_tensor,
         weight_tensor,
         device,
@@ -148,54 +143,10 @@ Result Conv1dOperation::invoke(
         padding,
         dilation,
         groups,
-        std::move(dtype),
-        std::move(bias_tensor),
-        std::move(conv_config),
-        std::move(compute_config),
-        memory_config,
-        return_output_dim,
-        return_weights_and_bias);
-}
-
-Result Conv1dOperation::invoke(
-    QueueId queue_id,
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& weight_tensor,
-    IDevice* device,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_length,
-    uint32_t kernel_size,
-    uint32_t stride,
-    std::variant<std::array<uint32_t, 2>, uint32_t> padding,
-    uint32_t dilation,
-    uint32_t groups,
-    const std::optional<const DataType>& dtype,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    const std::optional<const Conv1dConfig>& conv_config,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config,
-    const std::optional<const MemoryConfig>& memory_config,
-    bool return_output_dim,
-    bool return_weights_and_bias) {
-    return conv1d(
-        queue_id,
-        input_tensor,
-        weight_tensor,
-        device,
-        in_channels,
-        out_channels,
-        batch_size,
-        input_length,
-        kernel_size,
-        stride,
-        padding,
-        dilation,
-        groups,
-        std::move(dtype),
-        std::move(bias_tensor),
-        std::move(conv_config),
-        std::move(compute_config),
+        dtype,
+        bias_tensor,
+        conv_config,
+        compute_config,
         memory_config,
         return_output_dim,
         return_weights_and_bias);

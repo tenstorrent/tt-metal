@@ -135,7 +135,7 @@ public:
         if (HasReg(index)) {
             return registers[registers_by_index.at(index)].name;
         } else {
-            throw std::runtime_error("Non-existant overlay register index: " + std::to_string(index));
+            throw std::runtime_error("Non-existent overlay register index: " + std::to_string(index));
         }
     }
 
@@ -143,7 +143,7 @@ public:
         if (HasReg(label)) {
             return registers[registers_by_name.at(label)].index;
         } else {
-            throw std::runtime_error("Non-existant overlay register: " + std::string(label));
+            throw std::runtime_error("Non-existent overlay register: " + std::string(label));
         }
     }
 
@@ -151,7 +151,7 @@ public:
         if (HasReg(label)) {
             return registers[registers_by_name.at(label)].description;
         } else {
-            throw std::runtime_error("Non-existant overlay register: " + std::string(label));
+            throw std::runtime_error("Non-existent overlay register: " + std::string(label));
         }
     }
 
@@ -165,7 +165,7 @@ public:
         if (HasFld(label)) {
             return fields[fields_by_name.at(label)].offset;
         } else {
-            throw std::runtime_error("Non-existant overlay field: " + std::string(label));
+            throw std::runtime_error("Non-existent overlay field: " + std::string(label));
         }
     }
 
@@ -173,7 +173,7 @@ public:
         if (HasFld(label)) {
             return fields[fields_by_name.at(label)].width;
         } else {
-            throw std::runtime_error("Non-existant overlay field: " + std::string(label));
+            throw std::runtime_error("Non-existent overlay field: " + std::string(label));
         }
     }
 
@@ -181,7 +181,7 @@ public:
         if (HasFld(label)) {
             return fields[fields_by_name.at(label)].description;
         } else {
-            throw std::runtime_error("Non-existant overlay field: " + std::string(label));
+            throw std::runtime_error("Non-existent overlay field: " + std::string(label));
         }
     }
 
@@ -203,7 +203,7 @@ public:
         if (HasReg(reg_label)) {
             return registers[registers_by_name.at(reg_label)].fields;
         } else {
-            throw std::runtime_error("Non-existant overlay register: " + std::string(reg_label));
+            throw std::runtime_error("Non-existent overlay register: " + std::string(reg_label));
         }
     }
 
@@ -214,7 +214,7 @@ public:
         if (HasReg(reg_index)) {
             return registers[registers_by_index.at(reg_index)].fields;
         } else {
-            throw std::runtime_error("Non-existant overlay register index: " + std::to_string(reg_index));
+            throw std::runtime_error("Non-existent overlay register index: " + std::to_string(reg_index));
         }
     }
 
@@ -228,7 +228,7 @@ public:
             return field_tmp[index_field_temp].name;
         } else {
             throw std::runtime_error(
-                "Non-existant overlay register field (index, offset): " + std::to_string(reg_index) + ", " +
+                "Non-existent overlay register field (index, offset): " + std::to_string(reg_index) + ", " +
                 std::to_string(field_offset));
         }
     }
@@ -240,7 +240,7 @@ public:
             return field_tmp[index_field_temp].offset;
         } else {
             throw std::runtime_error(
-                "Non-existant overlay register field: " + std::string(reg_label) + ", " + std::string(field_label));
+                "Non-existent overlay register field: " + std::string(reg_label) + ", " + std::string(field_label));
         }
     }
 
@@ -251,7 +251,7 @@ public:
             return field_tmp[index_field_temp].width;
         } else {
             throw std::runtime_error(
-                "Non-existant overlay register field: " + std::string(reg_label) + ", " + std::string(field_label));
+                "Non-existent overlay register field: " + std::string(reg_label) + ", " + std::string(field_label));
         }
     }
 
@@ -265,7 +265,7 @@ public:
             return field_tmp[index_field_temp].width;
         } else {
             throw std::runtime_error(
-                "Non-existant overlay register field (index, offset): " + std::to_string(reg_index) + ", " +
+                "Non-existent overlay register field (index, offset): " + std::to_string(reg_index) + ", " +
                 std::to_string(field_offset));
         }
     }
@@ -277,7 +277,7 @@ public:
             return field_tmp[index_field_temp].description;
         } else {
             throw std::runtime_error(
-                "Non-existant overlay register field: " + std::string(reg_label) + ", " + std::string(field_label));
+                "Non-existent overlay register field: " + std::string(reg_label) + ", " + std::string(field_label));
         }
     }
 };

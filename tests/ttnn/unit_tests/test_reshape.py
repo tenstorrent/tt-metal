@@ -11,7 +11,16 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull
+
+
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
 
 
 @pytest.mark.parametrize(
@@ -453,7 +462,6 @@ def test_reshape_host(input_shape, output_shape, device):
 
 
 # required for Embedding
-@skip_for_grayskull("avoid this test while issue 15702 is resolved")
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -493,6 +501,38 @@ def test_reshape_int(input_shape, output_shape, device):
 )
 def test_fp32_support(input_shape, output_shape, device):
     torch_input_tensor = torch.randint(0, 100, input_shape)
+    torch_result = torch_input_tensor.reshape(output_shape)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    ttnn_output = ttnn.reshape(input_tensor, output_shape)
+
+    output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_result, output, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 1, 756, 128), (1, 27, 28, 128)),
+        ((1, 256, 16), (16, 256)),
+        ((1, 256, 1024), (1, 256, 16, 64)),
+        ((16, 16), (32, 8)),
+        ((1, 1445, 192), (1445, 192)),
+        ((1, 256), (1, 1, 256)),
+        ((16, 1, 32), (16, 1, 32)),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
+def test_int_support(input_shape, output_shape, device, dtype):
+    torch_input_tensor = random_torch_tensor(dtype, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
 
     input_tensor = ttnn.from_torch(
@@ -597,3 +637,41 @@ def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
     for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
         tt_output_tensor = ttnn.to_torch(tensor_shard)
         assert tt_output_tensor.shape == torch.Size(output_shape)
+
+
+def test_reshape_oob(device):
+    """
+    Test proves that this reshape op writes data out of bounds, corrupting
+    tensors at other memory locations.
+    """
+
+    def bf16_tensor(tensor):
+        return ttnn.from_torch(tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+
+    B, T, H, W, U = 1, 1, 90, 20, 768
+    SENTINEL_TENSOR_SIZE = 2**15
+    for i in range(10):
+        print(f"running test {i}")
+        torch_input_tensor = torch.randn(B, T, H, W, U, dtype=torch.bfloat16)
+        torch_output = torch_input_tensor.reshape(B, T, H, W, 2, U // 2)
+        # Known data below input and output tensors
+        pre_tensor = bf16_tensor(torch.full((SENTINEL_TENSOR_SIZE, SENTINEL_TENSOR_SIZE), 2.0, dtype=torch.bfloat16))
+        tt_input_tensor = bf16_tensor(torch_input_tensor)
+        # Allocate space for output tensor
+        dummy_tensor = bf16_tensor(torch.zeros(B, T, H, W, U))
+        # Known data above output tensor
+        post_tensor = bf16_tensor(torch.full((SENTINEL_TENSOR_SIZE, SENTINEL_TENSOR_SIZE), 2.0, dtype=torch.bfloat16))
+        ttnn.deallocate(dummy_tensor)
+        tt_output_tensor = ttnn.reshape(tt_input_tensor, (B, T, H, W, 2, U // 2))
+        tt_output_tensor_host = ttnn.to_torch(tt_output_tensor)
+        tt_input_tensor_host = ttnn.to_torch(tt_input_tensor)
+        pre_tensor_host = ttnn.to_torch(pre_tensor)
+        post_tensor_host = ttnn.to_torch(post_tensor)
+        assert torch.allclose(torch_output, tt_output_tensor_host), "Output tensors do not match"
+        assert torch.allclose(torch_input_tensor, tt_input_tensor_host), "Input tensors do not match"
+        assert torch.all(pre_tensor_host == 2.0), "Pre tensors do not match"
+        assert torch.all(post_tensor_host == 2.0), "Post tensors do not match"
+        ttnn.deallocate(tt_input_tensor)
+        ttnn.deallocate(tt_output_tensor)
+        ttnn.deallocate(pre_tensor)
+        ttnn.deallocate(post_tensor)

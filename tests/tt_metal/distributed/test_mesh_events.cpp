@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,18 +27,17 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshEventsTestT3000 = T3000MultiCQMeshDeviceFixture;
+using MeshEventsTest2x4 = MultiCQMeshDevice2x4Fixture;
 using MeshEventsTestSuite = GenericMultiCQMeshDeviceFixture;
 
 TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
-    int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    int32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
@@ -63,7 +62,6 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
         // Reads on CQ 1
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             readback_vecs.push_back({});
-            auto shard = buf->get_device_buffer(coord);
             ReadShard(mesh_device_->mesh_command_queue(1), readback_vecs.back(), buf, coord);
         }
 
@@ -73,9 +71,9 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     }
 }
 
-TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
+TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
     uint32_t num_iterations = 20;
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
@@ -129,13 +127,20 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
-    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
-    auto mesh_workload = CreateMeshWorkload();
+    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(
-        MeshCoordinate{0, 0}, MeshCoordinate{num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
+        MeshCoordinate{0, 0},
+        MeshCoordinate{
+            mesh_device_->num_rows() - 1,
+            num_cols_in_workload - 1,
+        });
     MeshCoordinateRange devices_1(
-        MeshCoordinate{num_rows_in_workload, 0},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+        MeshCoordinate{0, num_cols_in_workload},
+        MeshCoordinate{
+            mesh_device_->num_rows() - 1,
+            mesh_device_->num_cols() - 1,
+        });
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_1);
@@ -185,13 +190,13 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                         dst_vec,
                         output_bufs[col_idx * worker_grid_size.y + row_idx],
                         device_coord);
-                    if (device_coord[0] <= num_rows_in_workload - 1) {
+                    if (device_coord[1] <= num_cols_in_workload - 1) {
                         for (int i = 0; i < dst_vec.size(); i++) {
-                            EXPECT_EQ(dst_vec[i].to_float(), (2 * iter + 5));
+                            EXPECT_EQ(static_cast<float>(dst_vec[i]), (2 * iter + 5));
                         }
                     } else {
                         for (int i = 0; i < dst_vec.size(); i++) {
-                            EXPECT_EQ(dst_vec[i].to_float(), (iter + 2) * (iter + 3));
+                            EXPECT_EQ(static_cast<float>(dst_vec[i]), (iter + 2) * (iter + 3));
                         }
                     }
                 }
@@ -206,7 +211,7 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     }
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
-    int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    int32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
@@ -220,8 +225,8 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     for (std::size_t i = 0; i < num_iterations; i++) {
         std::vector<uint32_t> src_vec(NUM_TILES * single_tile_size / sizeof(uint32_t), i);
         std::iota(src_vec.begin(), src_vec.end(), i);
-        MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device_->num_cols() - 1});
-        MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, mesh_device_->num_cols() - 1});
+        MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, 0});
+        MeshCoordinateRange devices_1(MeshCoordinate{0, 1}, MeshCoordinate{mesh_device_->num_rows() - 1, 1});
 
         std::vector<std::vector<uint32_t>> readback_vecs = {};
 
@@ -231,7 +236,6 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         for (const auto& coord : devices_0) {
             readback_vecs.push_back({});
-            auto shard = buf->get_device_buffer(coord);
             ReadShard(mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, coord);
         }
 
@@ -241,7 +245,6 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         for (const auto& coord : devices_1) {
             readback_vecs.push_back({});
-            auto shard = buf->get_device_buffer(coord);
             ReadShard(mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, coord);
         }
         for (auto& vec : readback_vecs) {
@@ -258,7 +261,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     auto& read_cq = mesh_device_->mesh_command_queue(1);
 
     uint32_t num_tiles = 1024;
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     constexpr uint32_t NUM_ITERS = 500;

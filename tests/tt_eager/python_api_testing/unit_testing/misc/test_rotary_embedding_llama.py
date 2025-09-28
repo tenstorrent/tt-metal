@@ -11,13 +11,13 @@ from models.demos.t3000.llama2_70b.reference.llama.llama.model import precompute
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole, nearest_32, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_blackhole, nearest_32, skip_for_wormhole_b0
 from models.tt_transformers.tt.common import (
     precompute_freqs,
     get_rot_transformation_mat,
 )
 from models.tt_transformers.tt.rope import RotarySetup
-from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 
 MAX_SEQ_LEN = 128 * 1024
 
@@ -183,7 +183,7 @@ def run_test_rotary_embedding_llama(
         if fuse_qk:
             # Set up rope with 2 * batch size (for fused qk) (no scaling)
             rope_setup_decode = RotarySetup(
-                device, batch * 2, head_dim, max_seq_len, rope_theta=10000, scale_factor=None, orig_context_len=131072
+                device, batch * 2, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None
             )
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
             cos, sin = rope_setup_decode.get_rot_mats(position_ids.repeat(2))
@@ -223,9 +223,7 @@ def run_test_rotary_embedding_llama(
 
         else:
             # Set up rope with batch size (no scaling)
-            rope_setup_decode = RotarySetup(
-                device, batch, head_dim, max_seq_len, rope_theta=10000, scale_factor=None, orig_context_len=131072
-            )
+            rope_setup_decode = RotarySetup(device, batch, head_dim, max_seq_len, rope_theta=10000, rope_scaling=None)
 
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
             cos, sin = rope_setup_decode.get_rot_mats(position_ids)
@@ -420,7 +418,6 @@ def run_test_row_major_rotary_embedding_llama(
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (
@@ -510,7 +507,6 @@ def test_rotary_embedding_llama(
 
 
 @skip_for_blackhole("Requires eth connected devices to run, only single chip BH available. See #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "batch, seq_len",
     (

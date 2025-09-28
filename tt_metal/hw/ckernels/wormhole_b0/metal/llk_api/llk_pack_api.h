@@ -245,13 +245,15 @@ template <
     std::uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
     bool narrow_row = false,
-    std::uint32_t row_num_datums = TILE_C_DIM>
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    uint32_t tile_dst_ct_offset = 0>
 inline void llk_pack_untilize(
     std::uint32_t block_rt_dim,
     std::uint32_t output,
     const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t num_faces = 4,
-    const std::uint32_t block_c_index = 0) {
+    const std::uint32_t block_c_index = 0,
+    const std::uint32_t tile_dst_rt_offset = 0) {
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
@@ -261,8 +263,12 @@ inline void llk_pack_untilize(
             16;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
-        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-            pack_tile_addr, pack_dst_format[output_id], face_r_dim, num_faces, block_rt * block_ct_dim);
+        _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset>(
+            pack_tile_addr,
+            pack_dst_format[output_id],
+            face_r_dim,
+            num_faces,
+            block_rt * block_ct_dim + tile_dst_rt_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
@@ -281,6 +287,58 @@ inline void llk_matmul_pack(
 
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, untilize>(tile_index, pack_tile_addr);
     }
+}
+
+/*************************************************************************
+ * LLK PACK FAST TILIZE
+ *************************************************************************/
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_hw_configure(const llk_pack_params_t* pack_params) {
+    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
+
+    _llk_pack_fast_tilize_hw_configure_<is_fp32_dest_acc_en>(pack_src_format[output_id], pack_dst_format[output_id]);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_hw_configure_disaggregated(const std::uint32_t pack_output) {
+    const llk_pack_params_t llk_pack_params = {.pack_output = pack_output};
+
+    llk_pack_fast_tilize_hw_configure<is_fp32_dest_acc_en>(&llk_pack_params);
+}
+
+inline void llk_pack_fast_tilize_init(
+    const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
+    const std::uint8_t input_id = get_output_id(input_operand);
+    const std::uint8_t output_id = get_output_id(pack_output);
+    const uint32_t use_32bit_dest =
+        pack_src_format[input_id] == (uint)DataFormat::Float32 || pack_src_format[input_id] == (uint)DataFormat::Tf32;
+    _llk_pack_fast_tilize_init_<DST_SYNC_MODE>(use_32bit_dest, pack_dst_format[output_id], unit_dim);
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
+    const std::uint32_t output_id = get_output_id(pack_output);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const bool partial_face = get_output_partial_face(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    _llk_pack_fast_tilize_uninit_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+        pack_dst_format[output_id], face_r_dim, num_faces, partial_face, narrow_tile);
+}
+
+inline void llk_pack_fast_tilize_block(
+    const std::uint32_t tile_index,
+    const std::uint32_t output,
+    const std::uint32_t output_tile_index,
+    const std::uint32_t unit_dim,
+    const std::uint32_t num_units) {
+    const std::uint8_t output_id = get_output_id(output);
+
+    const std::uint32_t pack_tile_addr = get_output_tile_address<true, false>(output_id, output_tile_index);
+
+    _llk_pack_fast_tilize_block_(tile_index, pack_tile_addr, unit_dim, num_units);
 }
 
 /*************************************************************************

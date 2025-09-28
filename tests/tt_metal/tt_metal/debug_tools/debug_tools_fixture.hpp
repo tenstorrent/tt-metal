@@ -5,36 +5,35 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "debug/watcher_server.hpp"
-#include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
+#include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 
 namespace tt::tt_metal {
 
-class DebugToolsFixture : public DispatchFixture {
+class DebugToolsMeshFixture : public MeshDispatchFixture {
    protected:
-    bool watcher_previous_enabled;
+       bool watcher_previous_enabled{};
 
-    void TearDown() override {
-        DispatchFixture::TearDown();
-    }
+       void TearDown() override { MeshDispatchFixture::TearDown(); }
 
-    template <typename T>
-    void RunTestOnDevice(const std::function<void(T*, IDevice*)>& run_function, IDevice* device) {
-        auto run_function_no_args = [=,this]() { run_function(static_cast<T*>(this), device); };
-        DispatchFixture::RunTestOnDevice(run_function_no_args, device);
-    }
+       template <typename T>
+       void RunTestOnDevice(
+           const std::function<void(T*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+           const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+           auto run_function_no_args = [this, run_function, mesh_device]() { run_function(static_cast<T*>(this), mesh_device); };
+           MeshDispatchFixture::RunTestOnDevice(run_function_no_args, mesh_device);
+       }
 };
 
-// A version of DispatchFixture with DPrint enabled on all cores.
-class DPrintFixture : public DebugToolsFixture {
+// A version of MeshDispatchFixture with DPrint enabled on all cores.
+class DPrintMeshFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(IDevice* device, Program& program) {
+    void RunProgram(const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
-        DebugToolsFixture::RunProgram(device, program);
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
     }
 
@@ -62,23 +61,13 @@ protected:
         ExtraSetUp();
 
         // Parent class initializes devices and any necessary flags
-        DebugToolsFixture::SetUp();
+        DebugToolsMeshFixture::SetUp();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DebugToolsFixture::TearDown();
+        DebugToolsMeshFixture::TearDown();
         ExtraTearDown();
-
-        // If test induced a dprint error, re-initialize the context. If the test brought down the whole server/context,
-        // then no need to do this since it'll re-init for the next test.
-        if (MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()) {
-            // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
-            // when watcher_dump is removed.
-            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
-                MetalContext::instance().reinitialize();
-            }
-        }
 
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
@@ -96,10 +85,9 @@ protected:
     }
 
     void RunTestOnDevice(
-        const std::function<void(DPrintFixture*, IDevice*)>& run_function,
-        IDevice* device
-    ) {
-        DebugToolsFixture::RunTestOnDevice(run_function, device);
+        const std::function<void(DPrintMeshFixture*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
         MetalContext::instance().dprint_server()->clear_log_file();
         MetalContext::instance().dprint_server()->clear_signals();
     }
@@ -111,7 +99,7 @@ protected:
 };
 
 // For usage by tests that need the dprint server devices disabled.
-class DPrintDisableDevicesFixture : public DPrintFixture {
+class DPrintDisableMeshDevicesFixture : public DPrintMeshFixture {
 protected:
     void ExtraSetUp() override {
         // For this test, mute each devices using the environment variable
@@ -123,34 +111,36 @@ protected:
     }
 };
 
-// A version of DispatchFixture with watcher enabled
-class WatcherFixture : public DebugToolsFixture {
+// A version of MeshDispatchFixture with watcher enabled
+class MeshWatcherFixture : public DebugToolsMeshFixture {
 public:
     inline static const std::string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(IDevice* device, Program& program, bool wait_for_dump = false) {
+    void RunProgram(
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+        distributed::MeshWorkload& workload,
+        bool wait_for_dump = false) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
-        DebugToolsFixture::RunProgram(device, program);
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
 
         // Wait for watcher to run a full dump before finishing, need to wait for dump count to
         // increase because we'll likely check in the middle of a dump.
         if (wait_for_dump) {
-            int curr_count = tt::watcher_get_dump_count();
-            while (tt::watcher_get_dump_count() < curr_count + 2) {;}
+            int curr_count = MetalContext::instance().watcher_server()->dump_count();
+            while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {;}
         }
     }
 
 protected:
-    int  watcher_previous_interval;
-    bool watcher_previous_dump_all;
-    bool watcher_previous_append;
-    bool watcher_previous_auto_unpause;
-    bool watcher_previous_noinline;
-    bool test_mode_previous;
-    bool reset_server = false;
+    int watcher_previous_interval{};
+    bool watcher_previous_dump_all{};
+    bool watcher_previous_append{};
+    bool watcher_previous_auto_unpause{};
+    bool watcher_previous_noinline{};
+    bool test_mode_previous{};
     void SetUp() override {
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
@@ -167,25 +157,16 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_auto_unpause(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
-        tt::watcher_clear_log();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(true);
 
         // Parent class initializes devices and any necessary flags
-        DebugToolsFixture::SetUp();
+        DebugToolsMeshFixture::SetUp();
+        MetalContext::instance().watcher_server()->clear_log();
     }
 
     void TearDown() override {
         // Parent class tears down devices
-        DebugToolsFixture::TearDown();
-
-        // If test induced a watcher error, re-initialize the context.
-        if (watcher_server_killed_due_to_error() or reset_server) {
-            // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
-            // when watcher_dump is removed.
-            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
-                MetalContext::instance().reinitialize();
-                reset_server = false;
-            }
-        }
+        DebugToolsMeshFixture::TearDown();
 
         // Reset watcher settings to their previous values
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_interval(watcher_previous_interval);
@@ -195,22 +176,20 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(watcher_previous_noinline);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(test_mode_previous);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
-        tt::watcher_server_set_error_flag(false);
     }
 
     void RunTestOnDevice(
-        const std::function<void(WatcherFixture*, IDevice*)>& run_function,
-        IDevice* device
-    ) {
-        DebugToolsFixture::RunTestOnDevice(run_function, device);
+        const std::function<void(MeshWatcherFixture*, std::shared_ptr<distributed::MeshDevice>)>& run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
         // Wait for a final watcher poll and then clear the log.
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
-        tt::watcher_clear_log();
+        MetalContext::instance().watcher_server()->clear_log();
     }
 };
 
 // A version of WatcherFixture with read and write debug delays enabled
-class WatcherDelayFixture : public WatcherFixture {
+class MeshWatcherDelayFixture : public MeshWatcherFixture {
 public:
     tt::llrt::TargetSelection saved_target_selection[tt::llrt::RunTimeDebugFeatureCount];
 
@@ -232,12 +211,12 @@ public:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, delayed_cores);
 
         // Call parent
-        WatcherFixture::SetUp();
+        MeshWatcherFixture::SetUp();
     }
 
     void TearDown() override {
         // Call parent
-        WatcherFixture::TearDown();
+        MeshWatcherFixture::TearDown();
 
         // Restore
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);

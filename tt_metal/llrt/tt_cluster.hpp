@@ -4,9 +4,12 @@
 
 #pragma once
 
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/cluster.hpp>
+#include "llrt/rtoptions.hpp"
+#include "llrt/tt_target_device.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -20,34 +23,32 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
-#include <umd/device/cluster.h>
-#include <umd/device/device_api_metal.h>
-#include <umd/device/tt_cluster_descriptor.h>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/cluster.hpp>
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/tt_silicon_driver_common.hpp>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/harvesting.h>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/harvesting.hpp>
+#include <umd/device/types/cluster_types.hpp>
 
 namespace tt {
-enum class ARCH;
 namespace llrt {
 class RunTimeOptions;
 }
 namespace tt_fabric {
 class ControlPlane;
-class GlobalControlPlane;
 class FabricNodeId;
 }
 namespace tt_metal {
 class Hal;
 }
 }  // namespace tt
-struct tt_device_params;
 
 static constexpr std::uint32_t SW_VERSION = 0x00020000;
 
@@ -55,49 +56,23 @@ using tt_target_dram = std::tuple<int, int, int>;
 
 namespace tt {
 
-/**
- * @brief Specifies the target devices on which the graph can be run.
- */
-enum class TargetDevice : std::uint8_t {
-    Silicon = 0,
-    Simulator = 1,
-    Invalid = 0xFF,
-};
-
-enum class ClusterType : std::uint8_t {
-    INVALID = 0,
-    N150 = 1,                    // Production N150
-    N300 = 2,                    // Production N300
-    T3K = 3,                     // Production T3K, built with 4 N300s
-    GALAXY = 4,                  // Production Galaxy, all chips with mmio
-    TG = 5,                      // Will be deprecated
-    P100 = 6,                    // Blackhole single card, ethernet disabled
-    P150 = 7,                    // Blackhole single card, ethernet enabled
-    P150_X2 = 8,                 // 2 Blackhole single card, ethernet connected
-    P150_X4 = 9,                 // 4 Blackhole single card, ethernet connected
-    SIMULATOR_WORMHOLE_B0 = 10,  // Simulator Wormhole B0
-    SIMULATOR_BLACKHOLE = 11,    // Simulator Blackhole
-    N300_2x2 = 12,               // 2 N300 cards, ethernet connected to form 2x2
-};
-
 enum class EthRouterMode : uint32_t {
     IDLE = 0,
-    BI_DIR_TUNNELING = 1,
-    FABRIC_ROUTER = 2,
+    FABRIC_ROUTER = 1,
 };
 
 class Cluster {
 public:
     // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
-    static ClusterType get_cluster_type_from_cluster_desc(
+    static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
         const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
-    static bool is_base_routing_fw_enabled(ClusterType cluster_type);
+    static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
     Cluster(Cluster&& other) noexcept = delete;
 
-    Cluster(const llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
+    Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal);
     ~Cluster();
 
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatch, so user_devices are meant
@@ -147,9 +122,9 @@ public:
         return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
     }
 
-    uint16_t get_bus_id(chip_id_t chip) const {
-        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
-    }
+    uint16_t get_bus_id(chip_id_t chip) const;
+
+    std::optional<int> get_physical_slot(chip_id_t chip) const;
 
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
@@ -165,20 +140,55 @@ public:
         const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
     void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
 
-    // Accepts physical noc coordinates
+    // Write to core. Accepts physical noc coordinates
     void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
+    // Access physical noc coordinates. Does write without effects of write combining
+    void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
+    // Write to core without effects of write combining
+    template <typename DType>
+    void write_core_immediate(
+        chip_id_t device_id, const CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
+        write_core_immediate(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
+    }
+
+    // Write to core without effects of write combining
+    template <typename DType>
+    void write_core_immediate(
+        chip_id_t device_id, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
+        write_core_immediate(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
+    }
+
+    // Write span to core
+    template <typename DType>
+    void write_core(chip_id_t device_id, const CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
+        write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
+    }
+
+    // Write vector to core
+    template <typename DType>
+    void write_core(
+        chip_id_t device_id, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
+        write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
+    }
+
     void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
     void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
+    template <typename DType = uint32_t>
+    [[nodiscard]] std::vector<DType> read_core(
+        chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size) const {
+        std::vector<DType> read_hex_vec;
+        read_core(read_hex_vec, size, tt_cxy_pair(chip, core), addr);
+        return read_hex_vec;
+    }
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
-    }
-
-    std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
-        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
-        return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     // Returns a writer object which holds a pointer to a static tlb
@@ -238,19 +248,6 @@ public:
     // Returns virtual eth coord from channel
     CoreCoord get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const;
 
-    // Bookkeeping for mmio device tunnels
-    uint32_t get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const;
-    uint32_t get_mmio_device_tunnel_count(chip_id_t mmio_device) const;
-    uint32_t get_device_tunnel_depth(chip_id_t chip_id) const;
-
-    // Dispatch core is managed by device, so this is an api for device to get the each eth core used in FD tunneling.
-    // Returns logical eth core that communicates with specified dispatch core
-    tt_cxy_pair get_eth_core_for_dispatch_core(
-        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
-
-    std::tuple<tt_cxy_pair, tt_cxy_pair> get_eth_tunnel_core(
-        chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const;
-
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
     //       CreateDevice(0)
@@ -305,18 +302,23 @@ public:
 
     // Configures ethernet cores for fabric routers depending on whether fabric is enabled
     void configure_ethernet_cores_for_fabric_routers(
-        tt_metal::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
+        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt);
 
     void initialize_fabric_config(
-        tt_metal::FabricConfig fabric_config, tt_metal::FabricReliabilityMode reliability_mode);
+        tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
 
-    // Returns whether we are running on Galaxy.
+    // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
+
+    // Returns whether we are running on UBB Galaxy.
+    bool is_ubb_galaxy() const;
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;
 
-    ClusterType get_cluster_type() const;
+    tt::tt_metal::ClusterType get_cluster_type() const;
+
+    tt::TargetDevice get_target_device_type() const { return this->target_type_; }
 
     bool is_base_routing_fw_enabled() const;
 
@@ -366,7 +368,7 @@ private:
     void generate_virtual_to_profiler_flat_id_mapping();
 
     // Reserves ethernet cores in cluster for tunneling
-    void reserve_ethernet_cores_for_tunneling();
+    void initialize_ethernet_cores_router_mode();
 
     void initialize_ethernet_sockets();
 
@@ -379,8 +381,8 @@ private:
 
     bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
-    ARCH arch_;
-    TargetDevice target_type_;
+    ARCH arch_{tt::ARCH::Invalid};
+    TargetDevice target_type_{0};
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;
@@ -389,9 +391,7 @@ private:
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
     tt_ClusterDescriptor* cluster_desc_ = nullptr;
-    // In case of mock cluster descriptor, the tt_cluster holds the ownership of the created object;
-    // This is obviously a design issue. This should go away once the design is fixed.
-    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc_ptr_;
+
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 
@@ -405,7 +405,7 @@ private:
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
-    ClusterType cluster_type_ = ClusterType::INVALID;
+    tt::tt_metal::ClusterType cluster_type_ = tt::tt_metal::ClusterType::INVALID;
 
     // Reserves specified number of ethernet cores for fabric routers
     void reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes);

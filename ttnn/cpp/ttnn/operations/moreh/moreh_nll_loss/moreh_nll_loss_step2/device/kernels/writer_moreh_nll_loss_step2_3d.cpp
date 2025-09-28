@@ -15,14 +15,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
 
-    constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto output_args = TensorAccessorArgs<0>();
 
     const uint32_t output_tile_bytes = get_tile_size(cb_output);
 
-    const InterleavedAddrGen<output_is_dram> output_addrg = {
-        .bank_base_address = output_addr,
-        .page_size = output_tile_bytes,
-    };
+    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
 
     uint32_t Wf = (W + FACE_WIDTH - 1) / FACE_WIDTH;
     uint32_t Wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;

@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
 from models.experimental.vovnet.tt.conv_norm_act import TtConvNormAct
@@ -13,97 +12,61 @@ from models.experimental.vovnet.tt.effective_se_module import (
     TtEffectiveSEModule,
 )
 
+try:
+    from tracy import signpost
 
-class TtOsaBlock(nn.Module):
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
+
+class TtOsaBlock:
     def __init__(
         self,
-        in_chs=1,
-        mid_chs=64,
-        out_chs=64,
-        layer_per_block=3,
-        groups=64,
-        residual=True,
-        depthwise=True,
         base_address=None,
-        state_dict=None,
         device=None,
+        parameters=None,
     ) -> None:
         super().__init__()
         self.device = device
-        self.residual = residual
-        self.depthwise = depthwise
-        self.state_dict = state_dict
 
-        next_in_chs = in_chs
-        if self.depthwise and next_in_chs != mid_chs:
-            assert not residual
-            self.conv_reduction = TtConvNormAct(
-                in_channels=next_in_chs,
-                out_channels=mid_chs,
-                kernel_size=1,
-                stride=1,
-                padding=0,
-                dilation=1,
-                groups=1,
-                bias=False,
-                apply_act=True,
-                norm_kwargs=None,
-                act_kwargs=None,
-                state_dict=state_dict,
-                base_address=f"{base_address}.conv_reduction",
-                device=self.device,
-            )
-        else:
-            self.conv_reduction = None
-
-        self.conv_mid = TtSequentialAppendList(
-            layer_per_block=layer_per_block,
-            state_dict=state_dict,
-            base_address=f"{base_address}",
-            in_channels=mid_chs,
-            groups=groups,
-        )
-
-        # feature aggregation
-        next_in_chs = in_chs + layer_per_block * mid_chs
-        self.conv_concat = TtConvNormAct(
-            in_channels=next_in_chs,
-            out_channels=out_chs,
-            kernel_size=1,
+        self.conv_reduction = TtConvNormAct(
             stride=1,
             padding=0,
-            dilation=1,
-            groups=1,
-            bias=False,
-            apply_act=True,
-            norm_kwargs=None,
-            act_kwargs=None,
-            state_dict=state_dict,
+            parameters=parameters,
+            base_address=f"{base_address}.conv_reduction",
+            device=self.device,
+        )
+
+        self.conv_mid = TtSequentialAppendList(base_address=f"{base_address}", parameters=parameters, device=device)
+
+        self.conv_concat = TtConvNormAct(
+            stride=1,
+            padding=0,
+            parameters=parameters,
             base_address=f"{base_address}.conv_concat",
             device=device,
         )
 
         self.attn = TtEffectiveSEModule(
-            in_channels=out_chs,
-            out_channels=out_chs,
             kernel_size=1,
             stride=1,
-            dilation=1,
             padding=0,
-            bias=False,
-            state_dict=state_dict,
+            parameters=parameters,
             base_address=f"{base_address}.attn",
             device=device,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        output = [x]
+        if use_signpost:
+            signpost(header="osa_block")
+
+        output = [ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)]
         if self.conv_reduction is not None:
-            x = self.conv_reduction(x)
-        x = self.conv_mid(x, output)
-        x = self.conv_concat(x)
+            x = self.conv_reduction.forward(x)
+        x = self.conv_mid.forward(x[0], output)
+        x = self.conv_concat.forward(x)[0]
         if self.attn is not None:
-            x = self.attn(x)
-        if self.residual:
-            x = x + output[0]
+            x = self.attn.forward(x)
+        del output
         return x

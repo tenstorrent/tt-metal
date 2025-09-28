@@ -13,6 +13,7 @@ import ttnn
 from .linear import TtLinear, TtLinearParameters
 from .substate import indexed_substates, substate
 from .utils import from_torch_fast
+from .parallel_config import EncoderParallelManager
 
 
 @dataclass
@@ -42,6 +43,7 @@ class TtT5EncoderParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager,
     ) -> TtT5EncoderParameters:
         return cls(
             token_embedding=from_torch_fast(
@@ -52,7 +54,7 @@ class TtT5EncoderParameters:
                 shard_dim=None,
             ),
             blocks=[
-                TtT5BlockParameters.from_torch(s, dtype=dtype, device=device)
+                TtT5BlockParameters.from_torch(s, dtype=dtype, device=device, parallel_manager=parallel_manager)
                 for s in indexed_substates(state, "encoder.block")
             ],
             norm=TtT5LayerNormParameters.from_torch(
@@ -87,7 +89,9 @@ class TtT5Encoder:
         self._relative_attention_num_buckets = relative_attention_num_buckets
         self._relative_attention_max_distance = relative_attention_max_distance
 
-    def __call__(self, input_ids: ttnn.Tensor, device) -> ttnn.Tensor:
+    def __call__(
+        self, input_ids: ttnn.Tensor, device: ttnn.Device, parallel_manager: EncoderParallelManager
+    ) -> ttnn.Tensor:
         _batch_size, seq_length = input_ids.shape
 
         # TODO: Remove the conversion to row major layout once ttnn.embedding works with tiled input
@@ -101,11 +105,12 @@ class TtT5Encoder:
             relative_attention_num_buckets=self._relative_attention_num_buckets,
             relative_attention_max_distance=self._relative_attention_max_distance,
             relative_attention_bias=self._attention_bias,
+            parallel_manager=parallel_manager,
         )
 
         x = inputs_embeds
         for block in self._blocks:
-            x = block(x, position_bias=position_bias)
+            x = block(x, position_bias=position_bias, parallel_manager=parallel_manager)
 
         return self._norm(x)
 
@@ -122,12 +127,15 @@ class TtT5BlockParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager,
     ) -> TtT5BlockParameters:
         return cls(
             attention=TtT5LayerSelfAttentionParameters.from_torch(
-                substate(state, "layer.0"), dtype=dtype, device=device
+                substate(state, "layer.0"), dtype=dtype, device=device, parallel_manager=parallel_manager
             ),
-            ff=TtT5LayerFFParameters.from_torch(substate(state, "layer.1"), dtype=dtype, device=device),
+            ff=TtT5LayerFFParameters.from_torch(
+                substate(state, "layer.1"), dtype=dtype, device=device, parallel_manager=parallel_manager
+            ),
         )
 
 
@@ -138,9 +146,11 @@ class TtT5Block:
         )
         self._ff = TtT5LayerFF(parameters.ff, layer_norm_epsilon=layer_norm_epsilon)
 
-    def __call__(self, x: ttnn.Tensor, *, position_bias: ttnn.Tensor) -> ttnn.Tensor:
-        x = self._attention(x, position_bias=position_bias)
-        return self._ff(x)
+    def __call__(
+        self, x: ttnn.Tensor, *, position_bias: ttnn.Tensor, parallel_manager: EncoderParallelManager
+    ) -> ttnn.Tensor:
+        x = self._attention(x, position_bias=position_bias, parallel_manager=parallel_manager)
+        return self._ff(x, parallel_manager)
 
 
 @dataclass
@@ -155,9 +165,12 @@ class TtT5LayerSelfAttentionParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager,
     ) -> TtT5LayerSelfAttentionParameters:
         return cls(
-            attention=TtT5AttentionParameters.from_torch(substate(state, "SelfAttention"), dtype=dtype, device=device),
+            attention=TtT5AttentionParameters.from_torch(
+                substate(state, "SelfAttention"), dtype=dtype, device=device, parallel_manager=parallel_manager
+            ),
             norm=TtT5LayerNormParameters.from_torch(substate(state, "layer_norm"), dtype=dtype, device=device),
         )
 
@@ -167,9 +180,11 @@ class TtT5LayerSelfAttention:
         self._attention = TtT5Attention(parameters.attention, num_heads=num_heads)
         self._norm = TtT5LayerNorm(parameters.norm, eps=layer_norm_epsilon)
 
-    def __call__(self, x: ttnn.Tensor, *, position_bias: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, x: ttnn.Tensor, *, position_bias: ttnn.Tensor, parallel_manager: EncoderParallelManager
+    ) -> ttnn.Tensor:
         normed = self._norm(x)
-        attn = self._attention(normed, position_bias=position_bias)
+        attn = self._attention(normed, position_bias=position_bias, parallel_manager=parallel_manager)
         return x + attn
 
 
@@ -187,12 +202,49 @@ class TtT5AttentionParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager,
     ) -> TtT5AttentionParameters:
+        def column_parallel_linear(name):
+            my_state = substate(state, name)
+            weight = my_state["weight"]  # [num_heads * head_dim, input_dim]
+            bias = my_state.get("bias", None)  # [num_heads * head_dim]
+            weight = weight.T  # [input_dim, num_heads * head_dim]
+
+            shard_dims = [None, None]
+            shard_dims[parallel_manager.tensor_parallel.mesh_axis] = -1
+
+            weight = ttnn.from_torch(
+                weight,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
+            )
+
+            if bias is not None:
+                bias = bias.unsqueeze(0)
+                bias = ttnn.from_torch(
+                    bias,
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
+                )
+
+            return TtLinearParameters(weight=weight, bias=bias)
+
+        q_proj = column_parallel_linear("q")
+        k_proj = column_parallel_linear("k")
+        v_proj = column_parallel_linear("v")
+        o_proj = column_parallel_linear("o")
+
         return cls(
-            q_proj=TtLinearParameters.from_torch(substate(state, "q"), dtype=dtype, device=device, shard_dim=None),
-            k_proj=TtLinearParameters.from_torch(substate(state, "k"), dtype=dtype, device=device, shard_dim=None),
-            v_proj=TtLinearParameters.from_torch(substate(state, "v"), dtype=dtype, device=device, shard_dim=None),
-            o_proj=TtLinearParameters.from_torch(substate(state, "o"), dtype=dtype, device=device, shard_dim=None),
+            q_proj=q_proj,
+            k_proj=k_proj,
+            v_proj=v_proj,
+            o_proj=o_proj,
         )
 
 
@@ -205,7 +257,9 @@ class TtT5Attention:
         self._v_proj = TtLinear(parameters.v_proj)
         self._o_proj = TtLinear(parameters.o_proj)
 
-    def __call__(self, x: ttnn.Tensor, *, position_bias: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, x: ttnn.Tensor, *, position_bias: ttnn.Tensor, parallel_manager: EncoderParallelManager
+    ) -> ttnn.Tensor:
         batch_size, seq_length, _ = x.shape
 
         q = self._q_proj(x)
@@ -213,8 +267,11 @@ class TtT5Attention:
         v = self._v_proj(x)
 
         qkv = ttnn.concat([q, k, v], dim=-1)
+        # reshape for multihead attention
+        num_devices = parallel_manager.tensor_parallel.factor
+        num_local_heads = self._num_heads // num_devices
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv, num_heads=self._num_heads, transpose_key=True
+            qkv, num_heads=num_local_heads, transpose_key=True
         )
         scores = ttnn.matmul(q, k)
         scores = scores + position_bias
@@ -222,7 +279,36 @@ class TtT5Attention:
         attn = ttnn.matmul(attn_weights, v)
         attn = ttnn.transformer.concatenate_heads(attn)
 
-        return self._o_proj(attn)
+        attn = ttnn.unsqueeze(attn, 0)
+        orig_shape = list(attn.shape)
+        attn = ttnn.experimental.all_gather_async(
+            attn,
+            dim=len(attn.shape) - 1,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            mesh_device=parallel_manager.mesh_device,
+            topology=parallel_manager.topology,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        dense_out = self._o_proj(attn)
+
+        dense_out = ttnn.experimental.all_gather_async(
+            dense_out,
+            dim=len(dense_out.shape) - 1,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            mesh_device=parallel_manager.mesh_device,
+            topology=parallel_manager.topology,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        dense_out_shape = list(dense_out.shape)
+        dense_out_shape[2] = orig_shape[2]
+        dense_out = ttnn.reshape(dense_out, tuple(dense_out_shape), dense_out.shape)
+
+        return ttnn.reshape(dense_out, tuple(dense_out.shape)[1:])
 
 
 @dataclass
@@ -237,10 +323,11 @@ class TtT5LayerFFParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager,
     ) -> TtT5LayerFFParameters:
         return cls(
             dense_gated_dense=TtT5DenseGatedActDenseParameters.from_torch(
-                substate(state, "DenseReluDense"), dtype=dtype, device=device
+                substate(state, "DenseReluDense"), dtype=dtype, device=device, parallel_manager=parallel_manager
             ),
             norm=TtT5LayerNormParameters.from_torch(substate(state, "layer_norm"), dtype=dtype, device=device),
         )
@@ -251,9 +338,9 @@ class TtT5LayerFF:
         self._dense_gated_dense = TtT5DenseGatedActDense(parameters.dense_gated_dense)
         self._norm = TtT5LayerNorm(parameters.norm, eps=layer_norm_epsilon)
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, parallel_manager: EncoderParallelManager) -> ttnn.Tensor:
         fw = self._norm(x)
-        fw = self._dense_gated_dense(fw)
+        fw = self._dense_gated_dense(fw, parallel_manager)
         return x + fw
 
 
@@ -270,11 +357,49 @@ class TtT5DenseGatedActDenseParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager,
     ) -> TtT5DenseGatedActDenseParameters:
+        def parallel_weight_bias(name, dim):
+            assert dim in [-1, -2]
+            my_state = substate(state, name)
+            weight = my_state["weight"].transpose(0, 1)
+            bias = my_state.get("bias", None)
+
+            weight_shard_dims = [None, None]
+            weight_shard_dims[parallel_manager.tensor_parallel.mesh_axis] = dim
+
+            weight = ttnn.from_torch(
+                weight,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=weight_shard_dims),
+            )
+            if bias is not None:
+                # Bias always sharded on last dimension. If row-parallel, extend
+                # bias with zeros.
+                bias_shard_dims = [None, None]
+                bias_shard_dims[parallel_manager.tensor_parallel.mesh_axis] = -1
+                bias = bias.unsqueeze(0)
+                if dim == -2:
+                    # row-parallel, only one device should apply bias
+                    zero_bias = torch.zeros_like(bias)
+                    bias = torch.cat([bias] + [zero_bias] * (parallel_manager.tensor_parallel.factor - 1), dim=-1)
+                bias = ttnn.from_torch(
+                    bias,
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=bias_shard_dims),
+                )
+            return TtLinearParameters(weight=weight, bias=bias)
+
         return cls(
-            wi0=TtLinearParameters.from_torch(substate(state, "wi_0"), dtype=dtype, device=device, shard_dim=None),
-            wi1=TtLinearParameters.from_torch(substate(state, "wi_1"), dtype=dtype, device=device, shard_dim=None),
-            wo=TtLinearParameters.from_torch(substate(state, "wo"), dtype=dtype, device=device, shard_dim=None),
+            wi0=parallel_weight_bias("wi_0", -1),
+            wi1=parallel_weight_bias("wi_1", -1),
+            wo=parallel_weight_bias("wo", -2),
         )
 
 
@@ -284,11 +409,37 @@ class TtT5DenseGatedActDense:
         self._wi1 = TtLinear(parameters.wi1)
         self._wo = TtLinear(parameters.wo)
 
-    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, x: ttnn.Tensor, parallel_manager: EncoderParallelManager) -> ttnn.Tensor:
         gelu = new_gelu_activation(self._wi0(x))
         linear = self._wi1(x)
         x = gelu * linear
-        return self._wo(x)
+        hidden_states = self._wo(x)
+
+        hidden_states_shape = list(hidden_states.shape)
+        hidden_states = ttnn.unsqueeze(hidden_states, 0)
+        # AllReduce output
+
+        hidden_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            hidden_states,
+            dim=3,
+            multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=parallel_manager.topology,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+        )
+        hidden_states = ttnn.experimental.all_gather_async(
+            hidden_states_scattered,
+            dim=3,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            mesh_device=parallel_manager.mesh_device,
+            topology=parallel_manager.topology,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        hidden_states = ttnn.reshape(hidden_states, hidden_states_shape, hidden_states.shape)
+        return hidden_states
 
 
 @dataclass
@@ -349,6 +500,7 @@ def _compute_bias(
     relative_attention_num_buckets: int,
     relative_attention_max_distance: int,
     relative_attention_bias: ttnn.Tensor,
+    parallel_manager: EncoderParallelManager,
 ) -> ttnn.Tensor:
     context_position = torch.arange(seq_length)[:, None]
     memory_position = torch.arange(seq_length)[None, :]
@@ -366,9 +518,15 @@ def _compute_bias(
     output = torch.nn.functional.embedding(relative_position_bucket, torch_relative_attention_bias)
     output = output.permute([2, 0, 1]).unsqueeze(0)
     output = output[:, :, -seq_length:, :]
-
-    return from_torch_fast(
-        output, device=device, dtype=relative_attention_bias.get_dtype(), shard_dim=None, layout=ttnn.TILE_LAYOUT
+    # Shard outputs on dim=-3, heads
+    shard_dims = [None, None]
+    shard_dims[parallel_manager.tensor_parallel.mesh_axis] = -3
+    return ttnn.from_torch(
+        output,
+        device=device,
+        dtype=relative_attention_bias.get_dtype(),
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
     )
 
 

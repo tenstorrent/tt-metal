@@ -73,9 +73,9 @@ extern "C" {
         stream_id,                                                                \
         reg_id,                                                                   \
         ((NOC_STREAM_READ_REG(stream_id, reg_id) & ~((1 << field##_WIDTH) - 1)) | \
-         ((val & ((1 << field##_WIDTH) - 1)) << field))))
+         (((val) & ((1 << field##_WIDTH) - 1)) << (field)))))
 #define NOC_STREAM_READ_REG_FIELD(stream_id, reg_id, field) \
-    ((NOC_STREAM_READ_REG(stream_id, reg_id) >> field) & ((1 << field##_WIDTH) - 1))
+    ((NOC_STREAM_READ_REG(stream_id, reg_id) >> (field)) & ((1 << field##_WIDTH) - 1))
 
 #define NOC_WRITE_REG(addr, val) ((*((volatile uint32_t*)(addr)))) = (val)
 #define NOC_READ_REG(addr) (*((volatile uint32_t*)(addr)))
@@ -827,7 +827,7 @@ extern "C" {
 #define STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX 288
 
 // Reading this register will give you a stream id of a stream that finished its blob (according to
-// STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX) Subsequent reads will give you the next stream, untill all streams are read,
+// STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX) Subsequent reads will give you the next stream, until all streams are read,
 // after which it will loop This register is only valid if BLOB_NEXT_AUTO_CFG_DONE_VALID is set (i.e. if
 // STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX non-zero) Exists only in stream 0
 #define STREAM_BLOB_NEXT_AUTO_CFG_DONE_REG_INDEX 290
@@ -872,7 +872,7 @@ extern "C" {
 #define DISABLE_GLOBAL_OFFSET_TABLE (DISABLE_DEST_READY_TABLE + DISABLE_DEST_READY_TABLE_WIDTH)
 #define DISABLE_GLOBAL_OFFSET_TABLE_WIDTH 1
 
-// Debugging: Non-zero value indicates an invalid stream operation occured.
+// Debugging: Non-zero value indicates an invalid stream operation occurred.
 // Sticky, write 1 to clear.
 #define STREAM_DEBUG_ASSERTIONS_REG_INDEX 500
 

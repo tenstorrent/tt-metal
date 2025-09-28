@@ -12,8 +12,11 @@
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
-    constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
+    constexpr uint32_t x_block_size = get_named_compile_time_arg_val("x_block_size");
+    constexpr uint32_t w_block_size = get_named_compile_time_arg_val("w_block_size");
+
+    // constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
+    // constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
 
     uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
@@ -40,7 +43,7 @@ void MAIN {
         // transpose input
         cb_wait_front(cb_tilize, 1);
         transpose_wh_init_short(cb_tilize);
-        pack_untilize_dst_init_short<1>(cb_out);
+        pack_untilize_dest_init<1>(cb_out);
 
         tile_regs_acquire();
         transpose_wh_tile(cb_tilize, 0, 0);  // transpose call
@@ -50,7 +53,7 @@ void MAIN {
         cb_reserve_back(cb_out, w_block_size);
 
         tile_regs_wait();
-        pack_untilize_dst<1>(cb_out);  // pack call
+        pack_untilize_dest<1>(cb_out);  // pack call
         tile_regs_release();
 
         cb_push_back(cb_out, w_block_size);

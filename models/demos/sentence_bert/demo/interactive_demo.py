@@ -18,7 +18,7 @@ from models.demos.sentence_bert.reference.sentence_bert import custom_extended_m
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
 
-def compute_ttnn_embeddings(sentences, model_name, device, batch_size=8):
+def compute_ttnn_embeddings(sentences, model_name, device, model_location_generator, batch_size=8):
     logger.info("Loading tokenizer...")
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     all_embeddings = []
@@ -45,6 +45,7 @@ def compute_ttnn_embeddings(sentences, model_name, device, batch_size=8):
             logger.info("initialising trace..")
             sentence_bert_module = SentenceBERTPerformantRunner(
                 device=device,
+                model_location_generator=model_location_generator,
                 input_ids=input_ids,
                 extended_mask=extended_mask,
                 attention_mask=attention_mask,
@@ -55,7 +56,7 @@ def compute_ttnn_embeddings(sentences, model_name, device, batch_size=8):
 
         ttnn_output = sentence_bert_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
         logger.info("Running inference on TTNN model for current batch...")
-        ttnn_output = ttnn.to_torch(ttnn_output)
+        ttnn_output = ttnn.to_torch(ttnn_output, mesh_composer=sentence_bert_module.runner_infra.output_mesh_composer)
         # Always slice to the original batch size (before padding)embeddings = embeddings[:orig_batch_size]
         all_embeddings.append(ttnn_output)
         all_sentences.extend(sentences[i : i + orig_batch_size])
@@ -88,17 +89,13 @@ def load_knowledge_base(kb_file="knowledge_base.txt"):
     return kb_sentences
 
 
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
-)
-@pytest.mark.parametrize(
-    "model_name, sequence_length, batch_size,kb_file",
-    [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, "knowledge_base.txt")],
-)
-def test_interactive_demo_inference(device, model_name, sequence_length, batch_size, kb_file):
+def run_interactive_demo_inference(device, model_name, sequence_length, batch_size, kb_file, model_location_generator):
+    batch_size = batch_size * device.get_num_devices()
     logger.info(f"Loading knowledge base from {kb_file}...")
     kb_sentences = load_knowledge_base(kb_file)
-    kb_embeddings, kb_sentences, model_instance = compute_ttnn_embeddings(kb_sentences, model_name, device)
+    kb_embeddings, kb_sentences, model_instance = compute_ttnn_embeddings(
+        kb_sentences, model_name, device, model_location_generator, batch_size
+    )
     # Example query (in Turkish): "Siparişim ne zaman teslim edilir?"
     # English translation: "When will my order be delivered?"
     # This matches the knowledge base entry about order delivery times. i.e Siparişim ne zaman kargoya verilecek?
@@ -123,7 +120,7 @@ def test_interactive_demo_inference(device, model_name, sequence_length, batch_s
         position_ids = torch.arange(0, input_ids.shape[-1], dtype=torch.int64).unsqueeze(dim=0)
         ttnn_output = model_instance.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
         logger.info("Running inference on TTNN model for current batch...")
-        query_embeddings = ttnn.to_torch(ttnn_output)
+        query_embeddings = ttnn.to_torch(ttnn_output, mesh_composer=model_instance.runner_infra.output_mesh_composer)
         logger.info("Computing cosine similarities...")
         similarities = cosine_similarity(query_embeddings.detach().cpu().numpy(), kb_embeddings.detach().cpu().numpy())[
             0
@@ -132,3 +129,31 @@ def test_interactive_demo_inference(device, model_name, sequence_length, batch_s
         logger.info(f"\tQuery: {query}")
         logger.info(f"Best match: {kb_sentences[top_idx]}")
         logger.info(f"Similarity score: {similarities[top_idx]:.4f}")
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_name, sequence_length, batch_size,kb_file",
+    [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, "knowledge_base.txt")],
+)
+def test_interactive_demo_inference(device, model_name, sequence_length, batch_size, kb_file, model_location_generator):
+    return run_interactive_demo_inference(
+        device, model_name, sequence_length, batch_size, kb_file, model_location_generator
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_name, sequence_length, device_batch_size,kb_file",
+    [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, "knowledge_base.txt")],
+)
+def test_interactive_demo_inference_dp(
+    mesh_device, model_name, sequence_length, device_batch_size, kb_file, model_location_generator
+):
+    return run_interactive_demo_inference(
+        mesh_device, model_name, sequence_length, device_batch_size, kb_file, model_location_generator
+    )

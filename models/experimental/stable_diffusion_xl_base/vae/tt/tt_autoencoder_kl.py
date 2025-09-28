@@ -1,15 +1,24 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch.nn as nn
+import torch
+from diffusers.models.autoencoders.vae import DiagonalGaussianDistribution
+from diffusers.models.modeling_outputs import AutoencoderKLOutput
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_decoder import TtDecoder
-from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+from models.experimental.stable_diffusion_xl_base.vae.tt.tt_encoder import TtEncoder
+from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
-class TtAutoencoderKL(nn.Module):
-    def __init__(self, device, state_dict, model_config, batch_size=1, gn_fallback=False):
+class TtAutoencoderKL(LightweightModule):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        model_config,
+    ):
         super().__init__()
 
         self.device = device
@@ -20,57 +29,63 @@ class TtAutoencoderKL(nn.Module):
         self.dilation = (1, 1)
         self.groups = 1
 
-        self.decoder = TtDecoder(device, state_dict, model_config, batch_size=batch_size, gn_fallback=gn_fallback)
-
-        post_quant_conv_weights = state_dict[f"post_quant_conv.weight"]
-        post_quant_conv_bias = state_dict[f"post_quant_conv.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
-
-        (
-            self.compute_config,
-            self.tt_post_quant_conv_weights,
-            self.tt_post_quant_conv_bias,
-            self.conv_params,
-        ) = prepare_conv_params(
+        self.decoder = TtDecoder(
             device,
-            post_quant_conv_weights,
-            post_quant_conv_bias,
-            model_config.conv_w_dtype,
-            fp32_dest_acc_en=True,
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            state_dict,
+            model_config,
         )
-        self.conv_config = model_config.get_conv_config(conv_path="decoder.post_quant_conv")
-        self.conv_output_dtype = model_config.get_conv_output_dtype()
 
-    def forward(self, hidden_states, input_shape):
+        self.encoder = TtEncoder(
+            device,
+            state_dict,
+            model_config,
+        )
+
+        quant_conv_weights = state_dict[f"quant_conv.weight"].squeeze()
+        quant_conv_bias = state_dict[f"quant_conv.bias"]
+
+        self.tt_quant_conv_weights, self.tt_quant_conv_bias = prepare_linear_params(
+            device, quant_conv_weights, quant_conv_bias, model_config.conv_w_dtype
+        )
+
+        post_quant_conv_weights = state_dict[f"post_quant_conv.weight"].squeeze()
+        post_quant_conv_bias = state_dict[f"post_quant_conv.bias"]
+
+        self.tt_post_quant_conv_weights, self.tt_post_quant_conv_bias = prepare_linear_params(
+            device, post_quant_conv_weights, post_quant_conv_bias, model_config.conv_w_dtype
+        )
+
+    def encode(self, hidden_states, input_shape):
+        B, C, H, W = input_shape
+        hidden_states, [C, H, W] = self.encoder(hidden_states, [B, C, H, W])
+        hidden_states = ttnn.linear(
+            hidden_states,
+            self.tt_quant_conv_weights,
+            bias=self.tt_quant_conv_bias,
+        )
+
+        h = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
+        h = h.reshape(B, H, W, C)
+        h = torch.permute(h, (0, 3, 1, 2))
+
+        posterior = DiagonalGaussianDistribution(h)
+        return AutoencoderKLOutput(latent_dist=posterior)
+
+    def decode(self, hidden_states, input_shape):
         B, C, H, W = input_shape
 
         pre_conv_hidden_states = hidden_states
-        [hidden_states, [H, W], [self.tt_post_quant_conv_weights, self.tt_post_quant_conv_bias]] = ttnn.conv2d(
-            input_tensor=hidden_states,
-            weight_tensor=self.tt_post_quant_conv_weights,
-            in_channels=self.conv_params["input_channels"],
-            out_channels=self.conv_params["output_channels"],
-            device=self.device,
-            bias_tensor=self.tt_post_quant_conv_bias,
-            kernel_size=self.conv_params["kernel_size"],
-            stride=self.stride,
-            padding=self.padding,
-            dilation=self.dilation,
-            batch_size=B,
-            input_height=H,
-            input_width=W,
-            conv_config=self.conv_config,
-            compute_config=self.compute_config,
-            groups=self.groups,
-            memory_config=None,
-            return_output_dim=True,
-            return_weights_and_bias=True,
-            dtype=self.conv_output_dtype,
+        hidden_states = ttnn.linear(
+            hidden_states,
+            self.tt_post_quant_conv_weights,
+            bias=self.tt_post_quant_conv_bias,
         )
-        C = self.conv_params["output_channels"]
         ttnn.deallocate(pre_conv_hidden_states)
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = self.decoder(hidden_states, [B, C, H, W])
+        hidden_states, [C, H, W] = self.decoder(hidden_states, [B, C, H, W])
 
-        return hidden_states
+        return hidden_states, [C, H, W]
+
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError("Use decode() or encode() instead of forward()")

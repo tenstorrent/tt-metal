@@ -6,7 +6,7 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "tracy/Tracy.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -263,6 +263,31 @@ CoreRangeSet num_cores_to_corerangeset_in_subcoregrids(
     TT_FATAL(remaining_cores == 0, "Failed to split target number of cores into CoreRangeSet");
 
     return CoreRangeSet(std::move(result_coreranges));
+}
+
+std::tuple<std::vector<uint32_t>, CoreRangeSet> split_work_to_cores_even_multiples(
+    const CoreCoord& core_grid, const uint32_t units_to_divide, const uint32_t multiple, const bool row_wise) {
+    ZoneScoped;
+
+    const uint32_t batches_to_divide = std::ceil(units_to_divide / multiple), max_num_cores = core_grid.x * core_grid.y;
+    const uint32_t target_num_cores = (batches_to_divide >= max_num_cores) ? max_num_cores : batches_to_divide;
+
+    std::vector<uint32_t> increments(target_num_cores, 0ul);
+    auto it = increments.begin();
+    for (uint32_t units = 0; units < units_to_divide; units += multiple) {
+        *(it++) += multiple;
+        if (it == increments.end()) {
+            it = increments.begin();
+        }
+    }
+
+    auto rem = units_to_divide % multiple;
+    if (rem != 0) {
+        *it += rem;
+    }
+    const auto utilized_cores = num_cores_to_corerangeset({0, 0}, target_num_cores, core_grid, row_wise);
+
+    return std::make_tuple(increments, utilized_cores);
 }
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(

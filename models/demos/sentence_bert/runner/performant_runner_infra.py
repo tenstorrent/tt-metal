@@ -8,18 +8,12 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
+from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.ttnn.common import custom_preprocessor
 from models.demos.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
-from models.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def load_reference_model(model_name, config):
-    torch_model = transformers.BertModel.from_pretrained(model_name).eval()
-    reference_model = BertModel(config).to(torch.bfloat16)
-    reference_model.load_state_dict(torch_model.state_dict())
-    return reference_model
 
 
 def load_ttnn_model(device, torch_model, config):
@@ -38,6 +32,7 @@ class SentenceBERTPerformanceRunnerInfra:
         device,
         batch_size,
         sequence_length,
+        model_location_generator,
         input_ids=None,
         extended_mask=None,
         attention_mask=None,
@@ -56,9 +51,11 @@ class SentenceBERTPerformanceRunnerInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.sequence_length = sequence_length
-        config = transformers.BertConfig.from_pretrained(model_name)
-        self.torch_model = load_reference_model(model_name, config)
-
+        config = transformers.BertConfig.from_pretrained("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr")
+        self.torch_model = BertModel(config).to(torch.bfloat16)
+        self.torch_model = load_torch_model(
+            self.torch_model, target_prefix="", model_location_generator=model_location_generator
+        )
         # Log device information for data parallel validation
         num_devices = self.device.get_num_devices()
 

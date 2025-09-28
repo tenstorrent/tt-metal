@@ -15,6 +15,7 @@ void kernel_main() {
     constexpr uint32_t bytes_per_page = get_compile_time_arg_val(4);
     constexpr uint32_t test_id = get_compile_time_arg_val(5);
     constexpr uint32_t num_subordinates = get_compile_time_arg_val(6);
+    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(7);
 
     // Derivative values
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
@@ -32,14 +33,18 @@ void kernel_main() {
             uint64_t dst_noc_addr = get_noc_addr(dest_coord_x, dest_coord_y, sub_base_addr);
 
             for (uint32_t i = 0; i < num_of_transactions; i++) {
-                noc_async_write(mst_base_addr, dst_noc_addr, bytes_per_transaction);
+                // Cycle through virtual channels 0 to (num_virtual_channels - 1)
+                uint32_t current_virtual_channel = i % num_virtual_channels;
+                noc_async_write(mst_base_addr, dst_noc_addr, bytes_per_transaction, noc_index, current_virtual_channel);
             }
         }
 
         noc_async_write_barrier();
     }
 
-    DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction * num_subordinates);
     DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("Number of transactions", num_of_transactions * num_subordinates);
+    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
+    DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
+    DeviceTimestampedData("NoC Index", noc_index);
 }

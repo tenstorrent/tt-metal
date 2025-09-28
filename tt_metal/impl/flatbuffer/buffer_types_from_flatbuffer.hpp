@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,8 +18,8 @@ CircularBufferConfig from_flatbuffer(
 TensorMemoryLayout from_flatbuffer(flatbuffer::TensorMemoryLayout layout);
 
 ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation);
-ShardMode from_flatbuffer(flatbuffer::ShardMode mode);
 ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec);
 std::optional<ShardSpecBuffer> from_flatbuffer(const flatbuffer::ShardSpecBuffer* fb_shard_spec);
+std::optional<BufferDistributionSpec> from_flatbuffer(const flatbuffer::BufferDistributionSpec* fb_dist_spec);
 
 }  // namespace tt::tt_metal

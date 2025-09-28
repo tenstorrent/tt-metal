@@ -11,8 +11,8 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <algorithm>
 
 #include <tt-metalium/hal.hpp>
@@ -24,7 +24,7 @@ namespace ttnn::operations::data_movement {
 
 std::vector<CoreRange> get_multicast_regions(
     const IDevice* device, const CoreRangeSet& all_cores, const CoreCoord& logical_controller) {
-    TT_ASSERT(0 < all_cores.ranges().size() and all_cores.ranges().size() <= 2);
+    TT_ASSERT(!all_cores.ranges().empty() and all_cores.ranges().size() <= 2);
     CoreCoord logical_zero = {0, 0};
     TT_ASSERT(logical_controller == logical_zero);
 
@@ -81,10 +81,9 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
+    uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output.buffer()->size(), output.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     // CB is being used as temp L1 buffer to copy src data into before writing to dst
@@ -93,22 +92,19 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
             .set_page_size(cb_index, aligned_page_size);
-    auto cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     auto semaphore_id = CreateSemaphore(program, all_cores, 0);
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
 
-    uint32_t log2_page_size = 0;
-    std::vector<uint32_t> compile_time_args = {cb_index, (uint32_t)src_is_dram, (uint32_t)dst_is_dram};
+    std::vector<uint32_t> compile_time_args = {cb_index};
     if (!tilized) {
-        bool page_size_is_power_of_two = is_power_of_two_at_least_32(page_size);
-        log2_page_size = page_size_is_power_of_two ? (std::uint32_t)log2(page_size) : 0;
-        compile_time_args.push_back((uint32_t)page_size_is_power_of_two);
+        compile_time_args.push_back(page_size);
     }
+    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
     KernelHandle kernel_id = CreateKernel(
         program,
@@ -128,7 +124,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
         CoreRange noc_cr(
             device->worker_core_from_logical_core(logical_cr.start_coord),
             device->worker_core_from_logical_core(logical_cr.end_coord));
-        noc_multicast_regions.push_back(std::move(noc_cr));
+        noc_multicast_regions.push_back(noc_cr);
     }
 
     CoreRange range_0_noc = noc_multicast_regions[0];
@@ -136,7 +132,6 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     // if third multicast is not needed range_2_noc will be ignored
     bool do_third_multicast = (noc_multicast_regions.size() == 3);
 
-    uint32_t total_num_pages = 0;
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_pages_per_core = 0;
@@ -176,9 +171,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
             (uint32_t)logical_multicast_regions.back().size(),
             (uint32_t)do_third_multicast};
         if (!tilized) {
-            runtime_args.push_back(page_size);
             runtime_args.push_back(aligned_page_size);
-            runtime_args.push_back(log2_page_size);
         }
         SetRuntimeArgs(program, kernel_id, core, runtime_args);
         pages_handled_per_core += num_pages_per_core;

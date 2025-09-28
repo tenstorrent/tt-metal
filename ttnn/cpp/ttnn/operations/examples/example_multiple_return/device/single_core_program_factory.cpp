@@ -4,6 +4,7 @@
 
 #include "example_multiple_return_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::examples {
 ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t
@@ -16,19 +17,19 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
 
     const auto& input_tensor = tensor_args.input_tensor;
 
-    auto output_tensor1 = tensor_return_value.at(0);
-    auto output_tensor2 = tensor_return_value.at(1);
+    const auto& output_tensor1 = tensor_return_value.at(0);
+    const auto& output_tensor2 = tensor_return_value.at(1);
 
     auto src_buffer = input_tensor.buffer();
 
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     auto output_dtype = output_tensor1.has_value() ? output_tensor1.value().dtype() : output_tensor2.value().dtype();
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
+    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     uint32_t num_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
 
@@ -52,17 +53,14 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
             .set_page_size(output_cb_index, single_tile_size_output);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
-    bool dst_is_dram1 = output_tensor1.has_value()
-                            ? (output_tensor1.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0)
-                            : false;
-    bool dst_is_dram2 = output_tensor2.has_value()
-                            ? (output_tensor2.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0)
-                            : false;
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram1, (std::uint32_t)dst_is_dram2};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    tt::tt_metal::TensorAccessorArgs(output_tensor1.has_value() ? output_tensor1.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor2.has_value() ? output_tensor2.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -146,12 +144,12 @@ void ExampleMultipleReturnDeviceOperation::SingleCore::override_runtime_argument
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto output_tensor1 = tensor_return_value.at(0);
-    auto output_tensor2 = tensor_return_value.at(1);
+    const auto& output_tensor1 = tensor_return_value.at(0);
+    const auto& output_tensor2 = tensor_return_value.at(1);
 
     auto src_buffer = input_tensor.buffer();
-    auto dst_buffer1 = output_tensor1.has_value() ? output_tensor1.value().buffer() : 0;
-    auto dst_buffer2 = output_tensor2.has_value() ? output_tensor2.value().buffer() : 0;
+    auto dst_buffer1 = output_tensor1.has_value() ? output_tensor1.value().buffer() : nullptr;
+    auto dst_buffer2 = output_tensor2.has_value() ? output_tensor2.value().buffer() : nullptr;
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});

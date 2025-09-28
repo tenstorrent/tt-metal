@@ -1,0 +1,11 @@
+# This file contains a set of Python packages required for running
+# Python unit tests in the minimum environment
+
+pytest==7.2.2
+transformers==4.53.0
+multiprocess==0.70.14
+psutil==7.0.0
+pytest-xdist==3.6.1
+pytest-timeout==2.2.0
+nbconvert==7.16.6
+ipykernel==6.30.0

@@ -36,33 +36,33 @@ void kernel_main() {
     // Arg 4 is either batch_idx_tensor_addr or batch_idx_fallback scalar
     uint32_t batch_arg = get_arg_val<uint32_t>(4);
 
-    constexpr bool out_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool page_table_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(3);
-    constexpr uint32_t num_heads = get_compile_time_arg_val(4);
-    constexpr uint32_t num_blocks_of_work_per_head = get_compile_time_arg_val(5);
-    constexpr uint32_t block_size_t = get_compile_time_arg_val(6);
-    constexpr uint32_t Wt = get_compile_time_arg_val(7);
-    constexpr uint32_t log2_page_table_stick_size = get_compile_time_arg_val(8);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_page_table = get_compile_time_arg_val(1);
+    constexpr uint32_t num_heads = get_compile_time_arg_val(2);
+    constexpr uint32_t num_blocks_of_work_per_head = get_compile_time_arg_val(3);
+    constexpr uint32_t block_size_t = get_compile_time_arg_val(4);
+    constexpr uint32_t Wt = get_compile_time_arg_val(5);
+    constexpr uint32_t log2_page_table_stick_size = get_compile_time_arg_val(6);
+    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(7);
 
     // New compile-time args for optional batch_idx_tensor
-    constexpr bool use_batch_idx_tensor = get_compile_time_arg_val(10) == 1;
-    constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(11);  // CB for reading from batch_idx_tensor
-    constexpr bool batch_idx_tensor_is_dram = get_compile_time_arg_val(12) == 1;
+    constexpr bool use_batch_idx_tensor = get_compile_time_arg_val(8) == 1;
+    constexpr uint32_t cb_id_batch_idx = get_compile_time_arg_val(9);  // CB for reading from batch_idx_tensor
     constexpr uint32_t batch_idx_stick_size =
-        get_compile_time_arg_val(13);  // Expected to be small (e.g., 4 for uint32)
+        get_compile_time_arg_val(10);  // Expected to be small (e.g., 4 for uint32)
+
+    constexpr auto s0_args = TensorAccessorArgs<11>();
+    constexpr auto page_table_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    constexpr auto batch_idx_tensor_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
 
     uint32_t batch_idx;
     if constexpr (use_batch_idx_tensor) {
         uint32_t batch_idx_tensor_addr = batch_arg;  // Arg 4 is the address
 
-        const InterleavedAddrGen<batch_idx_tensor_is_dram> batch_idx_gen = {
-            .bank_base_address = batch_idx_tensor_addr, .page_size = batch_idx_stick_size};
+        const auto batch_idx_gen = TensorAccessor(batch_idx_tensor_args, batch_idx_tensor_addr, batch_idx_stick_size);
         cb_reserve_back(cb_id_batch_idx, 1);  // Expecting 1 element (the batch_idx)
         uint32_t batch_idx_cb_wr_ptr = get_write_ptr(cb_id_batch_idx);
-        uint64_t batch_idx_noc_addr = get_noc_addr(0, batch_idx_gen);
+        uint64_t batch_idx_noc_addr = batch_idx_gen.get_noc_addr(0);
         noc_async_read(batch_idx_noc_addr, batch_idx_cb_wr_ptr, batch_idx_stick_size);
         noc_async_read_barrier();
         volatile tt_l1_ptr uint32_t* batch_idx_ptr =
@@ -75,14 +75,12 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
-    const InterleavedAddrGenFast<out_is_dram> out_gen = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto out_gen = TensorAccessor(s0_args, dst_addr, tile_bytes);
 
-    const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
-        .bank_base_address = page_table_addr, .page_size = page_table_stick_size};
+    const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_stick_size);
     cb_reserve_back(cb_id_page_table, 1);
     uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-    uint64_t page_table_noc_addr = get_noc_addr(batch_idx, page_table_gen);
+    uint64_t page_table_noc_addr = page_table_gen.get_noc_addr(batch_idx);
     noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
     noc_async_read_barrier();
 

@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import skip_for_grayskull
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 def is_unsupported_case(input_shape, dim, math_op, mem_config, num_devices, num_links, input_dtype, layout):
@@ -39,32 +39,36 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    output_tensor_mesh = ttnn.reduce_scatter(
-        input_tensor_mesh,
-        dim=dim,
-        math_op=math_op,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        num_workers=n_worker,
-        num_buffers_per_channel=n_buffer,
-        topology=topology,
-    )
+    pytest.skip(LEGACY_CCL_SKIP)
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # output_tensor_mesh = ttnn.reduce_scatter(
+    #     input_tensor_mesh,
+    #     dim=dim,
+    #     math_op=math_op,
+    #     num_links=num_links,
+    #     memory_config=output_mem_config,
+    #     num_workers=n_worker,
+    #     num_buffers_per_channel=n_buffer,
+    #     topology=topology,
+    # )
     ttnn.synchronize_device(t3k_mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
     for i in range(num_iters):
-        output_tensor_mesh = ttnn.reduce_scatter(
-            input_tensor_mesh,
-            dim=dim,
-            math_op=math_op,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            num_workers=n_worker,
-            num_buffers_per_channel=n_buffer,
-            topology=topology,
-        )
+        pytest.skip(LEGACY_CCL_SKIP)
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # output_tensor_mesh = ttnn.reduce_scatter(
+        #     input_tensor_mesh,
+        #     dim=dim,
+        #     math_op=math_op,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        #     num_workers=n_worker,
+        #     num_buffers_per_channel=n_buffer,
+        #     topology=topology,
+        # )
     ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(t3k_mesh_device)
 
@@ -138,14 +142,16 @@ def run_reduce_scatter_test(
         )
     else:
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.reduce_scatter(
-                input_tensor_mesh,
-                dim=dim,
-                math_op=math_op,
-                num_links=num_links,
-                memory_config=mem_config,
-                topology=topology,
-            )
+            pytest.skip(LEGACY_CCL_SKIP)
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # output_tensor_mesh = ttnn.reduce_scatter(
+            #     input_tensor_mesh,
+            #     dim=dim,
+            #     math_op=math_op,
+            #     num_links=num_links,
+            #     memory_config=mem_config,
+            #     topology=topology,
+            # )
 
             ttnn.synchronize_device(mesh_device)
             logger.info(f"Done iteration {i}")
@@ -186,7 +192,6 @@ def run_reduce_scatter_test(
 
 
 # ~2:45 extra time in the current state
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -250,7 +255,6 @@ def test_ring_reduce_scatter_post_commit(
 
 
 # ~2:45 extra time in the current state
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -311,7 +315,6 @@ def test_line_reduce_scatter_post_commit(
 
 
 # ~2:45 extra time in the current state
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -469,14 +472,16 @@ def run_reduce_scatter_sharded_test(
         )
     else:
         for i in range(num_iters):
-            output_tensor_mesh = ttnn.reduce_scatter(
-                input_tensor_mesh,
-                dim=dim,
-                math_op=math_op,
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=topology,
-            )
+            pytest.skip(LEGACY_CCL_SKIP)
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # output_tensor_mesh = ttnn.reduce_scatter(
+            #     input_tensor_mesh,
+            #     dim=dim,
+            #     math_op=math_op,
+            #     num_links=num_links,
+            #     memory_config=output_mem_config,
+            #     topology=topology,
+            # )
 
             ttnn.synchronize_device(t3k_mesh_device)
             logger.info(f"Done iteration {i}")
@@ -505,7 +510,6 @@ def run_reduce_scatter_sharded_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -593,7 +597,6 @@ def test_width_sharded_reduce_scatter_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -679,7 +682,6 @@ def test_width_sharded_reduce_scatter_post_commit_4chip(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.skip("Hangs")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
@@ -749,7 +751,6 @@ def test_height_sharded_reduce_scatter_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",

@@ -8,10 +8,8 @@ target_link_libraries(
         pthread
         gmock_main
         nlohmann_json::nlohmann_json
-        magic_enum::magic_enum
+        enchantum::enchantum
         fmt::fmt-header-only
-        span
-        small_vector
         Boost::algorithm
         Taskflow::Taskflow
         TT::Metalium

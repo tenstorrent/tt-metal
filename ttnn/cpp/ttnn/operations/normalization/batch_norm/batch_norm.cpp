@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,16 +9,20 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
 #include "device/running_statistics_device_operation.hpp"
+#include "device/batch_norm_utils.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::normalization {
 
-inline Tensor mean_NHW(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+inline Tensor mean_NHW(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     auto output_mem_config = memory_config.value_or(input_tensor.memory_config());
     ttnn::SmallVector<int> dims = {2, 3};
-    Tensor mean_hw = ttnn::mean(input_tensor, dims, true);
-    return ttnn::mean(mean_hw, 0, true);
+    Tensor mean_hw = ttnn::mean(input_tensor, dims, true, output_mem_config, compute_kernel_config);
+    return ttnn::mean(mean_hw, 0, true, output_mem_config, compute_kernel_config);
 }
 
 Tensor BatchNorm::invoke(
@@ -32,7 +36,7 @@ Tensor BatchNorm::invoke(
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,
-    QueueId queue_id) {
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(
         input.logical_shape().rank() >= 4,
         "batch_norm not supported for tensors with rank < 4. (rank={})",
@@ -50,11 +54,11 @@ Tensor BatchNorm::invoke(
 
     Tensor batch_mean, batch_var;
     if (training) {
-        batch_mean = mean_NHW(input, memory_config);
-        auto mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config);
+        batch_mean = mean_NHW(input, memory_config, compute_kernel_config);
+        auto mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config, compute_kernel_config);
         batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);
-        Tensor stats =
-            ttnn::prim::running_statistics(batch_mean, batch_var, momentum, running_mean, running_var, memory_config);
+        Tensor stats = ttnn::prim::running_statistics(
+            batch_mean, batch_var, momentum, running_mean, running_var, memory_config, compute_kernel_config);
     } else {
         TT_FATAL(
             (running_mean.has_value() && running_var.has_value()),
@@ -62,6 +66,7 @@ Tensor BatchNorm::invoke(
         batch_mean = running_mean.value();
         batch_var = running_var.value();
     }
-    return ttnn::prim::batch_norm(input, batch_mean, batch_var, eps, weight, bias, output, memory_config);
+    return ttnn::prim::batch_norm(
+        input, batch_mean, batch_var, eps, weight, bias, output, memory_config, compute_kernel_config);
 }
 }  // namespace ttnn::operations::normalization

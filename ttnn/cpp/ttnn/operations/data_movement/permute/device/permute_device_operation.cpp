@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -38,8 +39,6 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
 
 void PermuteDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    auto& dims = attributes.dims;
-    auto rank = tensor_args.input_tensor.logical_shape().rank();
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
@@ -67,6 +66,16 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
         Shape(std::move(shape)),
         tt::tt_metal::TensorLayout(
             input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), attributes.output_mem_config));
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<PermuteDeviceOperation::tensor_return_value_t>
+PermuteDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const auto& input_tensor = inputs.input_tensor;
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output, false, 0, true);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, {output}, ideal_dev_clock_cycles);
+    return result;
 }
 
 PermuteDeviceOperation::tensor_return_value_t PermuteDeviceOperation::create_output_tensors(

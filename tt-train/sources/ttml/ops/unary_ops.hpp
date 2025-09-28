@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ namespace ttml::ops {
 
 autograd::TensorPtr relu(const autograd::TensorPtr& tensor);
 autograd::TensorPtr gelu(const autograd::TensorPtr& tensor);
-autograd::TensorPtr silu(const autograd::TensorPtr& tensor);
+autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw = false);
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor);
 autograd::TensorPtr sum(const autograd::TensorPtr& tensor);
 autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t new_batch_dim);

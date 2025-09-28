@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -66,12 +66,9 @@ std::vector<tt::tt_metal::HostBuffer> get_as(const ttnn::Tensor& tensor) {
         [](auto&& storage) -> std::vector<tt::tt_metal::HostBuffer> {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, tt::tt_metal::HostStorage>) {
-                return {storage.buffer};
-            } else if constexpr (std::is_same_v<StorageType, tt::tt_metal::MultiDeviceHostStorage>) {
                 std::vector<tt::tt_metal::HostBuffer> buffers;
-                buffers.reserve(storage.distributed_buffer().shard_coords().size());
-                storage.distributed_buffer().apply(
-                    [&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
+                buffers.reserve(storage.buffer().shard_coords().size());
+                storage.buffer().apply([&buffers](const tt::tt_metal::HostBuffer& shard) { buffers.push_back(shard); });
                 return buffers;
             } else {
                 throw std::runtime_error("Tensor must be on host");
@@ -228,10 +225,6 @@ tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
 
 bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
     return tensor.tensor_attributes != nullptr;
-}
-
-ttnn::Shape create_shape(const std::array<uint32_t, 4>& args) {
-    return ttnn::Shape{args};
 }
 
 void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name) {

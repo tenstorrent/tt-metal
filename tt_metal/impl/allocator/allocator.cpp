@@ -4,16 +4,17 @@
 
 #include <allocator.hpp>
 #include <buffer.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <functional>
 #include <string>
 #include <string_view>
+#include <mutex>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 
@@ -103,6 +104,7 @@ void Allocator::verify_safe_allocation() const {
 }
 
 DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
     DeviceAddr address = 0;
     auto size = buffer->aligned_size();
     auto page_size = buffer->aligned_page_size();
@@ -138,6 +140,7 @@ DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
 }
 
 void Allocator::deallocate_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();
     auto buffer_type = buffer->buffer_type();
     switch (buffer_type) {
@@ -153,15 +156,25 @@ void Allocator::deallocate_buffer(Buffer* buffer) {
 }
 
 void Allocator::deallocate_buffers() {
+    std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
     trace_buffer_manager_->deallocate_all();
 }
 
-const std::unordered_set<Buffer*>& Allocator::get_allocated_buffers() const { return allocated_buffers_; }
+std::unordered_set<Buffer*> Allocator::get_allocated_buffers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocated_buffers_;
+}
+
+size_t Allocator::get_num_allocated_buffers() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return allocated_buffers_.size();
+}
 
 uint32_t Allocator::get_num_banks(const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: return dram_manager_->num_banks();
         case BufferType::L1: return l1_manager_->num_banks();
@@ -175,6 +188,7 @@ uint32_t Allocator::get_num_banks(const BufferType& buffer_type) const {
 }
 
 DeviceAddr Allocator::get_bank_size(const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: return dram_manager_->bank_size();
         case BufferType::L1: return l1_manager_->bank_size();
@@ -188,16 +202,19 @@ DeviceAddr Allocator::get_bank_size(const BufferType& buffer_type) const {
 }
 
 uint32_t Allocator::get_dram_channel_from_bank_id(uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     TT_ASSERT(bank_id_to_dram_channel_.find(bank_id) != bank_id_to_dram_channel_.end());
     return bank_id_to_dram_channel_.at(bank_id);
 }
 
 CoreCoord Allocator::get_logical_core_from_bank_id(uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     TT_ASSERT(bank_id_to_logical_core_.find(bank_id) != bank_id_to_logical_core_.end());
     return bank_id_to_logical_core_.at(bank_id);
 }
 
 int32_t Allocator::get_bank_offset(BufferType buffer_type, uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: return dram_manager_->bank_offset(bank_id);
         case BufferType::L1: return l1_manager_->bank_offset(bank_id);
@@ -210,6 +227,7 @@ int32_t Allocator::get_bank_offset(BufferType buffer_type, uint32_t bank_id) con
 }
 
 const std::vector<uint32_t>& Allocator::get_bank_ids_from_dram_channel(uint32_t dram_channel) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (dram_channel_to_bank_ids_.find(dram_channel) == dram_channel_to_bank_ids_.end()) {
         TT_THROW("No DRAM bank exists for DRAM channel {}", dram_channel);
     }
@@ -218,9 +236,10 @@ const std::vector<uint32_t>& Allocator::get_bank_ids_from_dram_channel(uint32_t 
 
 const std::vector<uint32_t>& Allocator::get_bank_ids_from_logical_core(
     BufferType buffer_type, const CoreCoord& logical_core) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (logical_core_to_bank_ids_.at(buffer_type).find(logical_core) ==
         logical_core_to_bank_ids_.at(buffer_type).end()) {
-        TT_THROW("No {} bank exists for core {}", magic_enum::enum_name(buffer_type), logical_core.str());
+        TT_THROW("No {} bank exists for core {}", enchantum::to_string(buffer_type), logical_core.str());
     }
     return logical_core_to_bank_ids_.at(buffer_type).at(logical_core);
 }
@@ -244,13 +263,14 @@ DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const 
         case HalMemType::DRAM: return config_.dram_unreserved_base;
         case HalMemType::L1: return config_.l1_unreserved_base;
         default: {
-            TT_THROW("Allocator does not support allocating in {}", magic_enum::enum_name(mem_type));
+            TT_THROW("Allocator does not support allocating in {}", enchantum::to_string(mem_type));
         }
     }
     return 0;
 }
 
 Statistics Allocator::get_statistics(const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     Statistics stats;
     switch (buffer_type) {
         case BufferType::DRAM: return dram_manager_->get_statistics();
@@ -265,6 +285,7 @@ Statistics Allocator::get_statistics(const BufferType& buffer_type) const {
 }
 
 MemoryBlockTable Allocator::get_memory_block_table(const BufferType& buffer_type) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: return dram_manager_->get_memory_block_table();
         case BufferType::L1: return l1_manager_->get_memory_block_table();
@@ -277,6 +298,7 @@ MemoryBlockTable Allocator::get_memory_block_table(const BufferType& buffer_type
 }
 
 void Allocator::dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->dump_blocks(out); break;
         case BufferType::L1: l1_manager_->dump_blocks(out); break;
@@ -289,11 +311,13 @@ void Allocator::dump_memory_blocks(const BufferType& buffer_type, std::ofstream&
 }
 
 std::optional<DeviceAddr> Allocator::get_lowest_occupied_l1_address(uint32_t bank_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
     // l1_manager always sits below l1_small_manager in the address space, so there is no need to check l1_small_manager
     return l1_manager_->lowest_occupied_address(bank_id);
 }
 
 void Allocator::shrink_allocator_size(const BufferType& buffer_type, DeviceAddr shrink_size, bool bottom_up) {
+    std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->shrink_size(shrink_size, bottom_up); break;
         case BufferType::L1: l1_manager_->shrink_size(shrink_size, bottom_up); break;
@@ -306,6 +330,7 @@ void Allocator::shrink_allocator_size(const BufferType& buffer_type, DeviceAddr 
 }
 
 void Allocator::reset_allocator_size(const BufferType& buffer_type) {
+    std::lock_guard<std::mutex> lock(mutex_);
     switch (buffer_type) {
         case BufferType::DRAM: dram_manager_->reset_size(); break;
         case BufferType::L1: l1_manager_->reset_size(); break;
@@ -317,11 +342,18 @@ void Allocator::reset_allocator_size(const BufferType& buffer_type) {
     }
 }
 
-void Allocator::mark_allocations_unsafe() { allocations_unsafe_ = true; }
+void Allocator::mark_allocations_unsafe() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    allocations_unsafe_ = true;
+}
 
-void Allocator::mark_allocations_safe() { allocations_unsafe_ = false; }
+void Allocator::mark_allocations_safe() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    allocations_unsafe_ = false;
+}
 
 void Allocator::clear() {
+    std::lock_guard<std::mutex> lock(mutex_);
     dram_manager_->clear();
     l1_manager_->clear();
     l1_small_manager_->clear();
@@ -349,7 +381,6 @@ Allocator::~Allocator() {
     l1_small_manager_->clear();
     trace_buffer_manager_->clear();
     allocated_buffers_.clear();
-    config_.reset();
 }
 
 }  // namespace tt_metal

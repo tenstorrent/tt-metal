@@ -8,9 +8,10 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
+from models.common.utility_functions import profiler
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra, load_resnet50_model
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
 try:
     from tracy import signpost
@@ -20,12 +21,12 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-def dump_device_profiler(device):
-    ttnn.DumpDeviceProfiler(device)
+def read_device_profiler(device):
+    ttnn.ReadDeviceProfiler(device)
 
 
 # TODO: Create ttnn apis for this
-ttnn.dump_device_profiler = dump_device_profiler
+ttnn.read_device_profiler = read_device_profiler
 
 model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
@@ -34,233 +35,103 @@ model_config = {
 }
 
 
-def run_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
-    profiler.start("compile")
-    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
-    profiler.end("compile")
-    ttnn.dump_device_profiler(device)
-
-    profiler.start("cache")
-    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
-    profiler.end("cache")
-    ttnn.dump_device_profiler(device)
-
-    for iter in range(0, num_warmup_iterations):
-        test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-        _ = ttnn.from_device(test_infra.run(), blocking=True)
-        ttnn.dump_device_profiler(device)
-
-    ttnn.synchronize_device(device)
-    if use_signpost:
-        signpost(header="start")
-    outputs = []
-    profiler.start(f"run")
-    for iter in range(0, num_measurement_iterations):
-        test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-        outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
-    ttnn.synchronize_device(device)
-    profiler.end(f"run")
-    if use_signpost:
-        signpost(header="stop")
-    ttnn.dump_device_profiler(device)
-
-
-def run_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
+def _run_model_pipeline(
+    device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations, num_command_queues, trace
+):
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
-    tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
 
-    # Initialize the op event so we can write
-    op_event = ttnn.record_event(device, 0)
+    def model_wrapper(l1_input_tensor):
+        test_infra.input_tensor = l1_input_tensor
+        return test_infra.run()
 
+    pipeline = create_pipeline_from_config(
+        config=PipelineConfig(
+            use_trace=trace, num_command_queues=num_command_queues, all_transfers_on_separate_command_queue=False
+        ),
+        model=model_wrapper,
+        device=device,
+        dram_input_memory_config=sharded_mem_config_DRAM,
+        l1_input_memory_config=input_mem_config,
+    )
+
+    logger.info(f"Running model warmup with input shape {list(tt_inputs_host.shape)}")
     profiler.start("compile")
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    op_event = ttnn.record_event(device, 0)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
+    pipeline.compile(tt_inputs_host)
     profiler.end("compile")
-    ttnn.dump_device_profiler(device)
+    ttnn.read_device_profiler(device)
 
-    profiler.start("cache")
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    op_event = ttnn.record_event(device, 0)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
-    profiler.end("cache")
-    ttnn.dump_device_profiler(device)
+    host_inputs = [tt_inputs_host] * num_measurement_iterations
 
-    for iter in range(0, num_warmup_iterations):
-        ttnn.wait_for_event(1, op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        write_event = ttnn.record_event(device, 1)
-        ttnn.wait_for_event(0, write_event)
-        test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-        op_event = ttnn.record_event(device, 0)
-        _ = ttnn.from_device(test_infra.run(), blocking=True)
-        ttnn.dump_device_profiler(device)
+    pipeline.preallocate_output_tensors_on_host(
+        num_measurement_iterations,
+    )
 
-    ttnn.synchronize_device(device)
+    logger.info(
+        f"Starting performance pipline for {num_measurement_iterations} iterations with batch_size={test_infra.batch_size} and num_devices={test_infra.num_devices}"
+    )
     if use_signpost:
         signpost(header="start")
-    outputs = []
-    profiler.start(f"run")
-    for iter in range(0, num_measurement_iterations):
-        ttnn.wait_for_event(1, op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        write_event = ttnn.record_event(device, 1)
-        ttnn.wait_for_event(0, write_event)
-        test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-        op_event = ttnn.record_event(device, 0)
-        outputs.append(ttnn.from_device(test_infra.run(), blocking=False))
-    ttnn.synchronize_device(device)
-    profiler.end(f"run")
+    profiler.start(f"run_model_pipeline_{num_command_queues}cqs")
+    outputs = pipeline.enqueue(host_inputs).pop_all()
+    profiler.end(f"run_model_pipeline_{num_command_queues}cqs")
     if use_signpost:
         signpost(header="stop")
-    ttnn.dump_device_profiler(device)
+    ttnn.read_device_profiler(device)
+
+    for i, output in enumerate(outputs):
+        passed, pcc_message = test_infra.validate(output)
+        logger.info(f"Output {i} validation: {pcc_message}")
+        assert passed, f"Output {i} validation failed: {pcc_message}"
+
+    pipeline.cleanup()
 
 
-def run_trace_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
-    # Compile
-    profiler.start("compile")
-    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    spec = test_infra.input_tensor.spec
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
-    profiler.end("compile")
-    ttnn.dump_device_profiler(device)
-    test_infra.output_tensor.deallocate(force=True)
-
-    profiler.start("cache")
-    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
-    profiler.end("cache")
-    ttnn.dump_device_profiler(device)
-
-    # Capture
-    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    test_infra.output_tensor.deallocate(force=True)
-    trace_input_addr = test_infra.input_tensor.buffer_address()
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    tt_output_res = test_infra.run()
-    tt_image_res = ttnn.allocate_tensor_on_device(spec, device)
-    ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert trace_input_addr == tt_image_res.buffer_address()
-    ttnn.dump_device_profiler(device)
-
-    for iter in range(0, num_warmup_iterations):
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        _ = ttnn.from_device(tt_output_res, blocking=True)
-        ttnn.dump_device_profiler(device)
-
-    ttnn.synchronize_device(device)
-    if use_signpost:
-        signpost(header="start")
-    outputs = []
-    profiler.start(f"run")
-    for iter in range(0, num_measurement_iterations):
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        outputs.append(ttnn.from_device(tt_output_res, blocking=False))
-    ttnn.synchronize_device(device)
-    profiler.end(f"run")
-    if use_signpost:
-        signpost(header="stop")
-    ttnn.dump_device_profiler(device)
-
-    ttnn.release_trace(device, tid)
+def run_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
+    _run_model_pipeline(
+        device,
+        tt_inputs,
+        test_infra,
+        num_warmup_iterations,
+        num_measurement_iterations,
+        num_command_queues=1,
+        trace=False,
+    )
 
 
-def run_trace_2cq_model(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
-    tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
+def run_trace_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
+    _run_model_pipeline(
+        device,
+        tt_inputs,
+        test_infra,
+        num_warmup_iterations,
+        num_measurement_iterations,
+        num_command_queues=1,
+        trace=True,
+    )
 
-    # Initialize the op event so we can write
-    op_event = ttnn.record_event(device, 0)
 
-    profiler.start("compile")
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    spec = test_infra.input_tensor.spec
-    op_event = ttnn.record_event(device, 0)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
-    profiler.end("compile")
-    ttnn.dump_device_profiler(device)
+def run_2cq_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
+    _run_model_pipeline(
+        device,
+        tt_inputs,
+        test_infra,
+        num_warmup_iterations,
+        num_measurement_iterations,
+        num_command_queues=2,
+        trace=False,
+    )
 
-    profiler.start("cache")
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    op_event = ttnn.record_event(device, 0)
-    # Deallocate the previous output tensor here to make allocation match capture setup
-    # This allows us to allocate the input tensor after at the same address
-    test_infra.output_tensor.deallocate(force=True)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
-    profiler.end("cache")
-    ttnn.dump_device_profiler(device)
 
-    # Capture
-    ttnn.wait_for_event(1, op_event)
-    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-    write_event = ttnn.record_event(device, 1)
-    ttnn.wait_for_event(0, write_event)
-    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
-    op_event = ttnn.record_event(device, 0)
-    test_infra.output_tensor.deallocate(force=True)
-    trace_input_addr = test_infra.input_tensor.buffer_address()
-
-    tid = ttnn.begin_trace_capture(device, cq_id=0)
-    tt_output_res = test_infra.run()
-    input_tensor = ttnn.allocate_tensor_on_device(spec, device)
-    ttnn.end_trace_capture(device, tid, cq_id=0)
-    assert trace_input_addr == input_tensor.buffer_address()
-    ttnn.dump_device_profiler(device)
-
-    for iter in range(0, num_warmup_iterations):
-        ttnn.wait_for_event(1, op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        write_event = ttnn.record_event(device, 1)
-        ttnn.wait_for_event(0, write_event)
-        input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
-        op_event = ttnn.record_event(device, 0)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        ttnn.dump_device_profiler(device)
-
-    ttnn.synchronize_device(device)
-    if use_signpost:
-        signpost(header="start")
-    outputs = []
-    profiler.start(f"run")
-    for iter in range(0, num_measurement_iterations):
-        ttnn.wait_for_event(1, op_event)
-        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
-        write_event = ttnn.record_event(device, 1)
-        ttnn.wait_for_event(0, write_event)
-        # TODO: Add in place support to ttnn to_memory_config
-        input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
-        op_event = ttnn.record_event(device, 0)
-        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        outputs.append(tt_output_res.cpu(blocking=False))
-    ttnn.synchronize_device(device)
-    profiler.end(f"run")
-    if use_signpost:
-        signpost(header="stop")
-    ttnn.dump_device_profiler(device)
-
-    ttnn.release_trace(device, tid)
+def run_trace_2cq_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
+    _run_model_pipeline(
+        device,
+        tt_inputs,
+        test_infra,
+        num_warmup_iterations,
+        num_measurement_iterations,
+        num_command_queues=2,
+        trace=True,
+    )
 
 
 def run_perf_resnet(
@@ -320,20 +191,21 @@ def run_perf_resnet(
         profiler.end(cpu_key)
 
         if "resnet50_trace_2cqs" in model_version:
-            run_trace_2cq_model(device, inputs, test_infra, num_warmup_iterations, num_measurement_iterations)
-        elif "resnet50_2cqs" in model_version:
-            run_2cq_model(device, inputs, test_infra, num_warmup_iterations, num_measurement_iterations)
+            run_trace_2cq_model_pipeline(device, inputs, test_infra, num_warmup_iterations, num_measurement_iterations)
         elif "resnet50_trace" in model_version:
-            run_trace_model(device, inputs, test_infra, num_warmup_iterations, num_measurement_iterations)
+            run_trace_model_pipeline(device, inputs, test_infra, num_warmup_iterations, num_measurement_iterations)
+        elif "resnet50_2cqs" in model_version:
+            run_2cq_model_pipeline(device, inputs, test_infra, num_warmup_iterations, num_measurement_iterations)
         elif "resnet50" in model_version:
-            run_model(device, inputs, test_infra, num_warmup_iterations, num_measurement_iterations)
+            run_model_pipeline(device, inputs, test_infra, num_warmup_iterations, num_measurement_iterations)
         else:
             assert False, f"Model version to run {model_version} not found"
 
-    first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
+    first_iter_time = profiler.get(f"compile")
 
     # ensuring inference time fluctuations is not noise
-    inference_time_avg = profiler.get("run") / num_measurement_iterations
+    num_cqs = 2 if "2cqs" in model_version else 1
+    inference_time_avg = profiler.get(f"run_model_pipeline_{num_cqs}cqs") / num_measurement_iterations
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - 2 * inference_time_avg

@@ -19,7 +19,6 @@
 #include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -39,12 +38,11 @@ using ::tt::tt_metal::is_device_tensor;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
-// #21556: Disabled until we have clarity about user space multi-threading support
-TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
+TEST_F(MultiProducerCommandQueueTest, Stress) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
-    IDevice* device = this->device_;
+    auto device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -52,7 +50,7 @@ TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
     // Thread 0 uses cq_0, thread 1 uses cq_1
-    const ttnn::QueueId t0_io_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId t0_io_cq = ttnn::QueueId(0);
     const ttnn::QueueId t1_io_cq = ttnn::QueueId(1);
 
     std::vector<float> t0_host_data(tensor_shape.volume());
@@ -84,8 +82,7 @@ TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
     t1.join();
 }
 
-// #21556: Disabled until we have clarity about user space multi-threading support
-TEST_F(MultiProducerCommandQueueTest, DISABLED_EventSync) {
+TEST_F(MultiProducerCommandQueueTest, EventSync) {
     // Verify that the event_synchronize API stalls the calling thread until
     // the device records the event being polled.
     // Thread 0 = writer thread. Thread 1 = reader thread.
@@ -99,7 +96,7 @@ TEST_F(MultiProducerCommandQueueTest, DISABLED_EventSync) {
     const TensorLayout tensor_layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
-    const ttnn::QueueId write_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId write_cq = ttnn::QueueId(0);
     const ttnn::QueueId read_cq = ttnn::QueueId(1);
 
     std::optional<tt::tt_metal::distributed::MeshEvent> write_event;

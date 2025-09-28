@@ -11,13 +11,11 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/tt_cluster_descriptor.h>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/xy_pair.h>
-
-enum BoardType : uint32_t;
+#include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 //! tt_SocDescriptor contains information regarding the SOC configuration targetted.
 /*!
@@ -31,8 +29,8 @@ public:
     std::vector<std::vector<CoreCoord>> dram_view_eth_cores;  // per dram view preferred eth endpoints for each noc
     std::vector<size_t> dram_view_address_offsets;  // starting address offset
 
-    uint64_t dram_core_size;
-    uint64_t dram_view_size;
+    uint64_t dram_core_size{};
+    uint64_t dram_view_size{};
 
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
 
@@ -55,12 +53,6 @@ public:
     CoreCoord get_physical_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const;
 
     CoreCoord get_dram_grid_size() const;
-
-    tt_cxy_pair convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const;
-
-    // During the transition of the UMD's api to CoreCoords, this function is needed to make the transition smoother.
-    // At the moment, different coordinate systems are expected for grayskull and other architectures.
-    CoordSystem get_umd_coord_system() const;
 
     // Number of cores per DRAM bank ceiled to nearest integer
     int profiler_ceiled_core_count_perf_dram_bank = 0;

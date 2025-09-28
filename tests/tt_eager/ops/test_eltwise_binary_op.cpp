@@ -6,7 +6,7 @@
 #include <tt-metalium/constants.hpp>
 #include <functional>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -14,7 +14,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -34,7 +33,8 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
     auto output_buffer = std::vector<bfloat16>(input_tensor_a.physical_volume());
 
     for (auto index = 0; index < output_buffer.size(); index++) {
-        auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
+        auto value =
+            BinaryFunction{}(static_cast<float>(input_a_buffer[index]), static_cast<float>(input_b_buffer[index]));
         output_buffer[index] = bfloat16(value);
     }
     return Tensor(

@@ -9,8 +9,19 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_eltwise_unary
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES common/unary_op_types.hpp device/unary_composite_op.hpp unary.hpp unary_composite.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         common/unary_op_utils.cpp
         device/unary_composite_op.cpp
@@ -24,16 +35,6 @@ target_sources(
         unary.cpp
 )
 
-file(GLOB_RECURSE kernels device/kernels/*)
-target_sources(
-    ttnn_op_eltwise_unary
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
-)
-
 target_include_directories(ttnn_op_eltwise_unary PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_eltwise_unary
@@ -45,6 +46,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_eltwise_unary
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/eltwise/unary

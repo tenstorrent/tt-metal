@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,31 +17,32 @@ void MAIN {
     constexpr uint32_t NKH = get_compile_time_arg_val(2);
     constexpr uint32_t Skt = get_compile_time_arg_val(3);
     constexpr uint32_t DHt = get_compile_time_arg_val(4);
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(6);
-    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(8);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(5);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(7);
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(9);
 
-    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(9);
-    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(10);
-    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(11);
-    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(12);
-    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(13);
-    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(14);
-    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(15);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(16);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(17);
-    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(18);
-    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(19);
-    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(20);
+    constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(10);
+    constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(11);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(12);
+    constexpr uint32_t qk_in0_num_subblocks = get_compile_time_arg_val(13);
+    constexpr uint32_t qk_in1_num_subblocks = get_compile_time_arg_val(14);
+    constexpr uint32_t qk_num_blocks = get_compile_time_arg_val(15);
+    constexpr uint32_t out_in0_block_w = get_compile_time_arg_val(16);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(17);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(18);
+    constexpr uint32_t out_in0_num_subblocks = get_compile_time_arg_val(19);
+    constexpr uint32_t out_in1_num_subblocks = get_compile_time_arg_val(20);
+    constexpr uint32_t out_num_blocks = get_compile_time_arg_val(21);
 
-    constexpr uint32_t num_cores = get_compile_time_arg_val(21);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(22);
 
-    constexpr uint32_t is_causal = get_compile_time_arg_val(22) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(23) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(25) == 1;
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(26);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(24) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(25) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(26) == 1;
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
 
     const uint32_t core_id = get_arg_val<uint32_t>(0);
     const uint32_t local_batch_start = get_arg_val<uint32_t>(1);
@@ -50,14 +51,20 @@ void MAIN {
     const uint32_t local_nh_end = get_arg_val<uint32_t>(4);
     const uint32_t local_q_start = get_arg_val<uint32_t>(5);
     const uint32_t local_q_end = get_arg_val<uint32_t>(6);
-    const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
+    // const uint32_t chunked_q_chunk_offset = get_arg_val<uint32_t>(7);
+    const uint32_t num_phases = get_arg_val<uint32_t>(7);
+    const uint32_t chunked_q_chunk_offset_phase_1 = get_arg_val<uint32_t>(8);
+    uint32_t chunked_q_chunk_offset_phase_2 = 0;
+    if (num_phases == 2) {
+        chunked_q_chunk_offset_phase_2 = get_arg_val<uint32_t>(9);
+    }
 
     const uint32_t q_chunks_per_core = local_q_end - local_q_start;
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * DHt;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -77,12 +84,20 @@ void MAIN {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+    uint32_t chunked_q_chunk_offset = 0;
     mm_init(cb_q_in, cb_k_in, cb_out);
 
-    for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
-        for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
-            for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
-                uint32_t q_chunk;
+    for (uint32_t phase = 0; phase < num_phases; ++phase) {
+        if (phase == 0) {
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_1;
+        } else {
+            chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
+        }
+
+        for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {
+            for (uint32_t nq = local_nh_start; nq < local_nh_end; ++nq) {
+                for (uint32_t q_iter = 0; q_iter < q_chunks_per_core; ++q_iter) {
+                    uint32_t q_chunk;
 #if defined BALANCED_Q_PARALLEL
                 uint32_t q_chunk_div_2 = q_chunks_per_core / 2;
                 if (q_iter < q_chunk_div_2) {  // bottom half
@@ -206,7 +221,7 @@ void MAIN {
                         cb_v_in,
                         alias_mm2_cur_out,
                         Sq_chunk_t,
-                        DHt,
+                        vDHt,
                         Sk_chunk_t,
                         out_num_blocks,
                         out_in0_num_subblocks,
@@ -242,7 +257,7 @@ void MAIN {
                          * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
                          * This uses L1 accumulation to accumulate onto mm2_cur_out.
                          */
-                        mul_block_bcast_cols<Sq_chunk_t, DHt>(
+                        mul_block_bcast_cols<Sq_chunk_t, vDHt>(
                             alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out, true);
                     }
 
@@ -261,11 +276,12 @@ void MAIN {
 
                 /* cb_out_accumulate_im *= cb_cur_sum */
                 pack_reconfig_data_format(cb_out);
-                mul_block_bcast_cols<Sq_chunk_t, DHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
+                mul_block_bcast_cols<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum, cb_out, false);
 
                 cb_pop_front(cb_q_in, q_chunk_tiles);
                 // free up cb_prev_max after K chunks
                 cb_pop_front(alias_prev_max, Sq_chunk_t);
+                }
             }
         }
     }

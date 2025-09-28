@@ -9,10 +9,12 @@ import torch
 
 import ttnn
 
+from loguru import logger
+
 from tests.sweep_framework.sweep_utils.utils import gen_pytest_parametrize_args
 from tests.sweep_framework.sweep_utils.roofline_utils import get_run_return
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 TIMEOUT = 15
@@ -124,7 +126,7 @@ def test_matmul(
     input_b_memory_config,
     output_memory_config,
 ):
-    run_matmul(
+    (result, msg), e2e_perf = run_matmul(
         device,
         batch_sizes,
         m_n_sizes,
@@ -136,6 +138,8 @@ def test_matmul(
         input_b_memory_config,
         output_memory_config,
     )
+    assert result, msg
+    logger.info(f"e2e_perf: {e2e_perf}")
 
 
 def run(

@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
 from models.experimental.stable_diffusion_xl_base.tt.tt_upsample2d import TtUpsample2D
 
 
-class TtCrossAttnUpBlock2D(nn.Module):
+class TtCrossAttnUpBlock2D(LightweightModule):
     def __init__(
         self,
         device,
@@ -85,7 +85,7 @@ class TtCrossAttnUpBlock2D(nn.Module):
                 hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
             )
 
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         if self.upsamplers is not None:
             hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])

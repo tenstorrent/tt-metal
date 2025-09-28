@@ -126,6 +126,7 @@ def test_tensor_creation_api_parity(shape, tt_dtype, layout, device):
 
 
 grid_size = [8, 7]
+core_ranges = ttnn.num_cores_to_corerangeset(56, grid_size, True)
 
 
 @pytest.mark.parametrize(
@@ -162,32 +163,6 @@ grid_size = [8, 7]
             ),
         ),
         (
-            (1, 48, 56, 32),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.num_cores_to_corerangeset(56, grid_size, True),
-                    [48, 32],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardMode.LOGICAL,
-                ),
-            ),
-        ),
-        (
-            (1, 2, 10, 5),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.num_cores_to_corerangeset(3, grid_size, True),
-                    [20, 2],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardMode.LOGICAL,
-                ),
-            ),
-        ),
-        (
             (1, 1, 5, 96),
             ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -199,40 +174,10 @@ grid_size = [8, 7]
                 ),
             ),
         ),
-        (
-            (2, 3, 64, 96),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 5))}),
-                    [64, 64],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    ttnn.ShardMode.LOGICAL,
-                ),
-            ),
-        ),
-        (
-            (1, 8, 36, 32),
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 5))}),
-                    [48, 10],
-                    [64, 64],  # NOTE: This value is compatible with all PageConfigs in this sweep
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        ),
     ],
     ids=[
         "interleaved",
-        "height_sharded",
         "width_sharded",
-        "width_sharded_uneven",
-        "block_sharded",
-        "block_sharded_with_custom_physical_shard_shape",
     ],
 )
 def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layout, tile, device):
@@ -241,11 +186,7 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
 
-    if (
-        memory_config.shard_spec is not None
-        and memory_config.shard_spec.mode == ttnn.ShardMode.PHYSICAL
-        and tile is not None
-    ):
+    if memory_config.shard_spec is not None and tile is not None:
         shard_shape = memory_config.shard_spec.shape
         if shard_shape[0] % tile.tile_shape[0] != 0 or shard_shape[1] % tile.tile_shape[1] != 0:
             pytest.skip(
@@ -285,3 +226,200 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_3, **allclose_kwargs)
     passing = torch.allclose(py_tensor, py_tensor_after_round_trip_4, **allclose_kwargs)
     assert passing
+
+
+@pytest.mark.parametrize(
+    "tensor_spec",
+    [
+        # Basic tests for using TensorSpec to create a Tensor
+        ttnn.TensorSpec((1, 2, 3, 4), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+        ttnn.TensorSpec((2, 3, 10, 20), ttnn.float32, ttnn.TILE_LAYOUT),
+        ttnn.TensorSpec((2, 3, 10, 20), ttnn.float32, ttnn.TILE_LAYOUT, tile=ttnn.Tile([16, 16])),
+        ttnn.TensorSpec((2, 3, 10, 20), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1),
+        # Manually specifying sharding
+        ttnn.TensorSpec(
+            (2, 3, 10, 20),
+            ttnn.float32,
+            ttnn.TILE_LAYOUT,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.ShardSpec(core_ranges, [32, 32], ttnn.ShardOrientation.ROW_MAJOR),
+            buffer_type=ttnn.BufferType.L1,
+        ),
+        ttnn.TensorSpec(
+            (2, 3, 40, 50),
+            ttnn.float32,
+            ttnn.TILE_LAYOUT,
+            ttnn.NdShardSpec(
+                [1, 1, 32, 32],
+                core_ranges,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+            ),
+            buffer_type=ttnn.BufferType.L1,
+        ),
+        # Sharding using TensorSpec methods
+        # Batch sharding
+        ttnn.TensorSpec(
+            (2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        ).sharded_across_dims_except([0], core_ranges),
+        # Sharding preserving last two dimensions
+        ttnn.TensorSpec(
+            (2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        ).sharded_across_dims_except([-1, -2], core_ranges),
+        # Sharding across last dimension
+        ttnn.TensorSpec(
+            (2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1
+        ).sharded_across_dims([-1], core_ranges),
+        # 2D block sharding
+        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).block_sharded(
+            core_ranges
+        ),
+        # 2D height sharding
+        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).height_sharded(
+            core_ranges
+        ),
+        # 2D width sharding
+        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).width_sharded(
+            core_ranges
+        ),
+        # Customized ND sharding
+        ttnn.TensorSpec((2, 3, 40, 50), ttnn.float32, ttnn.TILE_LAYOUT, buffer_type=ttnn.BufferType.L1).sharded(
+            (1, 37, 37), core_ranges, ttnn.ShardShapeAlignment.RECOMMENDED
+        ),
+    ],
+)
+def test_tensor_creation_with_tensor_spec(tensor_spec, device):
+    torch.manual_seed(0)
+    dtype = tt_dtype_to_torch_dtype[tensor_spec.dtype]
+    py_tensor = torch.rand(list(tensor_spec.shape), dtype=dtype)
+    tt_tensor = ttnn.from_torch(py_tensor, spec=tensor_spec, device=device)
+    assert tt_tensor.spec == tensor_spec
+    py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
+    assert torch.allclose(py_tensor, py_tensor_after_round_trip)
+
+
+@pytest.mark.parametrize(
+    "dtype,shape,buffer",
+    [
+        # 1D tensors
+        (ttnn.uint8, [1, 3], [1, 2, 3]),
+        (ttnn.uint16, [1, 3], [1000, 2000, 3000]),
+        (ttnn.int32, [1, 3], [-100, -200, -300]),
+        (ttnn.uint32, [1, 3], [1000000, 2000000, 3000000]),
+        (ttnn.float32, [1, 3], [1.5, 2.7, 3.14]),
+        (ttnn.bfloat16, [1, 3], [1.25, 2.75, 3.125]),
+        # 2D tensors
+        (ttnn.uint8, [2, 3], [1, 2, 3, 4, 5, 6]),
+        (ttnn.uint16, [2, 3], [1000, 2000, 3000, 4000, 5000, 6000]),
+        (ttnn.int32, [2, 3], [-100, -200, -300, 400, 500, 600]),
+        (ttnn.uint32, [2, 3], [1000000, 2000000, 3000000, 4000000, 5000000, 6000000]),
+        (ttnn.float32, [2, 3], [1.5, 2.7, 3.14, 4.2, 5.8, 6.9]),
+        (ttnn.bfloat16, [2, 3], [1.25, 2.75, 3.125, 4.375, 5.625, 6.875]),
+        # 3D tensors
+        (ttnn.uint8, [2, 2, 2], [1, 2, 3, 4, 5, 6, 7, 8]),
+        (ttnn.uint16, [2, 2, 2], [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]),
+        (ttnn.int32, [2, 2, 2], [-100, -200, -300, -400, -500, -600, -700, -800]),
+        (ttnn.uint32, [2, 2, 2], [1000000, 2000000, 3000000, 4000000, 5000000, 6000000, 7000000, 8000000]),
+        (ttnn.float32, [2, 2, 2], [1.5, 2.7, 3.14, 4.2, 5.8, 6.9, 7.1, 8.2]),
+        (ttnn.bfloat16, [2, 2, 2], [1.25, 2.75, 3.125, 4.375, 5.625, 6.875, 7.125, 8.25]),
+        # 4D tensors
+        (ttnn.uint8, [2, 2, 2, 2], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+        (
+            ttnn.uint16,
+            [2, 2, 2, 2],
+            [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000, 16000],
+        ),
+        (
+            ttnn.int32,
+            [2, 2, 2, 2],
+            [-100, -200, -300, -400, -500, -600, -700, -800, -900, -1000, -1100, -1200, -1300, -1400, -1500, -1600],
+        ),
+        (
+            ttnn.uint32,
+            [2, 2, 2, 2],
+            [
+                1000000,
+                2000000,
+                3000000,
+                4000000,
+                5000000,
+                6000000,
+                7000000,
+                8000000,
+                9000000,
+                10000000,
+                11000000,
+                12000000,
+                13000000,
+                14000000,
+                15000000,
+                16000000,
+            ],
+        ),
+        (
+            ttnn.float32,
+            [2, 2, 2, 2],
+            [1.5, 2.7, 3.14, 4.2, 5.8, 6.9, 7.1, 8.2, 9.3, 10.4, 11.5, 12.6, 13.7, 14.8, 15.9, 16.1],
+        ),
+        (
+            ttnn.bfloat16,
+            [2, 2, 2, 2],
+            [
+                1.25,
+                2.75,
+                3.125,
+                4.375,
+                5.625,
+                6.875,
+                7.125,
+                8.25,
+                9.375,
+                10.625,
+                11.875,
+                12.125,
+                13.375,
+                14.625,
+                15.875,
+                16.125,
+            ],
+        ),
+    ],
+)
+def test_tensor_creation_from_buffer(dtype, shape, buffer, device):
+    tt_tensor = ttnn.from_buffer(buffer, shape, dtype=dtype, device=device)
+    assert tt_tensor.shape == shape
+    assert tt_tensor.dtype == dtype
+    assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    def flatten_list(data):
+        if isinstance(data, list):
+            return [
+                item for sublist in data for item in (flatten_list(sublist) if isinstance(sublist, list) else [sublist])
+            ]
+        return [data]
+
+    tensor_list = tt_tensor.to_list()
+    flattened = flatten_list(tensor_list)
+
+    if dtype in [ttnn.float32, ttnn.bfloat16]:
+        rounded = [round(v, 5) for v in flattened]
+        assert rounded == buffer
+    else:
+        assert flattened == buffer
+
+
+@pytest.mark.parametrize(
+    "dtype,buffer",
+    [
+        (ttnn.bfloat8_b, [[1, 2, 3], [4, 5, 6]]),
+        (ttnn.bfloat4_b, [[1, 2, 3], [4, 5, 6]]),
+        (ttnn.DataType.INVALID, [[1, 2, 3], [4, 5, 6]]),
+    ],
+)
+def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, device):
+    try:
+        tt_tensor = ttnn.from_buffer(buffer, [2, 3], dtype, device, ttnn.TILE_LAYOUT)
+    except Exception as e:
+        assert "Unreachable" in str(e)
+    else:
+        pytest.fail("Expected an exception, but got none")

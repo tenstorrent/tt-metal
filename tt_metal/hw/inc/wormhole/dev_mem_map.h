@@ -76,10 +76,10 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12640
+#define MEM_MAILBOX_SIZE 12768
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
-#define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 4
-#define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 8
+#define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 4)
+#define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 8)
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -95,24 +95,46 @@
 #define MEM_NCRISC_KERNEL_BASE MEM_NCRISC_IRAM_BASE
 
 #define MEM_NOC_COUNTER_SIZE 4
-#define MEM_NOC_COUNTER_L1_SIZE 5 * 2 * 2 * MEM_NOC_COUNTER_SIZE
+#define MEM_NOC_COUNTER_L1_SIZE (5 * 2 * 2 * MEM_NOC_COUNTER_SIZE)
 #define MEM_NOC_COUNTER_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC2_FIRMWARE_SIZE)
 
 // Tensix routing table for fabric networking
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
-#define MEM_TENSIX_ROUTING_TABLE_SIZE 2064
-#if (MEM_TENSIX_ROUTING_TABLE_BASE % 16 != 0) || (MEM_TENSIX_ROUTING_TABLE_SIZE % 16 != 0)
-#error "Tensix routing table base and size must be 16-byte aligned"
-#endif
+#define MEM_TENSIX_ROUTING_TABLE_SIZE 784
+
+#define ROUTING_PATH_SIZE_1D 64
+// 2D uncompressed size is too large to fit in L1 memory
+#define COMPRESSED_ROUTING_PATH_SIZE_1D 0    // sizeof(intra_mesh_routing_path_t<1, true>)
+#define COMPRESSED_ROUTING_PATH_SIZE_2D 512  // sizeof(intra_mesh_routing_path_t<2, true>)
+#define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
+#define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE
+#define MEM_TENSIX_ROUTING_PATH_BASE_2D (MEM_TENSIX_ROUTING_PATH_BASE + ROUTING_PATH_SIZE_1D)
+#define MEM_TENSIX_ROUTING_PATH_SIZE (ROUTING_PATH_SIZE_1D + COMPRESSED_ROUTING_PATH_SIZE_2D)
+
+#define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
+#define MEM_TENSIX_EXIT_NODE_TABLE_SIZE 1024  // sizeof(exit_node_table_t)
 
 // Tensix fabric connection metadata for workers
-#define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
-#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 592  // sizeof(tensix_fabric_connections_l1_info_t)
-#if (MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 != 0) || (MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 != 0)
-#error "Tensix fabric connections base and size must be 16-byte aligned"
+#define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_EXIT_NODE_TABLE_BASE + MEM_TENSIX_EXIT_NODE_TABLE_SIZE)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 656        // sizeof(tensix_fabric_connections_l1_info_t)
+#define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 400  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
+
+// Packet header pool sizing constants
+#define PACKET_HEADER_MAX_SIZE 64
+#define NUM_PACKET_HEADERS (4 * 2 * MaxDMProcessorsPerCoreType)  // (EAST, WEST, NORTH, SOUTH) * convention * (DM0, DM1)
+
+// Packet header pool for fabric networking
+// Size: 64 * 4 * 2 * 2 = 1024
+#define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
+#define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * NUM_PACKET_HEADERS)
+#if (MEM_PACKET_HEADER_POOL_BASE % 16 != 0) || (MEM_PACKET_HEADER_POOL_SIZE % 16 != 0)
+#error "Packet header pool base and size must be 16-byte aligned"
 #endif
 
-#define MEM_MAP_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
+// Read-only reserved memory boundary for watcher checks
+#define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
+// Read-write reserved memory boundary for watcher checks
+#define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
 // These can be used by FW during init, but aren't usable once FW reaches "ready"

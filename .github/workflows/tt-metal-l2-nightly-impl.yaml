@@ -22,27 +22,295 @@ on:
         required: false
         type: number
         default: 120
+      run_conv_tests:
+        required: false
+        type: boolean
+        default: true
+      run_matmul_tests:
+        required: false
+        type: boolean
+        default: true
+      run_pool_tests:
+        required: false
+        type: boolean
+        default: true
+      run_sdxl_tests:
+        required: false
+        type: boolean
+        default: true
+      run_train_tests:
+        required: false
+        type: boolean
+        default: true
+      run_sdpa_stress_tests:
+        required: false
+        type: boolean
+        default: true
+      run_ttnn-bos-tests:
+        required: false
+        type: boolean
+        default: true
+
+
+# This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
+env:
+  TEST_BUDGET_SECONDS: 300
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - name: ttnn nightly conv tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"
-            owner: U052J2QDDKQ # Pavle Josipovic
-          - name: ttnn nightly matmul tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"
-            owner: U06Q7ESTFEV # Borys Bradel
-          - name: ttnn nightly pool tests
-            cmd: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
-            owner: U052J2QDDKQ # Pavle Josipovic
+  ttnn-conv-tests:
+    if: ${{ inputs.run_conv_tests }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ttnn nightly conv tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ttnn nightly conv tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U052J2QDDKQ # Pavle Josipovic
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ttnn-matmul-tests:
+    if: ${{ inputs.run_matmul_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ttnn nightly matmul tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ttnn nightly matmul tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U06Q7ESTFEV # Borys Bradel
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ttnn-pool-tests:
+    if: ${{ inputs.run_pool_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ttnn nightly pool tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ttnn nightly pool tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U052J2QDDKQ # Pavle Josipovic
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ttnn-sdxl-tests:
+    if: ${{ inputs.run_sdxl_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+        TT_MM_THROTTLE_PERF: 5
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ttnn nightly sdxl tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ttnn nightly sdxl tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - name: ttnn nightly sdxl demo cfg parallel test (N300 only)
+        if: ${{ inputs.runner-label == 'N300' }}
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto models/experimental/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U07N3CUUN05 # Iva Potkonjak
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ttnn-train-nightly-tests:
+    if: ${{ inputs.run_train_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        ENABLE_NIGHTLY_TT_TRAIN_TESTS: 1
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: tt-train nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: tt-train nightly tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U082L4RSULT # Denys Makoviichuk
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+  ttnn-sdpa-stress-tests:
+    if: ${{ inputs.run_sdpa_stress_tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
       volumes:
@@ -53,10 +321,12 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    runs-on:
-      - ${{ inputs.runner-label }}
-      - "in-service"
+    name: tt-sdpa-stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+      }}
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -64,9 +334,9 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: ${{ matrix.test-group.name }} tests
+      - name: tt-sdpa-stress tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: ${{ matrix.test-group.cmd }}
+        run: pytest -n auto tests/nightly/single_card/sdpa --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -76,7 +346,57 @@ jobs:
         # Only notify during failed scheduled runs
         if: ${{ failure() && github.event_name == 'schedule' }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          owner: ${{ matrix.test-group.owner }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U03FJB5TM5Y # Colman Glagovich
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
+
+  ttnn-bos-tests:
+    if: ${{ inputs.run_ttnn-bos-tests }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
+        TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4, 3"
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    name: ttnn nightly bos tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    runs-on: >-
+      ${{
+        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+      }}
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ttnn nightly conv tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations -xv -m "not disable_fast_runtime_mode" -k panoptic --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

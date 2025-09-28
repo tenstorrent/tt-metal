@@ -1,27 +1,22 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
+
 import torch
 from loguru import logger
-from ultralytics import YOLO
 
 import ttnn
+from models.common.utility_functions import divup, is_wormhole_b0
+from models.demos.yolov8x.common import load_torch_model
 from models.demos.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
-from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def load_torch_model():
-    torch_model = YOLO("yolov8x.pt")
-    torch_model = torch_model.model
-    torch_model.eval()
-    return torch_model
-
-
-def load_ttnn_model(device, torch_model):
+def load_ttnn_model(device, torch_model, weights_mesh_mapper=None):
     state_dict = torch_model.state_dict()
-    parameters = custom_preprocessor(device, state_dict)
+    parameters = custom_preprocessor(device, state_dict, mesh_mapper=weights_mesh_mapper)
     ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
     return ttnn_model
 
@@ -32,6 +27,9 @@ class YOLOv8xPerformanceRunnerInfra:
         device,
         batch_size,
         model_location_generator=None,
+        inputs_mesh_mapper=None,
+        weights_mesh_mapper=None,
+        outputs_mesh_composer=None,
     ):
         super().__init__()
         torch.manual_seed(0)
@@ -39,37 +37,48 @@ class YOLOv8xPerformanceRunnerInfra:
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
         self.batch_size = batch_size
+        self.num_devices = device.get_num_devices()
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.outputs_mesh_composer = outputs_mesh_composer
         self.model_location_generator = model_location_generator
-        torch_model = load_torch_model()
-        self.ttnn_yolov8_model = load_ttnn_model(device=self.device, torch_model=torch_model)
-        input_shape = (1, 640, 640, 3)
-        torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-        self.tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-        self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
+        torch_model = load_torch_model(model_location_generator=self.model_location_generator)
+        self.ttnn_yolov8_model = load_ttnn_model(
+            device=self.device, torch_model=torch_model, weights_mesh_mapper=self.weights_mesh_mapper
+        )
+        input_shape = (self.batch_size, 3, 640, 640)
+        self.torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
+        self.tt_input_tensor = ttnn.from_torch(
+            self.torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper
+        )
         self.torch_output_tensor = torch_model(self.torch_input_tensor)[0]
 
     def run(self):
-        # input_tensor = ttnn.to_device(self.input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
         self.output_tensor = self.ttnn_yolov8_model(self.input_tensor)[0]
 
-    def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+    def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
             exit("Unsupported device")
-        # torch tensor
+
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
         n, c, h, w = torch_input_tensor.shape
-        # sharded mem config for fold input
-        if c == 3:
-            c = 16
+        if c < min_channels:
+            c = min_channels
+        elif c % min_channels != 0:
+            c = ((c // min_channels) + 1) * min_channels
+        n = n // self.num_devices if n // self.num_devices != 0 else n
+
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
+        tt_inputs_host = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
 
         return tt_inputs_host, input_mem_config
 
@@ -93,8 +102,13 @@ class YOLOv8xPerformanceRunnerInfra:
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def validate(self, output_tensor=None):
-        output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        output_tensor = ttnn.to_torch(self.output_tensor)
+        if output_tensor is None:
+            output_tensor = self.output_tensor
+        else:
+            if isinstance(output_tensor, (list, tuple)):
+                output_tensor = output_tensor[0]
+
+        output_tensor = ttnn.to_torch(output_tensor, mesh_composer=self.outputs_mesh_composer)
 
         valid_pcc = 0.978
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=valid_pcc)
@@ -102,4 +116,5 @@ class YOLOv8xPerformanceRunnerInfra:
         logger.info(f"Yolov8x batch_size={self.batch_size}, PCC={self.pcc_message}")
 
     def dealloc_output(self):
-        ttnn.deallocate(self.output_tensor)
+        if hasattr(self, "output_tensor") and self.output_tensor is not None:
+            ttnn.deallocate(self.output_tensor)

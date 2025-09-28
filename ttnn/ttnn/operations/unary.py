@@ -249,7 +249,7 @@ def _golden_function_elu(input_tensor_a, *args, alpha=1.0, **kwargs):
 ttnn.attach_golden_function(ttnn.elu, golden_function=_golden_function_elu)
 
 
-def _golden_function_hardtanh(input_tensor_a, min_val=-1.0, max_val=1.0, *args, **kwargs):
+def _golden_function_hardtanh(input_tensor_a, *args, min_val=-1.0, max_val=1.0, **kwargs):
     import torch
 
     return torch.nn.functional.hardtanh(input_tensor_a, min_val, max_val)
@@ -403,6 +403,8 @@ def _golden_function_bitwise_left_shift(input_tensor_a, shift_amt, *args, **kwar
 
 
 ttnn.attach_golden_function(ttnn.bitwise_left_shift, golden_function=_golden_function_bitwise_left_shift)
+
+ttnn.attach_golden_function(ttnn.logical_left_shift, golden_function=_golden_function_bitwise_left_shift)
 
 
 def _golden_function_bitwise_right_shift(input_tensor_a, shift_amt, *args, **kwargs):

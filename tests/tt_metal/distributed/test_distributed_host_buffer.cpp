@@ -15,6 +15,7 @@ namespace tt::tt_metal {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::Eq;
 using ::testing::IsEmpty;
 using ::testing::Pointwise;
@@ -25,7 +26,7 @@ TEST(DistributedHostBufferTest, InvalidLocalShape) {
     distributed::MeshShape local_shape(2, 4);  // 2x4 > 2x3
     distributed::MeshCoordinate local_offset(0, 0);
 
-    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr));
 }
 
 TEST(DistributedHostBufferTest, InvalidLocalOffset) {
@@ -33,7 +34,7 @@ TEST(DistributedHostBufferTest, InvalidLocalOffset) {
     distributed::MeshShape local_shape(1, 2);
     distributed::MeshCoordinate local_offset(2, 0);  // Offset 2 in first dimension exceeds global shape
 
-    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr));
 }
 
 TEST(DistributedHostBufferTest, InvalidCombination) {
@@ -41,7 +42,7 @@ TEST(DistributedHostBufferTest, InvalidCombination) {
     distributed::MeshShape local_shape(1, 2);
     distributed::MeshCoordinate local_offset(1, 2);  // Offset + shape exceeds global shape
 
-    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr));
 }
 
 TEST(DistributedHostBufferTest, DimensionMismatch) {
@@ -49,7 +50,7 @@ TEST(DistributedHostBufferTest, DimensionMismatch) {
     distributed::MeshShape local_shape(1, 1, 1);  // 3D shape vs 2D global shape
     distributed::MeshCoordinate local_offset(1, 0);
 
-    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr));
 }
 
 TEST(DistributedHostBufferTest, EmplaceAndGetBuffer) {
@@ -105,7 +106,7 @@ TEST(DistributedHostBufferTest, EmplaceAndGetBufferWithLocalMeshShape) {
     distributed::MeshShape local_shape(2, 1);
     distributed::MeshCoordinate local_offset(0, 1);
 
-    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
     EXPECT_EQ(buffer.shape().mesh_size(), 6);  // 2×3 = 6
 
     buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
@@ -213,7 +214,7 @@ TEST(DistributedHostBufferTest, TransformWithLocalShape) {
     distributed::MeshShape local_shape(2, 1);
     distributed::MeshCoordinate local_offset(1, 0);
 
-    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
     EXPECT_EQ(buffer.shape().mesh_size(), 3);  // 3×1 = 3
 
     buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
@@ -286,7 +287,7 @@ TEST(DistributedHostBufferTest, ApplyWithLocalShape) {
     distributed::MeshShape local_shape(2, 1);
     distributed::MeshCoordinate local_offset(1, 0);
 
-    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
     EXPECT_EQ(buffer.shape().mesh_size(), 3);  // 3×1 = 3
 
     buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
@@ -304,5 +305,84 @@ TEST(DistributedHostBufferTest, ApplyWithLocalShape) {
     EXPECT_THAT(values[1], ElementsAre(7, 8, 9));  // Global index 2
 }
 
+TEST(DistributedHostBufferTest, IsLocal) {
+    distributed::MeshShape global_shape(2, 2);
+    distributed::MeshShape local_shape(1, 2);
+    distributed::MeshCoordinate local_offset(1, 0);
+
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
+
+    EXPECT_FALSE(buffer.is_local(distributed::MeshCoordinate(0, 0)));
+    EXPECT_FALSE(buffer.is_local(distributed::MeshCoordinate(0, 1)));
+    EXPECT_TRUE(buffer.is_local(distributed::MeshCoordinate(1, 0)));
+    EXPECT_TRUE(buffer.is_local(distributed::MeshCoordinate(1, 1)));
+}
+
+TEST(DistributedHostBufferTest, EmplaceShardsSequential) {
+    auto buffer = DistributedHostBuffer::create(distributed::MeshShape(2, 3));
+
+    auto shard_coords = std::vector<distributed::MeshCoordinate>{
+        distributed::MeshCoordinate(0, 0),
+        distributed::MeshCoordinate(0, 1),
+        distributed::MeshCoordinate(1, 0),
+        distributed::MeshCoordinate(1, 1),
+        distributed::MeshCoordinate(1, 2),
+    };
+
+    buffer.emplace_shards(shard_coords, [](const distributed::MeshCoordinate& coord) {
+        return HostBuffer(std::vector<int>{coord[0] + 1, coord[1] + 1});
+    });
+
+    EXPECT_THAT(buffer.shard_coords(), ElementsAreArray(shard_coords));
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(0, 0)).has_value());
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(0, 1)).has_value());
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 0)).has_value());
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 1)).has_value());
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 2)).has_value());
+
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 0))->view_as<int>(), Pointwise(Eq(), {1, 1}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 1))->view_as<int>(), Pointwise(Eq(), {1, 2}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 0))->view_as<int>(), Pointwise(Eq(), {2, 1}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 1))->view_as<int>(), Pointwise(Eq(), {2, 2}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 2))->view_as<int>(), Pointwise(Eq(), {2, 3}));
+
+    // Out of global bounds.
+    EXPECT_ANY_THROW(buffer.get_shard(distributed::MeshCoordinate(2, 0)));
+}
+
+TEST(DistributedHostBufferTest, EmplaceShardsParallel) {
+    auto buffer = DistributedHostBuffer::create(distributed::MeshShape(2, 3));
+
+    auto shard_coords = std::vector<distributed::MeshCoordinate>{
+        distributed::MeshCoordinate(0, 0),
+        distributed::MeshCoordinate(0, 1),
+        distributed::MeshCoordinate(1, 0),
+        distributed::MeshCoordinate(1, 1),
+        distributed::MeshCoordinate(1, 2),
+    };
+
+    buffer.emplace_shards(
+        shard_coords,
+        [](const distributed::MeshCoordinate& coord) {
+            return HostBuffer(std::vector<int>{coord[0] + 1, coord[1] + 1});
+        },
+        DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
+    EXPECT_THAT(buffer.shard_coords(), ElementsAreArray(shard_coords));
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(0, 0)).has_value());
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(0, 1)).has_value());
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 0)).has_value());
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 1)).has_value());
+    EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 2)).has_value());
+
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 0))->view_as<int>(), Pointwise(Eq(), {1, 1}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 1))->view_as<int>(), Pointwise(Eq(), {1, 2}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 0))->view_as<int>(), Pointwise(Eq(), {2, 1}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 1))->view_as<int>(), Pointwise(Eq(), {2, 2}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 2))->view_as<int>(), Pointwise(Eq(), {2, 3}));
+
+    // Out of global bounds.
+    EXPECT_ANY_THROW(buffer.get_shard(distributed::MeshCoordinate(2, 0)));
+}
 }  // namespace
 }  // namespace tt::tt_metal

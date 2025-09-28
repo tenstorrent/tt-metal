@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,7 +26,7 @@ tt::stl::Span<std::byte> int_to_byte_span(int* val_ptr) {
 TEST(DistributedContextTest, TestSendRecv) {
     // assuming context is already initialized in main with argc, argv
     // in this case we will just get a world context
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     auto size = context->size();
 
@@ -53,7 +53,7 @@ TEST(DistributedContextTest, TestSendRecv) {
 TEST(DistributedContextTest, AllReduceInt) {
     // assuming context is already initialized in main with argc, argv
     // in this case we will just get a world context
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     auto size = context->size();
 
@@ -79,7 +79,7 @@ TEST(DistributedContextTest, AllReduceInt) {
 // Basic synchronisation --------------------------------------------------------
 // -----------------------------------------------------------------------------
 TEST(DistributedContextExtraTest, BarrierSynchronisation) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     ASSERT_TRUE(*ctx->size() > 1);
     // Rank 0 sleeps for a short time; others hit barrier immediately.
     if (*ctx->rank() == 0) {
@@ -93,7 +93,7 @@ TEST(DistributedContextExtraTest, BarrierSynchronisation) {
 // Broadcast --------------------------------------------------------------------
 // -----------------------------------------------------------------------------
 TEST(DistributedContextExtraTest, BroadcastVectorInt) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     ASSERT_TRUE(*ctx->size() > 1);
 
     std::vector<int> buffer(8);
@@ -112,7 +112,7 @@ TEST(DistributedContextExtraTest, BroadcastVectorInt) {
 // Gather / Scatter -------------------------------------------------------------
 // -----------------------------------------------------------------------------
 TEST(DistributedContextExtraTest, GatherIntToRoot) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     auto world_size = *ctx->size();
     ASSERT_GT(world_size, 1);
 
@@ -132,7 +132,7 @@ TEST(DistributedContextExtraTest, GatherIntToRoot) {
 }
 
 TEST(DistributedContextExtraTest, ScatterIntFromRoot) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     auto world_size = *ctx->size();
     ASSERT_GT(world_size, 1);
 
@@ -155,7 +155,7 @@ TEST(DistributedContextExtraTest, ScatterIntFromRoot) {
 // All‑gather / All‑to‑all -------------------------------------------------------
 // -----------------------------------------------------------------------------
 TEST(DistributedContextExtraTest, AllGatherRankInt) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     int world_size = *ctx->size();
     ASSERT_GT(world_size, 1);
 
@@ -171,7 +171,7 @@ TEST(DistributedContextExtraTest, AllGatherRankInt) {
 }
 
 TEST(DistributedContextExtraTest, AllToAllInt) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     int world_size = *ctx->size();
     ASSERT_GT(world_size, 1);
 
@@ -195,7 +195,7 @@ TEST(DistributedContextExtraTest, AllToAllInt) {
 // Reduce / Reduce‑scatter / Scan (typed wrappers) ------------------------------
 // -----------------------------------------------------------------------------
 TEST(DistributedContextExtraTest, ReduceSumIntToRoot) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     int world_size = *ctx->size();
     ASSERT_GT(world_size, 1);
 
@@ -210,7 +210,7 @@ TEST(DistributedContextExtraTest, ReduceSumIntToRoot) {
 }
 
 TEST(DistributedContextExtraTest, ReduceScatterSumInt) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     int world_size = *ctx->size();
     ASSERT_GT(world_size, 1);
 
@@ -226,7 +226,7 @@ TEST(DistributedContextExtraTest, ReduceScatterSumInt) {
 }
 
 TEST(DistributedContextExtraTest, PrefixScanSumInt) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     int world_size = *ctx->size();
     ASSERT_GT(world_size, 1);
 
@@ -243,7 +243,7 @@ TEST(DistributedContextExtraTest, PrefixScanSumInt) {
 // Non‑blocking P2P -------------------------------------------------------------
 // -----------------------------------------------------------------------------
 TEST(DistributedContextExtraTest, IsendIrecvWait) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     ASSERT_TRUE(*ctx->size() > 1);
 
     std::array<int, 4> buf_send{};
@@ -255,12 +255,12 @@ TEST(DistributedContextExtraTest, IsendIrecvWait) {
     if (*ctx->rank() == 0) {
         auto req = ctx->isend(
             tt::stl::as_writable_bytes(tt::stl::Span<int>{buf_send.data(), buf_send.size()}), Rank{1}, Tag{7});
-        auto status = req->wait();
+        [[maybe_unused]] auto status = req->wait();
         // EXPECT_EQ(status.count, buf_send.size());
     } else if (*ctx->rank() == 1) {
         auto req = ctx->irecv(
             tt::stl::as_writable_bytes(tt::stl::Span<int>{buf_recv.data(), buf_recv.size()}), Rank{0}, Tag{7});
-        auto status = req->wait();
+        [[maybe_unused]] auto status = req->wait();
         // EXPECT_EQ(status.count, buf_send.size());
         for (int i = 0; i < 4; ++i) {
             EXPECT_EQ(buf_recv[i], i);
@@ -269,7 +269,7 @@ TEST(DistributedContextExtraTest, IsendIrecvWait) {
 }
 
 TEST(DistributedContextExtraTest, IsendIrecvTestPolling) {
-    auto ctx = DistributedContext::get_current_world();
+    const auto& ctx = DistributedContext::get_current_world();
     ASSERT_TRUE(*ctx->size() > 1);
 
     int send_val = 1234;
@@ -295,7 +295,7 @@ TEST(DistributedContextExtraTest, IsendIrecvTestPolling) {
 // -----------------------------------------------------------------------------
 
 TEST(DistributedContextExtraTest, DuplicateCommunicator) {
-    auto world = DistributedContext::get_current_world();
+    const auto& world = DistributedContext::get_current_world();
     auto dup = world->duplicate();
 
     EXPECT_EQ(*world->size(), *dup->size());
@@ -313,7 +313,7 @@ TEST(DistributedContextExtraTest, DuplicateCommunicator) {
 }
 
 TEST(DistributedContextExtraTest, SplitCommunicatorEvenOdd) {
-    auto world = DistributedContext::get_current_world();
+    const auto& world = DistributedContext::get_current_world();
     int color = *world->rank() % 2;  // 0 = even, 1 = odd
     auto sub = world->split(Color{color}, Key{0});
 
@@ -323,7 +323,7 @@ TEST(DistributedContextExtraTest, SplitCommunicatorEvenOdd) {
 }
 
 TEST(DistributedContextExtraTest, CreateSubContextTranslateRanks) {
-    auto world = DistributedContext::get_current_world();
+    const auto& world = DistributedContext::get_current_world();
     int world_size = *world->size();
     int world_rank = *world->rank();
     ASSERT_GT(world_size, 2);

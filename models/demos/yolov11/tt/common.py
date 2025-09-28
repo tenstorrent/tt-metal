@@ -14,7 +14,7 @@ class Yolov11Conv2D:
         conv_pth,
         bn=None,
         device=None,
-        activation="",
+        activation=None,
         activation_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat8_b,
         reshard=False,
@@ -50,8 +50,6 @@ class Yolov11Conv2D:
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True if self.reshard else False,
             activation=self.activation,
         )
@@ -204,12 +202,12 @@ class TtnnConv:
         enable_act=True,
         is_detect=False,
         reshard=False,
-        activation="",
+        activation=None,
         deallocate_activation=False,
     ):
         self.enable_act = enable_act
         if self.enable_act:
-            activation = "silu"
+            activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)
         self.conv = Yolov11Conv2D(
             parameter.conv,
             conv_pt.conv,
@@ -228,3 +226,27 @@ class TtnnConv:
 def deallocate_tensors(*tensors):
     for t in tensors:
         ttnn.deallocate(t)
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer

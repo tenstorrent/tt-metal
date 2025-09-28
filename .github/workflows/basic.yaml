@@ -22,7 +22,7 @@ on:
 
 jobs:
   metalium-basic:
-    runs-on: ${{ format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner) }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
@@ -31,14 +31,14 @@ jobs:
         UBSAN_OPTIONS: "color=always:print_stacktrace=1:halt_on_error=1"
       volumes:
         - /work
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ (!contains(inputs.runner, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}

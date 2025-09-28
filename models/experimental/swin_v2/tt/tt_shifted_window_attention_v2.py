@@ -156,5 +156,5 @@ class TtShiftedWindowAttentionV2:
         x = ttnn.reshape(x, (B, H, W, C), memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = x[:, :H, :W, :]
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
         return x

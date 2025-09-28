@@ -51,17 +51,22 @@ on:
       - "Nightly tt-metal L2 tests"
       - "Package and release"
       - "Build test and publish upstream tests"
+      - "Multi-Host Deployment (Physical)"
+      - "Galaxy Multi-user Isolation Tests"
     types:
       - completed
 
 jobs:
   produce-cicd-data:
-    if: |
-      # Check if triggered by `workflow_run` with specific conclusion states,
-      # or if it's triggered by `workflow_call` or `workflow_dispatch`
-      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
-      ${{ github.event_name == 'workflow_call' }} ||
-      ${{ github.event_name == 'workflow_dispatch' }}
+    # Check if triggered by `workflow_run` with specific conclusion states,
+    # or if it's triggered by `workflow_call` or `workflow_dispatch`
+    if: >-
+      ${{ (github.event_name == 'workflow_run' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.conclusion == 'failure' ||
+            github.event.workflow_run.conclusion == 'cancelled')) ||
+          github.event_name == 'workflow_call' ||
+          github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,47 +120,7 @@ jobs:
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
-          echo "[Info] Workflow run attempt jobs"
-          # Try the original --paginate approach first, fall back to manual pagination if it fails
-          set +e  # Disable exit on error
-          paginated_output=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate 2>&1)
-          paginate_exit_code=$?
-          set -e  # Re-enable exit on error
-
-          if [ $paginate_exit_code -eq 0 ]; then
-            echo "Successfully fetched jobs using --paginate"
-            echo "$paginated_output" | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > workflow_jobs.json
-          else
-            echo "--paginate failed (exit code: $paginate_exit_code), falling back to manual pagination"
-            echo "Error output: $paginated_output"
-            # Manual pagination to avoid 502 errors with --paginate
-            # Get first page to determine total count
-            first_page=$(gh api "/repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs?per_page=50&page=1")
-            total_count=$(echo "$first_page" | jq -r '.total_count')
-            echo "Total jobs: $total_count"
-
-            # Calculate total pages needed
-            per_page=50
-            total_pages=$(( (total_count + per_page - 1) / per_page ))
-            echo "Total pages: $total_pages"
-
-            # Initialize with first page
-            all_jobs=$(echo "$first_page" | jq -r '.jobs')
-
-            # Fetch remaining pages if any
-            for page in $(seq 2 $total_pages); do
-              echo "Fetching page $page of $total_pages"
-              page_data=$(gh api "/repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs?per_page=50&page=$page")
-              page_jobs=$(echo "$page_data" | jq -r '.jobs')
-              all_jobs=$(jq -s '.[0] + .[1]' <(echo "$all_jobs") <(echo "$page_jobs"))
-              sleep 5
-            done
-
-            # Create final JSON with total_count and combined jobs
-            echo "$all_jobs" | jq -s '{total_count: '$total_count', jobs: .[0]}' > workflow_jobs.json
-          fi
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
@@ -199,15 +164,18 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U0883RN6CRE # William Ly
   test-produce-complete-benchmark-with-environment:
-    if: |
-      # Check if triggered by `workflow_run` with specific conclusion states,
-      # or if it's triggered by `workflow_call` or `workflow_dispatch`
-      ${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'cancelled') }} ||
-      ${{ github.event_name == 'workflow_call' }} ||
-      ${{ github.event_name == 'workflow_dispatch' }}
+    # Check if triggered by `workflow_run` with specific conclusion states,
+    # or if it's triggered by `workflow_call` or `workflow_dispatch`
+    if: >-
+      ${{ (github.event_name == 'workflow_run' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.conclusion == 'failure' ||
+            github.event.workflow_run.conclusion == 'cancelled')) ||
+          github.event_name == 'workflow_call' ||
+          github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

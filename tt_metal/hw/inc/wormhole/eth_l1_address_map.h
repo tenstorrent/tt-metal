@@ -117,8 +117,10 @@ struct address_map {
     static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC;
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
 
-    static constexpr uint32_t ETH_LINK_REMOTE_INFO_ADDR = 0x1EC0;
-    static constexpr std::uint32_t INTERMESH_ETH_LINK_CONFIG_ADDR = 0x104C;
-    static constexpr std::uint32_t INTERMESH_ETH_LINK_STATUS_ADDR = 0x1104;
+    static constexpr std::uint32_t CRC_ERR_ADDR = 0x1F7C;
+
+    // The following access 64-bit values, low bits located at +4 Byte offset
+    static constexpr std::uint32_t CORR_CW_HI_ADDR = 0x1F90;
+    static constexpr std::uint32_t UNCORR_CW_HI_ADDR = 0x1F98;
 };
 }  // namespace eth_l1_mem

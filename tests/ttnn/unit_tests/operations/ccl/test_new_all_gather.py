@@ -7,7 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull
+from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows,
@@ -69,14 +69,14 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_gather_async(
+    tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
         input_tensor_mesh,
         dim,
         multi_device_global_semaphore=multi_device_global_semaphore,
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
-        subdevice_id=subdevice_id,
+        sub_device_id=subdevice_id,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -84,14 +84,14 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.experimental.all_gather_async(
+        tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
             input_tensor_mesh,
             dim,
             multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
-            subdevice_id=subdevice_id,
+            sub_device_id=subdevice_id,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -145,9 +145,7 @@ def run_all_gather_impl(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)] for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
@@ -252,27 +250,26 @@ def run_all_gather_impl(
     else:
         for i in range(num_iters):
             if use_cluster_axis_api:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
                     input_tensor_mesh_list[i],
                     dim,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
                     cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
-                    subdevice_id=worker_sub_device_id,
-                    num_preferred_links=num_links,
+                    sub_device_id=worker_sub_device_id,
+                    num_links=num_links,
                 )
 
             else:
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
                     input_tensor_mesh_list[i],
                     dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     num_links=num_links,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
-                    subdevice_id=worker_sub_device_id,
+                    sub_device_id=worker_sub_device_id,
                 )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -306,7 +303,7 @@ def run_all_gather_impl(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
@@ -332,7 +329,7 @@ def run_all_gather_impl(
 @pytest.mark.parametrize("num_iters", [10])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     output_shape,
@@ -345,7 +342,7 @@ def test_all_gather(
     function_level_defaults,
 ):
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -361,7 +358,7 @@ def test_all_gather(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
@@ -444,7 +441,7 @@ def test_all_gather(
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_sharded(
-    t3k_mesh_device,
+    mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -460,10 +457,10 @@ def test_all_gather_sharded(
     tensor_mem_layout,
 ):
     if num_links > 1:
-        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the mesh_device (and hence only has 1 link available for use)"
 
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -483,12 +480,11 @@ def test_all_gather_sharded(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
+    "output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
         (
-            8,
             [1, 4, 32, 1280],
             3,
             ttnn.TILE_LAYOUT,
@@ -511,8 +507,7 @@ def test_all_gather_sharded(
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 def test_all_gather_sharded_ring(
-    t3k_mesh_device,
-    num_devices,
+    mesh_device,
     output_shape,
     dim,
     num_links,
@@ -527,11 +522,11 @@ def test_all_gather_sharded_ring(
     tensor_mem_layout,
 ):
     if num_links > 1:
-        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the mesh_device (and hence only has 1 link available for use)"
 
     run_all_gather_impl(
-        t3k_mesh_device,
-        num_devices,
+        mesh_device,
+        mesh_device.get_num_devices(),
         output_shape,
         dim,
         num_links,
@@ -549,7 +544,6 @@ def test_all_gather_sharded_ring(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
@@ -609,7 +603,6 @@ def test_line_all_gather_async_on_T3K_cols_persistent_fabric_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
@@ -670,7 +663,6 @@ def test_line_all_gather_async_on_T3K_rows_persistent_fabric_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices1, num_links1, per_chip_output_shape1, dim1, layout1",
     [

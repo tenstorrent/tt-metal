@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
-from models.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(
@@ -71,18 +71,20 @@ def test_demo_multichip(
         assert max_seq_len in [128, 1024, 2048], f"Unexpected max_seq_len: {max_seq_len} for perf mode"
         expected_perf_dict = {
             "4U": {
-                128: {"prefill_t/s": 22160, "decode_t/s/u": 7.20},
-                1024: {"prefill_t/s": 19460, "decode_t/s/u": 6.95},
-                2048: {"prefill_t/s": 18650, "decode_t/s/u": 7.00},
+                128: {"prefill_t/s": 24100, "decode_t/s/u": 6.90},
+                1024: {"prefill_t/s": 21200, "decode_t/s/u": 6.30},
+                2048: {"prefill_t/s": 20400, "decode_t/s/u": 6.60},
             },
             "6U": {
-                128: {"prefill_t/s": 30000, "decode_t/s/u": 12.00},
-                1024: {"prefill_t/s": 29090, "decode_t/s/u": 11.19},
-                2048: {"prefill_t/s": 27230, "decode_t/s/u": 10.90},
+                128: {"prefill_t/s": 32900, "decode_t/s/u": 12.19},
+                1024: {"prefill_t/s": 33800, "decode_t/s/u": 11.60},
+                2048: {"prefill_t/s": 31100, "decode_t/s/u": 10.97},
             },
         }
         expected_perf_metrics = expected_perf_dict[galaxy_type][max_seq_len]
         expected_perf_metrics["decode_t/s"] = global_batch_size * expected_perf_metrics["decode_t/s/u"]
+    else:
+        expected_perf_metrics = None
 
     if perf_mode:
         json_perf_targets = {
@@ -107,4 +109,5 @@ def test_demo_multichip(
         expected_greedy_output_path=expected_greedy_output_path,
         json_perf_targets=json_perf_targets,
         is_ci_env=is_ci_env,
+        galaxy_type=galaxy_type,
     )

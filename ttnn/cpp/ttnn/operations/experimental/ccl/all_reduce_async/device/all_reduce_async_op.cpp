@@ -16,9 +16,12 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
+    TT_FATAL(
+        (tt::tt_metal::hal::get_arch_name() != "blackhole") ||
+            (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
+        "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
+        "by the fabric api");
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
         this->ring_size % 2 == 0,
@@ -94,7 +97,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
         (this->cluster_axis == 0) ? mesh_view.get_devices_on_column(coord[1]) : mesh_view.get_devices_on_row(coord[0]);
 
     IDevice* target_device =
-        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+        input_tensors[0].device() ? input_tensors[0].device()->get_device(coord) : input_tensors[0].device();
 
     std::optional<IDevice*> forward_device = std::nullopt;
     std::optional<IDevice*> backward_device = std::nullopt;
@@ -116,13 +119,11 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     }
 
     auto input_tensor_shape = input_tensors[0].padded_shape();
-    auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
-    auto input_tensor_page_layout = input_tensors[0].layout();
 
     auto input_tensor_memory_config = input_tensors[0].memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
-    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
-    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
+    [[maybe_unused]] uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
+    [[maybe_unused]] uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
     log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
     log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);
@@ -169,6 +170,11 @@ tt::tt_metal::operation::Hash AllReduceAsync::compute_program_hash(const std::ve
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -193,7 +199,7 @@ Tensor all_reduce_async_impl(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -233,7 +239,7 @@ Tensor all_reduce_async(
         input_tensor,
         buffer_tensor,
         cluster_axis,
-        *(input_tensor.mesh_device()),
+        *(input_tensor.device()),
         topology,
         multi_device_global_semaphore,
         dtype,

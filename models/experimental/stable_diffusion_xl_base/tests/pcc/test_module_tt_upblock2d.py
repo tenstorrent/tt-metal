@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_upblock2d import TtUpBlo
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -32,10 +32,15 @@ def test_upblock(
     temb_shape,
     residuals,
     block_id,
+    is_ci_env,
     reset_seeds,
 ):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="unet",
+        local_files_only=is_ci_env,
     )
     unet.eval()
     state_dict = unet.state_dict()
@@ -83,5 +88,5 @@ def test_upblock(
     del unet
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.995)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.996)
     logger.info(f"PCC is: {pcc_message}")

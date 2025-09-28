@@ -1,6 +1,11 @@
 # TT-Metalium Distributed
 
+December 19, 2024
+
 Authors: TT-Metalium Scale-Out Team
+
+> [!IMPORTANT]
+> This document represents high-level architectural decisions and specifications as they existed at the time of writing. The information contained in this document may no longer reflect the current state of TT-Metalium. Implementation details, APIs, and design decisions are subject to change as the project evolves. Please consult the most recent documentation or contact the TT-Metalium Scale-Out team for the latest information.
 
 For questions and comments please use the [TT-Metalium Scale-Out Discord Server](https://discord.com/channels/863154240319258674/1321621251269328956)
 
@@ -376,7 +381,7 @@ In a single-device context, a CommandQueueHandle is associated with a CQ tied to
 
 **All APIs discussed in this section will be required for V1.**
 
-This section introduces the MeshBuffer and the MeshAllocator, through which memory management mechanisms exposed by TT-Metallium are extended to a distributed address space across a DRAM and SRAM banks in a Virtual Mesh.
+This section introduces the MeshBuffer and the MeshAllocator, through which memory management mechanisms exposed by TT-Metalium are extended to a distributed address space across a DRAM and SRAM banks in a Virtual Mesh.
 
 ### 3.3.1 Background: Device Buffer and Single-Device Allocator
 
@@ -653,7 +658,7 @@ As mentioned previously, Host APIs to configure individual program attributes in
 
 ```cpp
 // Creates an empty MeshWorkload object
-MeshWorkloadHandle CreateMeshWorkload();
+MeshWorkload MeshWorkload();
 
 // Wrapper around mesh_workload.add_program. By default, the added program runs on the
 // entire Virtual Mesh.
@@ -714,7 +719,7 @@ MeshWorkload Matmul::create_mesh_workload(
     auto mesh = input_tensors.at(0).mesh();
 
     // Create an empty MeshWorkload
-    MeshWorkloadHandle dp_matmul_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle dp_matmul_workload = distributed::MeshWorkload();
 
     // Create a matmul program configured for a single device
     auto program_with_callbacks = this->create_program(
@@ -766,7 +771,7 @@ distributed::MeshWorkload AllGather::create_mesh_workload(
     const std::vector<MeshTensor>& input_tensors,
     std::vector<MeshTensor>& output_tensors) const {
 
-    MeshWorkloadHandle all_gather_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle all_gather_workload = distributed::MeshWorkload();
 
     auto program_with_callbacks = this->create_program(input_tensors, output_tensors);
 
@@ -801,7 +806,7 @@ distributed::MeshWorkload CombinedWorkload::create_mesh_workload(
     std::vector<MeshTensor>& output_tensors) const {
 
     // Create an empty MeshWorkload
-    MeshWorkloadHandle combined_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle combined_workload = distributed::MeshWorkload();
 
     // Populate the MeshWorkload with a unary and binary operation, each runs on a
     // different grid
@@ -1622,20 +1627,20 @@ public:
 The functions listed below allow a MeshTrace to be captured, binarized and run/replayed on a MeshDevice post binarization. These are exposed through the MeshDevice class, which maintains an internal state of the live MeshTraces, existing in its distributed DRAM address space. The main APIs exposed for the MeshTrace feature are wrappers around these functions.
 
 ```cpp
-// Maps to BeginMeshTraceCapture
-uint32_t MeshDevice::begin_trace_capture(CommandQueueHandle cq_handle);
+// Maps to BeginTraceCapture
+void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EndMeshTraceCapture
-void MeshDevice::end_trace(CommandQueueHandle cq_handle, const uint32_t tid);
+// Maps to EndTraceCapture
+void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EnqueueMeshTrace
-void MeshDevice::replay_trace(CommandQueueHandle cq_handle, const uint32_t tid, const bool blocking);
+// Maps to ReplayTrace
+void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
 
 // Maps to ReleaseTrace
-void MeshDevice::release_trace(const uint32_t tid);
+void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id);
 
 // Get the underlying MeshTrace metadata corresponding to an ID.
-std::shared_ptr<MeshTraceBuffer> MeshDevice::get_trace(const uint32_t tid);
+std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id);
 ```
 
 ### 3.12.2 MeshTrace Capture and Execution

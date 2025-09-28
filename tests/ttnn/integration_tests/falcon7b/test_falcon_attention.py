@@ -189,7 +189,25 @@ def test_torch_functional_falcon_attention(model_name, batch_size, sequence_leng
 
     torch_hidden_states = (torch.rand(batch_size, sequence_length, config.hidden_size, dtype=torch.float32) * 2) - 1
     torch_attention_mask = torch.ones(1, sequence_length)
-    torch_output, torch_present = model.forward(torch_hidden_states, alibi=None, attention_mask=torch_attention_mask)
+    # 2D to 4D
+    torch_attention_mask = (
+        transformers.models.falcon.modeling_falcon.FalconModel._prepare_4d_causal_attention_mask_with_cache_position(
+            torch_attention_mask,
+            sequence_length=sequence_length,
+            target_length=sequence_length,
+            dtype=torch_hidden_states.dtype,
+            device=torch_hidden_states.device,
+            cache_position=torch.arange(sequence_length),
+            batch_size=batch_size,
+        )
+    )
+    torch_position_embeddings = model.rotary_emb(torch_hidden_states, torch.arange(sequence_length).unsqueeze(0))
+    torch_output, torch_present = model.forward(
+        torch_hidden_states,
+        alibi=None,
+        attention_mask=torch_attention_mask,
+        position_embeddings=torch_position_embeddings,
+    )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,

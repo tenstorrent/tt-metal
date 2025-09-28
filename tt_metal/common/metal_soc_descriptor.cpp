@@ -4,13 +4,11 @@
 
 #include "metal_soc_descriptor.h"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 #include <string>
 
-#include <umd/device/types/arch.h>
-
-enum BoardType : uint32_t;
+#include <umd/device/types/arch.hpp>
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(
@@ -74,19 +72,19 @@ int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& log
 
 CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const CoreCoord& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
-        translate_coord_to({logical_coord, CoreType::ETH, CoordSystem::LOGICAL}, CoordSystem::PHYSICAL);
+        translate_coord_to({logical_coord, CoreType::ETH, CoordSystem::LOGICAL}, CoordSystem::NOC0);
     return {physical_coord.x, physical_coord.y};
 }
 
 CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const CoreCoord& physical_coord) const {
     tt::umd::CoreCoord logical_coord =
-        translate_coord_to({physical_coord, CoreType::ETH, CoordSystem::PHYSICAL}, CoordSystem::LOGICAL);
+        translate_coord_to({physical_coord, CoreType::ETH, CoordSystem::NOC0}, CoordSystem::LOGICAL);
     return {logical_coord.x, logical_coord.y};
 }
 
 CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const {
     tt::umd::CoreCoord physical_coord =
-        translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::PHYSICAL);
+        translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::NOC0);
     return {physical_coord.x, physical_coord.y};
 }
 
@@ -164,17 +162,6 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     }
 }
 
-// UMD expects virtual NOC coordinates for worker cores
-tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const {
-    tt::umd::CoreCoord virtual_coord =
-        translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::PHYSICAL, get_umd_coord_system());
-    return tt_cxy_pair(physical_cxy.chip, virtual_coord.x, virtual_coord.y);
-}
-
-CoordSystem metal_SocDescriptor::get_umd_coord_system() const {
-    return CoordSystem::VIRTUAL;
-}
-
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
     for (const auto& logical_coord : this->get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
         this->logical_eth_core_to_chan_map.insert({{logical_coord.x, logical_coord.y}, logical_coord.y});
@@ -183,11 +170,11 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
 
 void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 #if defined(TRACY_ENABLE)
-    for (auto& core : get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL)) {
+    for (auto& core : get_cores(CoreType::TENSIX, CoordSystem::NOC0)) {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x, core.y}, 0);
     }
 
-    for (auto& core : this->get_cores(CoreType::ETH, CoordSystem::PHYSICAL)) {
+    for (auto& core : this->get_cores(CoreType::ETH, CoordSystem::NOC0)) {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x, core.y}, 0);
     }
 

@@ -61,7 +61,6 @@ class AddOpGraphTestFixture
 TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
     auto param_combination = GetParam();
     auto params = std::get<0>(param_combination);
-    auto run_mode = std::get<1>(param_combination);
 
     {
         const auto input_tensor_a =
@@ -70,7 +69,7 @@ TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
             ttnn::zeros(params.b_Shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device_, params.memory_config);
 
         auto call = [&] {
-            constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
+            constexpr tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> none{};
             const auto output_tensor = ttnn::add(
                 input_tensor_a, input_tensor_b, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
             return output_tensor;

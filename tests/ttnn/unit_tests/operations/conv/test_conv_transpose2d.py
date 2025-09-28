@@ -6,9 +6,8 @@ from loguru import logger
 
 import torch
 import pytest
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
-    skip_for_grayskull,
 )
 from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
@@ -45,7 +44,6 @@ def run_conv_transpose2d(
     shard_layout=None,
     auto_shard=False,
     mirror_kernel=True,
-    enable_split_reader=False,
     enable_act_double_buffer=False,
     preprocess_weights_bias=False,
 ):
@@ -95,8 +93,6 @@ def run_conv_transpose2d(
         shard_layout=shard_layout,
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
-        enable_split_reader=enable_split_reader,
-        enable_subblock_padding=False,
         output_layout=output_layout,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -206,7 +202,6 @@ def run_conv_transpose2d(
     assert passing
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
@@ -292,16 +287,15 @@ def test_simple_conv_t2d(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 # fmt: off
 @pytest.mark.parametrize(
-    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, enable_split_reader, enable_act_double_buffer, shard_layout",
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, enable_act_double_buffer, shard_layout",
     (
-        (1, 64, 8, 64, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 128, 16, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 256, 32, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
-        (1, 512, 64, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 64, 8, 64, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 128, 16, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 256, 32, 128, 64, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        (1, 512, 64, 128, 2, 4, 4, 2, 2, 1, 1, 0, 0, {"act_block_h": 32*2}, True, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
     ),
 )
 # fmt: on
@@ -335,7 +329,6 @@ def test_conv_transpose2d_model_fruit(
     out_pad_h,
     out_pad_w,
     config,
-    enable_split_reader,
     enable_act_double_buffer,
     shard_layout,
     mirror_kernel=False,
@@ -363,7 +356,6 @@ def test_conv_transpose2d_model_fruit(
         config_override=config,
         shard_layout=shard_layout,
         auto_shard=True,
-        enable_split_reader=enable_split_reader,
         enable_act_double_buffer=enable_act_double_buffer,
         mirror_kernel=mirror_kernel,
     )

@@ -4,7 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "nlp_kv_cache_load_slice_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/slice/device/slice_op.hpp"
@@ -71,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t num_input_tiles = num_tiles_per_core;
@@ -88,17 +88,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_kv_cache_load_slice
         (input_shape[-2] / TILE_HEIGHT - num_unpadded_tiles_seqlen_dim) * (input_shape[-1] / TILE_WIDTH);
 
     // Reader compile-time args
-    // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
-    // Reader
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_is_dram,
-                                                      (std::uint32_t)num_tiles_per_core,
-                                                      (std::uint32_t)num_unpadded_tiles_head_dim,
-                                                      (std::uint32_t)num_unpadded_tiles_seqlen_dim,
-                                                      (std::uint32_t)num_padded_tiles_seqlen_dim,
-                                                      (std::uint32_t)num_cores_total};
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)num_tiles_per_core,
+        (std::uint32_t)num_unpadded_tiles_head_dim,
+        (std::uint32_t)num_unpadded_tiles_seqlen_dim,
+        (std::uint32_t)num_padded_tiles_seqlen_dim,
+        (std::uint32_t)num_cores_total};
+    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/device/kernels/dataflow/"

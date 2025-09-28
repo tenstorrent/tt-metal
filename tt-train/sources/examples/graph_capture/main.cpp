@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -77,10 +77,10 @@ int main() {
     const size_t num_features = 784;
     auto* device = &ttml::autograd::ctx().get_device();
 
-    auto batch = ttml::autograd::create_tensor(
-        ttml::core::zeros(ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
-    auto target = ttml::autograd::create_tensor(
-        ttml::core::zeros(ttml::core::create_shape({batch_size, 1, 1, num_targets}), device));
+    auto batch =
+        ttml::autograd::create_tensor(ttml::core::zeros(ttnn::Shape({batch_size, 1, 1, num_features}), device));
+    auto target =
+        ttml::autograd::create_tensor(ttml::core::zeros(ttnn::Shape({batch_size, 1, 1, num_targets}), device));
 
     auto model_params = ttml::modules::MultiLayerPerceptronParameters{
         .input_features = num_features, .hidden_features = {128}, .output_features = num_targets};

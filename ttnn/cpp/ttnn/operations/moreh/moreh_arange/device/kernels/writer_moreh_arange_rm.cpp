@@ -18,10 +18,10 @@ void kernel_main() {
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     uint32_t num_bytes_per_tile = TILE_WIDTH * element_size;
 
-    const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = num_bytes_per_tile};
+    constexpr auto dst_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(dst_args, dst_addr, num_bytes_per_tile);
 
     union value {
         float f;

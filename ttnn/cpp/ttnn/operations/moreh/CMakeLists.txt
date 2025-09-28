@@ -10,8 +10,30 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    moreh_dot/device/kernels/*
+    moreh_getitem/device/moreh_getitem_kernels/*
+    moreh_getitem/device/moreh_getitem_tilized_kernels/*
+    moreh_group_norm/device/kernels/*
+    moreh_matmul/device/kernels/*
+)
 target_sources(
     ttnn_op_moreh
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES moreh_group_norm/moreh_group_norm.hpp moreh_matmul/moreh_matmul.hpp
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp
     PRIVATE
         moreh_abs_pow/device/moreh_abs_pow_device_operation.cpp
         moreh_abs_pow/device/moreh_abs_pow_program_factory.cpp
@@ -140,19 +162,6 @@ target_sources(
         moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_program_factory.cpp
         moreh_clip_grad_norm/moreh_clip_grad_norm.cpp
 )
-file(GLOB_RECURSE kernels moreh_dot/device/kernels/*)
-target_sources(
-    ttnn_op_moreh
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            ${kernels}
-            moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
-            moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
-            moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp
-)
 
 target_include_directories(ttnn_op_moreh PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
@@ -165,6 +174,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_moreh
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/moreh

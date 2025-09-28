@@ -1,37 +1,50 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
-#include "dataflow_api.h"
+#include <cstdint>
 
 void kernel_main() {
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t src0_bank_id = get_arg_val<uint32_t>(2);
-    uint32_t src1_bank_id = get_arg_val<uint32_t>(3);
+    // Read parameters from the kernel arguments
+    uint32_t in0_addr = get_arg_val<uint32_t>(0);
+    uint32_t in1_addr = get_arg_val<uint32_t>(1);
 
-    uint64_t src0_noc_addr = get_noc_addr_from_bank_id<true>(src0_bank_id, src0_addr);
-    uint64_t src1_noc_addr = get_noc_addr_from_bank_id<true>(src1_bank_id, src1_addr);
+    // The circular buffers to read the tiles into
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
+    // Get the tile size used in the circular buffers. We assume the
+    // circular buffers are created with the same tile size as the DRAM
+    // buffers (Whis is most of the cases).
+    const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
-    // single-tile ublocks
-    uint32_t ublock_size_bytes_0 = get_tile_size(cb_id_in0);
-    uint32_t ublock_size_bytes_1 = get_tile_size(cb_id_in1);
+    // Create address generators for the input buffers. Consider these the
+    // pointers for interleaved buffers
+    // Setting the page size to be tile_size_bytes works because we set it up
+    // explicitly in host code. This is usually a good idea as it makes coding
+    // easy.
+    const InterleavedAddrGenFast<true> in0 = {
+        .bank_base_address = in0_addr,         // The base address of the buffer
+        .page_size = tile_size_bytes,          // The size of a buffer page
+        .data_format = DataFormat::Float16_b,  // The data format of the buffer
+    };
+    const InterleavedAddrGenFast<true> in1 = {
+        .bank_base_address = in1_addr,
+        .page_size = tile_size_bytes,
+        .data_format = DataFormat::Float16_b,
+    };
 
-    uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-    uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+    // read the tiles from DRAM into the circular buffers
+    cb_reserve_back(cb_in0, 1);
+    uint32_t cb_in0_addr = get_write_ptr(cb_in0);
+    noc_async_read_tile(0, in0, cb_in0_addr);  // read
+    noc_async_read_barrier();                  // wait until the read is done
+    cb_push_back(cb_in0, 1);                   // mark the tile as ready.
 
-    // read ublocks from src0/src1 to CB0/CB1, then push ublocks to compute (unpacker)
-    cb_reserve_back(cb_id_in0, 1);
-    noc_async_read(src0_noc_addr, l1_write_addr_in0, ublock_size_bytes_0);
+    // same process for the second input (different circular buffer and input buffer)
+    cb_reserve_back(cb_in1, 1);
+    uint32_t cb_in1_addr = get_write_ptr(cb_in1);
+    noc_async_read_tile(0, in1, cb_in1_addr);
     noc_async_read_barrier();
-    cb_push_back(cb_id_in0, 1);
-
-    cb_reserve_back(cb_id_in1, 1);
-    noc_async_read(src1_noc_addr, l1_write_addr_in1, ublock_size_bytes_1);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in1, 1);
+    cb_push_back(cb_in1, 1);
 }

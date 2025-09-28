@@ -10,7 +10,7 @@
 #include "rotary_embedding_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace tt {
@@ -29,19 +29,19 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     Program program{};
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
+    uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
 
     tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
+    uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
 
     tt::DataFormat scalar_cb_data_format = DataFormat::Float16_b;
-    uint32_t scalar_single_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
+    uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
 
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
@@ -204,16 +204,13 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         compute_kernel_defines["DECODE_MODE"] = "1";
     }
 
-    const uint16_t bfloat16_scalar = bfloat16(-1.0f).to_uint16();
+    const uint16_t bfloat16_scalar = std::bit_cast<uint16_t>(bfloat16(-1.0f));
 
     auto src_buffer = input.buffer();
     auto cos_buffer = cos.buffer();
     auto sin_buffer = sin.buffer();
     auto dst_buffer = output.buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool cos_is_dram = cos_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool sin_is_dram = sin_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args;
     if (in_sharded) {
         reader_compile_time_args = {
@@ -222,14 +219,14 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             (std::uint32_t)cos_cb_index,
             (std::uint32_t)sin_cb_index,
             (std::uint32_t)src_scalar_cb_index,
-            (std::uint32_t)cos_is_dram,
-            (std::uint32_t)sin_is_dram,
             (std::uint32_t)bfloat16_scalar,
             (std::uint32_t)Ht,
             (std::uint32_t)Wt,
             (std::uint32_t)HtWt,
             (std::uint32_t)half_Wt * input_single_tile_size,
         };
+        tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     } else {
         reader_compile_time_args = {
             (std::uint32_t)input_cb_index,
@@ -237,18 +234,18 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             (std::uint32_t)cos_cb_index,
             (std::uint32_t)sin_cb_index,
             (std::uint32_t)src_scalar_cb_index,
-            (std::uint32_t)src_is_dram,
-            (std::uint32_t)cos_is_dram,
-            (std::uint32_t)sin_is_dram,
             (std::uint32_t)bfloat16_scalar,
             (std::uint32_t)Ht,
             (std::uint32_t)Wt,
             (std::uint32_t)HtWt,
             (std::uint32_t)half_Wt,
         };
+        tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     }
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     if (token_idx.has_value()) {
         writer_compile_time_args.insert(
@@ -256,9 +253,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             {untilized_cos_interm_cb_index,
              untilized_cos_sync_cb_index,
              untilized_sin_interm_cb_index,
-             untilized_sin_sync_cb_index,
-             Wt,
-             Wbytes});
+             untilized_sin_sync_cb_index});
     }
 
     if (out_sharded) {

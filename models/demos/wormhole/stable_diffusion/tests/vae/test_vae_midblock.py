@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,17 +7,18 @@ import torch
 from diffusers import AutoencoderKL
 
 import ttnn
+from models.common.utility_functions import skip_for_blackhole
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_configs import (
     MIDBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS,
     MIDBLOCK_RESNET_NORM_NUM_BLOCKS,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae_midblock import MidBlock
-from models.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @skip_for_blackhole("Blackhole PCC bad until GN issues fixed (#20760)")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "input_channels, input_height, input_width, norm_num_blocks, conv_in_channel_split_factors",
     [

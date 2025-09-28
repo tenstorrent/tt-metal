@@ -14,9 +14,9 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
-  tg-nightly-tests:
+  galaxy-nightly-tests:
     needs: build-artifact
-    uses: ./.github/workflows/tg-nightly-tests-impl.yaml
+    uses: ./.github/workflows/galaxy-nightly-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

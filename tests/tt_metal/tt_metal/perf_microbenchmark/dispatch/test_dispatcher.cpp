@@ -22,7 +22,7 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "common.h"
 #include <tt-metalium/core_coord.hpp>
@@ -39,8 +39,7 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "umd/device/tt_core_coordinates.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
@@ -383,8 +382,6 @@ void gen_cmds(
     CoreRange worker_cores,
     DeviceData& device_data,
     uint32_t page_size) {
-    uint32_t total_size_bytes = 0;
-    uint32_t buffer_size = prefetcher_buffer_size_g - page_size;  // for terminate
     uint32_t cmd_count = 0;
 
     switch (test_type_g) {
@@ -490,7 +487,7 @@ int main(int argc, char** argv) {
         uint32_t dram_data_addr = l1_buf_base;
         uint32_t l1_data_addr = l1_buf_base;
 
-        // Seperate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
+        // Separate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
         if (paged_test) {
             // Seems like 16B alignment is required otherwise mismatches in readback. Linear writes only target 16B
             // aligned transfer sizes too. It's okay for these not to be, the random calc below will align final
@@ -534,7 +531,7 @@ int main(int argc, char** argv) {
         }
 
         DeviceData device_data(
-            device, all_workers_g, l1_data_addr, dram_data_addr, 0, paged_test, DRAM_DATA_SIZE_WORDS);
+            device, all_workers_g, l1_data_addr, dram_data_addr, nullptr, paged_test, DRAM_DATA_SIZE_WORDS);
 
         if (is_paged_dram_test() && debug_g) {
             initialize_dram_banks(device);
@@ -543,7 +540,8 @@ int main(int argc, char** argv) {
         // Generate commands once and write them to prefetcher core.
         vector<uint32_t> cmds;
         gen_cmds(device, cmds, all_workers_g, device_data, dispatch_buffer_page_size_g);
-        llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
         const uint32_t spoof_prefetch_core_sem_0_id =
             tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);
@@ -629,6 +627,8 @@ int main(int argc, char** argv) {
             {"TO_MESH_ID", "0"},
             {"TO_DEV_ID", "0"},
             {"ROUTER_DIRECTION", "0"},
+            {"WORKER_MCAST_GRID", "0"},
+            {"NUM_WORKER_CORES_TO_MCAST", "0"},
             {"IS_D_VARIANT", "1"},
             {"IS_H_VARIANT", "1"},
         };

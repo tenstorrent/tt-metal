@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -84,7 +84,7 @@ TEST_F(ModuleBaseParametersTest, AllParametersIncluded) {
     EXPECT_EQ(model_params.size(), 4);
 };
 
-TEST_F(ModuleBaseParametersTest, UnusedParametersInModuleSGD) {
+TEST_F(ModuleBaseParametersTest, NIGHTLY_UnusedParametersInModuleSGD) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     ModelUnusedLayer model;
@@ -93,14 +93,13 @@ TEST_F(ModuleBaseParametersTest, UnusedParametersInModuleSGD) {
     EXPECT_EQ(model_params.size(), 6);
     auto optimizer = ttml::optimizers::SGD(model_params, ttml::optimizers::SGDConfig{});
 
-    auto input_tensor =
-        ttml::autograd::create_tensor(ttml::core::zeros(ttml::core::create_shape({1, 1, 1, 784}), device));
+    auto input_tensor = ttml::autograd::create_tensor(ttml::core::zeros(ttnn::Shape({1, 1, 1, 784}), device));
     auto output = model(input_tensor);
     output->backward();
     optimizer.step();
 }
 
-TEST_F(ModuleBaseParametersTest, UnusedParametersInModuleAdamW) {
+TEST_F(ModuleBaseParametersTest, NIGHTLY_UnusedParametersInModuleAdamW) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     ModelUnusedLayer model;
@@ -109,8 +108,7 @@ TEST_F(ModuleBaseParametersTest, UnusedParametersInModuleAdamW) {
     EXPECT_EQ(model_params.size(), 6);
     auto optimizer = ttml::optimizers::AdamW(model_params, ttml::optimizers::AdamWConfig{});
 
-    auto input_tensor =
-        ttml::autograd::create_tensor(ttml::core::zeros(ttml::core::create_shape({1, 1, 1, 784}), device));
+    auto input_tensor = ttml::autograd::create_tensor(ttml::core::zeros(ttnn::Shape({1, 1, 1, 784}), device));
     auto output = model(input_tensor);
     output->backward();
     optimizer.step();

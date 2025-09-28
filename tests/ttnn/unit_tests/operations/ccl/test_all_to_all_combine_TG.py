@@ -6,7 +6,6 @@ from loguru import logger
 import pytest
 import ttnn
 
-# tests/ttnn/unit_tests/operations/cl/test_all_to_all_dispatch_t3000.py
 from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
     run_all_to_all_combine_test,
     trace_all_to_all_combine,
@@ -15,7 +14,10 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D},
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
@@ -28,9 +30,10 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
 @pytest.mark.parametrize("seq", [1, 2])
+@pytest.mark.parametrize("local_reduce", [False, True])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
@@ -44,6 +47,7 @@ def test_all_to_all_combine_no_trace(
     select_experts_k,
     hidden_size,
     seq,
+    local_reduce,
     num_iters,
     num_links,
     topology,
@@ -64,6 +68,7 @@ def test_all_to_all_combine_no_trace(
         axis,
         batch,
         seq,
+        local_reduce,
         experts,
         select_experts_k,
         hidden_size,
@@ -81,7 +86,7 @@ def test_all_to_all_combine_no_trace(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
         }
     ],
@@ -100,10 +105,11 @@ def test_all_to_all_combine_no_trace(
     [(1, 40, 10), (128, 10, 5)],
     ids=["decode", "prefill"],
 )
+@pytest.mark.parametrize("local_reduce", [True])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("num_links", [3])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_perf(
     mesh_device,
@@ -114,6 +120,7 @@ def test_perf(
     select_experts_k,
     hidden_size,
     seq_len,
+    local_reduce,
     num_iters,
     warmup_iters,
     num_links,
@@ -136,6 +143,7 @@ def test_perf(
         cluster_axis,
         batch,
         seq_len,
+        local_reduce,
         experts,
         select_experts_k,
         hidden_size,

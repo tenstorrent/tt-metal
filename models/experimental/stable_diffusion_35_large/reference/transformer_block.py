@@ -90,20 +90,9 @@ class TransformerBlock(torch.nn.Module):
         spatial_scale: torch.Tensor,
         spatial_shift: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        # torch.save(spatial, "spatial.pt")
-        # torch.save(prompt, "prompt.pt")
-        # torch.save(spatial_gate, "spatial_gate.pt")
-        # torch.save(prompt_gate, "prompt_gate.pt")
-        # torch.save(prompt_scale, "prompt_scale.pt")
-        # torch.save(prompt_shift, "prompt_shift.pt")
-        # torch.save(spatial_scale, "spatial_scale.pt")
-        # torch.save(spatial_shift, "spatial_shift.pt")
-
         spatial_scaled = spatial * (1 + spatial_scale) + spatial_shift
         prompt_scaled = prompt * (1 + prompt_scale) + prompt_shift
 
-        # torch.save(spatial_scaled, "spatial_scaled.pt")
-        # torch.save(prompt_scaled, "prompt_scaled.pt")
         spatial_attn, prompt_attn = self.attn(spatial=spatial_scaled, prompt=prompt_scaled)
 
         spatial_attn = spatial_gate * spatial_attn

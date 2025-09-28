@@ -18,10 +18,6 @@
 namespace ttnn::operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    if (tt::tt_metal::is_multi_device_host_tensor(tensor)) {
-        return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
-    }
-
     const auto rank = tensor.logical_shape().rank();
     if (rank == 4) {
         return tensor;
@@ -48,21 +44,16 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
 }
 
 ttnn::Tensor to_device(
-    const ttnn::Tensor& tensor, IDevice* device, const std::optional<MemoryConfig>& memory_config, QueueId cq_id) {
-    return tensor.to_device(device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG), cq_id);
-}
-
-ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config,
-    QueueId cq_id) {
+    std::optional<QueueId> queue_id) {
     auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    return tensor.to_device(mesh_device, mem_config, cq_id);
+    return tensor.to_device(mesh_device, mem_config, queue_id);
 }
 
-ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, QueueId cq_id) {
-    return tensor.cpu(blocking, cq_id);
+ttnn::Tensor from_device(const ttnn::Tensor& tensor, bool blocking, std::optional<QueueId> queue_id) {
+    return tensor.cpu(blocking, queue_id);
 }
 
 void deallocate(Tensor& tensor, bool force) { tensor.deallocate(force); }

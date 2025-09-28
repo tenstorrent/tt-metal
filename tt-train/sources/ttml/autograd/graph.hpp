@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 
 namespace ttml::autograd {
 class Graph;
-class GraphNode;
+struct GraphNode;
 
 using GradFunction = std::function<void()>;
 

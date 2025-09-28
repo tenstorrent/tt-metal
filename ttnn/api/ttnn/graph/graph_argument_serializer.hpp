@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -35,7 +35,6 @@ private:
 
     void initialize();
 
-private:
     std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction> map;
 };
 }  // namespace ttnn::graph

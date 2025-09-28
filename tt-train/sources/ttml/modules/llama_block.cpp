@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -76,6 +76,7 @@ autograd::TensorPtr LlamaBlock::operator()(const autograd::TensorPtr& input, con
     auto x = (*m_mlp_norm)(h);
     x = (*m_mlp)(x);
     x = ops::add(x, residual);
+    ttml::autograd::ctx().get_profiler().read_results(&ttml::autograd::ctx().get_device(), "llama_block");
 
     return x;
 }

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,11 +8,10 @@ from loguru import logger
 import ttnn
 import os
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+from conftest import is_6u
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.utility_functions import skip_for_grayskull
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     SUB_DEVICE_CRS,
@@ -22,7 +21,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     FF1_CRS_RS_OUT,
     NORM_CRS,
 )
-from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
+from models.demos.llama3_70b_galaxy.tt.model_config import set_tg_attention_config
 from tracy import signpost
 
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(
@@ -387,7 +386,7 @@ def run_reduce_scatter_test(
         assert eq, f"{first_failed_tensor_index} FAILED: {output_results}"
 
 
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -408,7 +407,7 @@ def run_reduce_scatter_test(
     ],
     indirect=True,
 )
-def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_cache):
+def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype):
     # Only run these tests on unharvested TG
     device_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
     if device_grid != (7, 10):
@@ -441,7 +440,7 @@ def test_rs_create_heads_6u_trace(mesh_device, trace_mode, dtype, use_program_ca
     )
 
 
-@pytest.mark.skipif(is_RING_6U, reason="This test is only for TG devices")
+@pytest.mark.skipif(is_6u(), reason="This test is only for TG devices")
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -495,7 +494,7 @@ def test_rs_create_heads_tg_trace(mesh_device, trace_mode, dtype):
     )
 
 
-@pytest.mark.skipif(is_RING_6U, reason="This test is only for TG devices")
+@pytest.mark.skipif(is_6u(), reason="This test is only for TG devices")
 @pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],

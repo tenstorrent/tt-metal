@@ -15,7 +15,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="",
+        activation=None,
         groups=1,
         dtype=ttnn.bfloat16,
         use_shallow_conv_variant=False,
@@ -40,7 +40,6 @@ class Conv:
         )
         self.use_shallow_conv_variant = (use_shallow_conv_variant,)
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
@@ -60,6 +59,7 @@ class Conv:
 
         [output_tensor, [_out_height, _out_width], [self.weights, self.bias]] = ttnn.conv2d(
             input_tensor=input_tensor,
+            dtype=self.dtype,
             weight_tensor=self.weights,
             bias_tensor=self.bias,
             in_channels=input_tensor.shape[3],

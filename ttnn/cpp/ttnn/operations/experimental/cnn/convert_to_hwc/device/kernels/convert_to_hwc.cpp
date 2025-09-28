@@ -21,7 +21,7 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
     }
 
     cb_reserve_back(cb_out, BatchSize);
-    pack_untilize_dst<1>(cb_out, BatchSize);
+    pack_untilize_dest<1>(cb_out, BatchSize);
 
     tile_regs_commit();
     tile_regs_release();
@@ -62,7 +62,7 @@ void MAIN {
 
     pack_untilize_init(cb_in, cb_transpose_in0);
     transpose_wh_init(cb_in, cb_transpose_in0);
-    pack_untilize_dst_init_short<1>(cb_in);
+    pack_untilize_dest_init<1>(cb_in);
 
     for (uint32_t idx = 0; idx < total_tiles; idx++) {
         const uint32_t cb_transpose_in = idx % 2 == 0 ? cb_transpose_in0 : cb_transpose_in1;

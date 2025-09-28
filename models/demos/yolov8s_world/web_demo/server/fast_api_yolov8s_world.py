@@ -1,8 +1,7 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import logging
-import os
 import time
 from io import BytesIO
 
@@ -33,37 +32,13 @@ logging.basicConfig(
 )
 
 
-def get_dispatch_core_config():
-    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
-
-    return dispatch_core_config
-
-
 @app.on_event("startup")
 async def startup():
     global model
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        print("WH_ARCH_YAML:", os.environ.get("WH_ARCH_YAML"))
-        device_id = 0
-        device = ttnn.CreateDevice(
-            device_id,
-            dispatch_core_config=get_dispatch_core_config(),
-            l1_small_size=24576,
-            trace_region_size=3211264,
-            num_command_queues=2,
-        )
-        device.enable_program_cache()
-        model = YOLOv8sWorldPerformantRunner(device, 1)
-    else:
-        device_id = 0
-        device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
-        device.enable_program_cache()
-        model = YOLOv8sWorldPerformantRunner(device, 1)
+    device_id = 0
+    device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
+    device.enable_program_cache()
+    model = YOLOv8sWorldPerformantRunner(device, 1)
     model._capture_yolov8s_world_trace_2cqs()
 
 

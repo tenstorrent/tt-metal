@@ -1,17 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upsample2d import TtUpsample2D
 
 
-class TtUpDecoderBlock2D(nn.Module):
-    def __init__(
-        self, device, state_dict, module_path, model_config, has_upsample=False, conv_shortcut=False, gn_fallback=False
-    ):
+class TtUpDecoderBlock2D(LightweightModule):
+    def __init__(self, device, state_dict, module_path, model_config, has_upsample=False, conv_shortcut=False):
         super().__init__()
 
         num_layers = 3
@@ -26,7 +24,6 @@ class TtUpDecoderBlock2D(nn.Module):
                     f"{module_path}.resnets.{i}",
                     model_config,
                     conv_shortcut=conv_shortcut and (i == 0),
-                    gn_fallback=gn_fallback,
                 )
             )
 
@@ -41,14 +38,11 @@ class TtUpDecoderBlock2D(nn.Module):
         hidden_states = input_tensor
 
         for resnet in self.resnets:
-            hidden_states = ttnn.reshape(hidden_states, (1, 1, B * H * W, C))
             hidden_states, [C, H, W] = resnet.forward(hidden_states, [B, C, H, W])
 
         ttnn.deallocate(input_tensor)
         if self.upsamplers is not None:
-            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states = ttnn.reshape(hidden_states, (B, H, W, C))
-            hidden_states = ttnn.move(hidden_states)
             hidden_states, [C, H, W] = self.upsamplers.forward(hidden_states)
 
         return hidden_states, [C, H, W]

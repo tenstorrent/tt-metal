@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,8 +30,7 @@ TEST_F(PositionalEmbeddingTest, NonTrainableEmbedding) {
     uint32_t sentence_size = 2;
     uint32_t embedding_dim = 4;
 
-    auto x =
-        autograd::create_tensor(core::zeros(core::create_shape({batch_size, 1, sentence_size, embedding_dim}), device));
+    auto x = autograd::create_tensor(core::zeros(ttnn::Shape({batch_size, 1, sentence_size, embedding_dim}), device));
     auto pos_emb = modules::PositionalEmbedding(modules::PositionalEmbeddingConfig{
         .embedding_dim = embedding_dim,
         .sequence_length = sentence_size,

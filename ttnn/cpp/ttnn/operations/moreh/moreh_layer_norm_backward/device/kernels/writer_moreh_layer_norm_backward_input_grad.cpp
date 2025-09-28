@@ -10,15 +10,13 @@ void kernel_main() {
     const auto Wt = get_arg_val<uint32_t>(2);
     const auto tile_offset = get_arg_val<uint32_t>(3);
 
-    constexpr bool input_grad_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto input_grad_args = TensorAccessorArgs<0>();
 
     constexpr uint32_t cb_id_input_grad = 16;
 
     const uint32_t input_grad_tile_bytes = get_tile_size(cb_id_input_grad);
-    const auto data_format = get_dataformat(cb_id_input_grad);
 
-    const InterleavedAddrGenFast<input_grad_is_dram> input_grad_addrg = {
-        .bank_base_address = input_grad_addr, .page_size = input_grad_tile_bytes, .data_format = data_format};
+    const auto input_grad_addrg = TensorAccessor(input_grad_args, input_grad_addr, input_grad_tile_bytes);
 
     uint32_t offs = 0;
     const auto NCHt = num_rows_per_core;

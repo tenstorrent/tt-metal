@@ -64,7 +64,13 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.1.4)
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7)
+CPMAddPackage(
+    NAME enchantum
+    GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
+    GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
@@ -110,12 +116,15 @@ CPMAddPackage(
 CPMAddPackage(
     NAME tokenizers-cpp
     GITHUB_REPOSITORY mlc-ai/tokenizers-cpp
-    GIT_TAG 5de6f656c06da557d4f0fb1ca611b16d6e9ff11d
+    GIT_TAG 55d53aa38dc8df7d9c8bd9ed50907e82ae83ce66
     PATCH_COMMAND
         patch --dry-run -p1 -R < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch || patch -p1 < ${CMAKE_CURRENT_LIST_DIR}/tokenizers-cpp.patch
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
+if(tokenizers-cpp_ADDED)
+    target_compile_options(tokenizers_cpp PRIVATE -Wno-for-loop-analysis)
+endif()
 # gersemi: on
 
 ####################################################################################################################
@@ -140,7 +149,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.4
+    VERSION 1.1.6
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"

@@ -7,10 +7,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_attention import TtFalconAttention
+from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
-from models.utility_functions import nearest_32, skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh, ShardTensorToMesh
 
@@ -220,8 +221,10 @@ def run_test_FalconAttention_inference(
     )
 
     # TT hardware execution -------------------------------------------------------------
+    tt_ccl = TT_CCL(mesh_device)
     tt_FalconAttention_model = TtFalconAttention(
         mesh_device,
+        tt_ccl,
         state_dict,
         base_url,
         layer_num,
@@ -301,7 +304,6 @@ def run_test_FalconAttention_inference(
         assert does_pass
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",
@@ -328,6 +330,7 @@ def run_test_FalconAttention_inference(
     ],
     ids=["BFLOAT8_B-SHARDED", "BFLOAT16-SHARDED", "BFLOAT8_B-DRAM", "BFLOAT16-DRAM"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_FalconAttention_inference(
     num_devices,
     model_version,

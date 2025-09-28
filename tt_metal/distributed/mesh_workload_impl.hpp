@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
+#include "program/dispatch.hpp"
 
 namespace tt::tt_metal::distributed {
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
@@ -20,13 +21,12 @@ class MeshWorkloadImpl {
     // A MeshWorkload can be fully described using a set of programs mapped to different Logical Device Regions
     // in a Mesh + configurable runtime Args
     // The current iteration supports the following compute paradigms:
-    //  - Single Program Multi Device (Completely Homogenous MeshWorkload)
+    //  - Single Program Multi Device (Completely Homogeneous MeshWorkload)
     //  - Multi Program Multi Device (Completely Heterogeneous MeshWorkload)
     // Support for configurable runtime arguments will be added in future versions.
 private:
     uint64_t id;
 
-    uint64_t get_id() const { return id; }
     bool runs_on_noc_multicast_only_cores();
     bool runs_on_noc_unicast_only_cores();
     void compile(MeshDevice* mesh_device);
@@ -42,7 +42,7 @@ private:
     void set_finalized() { this->finalized_ = true; };
     ProgramBinaryStatus get_program_binary_status(std::size_t mesh_id) const;
     void set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status);
-    ProgramConfig& get_program_config(uint32_t index);
+    ProgramConfig& get_program_config(uint32_t index, bool using_fast_dispatch);
     ProgramCommandSequence& get_dispatch_cmds_for_program(Program& program, uint64_t command_hash);
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
@@ -69,6 +69,9 @@ private:
 public:
     // Main User-Facing API building blocks
     MeshWorkloadImpl();
+    ~MeshWorkloadImpl();
+
+    uint64_t get_id() const { return id; }
 
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }

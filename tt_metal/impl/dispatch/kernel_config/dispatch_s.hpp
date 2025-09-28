@@ -7,7 +7,7 @@
 
 #include "fd_kernel.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -28,8 +28,8 @@ struct dispatch_s_static_config_t {
 };
 
 struct dispatch_s_dependent_config_t {
-    std::optional<tt_cxy_pair> upstream_logical_core;     // Dependant
-    std::optional<tt_cxy_pair> downstream_logical_core;   // Dependant
+    std::optional<tt_cxy_pair> upstream_logical_core;     // Dependent
+    std::optional<tt_cxy_pair> downstream_logical_core;   // Dependent
     std::optional<uint32_t> upstream_dispatch_cb_sem_id;  // Dependent
 };
 

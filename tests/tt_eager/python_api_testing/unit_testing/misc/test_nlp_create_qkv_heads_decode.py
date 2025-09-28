@@ -12,10 +12,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     tt2torch_tensor,
-    skip_for_grayskull,
     nearest_32,
     is_blackhole,
     skip_for_blackhole,
@@ -73,7 +72,6 @@ def run_test_create_head_interleaved(device, n_local_heads, n_local_kv_heads, he
     assert out_pass_q and out_pass_k and out_pass_v
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_q_heads, n_kv_heads, head_dim",
     (
@@ -185,7 +183,6 @@ def run_test_create_head_max_width_shard(device, n_local_heads, n_local_kv_heads
     assert out_pass_q and out_pass_k and out_pass_v
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim, batch",
     ((8, 1, 128, 32), (8, 4, 96, 32), (16, 2, 64, 32), (8, 1, 128, 16), (8, 1, 128, 8), (32, 8, 128, 4)),
@@ -217,7 +214,7 @@ def run_test_create_min_width_shard(
 ):
     # Split Heads
     if not overlap_coregrid and (slice_size >= 32 if slice_size is not None else batch >= 32):
-        # Test with smaller batch size for CI to pass on devices not utlizing full coregrid
+        # Test with smaller batch size for CI to pass on devices not utilizing full coregrid
         pytest.skip(
             "Skipping tests for batch_per_device>=32 for non-overlapping coregrid as CI device does not support full coregrid"
         )
@@ -337,7 +334,6 @@ def run_test_create_min_width_shard(
     assert out_pass_q and out_pass_k and out_pass_v
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("batch", (1, 8, 16, 32))
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
@@ -370,7 +366,6 @@ def test_create_min_width_shard(
 
 
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("batch", (32,))
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
@@ -539,7 +534,6 @@ def run_test_create_width_shard_by_head(
     assert out_pass_q and out_pass_k and out_pass_v
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "n_local_heads, n_local_kv_heads, head_dim",
     ((32, 8, 128),),

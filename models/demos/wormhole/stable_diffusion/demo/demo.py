@@ -19,6 +19,8 @@ from transformers import CLIPTextModel, CLIPTokenizer
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import enable_persistent_kernel_cache, is_wormhole_b0, profiler
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE, SD_TRACE_REGION_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.sd_helper_funcs import compile_trace_sd
 from models.demos.wormhole.stable_diffusion.sd_pndm_scheduler import TtPNDMScheduler
@@ -26,7 +28,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
-from models.utility_functions import enable_persistent_kernel_cache, is_blackhole, profiler
 
 
 def load_inputs(input_path):
@@ -67,7 +68,8 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     profiler.clear()
 
     # Until di/dt issues are resolved
-    os.environ["SLOW_MATMULS"] = "1"
+    if is_wormhole_b0():
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
@@ -192,12 +194,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         )
         ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        if not is_blackhole():
-            image = ttnn.to_torch(output.cpu(blocking=True))
-        else:
-            # on blackhole, we use the original vae decoder until #20760 is fixed
-            latents = ttnn.to_torch(output).to(torch.float32)
-            image = vae.decode(latents).sample
+        image = ttnn.to_torch(output.cpu(blocking=True))
         ttnn.synchronize_device(device)
         profiler.end(f"inference_prompt_{i}")
 
@@ -230,7 +227,8 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
     enable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
-    os.environ["SLOW_MATMULS"] = "1"
+    if is_wormhole_b0():
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
@@ -351,12 +349,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
         ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        if not is_blackhole():
-            image = ttnn.to_torch(output.cpu(blocking=True))
-        else:
-            # on blackhole, we use the original vae decoder until #20760 is fixed
-            latents = ttnn.to_torch(output).to(torch.float32)
-            image = vae.decode(latents).sample
+        image = ttnn.to_torch(output.cpu(blocking=True))
         ttnn.synchronize_device(device)
         ttnn.release_trace(device, tid)
 
@@ -375,7 +368,8 @@ def run_demo_inference_diffusiondb(
     enable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
-    os.environ["SLOW_MATMULS"] = "1"
+    if is_wormhole_b0():
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     assert (
         num_inference_steps >= 4
@@ -500,12 +494,7 @@ def run_demo_inference_diffusiondb(
         ttnn_text_embeddings = ttnn.from_torch(ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        if not is_blackhole():
-            image = ttnn.to_torch(output.cpu(blocking=True))
-        else:
-            # on blackhole, we use the original vae decoder until #20760 is fixed
-            latents = ttnn.to_torch(output).to(torch.float32)
-            image = vae.decode(latents).sample
+        image = ttnn.to_torch(output.cpu(blocking=True))
         ttnn.synchronize_device(device)
         ttnn.release_trace(device, tid)
 
@@ -536,7 +525,7 @@ def run_demo_inference_diffusiondb(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 11 * 8192, "trace_region_size": 789321728}],
+    [{"l1_small_size": SD_L1_SMALL_SIZE, "trace_region_size": SD_TRACE_REGION_SIZE}],
     indirect=True,
 )
 @pytest.mark.parametrize(

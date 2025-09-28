@@ -4,22 +4,22 @@
 
 #pragma once
 
-#include <filesystem>
 #include <mutex>
 #include <reflect>
 #include <stack>
-#include <tuple>
-#include <type_traits>
 
-#include "ttnn/tensor/tensor.hpp"
+#include <enchantum/enchantum.hpp>
+#include <fmt/format.h>
 #include <nlohmann/json.hpp>
-#include <magic_enum/magic_enum.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "ttnn/operation.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyC.h>
+
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include "tracy/Tracy.hpp"
-#include "tracy/TracyC.h"
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
 
 using json = nlohmann::json;
 
@@ -211,60 +211,53 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
     if (tt::DevicePool::instance().is_device_active(device_id)) {
         device = tt::DevicePool::instance().get_active_device(device_id);
     }
-    json kernelSizes;
-    kernelSizes["brisc_max_kernel_size"] = 0;
-    kernelSizes["ncrisc_max_kernel_size"] = 0;
-    kernelSizes["erisc_max_kernel_size"] = 0;
-    kernelSizes["trisc_0_max_kernel_size"] = 0;
-    kernelSizes["trisc_1_max_kernel_size"] = 0;
-    kernelSizes["trisc_2_max_kernel_size"] = 0;
 
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
-        if (kernel->processor() == RISCV::COMPUTE) {
-            MathFidelity mathFidelity = std::get<ComputeConfig>(kernel->config()).math_fidelity;
-            json computeKernelObj;
-            computeKernelObj["math_fidelity"] = fmt::format("{}", magic_enum::enum_name(mathFidelity));
-            computeKernelObj["source"] = kernel->kernel_source().source_;
-            computeKernelObj["name"] = kernel->get_full_kernel_name();
-            computeKernels.push_back(computeKernelObj);
-            if (device != nullptr) {
-                if (kernelSizes["trisc_0_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
-                    kernelSizes["trisc_0_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
-                }
-                if (kernelSizes["trisc_1_max_kernel_size"] < kernel->get_binary_packed_size(device, 1)) {
-                    kernelSizes["trisc_1_max_kernel_size"] = kernel->get_binary_packed_size(device, 1);
-                }
-                if (kernelSizes["trisc_2_max_kernel_size"] < kernel->get_binary_packed_size(device, 2)) {
-                    kernelSizes["trisc_2_max_kernel_size"] = kernel->get_binary_packed_size(device, 2);
-                }
-            }
+    json kernelSizes;
+    // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
+    // currently HAL does not correctly report the number of processors under DM.
+    // It should report (DM, 0) and (DM, 1), but instead it currently reports (DM, 0) and (DM+1, 0).
+    // So hardcode for now, this is on par with previously hardcoded brisc, ncrisc, etc.
+    kernelSizes["TENSIX_DM_0_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_DM_1_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_0_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_1_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_2_max_kernel_size"] = 0;
+    kernelSizes["ACTIVE_ETH_DM_0_max_kernel_size"] = 0;
+    kernelSizes["ACTIVE_ETH_DM_1_max_kernel_size"] = 0;
+    kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
+    kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
+
+    for (const auto& kernel : detail::collect_kernel_meta(program, device)) {
+        json kernelObj;
+        kernelObj["source"] = kernel.source;
+        kernelObj["name"] = kernel.name;
+
+        auto processor_class = kernel.processor_class;
+        if (processor_class == HalProcessorClassType::COMPUTE) {
+            MathFidelity mathFidelity = kernel.math_fidelity.value();
+            kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
+            computeKernels.push_back(std::move(kernelObj));
         } else {
-            json datamovementKernelObj;
-            datamovementKernelObj["source"] = kernel->kernel_source().source_;
-            datamovementKernelObj["name"] = kernel->get_full_kernel_name();
-            datamovementKernels.push_back(datamovementKernelObj);
-            if (device != nullptr) {
-                if (kernel->processor() == RISCV::BRISC) {
-                    if (kernelSizes["brisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
-                        kernelSizes["brisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
-                    }
-                } else if (kernel->processor() == RISCV::NCRISC) {
-                    if (kernelSizes["ncrisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
-                        kernelSizes["ncrisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
-                    }
-                } else if (kernel->processor() == RISCV::ERISC or kernel->processor() == RISCV::ERISC1) {
-                    if (kernelSizes["erisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
-                        kernelSizes["erisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
-                    }
-                }
+            datamovementKernels.push_back(std::move(kernelObj));
+        }
+
+        auto core_type = kernel.programmable_core_type;
+        auto core_type_name = enchantum::to_string(core_type);
+        auto processor_class_name = enchantum::to_string(kernel.processor_class);
+
+        for (auto const& binary_meta : kernel.binary_meta) {
+            auto key = fmt::format(
+                "{}_{}_{}_max_kernel_size", core_type_name, processor_class_name, binary_meta.processor_type);
+            if (kernelSizes.value(key, 0) < binary_meta.packed_size) {
+                kernelSizes[key] = binary_meta.packed_size;
             }
         }
     }
+
     json ret;
-    ret["compute_kernels"] = computeKernels;
-    ret["datamovement_kernels"] = datamovementKernels;
-    ret["kernel_sizes"] = kernelSizes;
+    ret["compute_kernels"] = std::move(computeKernels);
+    ret["datamovement_kernels"] = std::move(datamovementKernels);
+    ret["kernel_sizes"] = std::move(kernelSizes);
     return ret;
 }
 
@@ -274,20 +267,30 @@ static inline json get_tensor_json(const Tensor& tensor) {
     if (tensor.storage_type() == StorageType::DEVICE) {
         ret["storage_type"]["device_id"] = tensor.device()->id();
         ret["storage_type"]["memory_config"]["buffer_type"] =
-            magic_enum::enum_name(tensor.memory_config().buffer_type());
+            enchantum::to_string(tensor.memory_config().buffer_type());
         ret["storage_type"]["memory_config"]["memory_layout"] =
-            magic_enum::enum_name(tensor.memory_config().memory_layout());
+            enchantum::to_string(tensor.memory_config().memory_layout());
     } else {
-        ret["storage_type"] = fmt::format("{}", magic_enum::enum_name(tensor.storage_type()));
+        ret["storage_type"] = fmt::format("{}", enchantum::to_string(tensor.storage_type()));
     }
 
-    auto tensor_shape = tensor.padded_shape();
-    ret["shape"]["W"] = tensor_shape.rank() >= 4 ? tensor_shape[-4] : 1;
-    ret["shape"]["Z"] = tensor_shape.rank() >= 3 ? tensor_shape[-3] : 1;
-    ret["shape"]["Y"] = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
-    ret["shape"]["X"] = tensor_shape[-1];
-    ret["layout"] = fmt::format("{}", magic_enum::enum_name(tensor.layout()));
-    ret["dtype"] = fmt::format("{}", magic_enum::enum_name(tensor.dtype()));
+    auto tensor_shape_padded = tensor.padded_shape();
+    auto tensor_shape_logical = tensor.logical_shape();
+    ret["shape"]["W"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 4 ? tensor_shape_padded[-4] : 1,
+        tensor_shape_logical.rank() >= 4 ? tensor_shape_logical[-4] : 1);
+    ret["shape"]["Z"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 3 ? tensor_shape_padded[-3] : 1,
+        tensor_shape_logical.rank() >= 3 ? tensor_shape_logical[-3] : 1);
+    ret["shape"]["Y"] = fmt::format(
+        "{}[{}]",
+        tensor_shape_padded.rank() >= 2 ? tensor_shape_padded[-2] : 1,
+        tensor_shape_logical.rank() >= 2 ? tensor_shape_logical[-2] : 1);
+    ret["shape"]["X"] = fmt::format("{}[{}]", tensor_shape_padded[-1], tensor_shape_logical[-1]);
+    ret["layout"] = fmt::format("{}", enchantum::to_string(tensor.layout()));
+    ret["dtype"] = fmt::format("{}", enchantum::to_string(tensor.dtype()));
 
     return ret;
 }
@@ -414,7 +417,7 @@ inline json get_base_json(
 inline std::string op_meta_data_serialized_json(
     uint32_t opID, const tt::tt_metal::operation::ExternalOperation& op, const std::vector<Tensor>& input_tensors) {
     auto j = get_base_json<true>(opID, op, input_tensors);
-    j["op_type"] = magic_enum::enum_name(OpType::python_fallback);
+    j["op_type"] = enchantum::to_string(OpType::python_fallback);
     std::string ser = j.dump(4);
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"].dump(), ser);
 }
@@ -435,7 +438,7 @@ inline std::string op_meta_data_serialized_json(
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {
         auto j =
             get_base_json<device_operation_t>(operation_id, operation_attributes, tensor_args, tensor_return_value);
-        j["op_type"] = magic_enum::enum_name(OpType::tt_dnn_device);
+        j["op_type"] = enchantum::to_string(OpType::tt_dnn_device);
         j["device_id"] = device_id;
         j["op_hash"] = program_hash;
         j["kernel_info"] = get_kernels_json(device_id, program);
@@ -503,6 +506,9 @@ inline std::string op_meta_data_serialized_json(
             /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
             /* regression tests well-formed data. */                                                           \
             /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
+            if (!mesh_device->is_local(coord)) {                                                               \
+                continue;                                                                                      \
+            }                                                                                                  \
             ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
             auto device_id = mesh_device->get_device(coord)->id();                                             \
             auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \

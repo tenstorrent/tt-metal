@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,9 @@
 #include "ttnn/operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
@@ -105,7 +105,7 @@ struct TileIterator {
         tile_end_w(in_end_w - 1),
         first(true) {};
 
-    inline bool next() {
+    bool next() {
         if (first) {
             first = false;
             return true;
@@ -135,9 +135,9 @@ protected:
     const uint32_t tile_end_w;
     bool first;
 
-    inline uint32_t h() { return start_h + tile_idx_h; }
+    uint32_t h() { return start_h + tile_idx_h; }
 
-    inline uint32_t w() { return start_w + tile_idx_w; }
+    uint32_t w() { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(
@@ -299,13 +299,10 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();
-
-    const bool input_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     TT_ASSERT(input_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -337,7 +334,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::CircularBufferConfig(
             mapping_page_size_bytes * reader_cb_len, {{mapping_cb_idx, mapping_dataformat}})
             .set_page_size(mapping_cb_idx, mapping_page_size_bytes);
-    const auto cb_mapping = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_mapping_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_mapping_config);
 
     // set up CB for input tiles
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -348,7 +345,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         tt::tt_metal::CircularBufferConfig(
             input_tile_size_bytes * reader_cb_len, {{input_cb_idx, input_cb_data_format}})
             .set_page_size(input_cb_idx, input_tile_size_bytes);
-    auto cb_input = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_input_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_input_config);
 
     // TODO assert output tile size and data format same as input
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
@@ -358,7 +355,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(output_tile_size_bytes, {{output_cb_idx, output_cb_data_format}})
             .set_page_size(output_cb_idx, output_tile_size_bytes);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
 
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -366,28 +363,31 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     TT_ASSERT(num_cores <= num_output_pages);
 
+    std::vector<uint32_t> reader_compile_time_args = {
+        mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx};
+    tt::tt_metal::TensorAccessorArgs(*mapping_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
-        total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            {input_is_dram, mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx}));
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
     std::vector<uint32_t> writer_compile_time_args = {
-        output_is_dram,
         input_tile_size_bytes,
         max_map_entries,
         tt::datum_size(output_cb_data_format),
         mapping_cb_idx,
         input_cb_idx,
         output_cb_idx};
+    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/"
         "writer_reshape_tiled.cpp",
-        total_cores,
+        all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> utilized_cores;

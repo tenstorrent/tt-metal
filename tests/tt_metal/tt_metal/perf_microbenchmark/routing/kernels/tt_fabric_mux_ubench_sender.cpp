@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,8 +6,8 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "debug/assert.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h" // zero_l1_buf
+#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 // clang-format on

@@ -1,14 +1,14 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
 
 
-class TtBasicTransformerBlock(nn.Module):
+class TtBasicTransformerBlock(LightweightModule):
     def __init__(
         self,
         device,

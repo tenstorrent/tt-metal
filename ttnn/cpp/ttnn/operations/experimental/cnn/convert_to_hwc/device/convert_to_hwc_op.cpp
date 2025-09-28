@@ -16,7 +16,6 @@ void ConvertToHWC::validate(const std::vector<Tensor>& input_tensors) const {
 
     const auto& input = input_tensors.at(0);
     const auto& shape = input.logical_shape();
-    const auto& HW = shape[-1];
     const auto& C = shape[-2];
 
     TT_FATAL(shape.size() == 4, "Input shape must be rank 4 (was rank {})", shape.size());

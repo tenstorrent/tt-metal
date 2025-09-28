@@ -34,7 +34,6 @@ target_sources(
         dispatch_buffer/test_sub_device.cpp
         dispatch_program/test_dispatch.cpp
         dispatch_program/test_global_circular_buffers.cpp
-        dispatch_program/test_program_reuse.cpp
         dispatch_trace/test_sub_device.cpp
         dispatch_util/test_ringbuffer_cache.cpp
 )
@@ -56,6 +55,7 @@ target_sources(
     unit_tests_dispatch_slow
     PRIVATE
         dispatch_buffer/test_EnqueueWriteBuffer_and_EnqueueReadBuffer.cpp # FIXME: Fix the heap-buffer-overflow in here and see if it's fast enough for Basic
+        dispatch_buffer/test_large_mesh_buffer.cpp
         dispatch_program/test_EnqueueProgram.cpp
         dispatch_trace/test_EnqueueTrace.cpp
 )

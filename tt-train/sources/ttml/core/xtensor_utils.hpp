@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,7 +47,7 @@ struct fmt::formatter<xt::svector<T>> : fmt::formatter<std::string> {
     }
 };
 
-// TODO: decide if we want to use xarray everwhere or xtensor is ok
+// TODO: decide if we want to use xarray everywhere or xtensor is ok
 /*
 Difference between xtensor and xarray:
 

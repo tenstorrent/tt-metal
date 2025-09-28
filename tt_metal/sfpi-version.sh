@@ -1,9 +1,13 @@
 # set SFPI release version information
-sfpi_version=v6.12.0
+
+sfpi_version=7.1.0
 sfpi_url=https://github.com/tenstorrent/sfpi/releases/download
-sfpi_aarch64_Linux_txz_md5=b12a5c2e3467cc486e9d37201c822e75
-sfpi_aarch64_Linux_deb_md5=36fc0dab154d65bbb5c152b4bddd41f8
-sfpi_aarch64_Linux_rpm_md5=3983b6cbbaa216ceeaf087b0ac80fd0f
- sfpi_x86_64_Linux_txz_md5=056a58245dddec11c1e89a7bbeb4022f
- sfpi_x86_64_Linux_deb_md5=b6a826aa4ed8333788bdcccbb281afd8
- sfpi_x86_64_Linux_rpm_md5=a76fa7d91e439a8197f76a6acf512976
+
+# convert md5 file into these variables
+# sed 's/^\([0-9a-f]*\) \*sfpi_[-.0-9a-zA-Z]*_\([a-z0-9_A-Z]*\)\.\([a-z]*\)$/sfpi_\2_\3_md5=\1/'
+sfpi_aarch64_txz_md5=84349e5d816885a7db0d447a71311b6c
+sfpi_aarch64_deb_md5=ab74092edaf9d8effe22d5c3ee1a6641
+sfpi_aarch64_rpm_md5=33c2221bd643168479ce668e4967c18f
+sfpi_x86_64_txz_md5=92c59298aec2954b1a9c65e5a39cf9af
+sfpi_x86_64_deb_md5=46632ec6aa6c11605447b03284395bfb
+sfpi_x86_64_rpm_md5=10e3b833fddead540ddf6b240dd616c0

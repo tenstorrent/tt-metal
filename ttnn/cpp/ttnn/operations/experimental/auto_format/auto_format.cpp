@@ -15,6 +15,8 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/tensor/tensor.hpp"
+// Include mesh device for single-device wrappers
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::experimental::auto_format {
 
@@ -47,8 +49,10 @@ bool legal_device_shape(const ttnn::Shape& shape, tt::tt_metal::Layout layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // anonymous namespace
 
-Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, const MemoryConfig& mem_config) {
+Tensor AutoFormat::move_tensor_to_device(
+    const Tensor& input, tt::tt_metal::distributed::MeshDevice* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
+        TT_FATAL(device != nullptr, "Target mesh device must not be nullptr when moving tensor to device");
         return input.to_device(device, mem_config);
     } else {
         return input;
@@ -57,7 +61,9 @@ Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, c
 
 Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return input.to_device(AutoFormat::GetDefaultDevice(), mem_config);
+        auto default_device = AutoFormat::GetDefaultDevice();
+        TT_FATAL(default_device != nullptr, "Default mesh device is not set for AutoFormat operations");
+        return input.to_device(default_device, mem_config);
     } else if (input.memory_config() != mem_config) {
         return ttnn::clone(input, std::nullopt, mem_config, std::nullopt);
     } else {
@@ -70,7 +76,10 @@ Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryCo
 // Used in backward_ops.cpp
 // See: Remove auto format within permute_op.cpp #9404
 Tensor AutoFormat::move_tensor_to_device_and_pad(
-    const Tensor& input, IDevice* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
+    const Tensor& input,
+    tt::tt_metal::distributed::MeshDevice* device,
+    Layout target_layout,
+    std::optional<MemoryConfig> target_mem_config) {
     using namespace tt::constants;
     const auto& device_shape = input.padded_shape();
     const Shape new_device_shape(
@@ -84,7 +93,7 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
 
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
-    IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const ttnn::Shape& padded_shape,
     float pad_value,
     Layout target_layout,
@@ -118,7 +127,6 @@ Tensor AutoFormat::format_input_tensor(
         } else if (!convert_layout && pad_input) {
             if (formatted_input.layout() == Layout::ROW_MAJOR || formatted_input.layout() == Layout::TILE) {
                 return ttnn::pad(
-                    DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -139,7 +147,6 @@ Tensor AutoFormat::format_input_tensor(
             } else if (formatted_input.layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(
-                    DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -175,7 +182,7 @@ Tensor AutoFormat::format_input_tensor(
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
     const ttnn::Shape& shape,
-    IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
     bool unpad_output = output.padded_shape() != shape;
@@ -282,9 +289,9 @@ Tensor AutoFormat::format_output_tensor(
     return formatted_output;
 }
 
-void AutoFormat::SetDefaultDevice(tt::tt_metal::IDevice* dev) { device = dev; }
+void AutoFormat::SetDefaultDevice(tt::tt_metal::distributed::MeshDevice* dev) { device = dev; }
 
-tt::tt_metal::IDevice* AutoFormat::GetDefaultDevice() { return device; }
+tt::tt_metal::distributed::MeshDevice* AutoFormat::GetDefaultDevice() { return device; }
 
 ttnn::Shape AutoFormat::pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
     using namespace tt::constants;

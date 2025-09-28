@@ -7,21 +7,18 @@
 
 void kernel_main() {
     constexpr uint32_t num_tensors = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t stick_size = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
     const uint32_t num_pages_per_core = get_arg_val<uint32_t>(2);
-    const uint32_t stick_size = get_arg_val<uint32_t>(3);
-    const uint32_t num_tensors_times_rows_per_shard = get_arg_val<uint32_t>(4);
-    const uint32_t num_pages_per_tensor = get_arg_val<uint32_t>(5);
+    const uint32_t num_tensors_times_rows_per_shard = get_arg_val<uint32_t>(3);
+    const uint32_t num_pages_per_tensor = get_arg_val<uint32_t>(4);
 
-    uint32_t arg_index = 6;
+    uint32_t arg_index = 5;
 
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
-        .page_size = stick_size,
-    };
+    const auto s = TensorAccessor(dst_args, dst_addr, stick_size);
 
     for (uint32_t tensor_id = 0; tensor_id < num_tensors; tensor_id++) {
         const uint32_t input_shard_cb = get_arg_val<uint32_t>(arg_index++);

@@ -270,8 +270,14 @@ def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(),
                 test_start_ts = datetime.fromisoformat(properties["start_timestamp"])
                 test_end_ts = datetime.fromisoformat(properties["end_timestamp"])
             else:
-                test_start_ts = default_timestamp
-                test_end_ts = default_timestamp
+                # Check if there's a time attribute in the testcase
+                if "time" in testcase.attrib:
+                    pytest_elapsed_time = float(testcase.attrib["time"])
+                    test_start_ts = default_timestamp
+                    test_end_ts = default_timestamp + timedelta(seconds=pytest_elapsed_time)
+                else:
+                    test_start_ts = default_timestamp
+                    test_end_ts = default_timestamp
         else:
             test_start_ts = default_timestamp
             # gtest stores elapsed time for the test in the time attribute
@@ -350,6 +356,43 @@ def is_valid_testcase_(testcase):
         return True
 
 
+def deduplicate_tests_by_full_name(tests):
+    """
+    Deduplicate tests based on full_test_name.
+    If there are multiple tests with the same name:
+    - Take the first one with elapsed time > 0 (test_end_ts != test_start_ts)
+    - If they all have 0 elapsed time, take the first instance
+    """
+    test_name_to_tests = {}
+
+    for test in tests:
+        test_name = test.full_test_name
+        if test_name not in test_name_to_tests:
+            test_name_to_tests[test_name] = []
+        test_name_to_tests[test_name].append(test)
+
+    deduplicated_tests = []
+    for test_name, test_list in test_name_to_tests.items():
+        if len(test_list) == 1:
+            # Only one test with this name, keep it
+            deduplicated_tests.append(test_list[0])
+        else:
+            # Multiple tests with same name, apply deduplication logic
+            # First, try to find one with elapsed time > 0
+            logger.warning(f"Found {len(test_list)} tests with the same full_test_name: {test_name}. Will deduplicate.")
+            test_with_elapsed_time = None
+            for test in test_list:
+                if test.test_end_ts != test.test_start_ts:
+                    test_with_elapsed_time = test
+                    break
+
+            # If found one with elapsed time > 0, use it; otherwise use the first one
+            selected_test = test_with_elapsed_time if test_with_elapsed_time else test_list[0]
+            deduplicated_tests.append(selected_test)
+
+    return deduplicated_tests
+
+
 def get_tests_from_test_report_path(test_report_path):
     report_root_tree = junit_xml_utils.get_xml_file_root_element_tree(test_report_path)
 
@@ -367,7 +410,7 @@ def get_tests_from_test_report_path(test_report_path):
                     default_timestamp=default_timestamp, is_pytest=False, testsuite_name=None, testcase=testcase
                 )
                 tests.append(pyd_test_info)
-        return tests
+        return deduplicate_tests_by_full_name(tests)
 
     is_pytest = junit_xml_utils.is_pytest_junit_xml(report_root)
     is_gtest = junit_xml_utils.is_gtest_xml(report_root)
@@ -389,7 +432,7 @@ def get_tests_from_test_report_path(test_report_path):
                 if is_valid_testcase_(testcase):
                     tests.append(get_pydantic_test(testcase))
 
-        return tests
+        return deduplicate_tests_by_full_name(tests)
     else:
         logger.warning("XML is not pytest junit or gtest format, or no tests were found in the XML, skipping for now")
         return []

@@ -1,5 +1,6 @@
 # This YAML file demonstrates the various features of the fabric performance test framework.
 # It will be updated as new features are added.
+# For multi-host testing, see test_t3k_2x2.yaml.
 
 # ======================================================================================
 # Optional Top-Level Configuration: Allocation Policies
@@ -106,7 +107,29 @@ Tests:
       ftype: unicast # This default applies to both patterns above
 
   # ======================================================================================
-  # Test 4: Full Device Random Pairing Pattern
+  # Test 4: Mesh Coordinate Device Specification
+  # This demonstrates how to specify devices using mesh coordinates instead of
+  # physical chip IDs. The format is [mesh_id, [row, col]] where mesh_id is the
+  # mesh identifier and [row, col] are the coordinates within that mesh.
+  # ======================================================================================
+  - name: "MeshCoordinateDevices"
+    fabric_setup:
+      topology: Linear
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+
+    senders:
+      - device: [0, [0, 0]]  # Source is mesh 0, coordinate [0, 0]
+        patterns:
+          - destination:
+              device: [0, [0, 1]]  # Destination is mesh 0, coordinate [0, 1]
+
+  # ======================================================================================
+  # Test 5: Full Device Random Pairing Pattern
   # This pattern requires an even number of devices and will create random
   # one-to-one pairings between them. For example, with 4 chips {0,1,2,3},
   # it might generate pairs (0,3) and (1,2) in one iteration, and (0,1) and
@@ -127,7 +150,7 @@ Tests:
         iterations: 5 # Generate 5 different random pairings
 
   # ======================================================================================
-  # Test 5: Automatic Randomization of Missing Parameters
+  # Test 6: Automatic Randomization of Missing Parameters
   # This test shows how to specify only the bare minimum (a sender and a
   # destination) and let the framework randomize the rest of the traffic
   # parameters (ftype, ntype, size, num_packets).
@@ -153,16 +176,16 @@ Tests:
               device: 0
 
   # ======================================================================================
-  # Test 6: Multicast via Hops
+  # Test 7: Multicast via Hops
   # This demonstrates how to create a multicast group by specifying the number
   # of hops in each cardinal direction from the source.
   # ======================================================================================
   - name: "MulticastHops"
     fabric_setup:
       topology: Mesh
-      # You can explicitly set the routing type. Options are "Low Latency" and "Dynamic".
-      # If not specified, it defaults to "Low Latency".
-      routing_type: "Low Latency"
+      # You can explicitly set the routing type. Options are "LowLatency" and "Dynamic".
+      # If not specified, it defaults to "LowLatency".
+      routing_type: "LowLatency"
 
     defaults:
       ntype: unicast_write
@@ -185,7 +208,7 @@ Tests:
             mcast_start_hops: 1
 
   # ======================================================================================
-  # Test 7: Ring Topology and All-to-All Multicast
+  # Test 8: Ring Topology and All-to-All Multicast
   # This demonstrates the Ring topology and the all_to_all_multicast pattern, which
   # creates a multicast from each device to every other device.
   # ======================================================================================
@@ -203,7 +226,7 @@ Tests:
       - type: all_to_all_multicast
 
   # ======================================================================================
-  # Test 8: Dynamic Routing and Custom Atomic Operations
+  # Test 9: Dynamic Routing and Custom Atomic Operations
   # This shows how to enable dynamic routing for 2D mesh topologies and how to
   # customize the behavior of atomic increment operations.
   # ======================================================================================
@@ -225,7 +248,7 @@ Tests:
             atomic_inc_wrap: 100
 
   # ======================================================================================
-  # Test 9: Advanced Destination and Test Control
+  # Test 10: Advanced Destination and Test Control
   # This demonstrates specifying a fixed L1 address for the destination buffer,
   # setting a fixed seed for reproducibility, and specifying a bandwidth calculation
   # function.

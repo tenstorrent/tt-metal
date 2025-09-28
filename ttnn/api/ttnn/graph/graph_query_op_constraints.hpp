@@ -16,6 +16,7 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace ttnn::graph {
 
@@ -27,6 +28,9 @@ namespace detail {
 
 // most ops just return a tensor
 inline Tensor extract_output_tensor(const Tensor& result) { return result; }
+
+// multi-output ops like sort
+inline Tensor extract_output_tensor(const std::vector<Tensor>& result) { return result[0]; }
 
 // conv2d output
 template <typename... Args1, typename... Args2>
@@ -45,6 +49,7 @@ Tensor extract_output_tensor(const std::variant<
 struct ResourceUsage {
     size_t cb_peak_size_per_core = 0;
     size_t l1_buffers_peak_per_core = 0;
+    size_t peak_memory_usage_per_core = 0;
     size_t l1_output_buffer_per_core = 0;
 };
 
@@ -71,7 +76,7 @@ struct ConstraintQueryResponse {
  *         - On failure: ExecutionStatus::Error, zeroed resource usage, and an error message.
  */
 template <typename Op, typename... Args>
-auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
+auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, Args&&... args) {
     nlohmann::json op_trace;
     Tensor output;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
@@ -115,13 +120,14 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
     size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
     size_t l1_buffers_peak_per_core =
         extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);
+    size_t peak_memory_usage_per_core = extract_peak_memory_usage(op_trace, interleaved_storage_cores);
     size_t l1_output_buffer_per_core = output.buffer()->is_dram() ? 0
                                                                   : extract_l1_output_buffer_allocation_size_per_core(
                                                                         output, interleaved_storage_cores);
 
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
-        {cb_peak_size_per_core, l1_buffers_peak_per_core, l1_output_buffer_per_core},
+        {cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core, l1_output_buffer_per_core},
         output.tensor_spec()};
 }
 

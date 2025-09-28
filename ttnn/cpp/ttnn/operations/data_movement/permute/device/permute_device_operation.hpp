@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,8 +34,8 @@ struct PermuteDeviceOperation {
     // Implementation for a row major tensor where the row dimension is not moved in the permutation
     struct MultiCoreRowInvariant {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
             tt::tt_metal::CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -55,9 +55,9 @@ struct PermuteDeviceOperation {
     // Implementation for a row major tensor where the row dimension is moved in the permutation
     struct MultiCoreBlockedGeneric {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -79,9 +79,9 @@ struct PermuteDeviceOperation {
     struct MultiCoreTileInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -104,9 +104,9 @@ struct PermuteDeviceOperation {
     struct MultiCoreTileRowInvariant {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -127,9 +127,9 @@ struct PermuteDeviceOperation {
     struct MultiCoreTiledGeneric {
         // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -169,13 +169,13 @@ struct PermuteDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t&, const tensor_args_t&, const Tensor&);
 
     // API call to map user arguments to operation attributes and tensor args.
     // This is the only method that is called by the user
     // The user will be able to call the operation using `tensor_return_value_t output =
-    // ttnn::prim::example(input_tensor)` after the op is registered Keep in mind that the the overload with `queue_id`
-    // argument will be added automatically for primitive operations So, the user can also call this operation using
-    // `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`
+    // ttnn::prim::example(input_tensor)` after the op is registered
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const SmallVector<uint32_t>& dims,

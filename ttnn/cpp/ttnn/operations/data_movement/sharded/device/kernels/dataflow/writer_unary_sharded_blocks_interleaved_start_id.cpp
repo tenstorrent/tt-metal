@@ -17,14 +17,12 @@ void kernel_main() {
     const uint32_t start_id = start_id_base + start_id_offset;
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<1>();
 
     // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     const uint32_t padded_width_diff = (block_width_tiles - unpadded_block_width_tiles) * tile_bytes;
 
@@ -37,10 +35,10 @@ void kernel_main() {
             noc_async_write_tile(tile_id, s, l1_read_addr);
             tile_id++;
             l1_read_addr += tile_bytes;
-            noc_async_write_barrier();
         }
         l1_read_addr += padded_width_diff;
         row_start_tile_id += output_width_tiles;
     }
+    noc_async_write_barrier();
     cb_pop_front(cb_id_out, block_num_tiles);
 }

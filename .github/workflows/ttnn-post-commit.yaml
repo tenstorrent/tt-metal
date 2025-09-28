@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 60
       num-groups:
         required: false
         type: number
@@ -26,6 +26,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
 
   workflow_dispatch:
     inputs:
@@ -45,7 +49,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 60
       num-groups:
         required: false
         type: number
@@ -70,7 +74,7 @@ jobs:
         os: ["ubuntu-22.04"]
         test-group:
           - name: ttnn group 1
-            cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
+            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
           - name: ttnn group 2
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 2 -m "not disable_fast_runtime_mode"
           - name: ttnn group 3
@@ -93,6 +97,8 @@ jobs:
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 11 -m "not disable_fast_runtime_mode"
           - name: ttnn group 12
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 12 -m "not disable_fast_runtime_mode"
+          - name: ttnn notebook
+            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
             cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
@@ -101,11 +107,11 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150, N300', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -124,6 +130,7 @@ jobs:
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
 
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
@@ -138,7 +145,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06CXU895AP # Michael Chiou
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
@@ -149,24 +156,3 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
-  ttnn-import-test:
-    name: ttnn import test ubuntu-22.04
-    runs-on: ubuntu-22.04
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install system dependencies
-        run: sudo ./install_dependencies.sh
-      - name: 🧪 Download Python Wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
-      - name: 💿 Install Wheel
-        run: |
-          WHEEL_FILENAME=$(ls -1 *.whl)
-          pip3 install "$WHEEL_FILENAME"
-      - name: ttnn import test
-        run: python3 -c "import ttnn"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -31,7 +31,7 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data(24, -1.F);
-    auto shape = ttml::core::create_shape({1, 2, 3, 4});
+    auto shape = ttnn::Shape({1, 2, 3, 4});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto res = ttnn::max(tensor, /* dim */ 3, /* keepdim */ true);
     auto res_vector = ttml::core::to_vector(res);
@@ -48,7 +48,7 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne) {
 TEST_F(TrivialTnnFixedTest, TestMaxNegativeBatch) {
     auto* device = &ttml::autograd::ctx().get_device();
 
-    auto shape = ttml::core::create_shape({4, 1, 1, 4});
+    auto shape = ttnn::Shape({4, 1, 1, 4});
     std::vector<float> data(16);
     for (int i = 0; i < 4; ++i) {
         for (int j = 0; j < 4; ++j) {
@@ -77,7 +77,7 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_0) {
     for (int i = 0; i < data.size(); ++i) {
         data[i] = 100.F + static_cast<float>(i);
     }
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_data = ttml::core::to_vector(tensor);
     EXPECT_NEAR(tensor_data[0], 100.F, 1e-2);
@@ -98,7 +98,7 @@ TEST_F(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
     for (int i = 0; i < data.size(); ++i) {
         data[i] = -100.F + static_cast<float>(i);
     }
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_data = ttml::core::to_vector(tensor);
     EXPECT_NEAR(tensor_data[0], -100.F, 1e-2);
@@ -122,7 +122,7 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_2) {
     const size_t features = 10U;
     std::vector<float> data(batch_size * features, 0.F);
     data[0] = 1.0F;
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_data = ttml::core::to_vector(tensor);
     EXPECT_NEAR(tensor_data[0], 1.F, 1e-2);
@@ -149,7 +149,7 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_0) {
     std::vector<float> data(batch_size * features);
     std::iota(data.begin(), data.end(), 0);
 
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_shape = tensor.logical_shape();
     EXPECT_EQ(tensor_shape[0], batch_size);
@@ -178,7 +178,7 @@ TEST_F(TrivialTnnFixedTest, TestDivide) {
         rhs[i] = static_cast<float>(i + 1);
     }
 
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto lhs_tensor = ttml::core::from_vector(lhs, shape, device);
     auto rhs_tensor = ttml::core::from_vector(rhs, shape, device);
 
@@ -210,7 +210,7 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
         value += step;
     }
 
-    auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
+    auto shape = ttnn::Shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
     auto tensor_shape = tensor.logical_shape();
     EXPECT_EQ(tensor_shape[0], batch_size);
@@ -236,5 +236,63 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
         }
 
         EXPECT_NEAR(expected_value, resulting_vector[i], eps);
+    }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingZeroTemperatureNoMask) {
+    // xarray of shape {1, 1, 32, 32} with max along the diagonal
+    xt::xarray<float>::shape_type shape = {1, 1, 32, 32};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    // Set diagonal max: for each row i, set a(0,0,i,i) = 1000.0f
+    for (size_t i = 0; i < 32; ++i) {
+        a(0, 0, i, i) = 1000.0f;
+    }
+    std::vector<uint32_t> expected_b(32);
+    for (size_t i = 0; i < 32; ++i) {
+        expected_b[i] = i;
+    }
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, 0.0F, 42);
+    auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
+    EXPECT_EQ(vector_b, expected_b);
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureNoMask) {
+    // Test sampling with positive temperature, no mask, and xarray of shape {1, 1, 32, 64}
+    xt::xarray<float>::shape_type shape = {1, 1, 32, 64};
+    xt::xarray<float> a = xt::random::rand<float>(shape);
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    float temperature = 1.0F;
+    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, temperature, 42);
+    auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
+    // The output should have shape {1, 1, 32} (one sample per row)
+    EXPECT_EQ(vector_b.size(), 32);
+    // All values should be in the range [0, 63] (since last dim is 64)
+    for (auto v : vector_b) {
+        EXPECT_GE(v, 0);
+        EXPECT_LT(v, 64);
+    }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingPositiveTemperatureWithMask) {
+    // Test sampling with positive temperature, with mask, and xarray of shape {1, 1, 32, 65}
+    xt::xarray<float>::shape_type shape = {1, 1, 32, 65};
+    xt::xarray<float> a = xt::random::rand<float>(shape);
+    // Create a mask: mask out the last column (set to large negative value)
+    xt::xarray<float> mask = xt::zeros<float>(shape);
+    for (size_t i = 0; i < 32; ++i) {
+        mask(0, 0, i, 64) = 1e4F;
+    }
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+    auto tensor_mask = ttml::core::from_xtensor(mask, &ttml::autograd::ctx().get_device());
+    float temperature = 1.0F;
+    auto tensor_b = ttml::ttnn_fixed::sample(tensor_a, temperature, 42, tensor_mask);
+    auto vector_b = ttml::core::to_vector<uint32_t>(tensor_b);
+    // The output should have shape {1, 1, 32} (one sample per row)
+    EXPECT_EQ(vector_b.size(), 32);
+    // All values should be in the range [0, 63] (since last dim is 65, but last index is masked)
+    for (auto v : vector_b) {
+        EXPECT_GE(v, 0);
+        EXPECT_LT(v, 64);
     }
 }

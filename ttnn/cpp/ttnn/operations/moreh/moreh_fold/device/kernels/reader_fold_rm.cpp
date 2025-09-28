@@ -28,15 +28,15 @@ void kernel_main() {
     const uint32_t start_id = get_arg_val<uint32_t>(17);
     const uint32_t num_units_per_core = get_arg_val<uint32_t>(18);
 
-    constexpr bool input_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
+    constexpr auto input_args = TensorAccessorArgs<2>();
     constexpr uint32_t onetile = 1;
 
     uint32_t P = kernel_size_h * kernel_size_w;
     uint32_t l = LH * LW;
 
-    const InterleavedAddrGen<input_is_dram> s0 = {.bank_base_address = input_addr, .page_size = input_cb_page_size};
+    const auto s0 = TensorAccessor(input_args, input_addr, input_cb_page_size);
 
     for (uint32_t row_id = start_id; row_id < start_id + num_units_per_core; row_id++) {
         cb_reserve_back(output_cb_id, onetile);

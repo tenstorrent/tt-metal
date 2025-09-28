@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
@@ -16,15 +16,15 @@ using MeshDeviceAutoInitDistributedContextTest = GenericMeshDeviceFixture;
 // Test that MetalContext constructor automatically initializes the distributed context
 TEST_F(MeshDeviceAutoInitDistributedContextTest, MetalContextInitializesDistributedContext) {
     EXPECT_TRUE(multihost::DistributedContext::is_initialized());
-    auto world_context = multihost::DistributedContext::get_current_world();
+    const auto& world_context = multihost::DistributedContext::get_current_world();
     EXPECT_NE(world_context, nullptr);
     EXPECT_EQ(*world_context->size(), 1);
 }
 
 // Test that initialization is only done once
 TEST_F(MeshDeviceAutoInitDistributedContextTest, MetalContextDoesNotReinitialize) {
-    auto world_context1 = multihost::DistributedContext::get_current_world();
-    auto world_context2 = multihost::DistributedContext::get_current_world();
+    const auto& world_context1 = multihost::DistributedContext::get_current_world();
+    const auto& world_context2 = multihost::DistributedContext::get_current_world();
     EXPECT_EQ(world_context1, world_context2);
     EXPECT_EQ(*world_context1->size(), 1);
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,18 +14,6 @@ namespace operations::transformer {
 
 struct ExecuteScaledDotProductAttention {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
-        bool is_causal = true,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -39,18 +27,6 @@ struct ExecuteScaledDotProductAttention {
 
 struct ExecuteChunkedScaledDotProductAttention {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        const ttnn::Tensor& page_table_tensor,
-        int64_t chunk_start_idx,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -63,19 +39,6 @@ struct ExecuteChunkedScaledDotProductAttention {
 };
 
 struct ExecuteJointAttention {
-    static std::tuple<ttnn::Tensor, ttnn::Tensor> invoke(
-        QueueId queue_id,
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        const ttnn::Tensor& joint_tensor_q,
-        const ttnn::Tensor& joint_tensor_k,
-        const ttnn::Tensor& joint_tensor_v,
-        const std::string& joint_strategy,
-        SDPAProgramConfig program_config,
-        std::optional<float> scale = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
     static std::tuple<ttnn::Tensor, ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
@@ -91,7 +54,6 @@ struct ExecuteJointAttention {
 
 struct ExecuteRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -115,6 +77,46 @@ struct ExecuteRingJointAttention {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
+struct ExecuteFlashMLAPrefill {
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        uint32_t head_dim_v,
+        const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
+        bool is_causal = true,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
+struct ExecuteChunkedFlashMLAPrefill {
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        uint32_t head_dim_v,
+        const ttnn::Tensor& page_table_tensor,
+        int64_t chunk_start_idx,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
+struct ExecuteRingDistributedScaledDotProductAttention {
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        const ttnn::Tensor& input_tensor_v,
+        uint32_t ring_size,
+        std::optional<uint32_t> ring_id =
+            std::nullopt,  // Optional: if provided, uses this value; if nullopt, infers from device coordinate
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
 }  // namespace operations::transformer
 
 namespace transformer {
@@ -134,6 +136,17 @@ constexpr auto joint_scaled_dot_product_attention = ttnn::register_operation<
 constexpr auto ring_joint_scaled_dot_product_attention = ttnn::register_operation<
     "ttnn::transformer::ring_joint_scaled_dot_product_attention",
     ttnn::operations::transformer::ExecuteRingJointAttention>();
+
+constexpr auto flash_mla_prefill = ttnn::
+    register_operation<"ttnn::transformer::flash_mla_prefill", ttnn::operations::transformer::ExecuteFlashMLAPrefill>();
+
+constexpr auto chunked_flash_mla_prefill = ttnn::register_operation<
+    "ttnn::transformer::chunked_flash_mla_prefill",
+    ttnn::operations::transformer::ExecuteChunkedFlashMLAPrefill>();
+
+constexpr auto ring_distributed_scaled_dot_product_attention = ttnn::register_operation<
+    "ttnn::transformer::ring_distributed_scaled_dot_product_attention",
+    ttnn::operations::transformer::ExecuteRingDistributedScaledDotProductAttention>();
 
 }  // namespace transformer
 

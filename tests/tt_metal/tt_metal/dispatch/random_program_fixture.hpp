@@ -11,13 +11,14 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/semaphore.hpp>
 #include "dispatch_test_utils.hpp"
 
 namespace tt::tt_metal {
 
-class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {
+class UnitMeshRandomProgramFixture : virtual public UnitMeshCQSingleCardProgramFixture {
 protected:
     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
     static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
@@ -65,12 +66,12 @@ protected:
             max_num_cbs(MAX_NUM_CBS) {}
     };
 
-    static const uint32_t NUM_PROGRAMS = 75;
+    static const uint32_t NUM_WORKLOADS = 75;
 
-    IDevice* device_;
+    std::shared_ptr<distributed::MeshDevice> device_;
 
     void SetUp() override {
-        CommandQueueSingleCardProgramFixture::SetUp();
+        UnitMeshCQSingleCardProgramFixture::SetUp();
         if (!::testing::Test::IsSkipped()) {
             // Parent may have skipped
             this->device_ = this->devices_[0];
@@ -83,7 +84,6 @@ protected:
         log_info(tt::LogTest, "Using seed: {}", seed);
         srand(seed);
     }
-
     void create_kernel(
         Program& program,
         const CoreType kernel_core_type,
@@ -313,7 +313,8 @@ private:
         } else {
             TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
             std::set<CoreRange> core_ranges;
-            const std::unordered_set<CoreCoord> active_eth_cores = this->device_->get_active_ethernet_cores(true);
+            const std::unordered_set<CoreCoord> active_eth_cores =
+                this->device_->get_devices()[0]->get_active_ethernet_cores(true);
             TT_FATAL(!active_eth_cores.empty(), "No active ethernet cores detected");
             for (CoreCoord eth_core : active_eth_cores) {
                 core_ranges.emplace(eth_core);
@@ -331,7 +332,7 @@ private:
             case 2: cores = this->generate_subset_of_cores(all_cores, 4); break;
         }
 
-        TT_FATAL(cores.size() > 0, "Generated cores cannot be empty");
+        TT_FATAL(!cores.empty(), "Generated cores cannot be empty");
         return cores;
     }
 
@@ -359,14 +360,14 @@ private:
     }
 };
 
-class RandomProgramTraceFixture : virtual public RandomProgramFixture,
-                                  virtual public CommandQueueSingleCardTraceFixture {
+class UnitMeshRandomProgramTraceFixture : virtual public UnitMeshRandomProgramFixture,
+                                          virtual public UnitMeshCQSingleCardTraceFixture {
 protected:
     static const uint32_t NUM_TRACE_ITERATIONS = 50;
-    Program programs[NUM_PROGRAMS];
+    distributed::MeshWorkload workloads[NUM_WORKLOADS];
 
     void SetUp() override {
-        CommandQueueSingleCardTraceFixture::SetUp();
+        UnitMeshCQSingleCardTraceFixture::SetUp();
         if (!::testing::Test::IsSkipped()) {
             // Parent may have skipped
             this->device_ = this->devices_[0];
@@ -374,25 +375,34 @@ protected:
         }
     }
 
-    uint32_t trace_programs() {
-        const uint32_t trace_id = this->capture_trace();
+    distributed::MeshTraceId trace_programs() {
+        const distributed::MeshTraceId trace_id = this->capture_trace();
         this->run_trace(trace_id);
         return trace_id;
     }
 
 private:
-    uint32_t capture_trace() {
-        const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
-        for (Program& program : this->programs) {
-            EnqueueProgram(this->device_->command_queue(), program, false);
+    distributed::MeshTraceId capture_trace() {
+        auto& mesh_command_queue = this->device_->mesh_command_queue();
+
+        // Create a zero coordinate and range for the device
+        distributed::MeshCoordinate zero_coord =
+            distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        const distributed::MeshTraceId trace_id =
+            distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+        for (auto& workload : this->workloads) {
+            distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }
-        EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
+        distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
         return trace_id;
     }
 
-    void run_trace(const uint32_t trace_id) {
+    void run_trace(const distributed::MeshTraceId trace_id) {
+        auto& mesh_command_queue = this->device_->mesh_command_queue();
         for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
-            EnqueueTrace(this->device_->command_queue(), trace_id, false);
+            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
         }
     }
 };

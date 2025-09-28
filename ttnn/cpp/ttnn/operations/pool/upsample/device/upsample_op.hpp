@@ -12,8 +12,6 @@
 
 namespace ttnn::operations::upsample {
 
-enum class UpSampleParallelizationStrategy { MULTI_CORE, SINGLE_CORE };
-
 struct UpSample {
     const int scale_factor_h_;
     const int scale_factor_w_;
@@ -25,12 +23,11 @@ struct UpSample {
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
-    UpSampleParallelizationStrategy get_parallelization_strategy(const std::vector<Tensor>& input_tensors) const;
 };
 
-tt::tt_metal::operation::ProgramWithCallbacks upsample_single_core(
+tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     const Tensor& input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w);
-tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core(
+tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_sharded(
     const Tensor& input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w);
 tt::tt_metal::operation::ProgramWithCallbacks bilinear_multi_core(
     const Tensor& input,

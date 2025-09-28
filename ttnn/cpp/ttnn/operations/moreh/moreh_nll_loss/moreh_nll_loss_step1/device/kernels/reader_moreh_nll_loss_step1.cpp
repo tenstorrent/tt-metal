@@ -24,22 +24,15 @@ void kernel_main() {
     // ublocks size defined in tiles
     const uint32_t target_tile_bytes = get_tile_size(cb_target);
 
-    constexpr bool target_is_dram = get_compile_time_arg_val(0) == 1;
-#if defined(WEIGHT)
-    constexpr bool weight_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool weight_has_value = get_compile_time_arg_val(2) == 1;
-#endif
+    constexpr bool weight_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr auto target_args = TensorAccessorArgs<1>();
+    constexpr auto weight_args = TensorAccessorArgs<target_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGen<target_is_dram> addrg_target = {
-        .bank_base_address = target_addr, .page_size = target_tile_bytes};
+    const auto addrg_target = TensorAccessor(target_args, target_addr, target_tile_bytes);
 
 #if defined(WEIGHT)
     const uint32_t weight_tile_bytes = get_tile_size(cb_weight);
-    const DataFormat weight_data_format = get_dataformat(cb_weight);
-    const InterleavedAddrGen<weight_is_dram> addrg_weight = {
-        .bank_base_address = weight_addr,
-        .page_size = weight_tile_bytes,
-    };
+    const auto addrg_weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 #endif
 
     constexpr uint32_t onetile = 1;

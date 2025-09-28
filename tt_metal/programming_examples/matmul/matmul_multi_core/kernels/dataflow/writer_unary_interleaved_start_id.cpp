@@ -17,10 +17,9 @@ void kernel_main() {
     // the same parameters from the circular buffer as we would from the DRAM buffer.
     constexpr uint32_t onetile = 1;  // single-tile ublocks
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<true> c = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto c_args = TensorAccessorArgs<0>();
+    const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
 
     // Loop through the tile indices and write each tile to DRAM in order.
     uint32_t end_id = start_id + num_tiles;

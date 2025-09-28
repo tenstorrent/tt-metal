@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ namespace ttml::models::distributed::llama {
 using RunnerType = common::transformer::RunnerType;
 using models::llama::LlamaConfig;
 
-class DistributedLlama : public ttml::autograd::ModuleBase {
+class DistributedLlama : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
@@ -28,7 +28,7 @@ private:
 
 public:
     explicit DistributedLlama(const LlamaConfig& config);
-
+    virtual ~DistributedLlama() = default;
     ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask);
 };
 

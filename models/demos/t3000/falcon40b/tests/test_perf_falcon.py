@@ -7,16 +7,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    profiler,
-    skip_for_grayskull,
-)
 from ttnn import ConcatMeshToTensor
 
 
@@ -176,7 +171,7 @@ def run_test_FalconCausalLM_end_to_end(
         signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
-        ttnn.DumpDeviceProfiler(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
         if llm_mode == "prefill":
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
@@ -220,7 +215,7 @@ def run_test_FalconCausalLM_end_to_end(
     ttnn.synchronize_device(mesh_device)
 
     # Run for perf iteration - profiler enabled
-    ttnn.DumpDeviceProfiler(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
@@ -306,7 +301,6 @@ def run_test_FalconCausalLM_end_to_end(
     # This script does not asser the expected vs actual time since this is done based on the perf report and as part of the perf pipeline
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.model_perf_t3000
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
@@ -335,6 +329,7 @@ def run_test_FalconCausalLM_end_to_end(
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_perf_bare_metal(
     num_devices,
     model_version,
@@ -388,7 +383,6 @@ def test_perf_bare_metal(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
@@ -406,6 +400,7 @@ def test_perf_bare_metal(
     ("tiiuae/falcon-40b-instruct",),
     ids=["falcon_40b"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_device_perf_bare_metal(
     num_devices,
     model_version,

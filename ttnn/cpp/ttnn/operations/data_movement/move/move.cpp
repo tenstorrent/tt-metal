@@ -5,12 +5,12 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/distributed/api.hpp"
 
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt::tt_metal;
 
@@ -21,10 +21,7 @@ bool can_deallocate(const Tensor& input_tensor) {
         [&input_tensor](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (storage.mesh_buffer) {
-                    return storage.mesh_buffer.use_count() == 1;
-                }
-                return storage.buffer.use_count() == 1;
+                return storage.mesh_buffer.use_count() == 1;
             } else {
                 return false;
             }
@@ -32,11 +29,11 @@ bool can_deallocate(const Tensor& input_tensor) {
         input_tensor.storage());
 }
 
-static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+static inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
-    auto input_mem_config = input_tensor.memory_config();
+    const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
-    auto output_mem_config = mem_config.value_or(input_mem_config);
+    TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
     if (not can_deallocate(input_tensor)) {
         // TODO: Should this throw error?
@@ -50,16 +47,12 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
         DeallocateBuffer(*input_tensor.buffer());
     }
 
-    auto output_tensor = create_device_tensor(
-        TensorSpec(
-            input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                input_tensor.dtype(),
-                PageConfig(input_tensor.layout()),
-                output_mem_config,
-                input_tensor.logical_shape(),
-                input_tensor.padded_shape())),
-        input_tensor.device());
+    if (mem_config) {
+        output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
+    }
+
+    auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
+    auto output_mem_config = output_tensor.memory_config();
 
     // get_parallelization_strategy
     bool move_within_same_mem_space = input_mem_config.buffer_type() == output_mem_config.buffer_type();
@@ -77,7 +70,7 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
     const auto num_banks = input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
-    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(
+    uint32_t size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),
         num_banks,
@@ -87,7 +80,7 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
     // Only compute with storage cores allow CBs to be created
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
+    uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     if (move_within_same_mem_space) {
@@ -118,20 +111,15 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
                       MoveDeviceOperation{output_mem_config, move_op_parallelization_strategy},
                       {input_tensor, output_tensor},
                       {},
-                      {},
-                      queue_id)
+                      {})
                       .at(0);
     return output;
 }
 
-static inline Tensor move_sharded(
-    QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
-    auto input_mem_config = input_tensor.memory_config();
-    TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
-    auto input_address = input_tensor.buffer()->address();
-    auto output_mem_config = mem_config.value_or(input_mem_config);
-    TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
+    TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
+    [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
     if (not can_deallocate(input_tensor)) {
         TT_FATAL(
             false,
@@ -141,10 +129,6 @@ static inline Tensor move_sharded(
         return {input_tensor};
     }
     auto shard_spec = input_tensor.shard_spec().value();
-    auto shard_shape = shard_spec.shape;
-    auto shard_grid = shard_spec.grid;
-    auto input_dtype = input_tensor.dtype();
-    auto input_layout = input_tensor.layout();
     // Special handling for Mesh vs single device. Needs to be consolidated after full
     // migration
 
@@ -153,18 +137,15 @@ static inline Tensor move_sharded(
     } else {
         DeallocateBuffer(*input_tensor.buffer());
     }
-    // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
-    auto shard_mem_config = output_mem_config.with_shard_spec(shard_spec);
-    auto output_tensor = create_device_tensor(
-        TensorSpec(
-            input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                input_dtype,
-                PageConfig(input_layout),
-                shard_mem_config,
-                input_tensor.logical_shape(),
-                input_tensor.padded_shape())),
-        input_tensor.device());
+
+    auto output_tensor_spec = input_tensor.tensor_spec();
+    if (mem_config) {
+        TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
+        auto output_mem_config = mem_config->with_shard_spec(shard_spec);
+        output_tensor_spec = output_tensor_spec.with_memory_config(output_mem_config);
+    }
+
+    auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
         log_debug(
             tt::LogOp,
@@ -174,21 +155,16 @@ static inline Tensor move_sharded(
     }
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
     return operation::run(
-               MoveDeviceOperation{output_mem_config, move_op_parallelization_strategy}, {input_tensor, output_tensor})
+               MoveDeviceOperation{output_tensor.memory_config(), move_op_parallelization_strategy},
+               {input_tensor, output_tensor})
         .at(0);
 }
 
-ttnn::Tensor MoveOperation::invoke(
-    QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+ttnn::Tensor MoveOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_tensor.memory_config().is_sharded()) {
-        return move_sharded(queue_id, input_tensor, output_mem_config);
+        return move_sharded(input_tensor, output_mem_config);
     }
-    return move(queue_id, input_tensor, output_mem_config);
-}
-
-ttnn::Tensor MoveOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    return invoke(ttnn::DefaultQueueId, input_tensor, output_mem_config);
+    return move(input_tensor, output_mem_config);
 }
 
 }  // namespace ttnn::operations::data_movement

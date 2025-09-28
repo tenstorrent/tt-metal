@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <gtest/gtest.h>
+#include <filesystem>
 #include <memory>
 #include <type_traits>
 
@@ -97,9 +98,36 @@ inline void barrier(const ContextPtr& ctx) { ctx->barrier(); }
 inline int multihost_main(int argc, char** argv) {
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
 
+    // If GTEST_OUTPUT is set to a directory, add the rank to the path to make it unique
+    std::string gtest_output_str = GTEST_FLAG_GET(output);
+    if (!gtest_output_str.empty()) {
+        const size_t colon = gtest_output_str.find(':');
+
+        // Split into prefix (up to and including colon) and path
+        std::string prefix;
+        std::string path_part;
+        if (colon != std::string::npos) {
+            prefix = gtest_output_str.substr(0, colon + 1);  // includes colon
+            path_part = gtest_output_str.substr(colon + 1);
+        } else {
+            path_part = gtest_output_str;
+        }
+
+        std::filesystem::path path(path_part);
+        bool is_dir_like =
+            std::filesystem::exists(path) ? std::filesystem::is_directory(path) : path.extension().empty();
+        if (is_dir_like) {
+            path /=
+                std::to_string(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank());
+        }
+
+        // Prepend the prefix (e.g., "xml:") back to the final path
+        std::string final_output = prefix + path.string() + "/";
+        GTEST_FLAG_SET(output, final_output);
+    }
     ::testing::InitGoogleTest(&argc, argv);
 
-    auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     // Skip all tests if lacking fault tolerance.
     if (!ctx->supports_fault_tolerance()) {
@@ -116,7 +144,7 @@ inline int multihost_main(int argc, char** argv) {
     int local_rc = RUN_ALL_TESTS();
 
     // need to make sure that  we get context after the tests, old one could be revoked
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     fmt::print("Rank {}: local rc = {}\n", *context->rank(), local_rc);
     // Propagate the worst return code to all ranks
 

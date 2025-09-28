@@ -10,7 +10,7 @@ on:
           - wormhole_b0
           - blackhole
       runner-label:
-        description: 'Optional: N150, N300, BH, config-t3000, config-tg'
+        description: 'Optional: N150, N300, BH, config-t3000, config-tg. for example: ["in-service", "config-t3000"]'
         required: true
         type: string
         default: '["in-service"]'
@@ -42,6 +42,11 @@ on:
         options:
             - "22.04"
             - "24.04"
+      commit:
+        required: false
+        type: string
+        default: ""
+        description: 'Commit SHA to test (default: HEAD)'
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -66,28 +71,30 @@ jobs:
       tracy: ${{ inputs.tracy }}
       version: ${{ inputs.version }}
       build-wheel: true
+      ref: ${{ inputs.commit || github.sha }}
   test-dispatch:
     # needs: setup
     needs: build-artifact
-    timeout-minutes: 1440
+    timeout-minutes: 120
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          ref: ${{ inputs.commit || github.sha }}
       - uses: ./.github/actions/ensure-active-weka-mount
         timeout-minutes: 3
         if: ${{ inputs.arch != 'blackhole' }}
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -103,7 +110,6 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            ${{ (inputs.arch == 'wormhole_b0' && '-e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml') || '' }}
           run_args: |
             pip3 install pytest-repeat
             ${{ inputs.command }}

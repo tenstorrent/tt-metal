@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "uniform_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::uniform {
 
@@ -57,8 +58,8 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/uniform/device/kernels/";
-    const uint32_t output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
-    const std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id, output_is_dram};
+    std::vector<uint32_t> writer_compile_time_args{intermed_cb_id, dst_cb_id};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_uniform.cpp";
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_uniform.cpp";
@@ -103,7 +104,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
         union {
             float f;
             uint32_t u;
-        } f2u_from, f2u_to;
+        } f2u_from{}, f2u_to{};
         f2u_from.f = operation_attributes.from;
         f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
 

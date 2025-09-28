@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DCond
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -75,10 +75,20 @@ def run_unet_model(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
     iterations=1,
 ):
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_v2_env else model_location,
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        subfolder="unet" if not is_ci_v2_env else None,
     )
     unet.eval()
     state_dict = unet.state_dict()
@@ -136,8 +146,10 @@ def run_unet_model(
     ttnn.deallocate(ttnn_output_tensor)
     ttnn.deallocate(ttnn_timestep_tensor)
     ttnn.deallocate(ttnn_encoder_tensor)
+    ttnn.deallocate(ttnn_added_cond_kwargs["text_embeds"])
+    ttnn.deallocate(ttnn_added_cond_kwargs["time_ids"])
 
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
     logger.info(f"PCC of first iteration is: {pcc_message}")
@@ -164,8 +176,10 @@ def run_unet_model(
         ttnn.deallocate(ttnn_output_tensor)
         ttnn.deallocate(ttnn_timestep_tensor)
         ttnn.deallocate(ttnn_encoder_tensor)
+        ttnn.deallocate(ttnn_added_cond_kwargs["text_embeds"])
+        ttnn.deallocate(ttnn_added_cond_kwargs["time_ids"])
 
-        ttnn.DumpDeviceProfiler(device)
+        ttnn.ReadDeviceProfiler(device)
 
     del unet
     gc.collect()
@@ -185,6 +199,9 @@ def test_unet(
     encoder_shape,
     temb_shape,
     time_ids_shape,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
     reset_seeds,
 ):
     run_unet_model(
@@ -194,4 +211,7 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
     )

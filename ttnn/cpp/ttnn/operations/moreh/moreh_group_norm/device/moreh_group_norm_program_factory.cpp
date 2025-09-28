@@ -4,6 +4,7 @@
 
 #include "moreh_group_norm_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 inline uint32_t get_block_size(uint32_t num_tiles, uint32_t max_block_size) {
@@ -61,10 +62,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const bool is_group_norm = true;
 
     const bool do_mask_h = (origin_h % TILE_HEIGHT) != 0;
-    const auto mask_h = do_mask_h ? origin_h % TILE_HEIGHT : TILE_HEIGHT;
-
     const bool do_mask_w = (origin_w % TILE_WIDTH) != 0;
-    const auto mask_w = do_mask_w ? origin_w % TILE_WIDTH : TILE_WIDTH;
 
     const auto Ht = h / TILE_HEIGHT;
     const auto Wt = w / TILE_WIDTH;
@@ -130,7 +128,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
     const auto cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt::tile_size(cb_data_format);
 
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +
                            im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
@@ -183,8 +181,20 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const std::string writer_kernel_file(
         "ttnn/cpp/ttnn/operations/moreh/moreh_group_norm/device/kernels/dataflow/writer_moreh_group_norm.cpp");
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
+    std::vector<uint32_t> reader_compile_time_args{
+        static_cast<uint32_t>(gamma_has_value), static_cast<uint32_t>(beta_has_value)};
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gamma_has_value ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(beta_has_value ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args{
+        static_cast<uint32_t>(mean_has_value), static_cast<uint32_t>(rstd_has_value)};
+    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(mean_has_value ? mean.value().buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(rstd_has_value ? rstd.value().buffer() : nullptr).append_to(writer_compile_time_args);
+
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
@@ -262,13 +272,8 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
         // reader
         const std::vector<uint32_t> reader_runtime_args{
             input_addr,
-            static_cast<uint32_t>(is_dram(input)),
             gamma_addr,
-            static_cast<uint32_t>(is_dram(gamma)),
-            static_cast<uint32_t>(gamma_has_value),
             beta_addr,
-            static_cast<uint32_t>(is_dram(beta)),
-            static_cast<uint32_t>(beta_has_value),
             *reinterpret_cast<uint32_t*>(&scaler),
             *reinterpret_cast<uint32_t*>(&eps),
             tile_offset,
@@ -284,13 +289,8 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
         // writer
         const std::vector<uint32_t> writer_runtime_args{
             output_addr,
-            static_cast<uint32_t>(is_dram(output)),
             mean_addr,
-            static_cast<uint32_t>(mean_has_value ? is_dram(mean.value()) : 1),
-            static_cast<uint32_t>(mean_has_value),
             rstd_addr,
-            static_cast<uint32_t>(rstd_has_value ? is_dram(rstd.value()) : 1),
-            static_cast<uint32_t>(rstd_has_value),
             tile_offset,
             num_rows_per_core,
             num_inner_tiles,
@@ -330,10 +330,10 @@ void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
             auto& runtime_args = GetRuntimeArgs(cached_program.program, reader_kernels_id, core);
             runtime_args[0] = input_buffer->address();
             if (gamma_buffer != nullptr) {
-                runtime_args[2] = gamma_buffer->address();
+                runtime_args[1] = gamma_buffer->address();
             }
             if (beta_buffer != nullptr) {
-                runtime_args[5] = beta_buffer->address();
+                runtime_args[2] = beta_buffer->address();
             }
         }
 
@@ -341,10 +341,10 @@ void MorehGroupNormOperation::MorehGroupNormFactory::override_runtime_arguments(
             auto& runtime_args = GetRuntimeArgs(cached_program.program, writer_kernels_id, core);
             runtime_args[0] = ouput_buffer->address();
             if (mean_buffer != nullptr) {
-                runtime_args[2] = mean_buffer->address();
+                runtime_args[1] = mean_buffer->address();
             }
             if (rstd_buffer != nullptr) {
-                runtime_args[5] = rstd_buffer->address();
+                runtime_args[2] = rstd_buffer->address();
             }
         }
     }

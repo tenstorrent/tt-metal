@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -16,6 +17,7 @@ class DropoutTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -28,13 +30,18 @@ TEST_F(DropoutTest, TestSeed) {
     uint32_t dropout_seed2 = 32;
     float scale = 2.0F;
     float prob = 0.5F;
-    xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);
-        xt::xarray<float> xtensor_a = xt::random::rand(shape, -0.5, 0.5);
+        xt::xarray<float> xtensor_a = xt::empty<float>(shape);
+        auto& rng = ttml::autograd::ctx().get_generator();
+        uint32_t seed = rng();
+        ttml::core::parallel_generate(
+            std::span{xtensor_a.data(), xtensor_a.size()},
+            []() { return std::uniform_real_distribution<float>(-0.5f, 0.5f); },
+            seed);
 
         auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
         auto num_cache_before = device->num_program_cache_entries();
@@ -77,22 +84,6 @@ TEST_F(DropoutTest, TestProb) {
     EXPECT_NEAR(mean_ratio, 1.0F - prob, 0.05);
     EXPECT_NEAR(std_ratio, 0.05, 0.05);
 }
-
-namespace {
-xt::xarray<float> golden_dropout(
-    const xt::xarray<float>& input, float p = 0.5f, bool scale = true, uint64_t seed = 42ULL) {
-    // 1) Create a random engine seeded for reproducibility
-    std::mt19937_64 rng(seed);
-
-    auto rand_vals = xt::random::rand<float>(input.shape(), 0.0f, 1.0f, rng);
-    auto mask = xt::cast<float>(rand_vals >= p);
-
-    float scale_factor = (scale && (1.0f - p) > 1e-7f) ? (1.0f / (1.0f - p)) : 1.0f;
-    auto output = input * mask * scale_factor;
-
-    return output;
-}
-}  // namespace
 
 TEST_F(DropoutTest, TestKeepRatioApproximatelyNormal) {
     GTEST_SKIP() << "Currently random number generator using in the WH is not perfect. This Test show that "

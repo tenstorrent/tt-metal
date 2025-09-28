@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from models.utility_functions import nearest_32, pad_by_zero, skip_for_grayskull
+from models.common.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 
 
@@ -24,6 +24,8 @@ def run_test_paged_fused_update_cache_decode(
     pcc,
     sub_core_grids=None,
     row_major=False,
+    is_cur_pos_sharded=False,
+    is_page_table_sharded=False,
 ):
     max_num_blocks_per_seq = max_seq_len // block_size
     assert max_num_blocks_per_seq * block_size == max_seq_len
@@ -51,7 +53,30 @@ def run_test_paged_fused_update_cache_decode(
         permutation = torch.randperm(max_num_blocks)
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(num_users, max_num_blocks_per_seq)
-        page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+
+        if is_page_table_sharded:
+            page_table_core_grids = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1)),
+                ]
+            )
+            page_table = page_table.repeat(page_table_core_grids.num_cores(), 1)
+            page_table_shard_spec = ttnn.ShardSpec(
+                page_table_core_grids, (num_users, max_num_blocks_per_seq), ttnn.ShardOrientation.ROW_MAJOR
+            )
+            page_table_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
+            )
+            page_table_tt = ttnn.as_tensor(
+                page_table,
+                device=device,
+                dtype=ttnn.uint16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=page_table_memory_config,
+            )
+        else:
+            page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
         # Prepare paged caches for both cache1 and cache2
         shuffled_cache1 = prepare_paged_cache(cache1, permutation)
@@ -132,7 +157,22 @@ def run_test_paged_fused_update_cache_decode(
     cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
     if num_heads == 1:
         cache_idxs[num_users // 2] = -1
-    cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
+    cache_idxs_memory_config = None
+    if is_cur_pos_sharded:
+        cache_idxs_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(7, 1)),
+            ]
+        )
+        cache_idxs_pt = torch.tensor([cache_idxs] * cache_idxs_core_grids.num_cores())
+        cache_idxs_shard_spec = ttnn.ShardSpec(cache_idxs_core_grids, (1, num_users), ttnn.ShardOrientation.ROW_MAJOR)
+        cache_idxs_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cache_idxs_shard_spec
+        )
+        cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs_pt), ttnn.int32).to(device, cache_idxs_memory_config)
+    else:
+        cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
 
     # Perform fused update cache operation
     cachett1, cachett2 = ttnn.experimental.paged_fused_update_cache(
@@ -185,7 +225,6 @@ def run_test_paged_fused_update_cache_decode(
         assert eq_cache and eq_update, f"Cache{cache_idx} and update slice mismatch"
 
 
-@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("paged_update", [True, False])
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
@@ -225,7 +264,6 @@ def test_paged_fused_update_cache_decode(
     )
 
 
-@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("paged_update", [True, False])
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])

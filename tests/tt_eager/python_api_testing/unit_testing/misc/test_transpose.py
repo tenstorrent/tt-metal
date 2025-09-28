@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,9 @@ import numpy as np
 import ttnn
 
 from loguru import logger
-from models.utility_functions import is_blackhole, torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -85,12 +85,12 @@ def test_fold_transpose(device):
     "dtype",
     (
         ttnn.bfloat16,
-        # ttnn.int32, issue 24704
+        ttnn.int32,
         ttnn.float32,
     ),
     ids=[
         "bfloat16",
-        # "int32",
+        "int32",
         "float",
     ],
 )
@@ -127,12 +127,12 @@ def test_transpose_wh_bfp4(device):
     "dtype",
     (
         ttnn.bfloat16,
-        # ttnn.int32, issue 24704
+        ttnn.int32,
         ttnn.float32,
     ),
     ids=[
         "bfloat16",
-        # "int32",
+        "int32",
         "float",
     ],
 )
@@ -165,12 +165,12 @@ def test_transpose_hc_program_cache(dtype, device):
     "dtype",
     (
         ttnn.bfloat16,
-        # ttnn.int32, issue 24704
+        ttnn.int32,
         ttnn.float32,
     ),
     ids=[
         "bfloat16",
-        # "int32",
+        "int32",
         "float",
     ],
 )
@@ -194,13 +194,13 @@ def test_transpose_cn_program_cache(dtype, device):
     "dtype",
     (
         ttnn.bfloat16,
-        # ttnn.int32, issue 24704
+        ttnn.int32,
         ttnn.float32,
         ttnn.bfloat8_b,
     ),
     ids=[
         "bfloat16",
-        # "int32",
+        "int32",
         "float",
         "bfloat8_b",
     ],
@@ -236,12 +236,12 @@ def test_transpose_wh_program_cache(dtype, device):
     "dtype",
     (
         ttnn.bfloat8_b,
-        # ttnn.int32, issue 24704
+        ttnn.int32,
         ttnn.float32,
     ),
     ids=[
         "bfloat8_b",
-        # "int32",
+        "int32",
         "float",
     ],
 )
@@ -678,12 +678,12 @@ def test_transpose_bfloat8_b(device, shape, swap_dims):
     "dtype",
     (
         ttnn.bfloat16,
-        # ttnn.int32, issue 24704
+        ttnn.int32,
         ttnn.float32,
     ),
     ids=[
         "bfloat16",
-        # "int32",
+        "int32",
         "float",
     ],
 )
@@ -701,12 +701,12 @@ def test_transpose_hc(dtype, shape, device):
     "dtype",
     (
         ttnn.bfloat16,
-        # ttnn.int32, issue 24704
+        ttnn.int32,
         ttnn.float32,
     ),
     ids=[
         "bfloat16",
-        # "int32",
+        "int32",
         "float",
     ],
 )
@@ -734,12 +734,12 @@ def test_transpose_2D(dtype, shape, layout, device):
     "dtype",
     (
         ttnn.bfloat16,
-        # ttnn.int32, issue 24704
+        ttnn.int32,
         ttnn.float32,
     ),
     ids=[
         "bfloat16",
-        # "int32",
+        "int32",
         "float",
     ],
 )
