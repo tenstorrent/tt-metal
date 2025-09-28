@@ -74,8 +74,8 @@ class TtSwinTransformer:
         ttnn.deallocate(nchw)
         ttnn.deallocate(x)
         nhwc = ttnn.reallocate(nhwc)
+
         x = self.conv2d(self.device, nhwc)
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
 
         if self.norm_layer is None:
@@ -105,10 +105,26 @@ class TtSwinTransformer:
         else:
             pass
 
-        x = ttnn.permute(x, (0, 2, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.global_avg_pool2d(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        input_h = x.shape[1]
+        input_w = x.shape[2]
+
+        x = ttnn.reshape(
+            x,
+            (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]),
+        )
+
+        x = ttnn.adaptive_avg_pool2d(
+            input_tensor=x,
+            batch_size=x.shape[0],
+            input_h=input_h,
+            input_w=input_w,
+            channels=x.shape[-1],
+            output_size=[1, 1],
+        )
 
         x = ttnn.reshape(x, (x.shape[0], -1), memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.linear(
             x,
             self.parameters.head.weight,
@@ -117,5 +133,6 @@ class TtSwinTransformer:
                 math_fidelity=ttnn.MathFidelity.LoFi,
             ),
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.device.core_grid,
         )
         return x
