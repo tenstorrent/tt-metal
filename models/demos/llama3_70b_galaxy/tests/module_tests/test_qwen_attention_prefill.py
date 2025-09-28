@@ -14,27 +14,15 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.tt_transformers.tt.rope import get_rot_mats
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention, precompute_freqs_cis
-<<<<<<< HEAD
 from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-=======
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
-from models.utility_functions import skip_for_grayskull
->>>>>>> bc236880f1 (Resolved merge conflicts)
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
 
 @torch.no_grad()
-<<<<<<< HEAD
-=======
-@skip_for_grayskull("Requires wormhole_b0 to run")
->>>>>>> bc236880f1 (Resolved merge conflicts)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -61,17 +49,11 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-<<<<<<< HEAD
-        # 128,
-        # 2048,
-        # 4096,
-        # 8192,
-        1024 * 16,
-=======
         128,
-        # 2048,
-        # 1024 * 32,
->>>>>>> bc236880f1 (Resolved merge conflicts)
+        2048,
+        4096,
+        8192,
+        1024 * 16,
         # 1024 * 64,
     ),
 )
@@ -178,11 +160,7 @@ def test_qwen_attention_inference_prefill(
 
     pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
     tt_attention_input = pt_attention_input.clone()
-<<<<<<< HEAD
     for _ in range(1):
-=======
-    for _ in range(2):
->>>>>>> bc236880f1 (Resolved merge conflicts)
         attention_input = model_args.prepare_residual_tensor_prefill(
             tt_attention_input,
             force_replicated=False if model_args.is_galaxy else True,
