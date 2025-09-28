@@ -173,10 +173,10 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize(
     "n, c, h, w",
     (
-        # (6, 256, 80, 200),
-        # (6, 768, 20, 50),
+        (6, 256, 80, 200),
+        (6, 768, 20, 50),
         (6, 256, 40, 100),
-        # (6, 1024, 10, 25),
+        (6, 1024, 10, 25),
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -207,11 +207,11 @@ def test_vovnetcp_esemodule(device, n, c, h, w):
     "n, c, h, w",
     (
         (6, 128, 80, 200),
-        # (6, 256, 40, 100), 0.928
-        # (6, 768, 10, 25),
-        # (6, 1024, 10, 25),
-        # (6, 768, 20, 50),
-        # (6, 512, 40, 100), 0.87
+        (6, 256, 40, 100),  # 0.928
+        (6, 768, 10, 25),
+        (6, 1024, 10, 25),
+        (6, 768, 20, 50),
+        (6, 512, 40, 100),  # 0.87
         # 2_1 = 0.99
         # 3_1 = 0.928
         # 3_2, 3_3 = 0.87
@@ -246,10 +246,10 @@ def test_vovnetcp_osa_module(device, reset_seeds, n, c, h, w):
 @pytest.mark.parametrize(
     "in_ch, stage_ch, concat_ch, block_per_stage, layer_per_block, stage_num,input_shape",
     [
-        # (128, 128, 256, 1, 5, 2, [6, 128, 80, 200]),
+        (128, 128, 256, 1, 5, 2, [6, 128, 80, 200]),
         (256, 160, 512, 3, 5, 3, [6, 256, 80, 200]),  # Maxpool issue 15093
-        # (512,192,768,9,5,4,[6,512,40,100]), #Maxpool issue 15093
-        # (768,224,1024,3,5,5,[6,768,20,50]), #Maxpool issue 15093,14292
+        (512, 192, 768, 9, 5, 4, [6, 512, 40, 100]),  # Maxpool issue 15093
+        (768, 224, 1024, 3, 5, 5, [6, 768, 20, 50]),  # Maxpool issue 15093,14292
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

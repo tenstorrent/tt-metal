@@ -225,9 +225,20 @@ def test_petr_head_without_saved_input(device, reset_seeds):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_petr_head(device, reset_seeds):
-    mlvl_feats = torch.load("models/experimental/functional_petr/reference/golden_mlvl_feats_petr_head.pt")
-    img_metas = torch.load("models/experimental/functional_petr/reference/golden_img_metas_petr_head.pt")
-
+    mlvl_feats = torch.load(
+        "models/experimental/functional_petr/resources/golden_mlvl_feats_petr_head.pt", weights_only=False
+    )
+    img_metas = torch.load(
+        "models/experimental/functional_petr/resources/golden_img_metas_petr_head.pt", weights_only=False
+    )
+    for meta in img_metas:
+        if "img_shape" in meta and isinstance(meta["img_shape"], tuple):
+            # Convert (320, 800) to [(320, 800), (320, 800), ...] for 6 cameras
+            meta["img_shape"] = [meta["img_shape"]] * 6
+    # print(f"img_metas type: {type(img_metas)}")
+    # print(f"img_metas[0] keys: {img_metas[0].keys()}")
+    # print(f"img_shape type: {type(img_metas[0]['img_shape'])}")
+    # print(f"img_shape content: {img_metas[0]['img_shape']}")
     torch_model = PETRHead(
         num_classes=10,
         in_channels=256,
