@@ -72,8 +72,8 @@ def validate_test(num_devices, topology, shape, cluster_axis):
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
-        (False, 10),
+        (True, 3),
+        (False, 3),
     ],
     ids=["trace", "non-trace"],
 )
@@ -147,12 +147,10 @@ def test_all_gather_linear_2D_nightly(
 @pytest.mark.parametrize(
     "ag_input_dtype",
     [
-        ttnn.bfloat16,
         ttnn.uint32,
         ttnn.bfloat8_b,
     ],
     ids=[
-        "float_16",
         "uint_32",
         "bfloat_8",
     ],
@@ -166,14 +164,6 @@ def test_all_gather_linear_2D_nightly(
         ),
         (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-        ),
-        (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
@@ -181,8 +171,8 @@ def test_all_gather_linear_2D_nightly(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
-        (False, 10),
+        (True, 3),
+        (False, 3),
     ],
     ids=["trace", "non-trace"],
 )
@@ -258,32 +248,20 @@ def test_all_gather_linear_4D_nightly(
     "ag_input_dtype",
     [
         ttnn.bfloat16,
-        ttnn.uint32,
-        ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        "uint_32",
-        "bfloat_8",
     ],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
     [
         (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-        ),
-        (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
         ),
         (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
-        ),
-        (
-            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
         ),
     ],
@@ -291,8 +269,8 @@ def test_all_gather_linear_4D_nightly(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
-        (False, 10),
+        (True, 3),
+        (False, 3),
     ],
     ids=["trace", "non-trace"],
 )

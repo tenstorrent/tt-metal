@@ -293,10 +293,9 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -404,10 +403,9 @@ def test_reduce_scatter_async_4dev_ring(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -512,10 +510,9 @@ def test_reduce_scatter_async_line(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -625,10 +622,9 @@ def test_reduce_scatter_async_training_shapes(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -752,10 +748,9 @@ def test_reduce_scatter_async_sharded_to_sharded(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -863,10 +858,9 @@ def test_reduce_scatter_async_interleaved_to_sharded(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",

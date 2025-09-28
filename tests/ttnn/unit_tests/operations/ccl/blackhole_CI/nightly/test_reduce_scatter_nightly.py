@@ -29,12 +29,10 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
     "rs_input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.uint32, #Bad PCC
         ttnn.bfloat8_b,
     ],
     ids=[
         "float_16",
-        # "uint_32", #Bad PCC
         "bfloat_8",
     ],
 )
