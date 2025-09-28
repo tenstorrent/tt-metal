@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 #include <tt_stl/assert.hpp>
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
@@ -266,11 +267,11 @@ std::vector<CBInfo> get_cb_info(
             row_major_act_cb_num_tiles = act_block_num_tiles;
         }
 
-        const bool overlap_act_cb =
-            sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
+        const bool overlap_act_cb = sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED &&
+                                    /*conv_input_df == output_df &&*/ !skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_ROW_MAJOR_BFLOAT16,
-            .num_pages = overlap_act_cb ? 0 : row_major_act_cb_num_tiles,
+            .num_pages = /*overlap_act_cb ? 0 :*/ row_major_act_cb_num_tiles,
             .page_size = input_tile_size,
             .data_format = conv_input_df,
             .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
@@ -322,9 +323,93 @@ void allocate_cbs(
     const Tensor& output_tensor,
     const Tensor& l1_indices_tensor) {
     uint32_t cb_index = 0;
+
+    // Find pairs of overlapped circular buffers
+    std::vector<std::pair<size_t, size_t>> overlapped_pairs;
+    for (size_t i = 0; i < cb_info.size(); ++i) {
+        if (cb_info[i].overlapped_by_cb.has_value()) {
+            // Find the CB that overlaps this one
+            Conv2dCb overlapping_cb = cb_info[i].overlapped_by_cb.value();
+            for (size_t j = 0; j < cb_info.size(); ++j) {
+                if (i != j && cb_info[j].name == overlapping_cb) {
+                    overlapped_pairs.emplace_back(i, j);
+                    break;
+                }
+            }
+        }
+    }
+
+    for (const auto& pair : overlapped_pairs) {
+        size_t overlapped_idx = pair.first;
+        size_t overlapping_idx = pair.second;
+
+        uint32_t cb_index_1 = cb_index++;
+        uint32_t cb_index_2 = cb_index++;
+
+        uint32_t total_size = std::max(
+            cb_info[overlapped_idx].page_size * cb_info[overlapped_idx].num_pages,
+            cb_info[overlapping_idx].page_size * cb_info[overlapping_idx].num_pages);
+        std::map<uint8_t, tt::DataFormat> output_cb_data_format_spec{
+            {(uint8_t)cb_index_1, cb_info[overlapped_idx].data_format},
+            {(uint8_t)cb_index_2, cb_info[overlapping_idx].data_format}};
+
+        auto cb_config = tt::tt_metal::CircularBufferConfig(total_size, output_cb_data_format_spec)
+                             .set_page_size(cb_index_1, cb_info[overlapped_idx].page_size)
+                             .set_page_size(cb_index_2, cb_info[overlapping_idx].page_size);
+        const CBInfo& cb = cb_info[overlapped_idx];
+        const CBInfo& cb2 = cb_info[overlapping_idx];
+
+        // cbs for sharded tensors.
+        Buffer* buffer = nullptr;
+        if (cb.is_globally_allocated || cb2.is_globally_allocated) {
+            if (cb.name == Conv2dCb::ACT_SHARDED || cb2.name == Conv2dCb::ACT_SHARDED) {
+                buffer = input_tensor.buffer();
+            } else if (
+                cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS || cb2.name == Conv2dCb::OUT ||
+                cb2.name == Conv2dCb::MATMUL_PARTIALS) {
+                buffer = output_tensor.buffer();
+            } else if (cb.name == Conv2dCb::READER_INDICES || cb2.name == Conv2dCb::READER_INDICES) {
+                buffer = l1_indices_tensor.buffer();
+            } else {
+                TT_THROW(
+                    "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",
+                    enchantum::to_string(cb.name));
+            }
+        }
+        if (buffer != nullptr) {
+            cb_config.set_globally_allocated_address(*buffer);
+        }
+
+        tt::tt_metal::CBHandle cb_handle = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+        cb_info[overlapped_idx].handle = cb_handle;
+        cb_info[overlapped_idx].index = cb_index_1;
+        cb_info[overlapping_idx].handle = cb_handle;
+        cb_info[overlapping_idx].index = cb_index_2;
+        log_info(
+            tt::LogOp,
+            "Allocated overlapped circular buffers {} and {} with index {}, {}, num pages {}, page size {}, globally "
+            "allocated: {}",
+            enchantum::to_string(cb.name),
+            enchantum::to_string(cb2.name),
+            cb_info[overlapped_idx].index,
+            cb_info[overlapping_idx].index,
+            cb_info[overlapped_idx].num_pages,
+            cb_info[overlapped_idx].page_size,
+            cb.is_globally_allocated || cb2.is_globally_allocated);
+    }
+
     for (auto& cb : cb_info) {
         if (cb.num_pages == 0) {
             // Skip circular buffers with zero pages
+            continue;
+        }
+
+        // Check if this CB is in overlapped_pairs and skip it if it is.
+        auto it = std::find_if(
+            overlapped_pairs.begin(), overlapped_pairs.end(), [&cb, &cb_info](const std::pair<size_t, size_t>& p) {
+                return cb_info[p.first].name == cb.name;
+            });
+        if (it != overlapped_pairs.end()) {
             continue;
         }
 
@@ -346,7 +431,7 @@ void allocate_cbs(
 
         std::tie(cb.index, cb.handle) =
             tt::tt_metal::create_cb(cb_index++, program, all_cores, cb.page_size, cb.num_pages, cb.data_format, buffer);
-        log_trace(
+        log_info(
             tt::LogOp,
             "Allocated circular buffer {} with index {}, num pages {}, page size {}, globally allocated: {}",
             enchantum::to_string(cb.name),

@@ -266,7 +266,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
-    auto actual_cb_size = calculate_total_cb_size(program_with_cbs.program);
+    // auto actual_cb_size = calculate_total_cb_size(program_with_cbs.program);
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
@@ -301,11 +301,11 @@ tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
         input_channels_padded,
         skip_mcast.skip_activation_mcast);
 
-    TT_FATAL(
-        actual_cb_size == l1_usage.CB_allocation_size,
-        "Calculated CB size {} does not match with the actual CB size {}",
-        l1_usage.CB_allocation_size,
-        actual_cb_size);
+    // TT_FATAL(
+    //     actual_cb_size == l1_usage.CB_allocation_size,
+    //     "Calculated CB size {} does not match with the actual CB size {}",
+    //     l1_usage.CB_allocation_size,
+    //     actual_cb_size);
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.

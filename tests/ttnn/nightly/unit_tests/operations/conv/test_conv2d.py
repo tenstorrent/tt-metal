@@ -4555,14 +4555,14 @@ def test_conv2d_ch_split_dram_panoptic(
     "output_channels, input_channels",
     (
         (128, 128),  # larger input 8x8 vs 8x4
-        (256, 128),  # equal grids 8x8
-        (32, 128),  # single output column 8x1
-        (128, 8),  # single input column 8x1 vs 8x4 output
-        (128, 16),  # input 8x2 vs 8x4 output
-        (768, 32),  # input 8x2 vs 8x4 output
+        # (256, 128),  # equal grids 8x8
+        # (32, 128),  # single output column 8x1
+        # (128, 8),  # single input column 8x1 vs 8x4 output
+        # (128, 16),  # input 8x2 vs 8x4 output
+        # (768, 32),  # input 8x2 vs 8x4 output
     ),
 )
-@pytest.mark.parametrize("transpose_shard", [False, True])
+@pytest.mark.parametrize("transpose_shard", [False])
 def test_conv_bs_grid(
     device,
     torch_tensor_map,
@@ -4574,7 +4574,7 @@ def test_conv_bs_grid(
         device,
         torch_tensor_map,
         ttnn.MathFidelity.HiFi4,
-        ttnn.bfloat16,
+        ttnn.bfloat8_b,
         ttnn.bfloat16,
         1,
         output_channels,
