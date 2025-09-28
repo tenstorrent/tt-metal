@@ -14,5 +14,6 @@ int main() {
         /*num_command_queues=*/2,
         /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
     std::cout << "Device created" << std::endl;
+    device->close();
     return 0;
 }
