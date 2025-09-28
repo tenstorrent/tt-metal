@@ -301,7 +301,7 @@ def test_petr_without_saved_input(device, reset_seeds):
 
     torch_model = PETR(use_grid_mask=True)
     weights_state_dict = torch.load(
-        "models/experimental/functional_petr/reference/petr_vovnet_gridmask_p4_800x320-e2191752.pth"
+        "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth"
     )["state_dict"]
     torch_model.load_state_dict(weights_state_dict)
     torch_model.eval()
@@ -356,7 +356,7 @@ def test_petr_without_saved_input(device, reset_seeds):
     stem_parameters = stem_parameters_preprocess(torch_model.img_backbone)
     parameters["stem_parameters"] = stem_parameters
 
-    print("parameters", parameters)
+    # print("parameters", parameters)
 
     query_embedding_input = torch_model.pts_bbox_head.reference_points.weight
     query_embedding_input = pos2posemb3d(query_embedding_input)
@@ -372,7 +372,7 @@ def test_petr_without_saved_input(device, reset_seeds):
 
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas)
 
-    print("output", ttnn_output)
+    # print("output", ttnn_output)
     assert_with_pcc(
         output[0]["pts_bbox"]["bboxes_3d"].tensor, ttnn_output[0]["pts_bbox"]["bboxes_3d"].tensor, pcc=0.99
     )  # 0.05455256429036736
@@ -386,16 +386,29 @@ def test_petr_without_saved_input(device, reset_seeds):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_petr(device, reset_seeds):
-    inputs = torch.load("models/experimental/functional_petr/reference/golden_input_inputs_sample1.pt")
-    modified_batch_img_metas = torch.load(
-        "models/experimental/functional_petr/reference/modified_input_batch_img_metas_sample1.pt"
+    inputs = torch.load(
+        "models/experimental/functional_petr/resources/golden_input_inputs_sample1.pt", weights_only=False
     )
+    modified_batch_img_metas = torch.load(
+        "models/experimental/functional_petr/resources/modified_input_batch_img_metas_sample1.pt", weights_only=False
+    )
+    # print("Type of inputs:", type(inputs))
+    # print("Keys in inputs:", inputs.keys() if isinstance(inputs, dict) else "Not a dict")
+    # print("Type of inputs['imgs']:", type(inputs.get("imgs")))
+    # print("Content of inputs['imgs']:", inputs.get("imgs"))
+
     torch_model = PETR(use_grid_mask=True)
     weights_state_dict = torch.load(
-        "models/experimental/functional_petr/reference/petr_vovnet_gridmask_p4_800x320-e2191752.pth"
+        "models/experimental/functional_petr/resources/petr_vovnet_gridmask_p4_800x320-e2191752.pth", weights_only=False
     )["state_dict"]
     torch_model.load_state_dict(weights_state_dict)
     torch_model.eval()
+
+    if isinstance(inputs.get("imgs"), str):
+        # Handle the case where it's a file path
+        imgs_path = inputs["imgs"]
+    # print(f"imgs is a string: {imgs_path}, creating dummy tensor")
+    # inputs["imgs"] = torch.randn(1, 6, 3, 320, 800)
 
     ttnn_inputs = dict()
     ttnn_inputs["imgs"] = ttnn.from_torch(inputs["imgs"], device=device)
@@ -447,7 +460,7 @@ def test_petr(device, reset_seeds):
     stem_parameters = stem_parameters_preprocess(torch_model.img_backbone)
     parameters["stem_parameters"] = stem_parameters
 
-    print("parameters", parameters)
+    # print("parameters", parameters)
 
     query_embedding_input = torch_model.pts_bbox_head.reference_points.weight
     query_embedding_input = pos2posemb3d(query_embedding_input)

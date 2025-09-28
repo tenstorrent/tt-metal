@@ -46,6 +46,12 @@ class Conv:
 
     def __call__(self, device, input_tensor):
         batch_size = input_tensor.shape[0]
+        input_height = input_tensor.shape[1]
+        input_width = input_tensor.shape[2]
+        input_channels = input_tensor.shape[3]
+
+        # Check for small spatial dimensions that might cause issues
+        is_small_spatial = input_height < 32 or input_width < 32
 
         if input_tensor.shape[3] == 1024 or input_tensor.shape[3] == 384:
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -54,12 +60,10 @@ class Conv:
 
         # check input is in interleaved format
         if hasattr(input_tensor, "memory_config") and input_tensor.memory_config().is_sharded():
-            # print("Input tensor is sharded, converting to interleaved...")
             input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
         # check weights are also properly formatted
         if hasattr(self.weights, "memory_config") and self.weights.memory_config().is_sharded():
-            # print("Weights are sharded, converting to interleaved...")
             self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.DRAM_MEMORY_CONFIG)
 
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -70,53 +74,36 @@ class Conv:
             math_approx_mode=True,
         )
 
-        try:
-            # [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
-            #     input_tensor=input_tensor,
-            #     weight_tensor=self.weights,
-            #     bias_tensor=self.bias,
-            #     device=device,
-            #     in_channels=in_channels,
-            #     out_channels=self.out_channels,
-            #     batch_size=batch_size,
-            #     input_height=input_height,
-            #     input_width=input_width,
-            #     kernel_size=self.kernel_size,
-            #     stride=(stride_h, stride_w),
-            #     padding=(padding_h, padding_w),
-            #     dilation=(self.dilation, self.dilation),
-            #     groups=self.groups,
-            #     compute_config=compute_config,
-            #     return_output_dim=True,
-            #     return_weights_and_bias=False,
-            # )
-            # For 3x3 convolutions,
-            if self.kernel_size[0] == 3 and self.kernel_size[1] == 3:
-                # Move input to host first, then back to device with DRAM config
-                input_tensor = ttnn.from_device(input_tensor)
-                input_tensor = ttnn.to_device(input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        output_tensor = None
+        _out_height = None
+        _out_width = None
 
-                # Use a conservative config that avoids sharding
+        try:
+            if self.kernel_size[0] == 3 and self.kernel_size[1] == 3:
+                # For 3x3 convolutions, use the minimal configuration that works
+                temp_input = ttnn.from_device(input_tensor) if hasattr(input_tensor, "device") else input_tensor
+                temp_input = ttnn.to_device(temp_input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+                # Minimal config that works reliably
                 conv_config = ttnn.Conv2dConfig(
                     weights_dtype=ttnn.bfloat16,
                     output_layout=ttnn.TILE_LAYOUT,
-                    shard_layout=None,
-                    deallocate_activation=self.deallocate,
-                    reallocate_halo_output=True,
-                    enable_act_double_buffer=True,
-                    activation=self.activation if self.activation else None,
+                    deallocate_activation=False,  # Disable for stability
+                    reallocate_halo_output=False,  # Disable for stability
+                    enable_act_double_buffer=False,  # Disable for stability
+                    activation=None,  # Handle activation separately if needed
                 )
 
                 [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
-                    input_tensor=input_tensor,
+                    input_tensor=temp_input,
                     weight_tensor=self.weights,
                     bias_tensor=self.bias,
                     device=device,
-                    in_channels=input_tensor.shape[3],
+                    in_channels=input_channels,
                     out_channels=self.out_channels,
-                    batch_size=input_tensor.shape[0],
-                    input_height=input_tensor.shape[1],
-                    input_width=input_tensor.shape[2],
+                    batch_size=batch_size,
+                    input_height=input_height,
+                    input_width=input_width,
                     kernel_size=self.kernel_size,
                     stride=(self.conv_params[0], self.conv_params[1]),
                     padding=(self.conv_params[2], self.conv_params[3]),
@@ -127,18 +114,33 @@ class Conv:
                     return_output_dim=True,
                     return_weights_and_bias=False,
                 )
+
+                # Apply activation after convolution if needed
+                if self.activation == "relu":
+                    output_tensor = ttnn.relu(output_tensor)
+                elif self.activation == "gelu":
+                    output_tensor = ttnn.gelu(output_tensor)
+                # Add other activations as needed
+
             else:
-                # For 1x1 convolutions, original approach
+                # For 1x1 convolutions, try DRAM approach first for small tensors
+                if is_small_spatial:
+                    temp_input = ttnn.from_device(input_tensor) if hasattr(input_tensor, "device") else input_tensor
+                    temp_input = ttnn.to_device(temp_input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    conv_input = temp_input
+                else:
+                    conv_input = input_tensor
+
                 [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
-                    input_tensor=input_tensor,
+                    input_tensor=conv_input,
                     weight_tensor=self.weights,
                     bias_tensor=self.bias,
                     device=device,
-                    in_channels=input_tensor.shape[3],
+                    in_channels=input_channels,
                     out_channels=self.out_channels,
-                    batch_size=input_tensor.shape[0],
-                    input_height=input_tensor.shape[1],
-                    input_width=input_tensor.shape[2],
+                    batch_size=batch_size,
+                    input_height=input_height,
+                    input_width=input_width,
                     kernel_size=self.kernel_size,
                     stride=(self.conv_params[0], self.conv_params[1]),
                     padding=(self.conv_params[2], self.conv_params[3]),
@@ -148,19 +150,63 @@ class Conv:
                     return_output_dim=True,
                     return_weights_and_bias=False,
                 )
-                # Check if output is sharded before converting
-                if hasattr(output_tensor, "memory_config") and output_tensor.memory_config().is_sharded():
-                    output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+
+                # Apply activation if needed
+                if self.activation == "relu":
+                    output_tensor = ttnn.relu(output_tensor)
+                elif self.activation == "gelu":
+                    output_tensor = ttnn.gelu(output_tensor)
 
         except Exception as e:
-            print(f"Conv2d failed with error: {e}")
+            # If the optimized approach fails, try a more conservative fallback
+            try:
+                print(f"Conv2d failed ({e}), trying fallback...")
 
-        # Check if output needs conversion
+                # Force everything to DRAM and use minimal config
+                temp_input = ttnn.from_device(input_tensor) if hasattr(input_tensor, "device") else input_tensor
+                temp_input = ttnn.to_device(temp_input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+                temp_weights = ttnn.from_device(self.weights) if hasattr(self.weights, "device") else self.weights
+                temp_weights = ttnn.to_device(temp_weights, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+                [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
+                    input_tensor=temp_input,
+                    weight_tensor=temp_weights,
+                    bias_tensor=self.bias,
+                    device=device,
+                    in_channels=input_channels,
+                    out_channels=self.out_channels,
+                    batch_size=batch_size,
+                    input_height=input_height,
+                    input_width=input_width,
+                    kernel_size=self.kernel_size,
+                    stride=(self.conv_params[0], self.conv_params[1]),
+                    padding=(self.conv_params[2], self.conv_params[3]),
+                    dilation=(self.dilation, self.dilation),
+                    groups=self.groups,
+                    compute_config=compute_config,
+                    return_output_dim=True,
+                    return_weights_and_bias=False,
+                )
+
+                # Apply activation if needed
+                if self.activation == "relu":
+                    output_tensor = ttnn.relu(output_tensor)
+                elif self.activation == "gelu":
+                    output_tensor = ttnn.gelu(output_tensor)
+
+            except Exception as fallback_e:
+                raise RuntimeError(
+                    f"Conv2d failed. Primary: {e}, Fallback: {fallback_e}. "
+                    f"Kernel size: {self.kernel_size}, Input shape: {[batch_size, input_height, input_width, input_channels]}, "
+                    f"Conv params: {self.conv_params}, Small spatial: {is_small_spatial}"
+                )
+
+        # Post-processing
         if hasattr(output_tensor, "memory_config") and output_tensor.memory_config().is_sharded():
             output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-
         output_tensor = ttnn.reshape(output_tensor, (batch_size, _out_height, _out_width, output_tensor.shape[3]))
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
         del _out_height, _out_width
@@ -207,9 +253,6 @@ class Conv_with_split:
 
     def __call__(self, device, input_tensor):
         batch, height, width, channel = input_tensor.shape
-
-        # print(f"Conv_with_split input shape: {input_tensor.shape}")
-        # print(f"Device grid size: {device.compute_with_storage_grid_size()}")
 
         input_tensor = ttnn.to_torch(input_tensor)
         self.weights = ttnn.to_torch(self.weights)
