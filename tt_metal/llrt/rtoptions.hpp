@@ -37,7 +37,7 @@ enum RunTimeDebugFeatures {
     RunTimeDebugFeatureReadDebugDelay,
     RunTimeDebugFeatureWriteDebugDelay,
     RunTimeDebugFeatureAtomicDebugDelay,
-    RunTimeDebugFeatureDisableL1DataCache,
+    RunTimeDebugFeatureEnableL1DataCache,
     // NOTE: Update RunTimeDebugFeatureNames if adding new features
     RunTimeDebugFeatureCount
 };
@@ -370,7 +370,7 @@ public:
                 } else {
                     return "false";
                 }
-            case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureEnableL1DataCache: return std::to_string(get_feature_enabled(feature));
             default: return "";
         }
     }

@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.common.utility_functions import skip_for_grayskull
 
 
 def run_all_reduce_test(
@@ -125,7 +124,6 @@ def run_all_reduce_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -199,7 +197,6 @@ def test_ring_all_reduce_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -388,7 +385,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
@@ -449,7 +445,6 @@ def test_line_all_reduce_on_TG_rows_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
@@ -504,7 +499,6 @@ def test_line_all_reduce_on_TG_cols_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
