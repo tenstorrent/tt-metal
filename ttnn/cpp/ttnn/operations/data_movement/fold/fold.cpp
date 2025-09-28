@@ -402,51 +402,47 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     return output_tensors;
 }
 
-// Tensor reshard_if_needed(
-//     const Tensor& input,
-//     const uint32_t stride_h,
-//     const uint32_t stride_w) {
-//         ttnn::Shape input_shape = input.logical_shape();
-//         uint32_t input_width = input_shape[2];
-//         uint32_t pixels_per_compute_row = stride_h * stride_w * input_width;
-//         uint32_t current_shard_height = input.shard_spec().value().shape[0];
-//         const CoreCoord &compute_grid_size = input.device()->compute_with_storage_grid_size();
-//         std::cout << "current_shard_height: " << current_shard_height << std::endl;
-//         std::cout << "pixels_per_compute_row: " << pixels_per_compute_row << std::endl;
-//         if (current_shard_height % pixels_per_compute_row != 0) {
-//             uint32_t max_cores = compute_grid_size.x * compute_grid_size.y;
-//             uint32_t total_height = input_shape[0] * input_shape[1] * input_shape[2];
+Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t stride_w) {
+    ttnn::Shape input_shape = input.logical_shape();
+    uint32_t input_width = input_shape[2];
+    uint32_t pixels_per_compute_row = stride_h * stride_w * input_width;
+    uint32_t current_shard_height = input.shard_spec().value().shape[0];
+    const CoreCoord& compute_grid_size = input.device()->compute_with_storage_grid_size();
+    std::cout << "current_shard_height: " << current_shard_height << std::endl;
+    std::cout << "pixels_per_compute_row: " << pixels_per_compute_row << std::endl;
+    if (current_shard_height % pixels_per_compute_row != 0) {
+        uint32_t max_cores = compute_grid_size.x * compute_grid_size.y;
+        uint32_t total_height = input_shape[0] * input_shape[1] * input_shape[2];
 
-//             // Find the largest number of cores <= max_cores such that total_height % num_cores == 0
-//             uint32_t num_cores = max_cores;
-//             while (num_cores > 0 && (total_height / stride_h / stride_w) % num_cores != 0) {
-//                 num_cores--;
-//             }
+        // Find the largest number of cores <= max_cores such that total_height % num_cores == 0
+        uint32_t num_cores = max_cores;
+        while (num_cores > 0 && (total_height / stride_h / stride_w) % num_cores != 0) {
+            num_cores--;
+        }
 
-//             // Ensure we use at least 1 core
-//             if (num_cores == 0) {
-//                 num_cores = 1;
-//             }
-//             std::cout << "Resharding from " << current_shard_height << " to use " << num_cores << " cores." <<
-//             std::endl;
+        // Ensure we use at least 1 core
+        if (num_cores == 0) {
+            num_cores = 1;
+        }
+        std::cout << "Resharding from " << current_shard_height << " to use " << num_cores << " cores." << std::endl;
 
-//             uint32_t optimal_shard_height = tt::round_up(total_height / num_cores, pixels_per_compute_row);
+        uint32_t optimal_shard_height = tt::round_up(total_height / num_cores, pixels_per_compute_row);
 
-//             auto new_shard_spec = input.shard_spec().value();
-//             new_shard_spec.shape[0] = optimal_shard_height;
+        auto new_shard_spec = input.shard_spec().value();
+        new_shard_spec.shape[0] = optimal_shard_height;
 
-//             std::cout << "optimal_shard_height: " << optimal_shard_height << std::endl;
-//             // Create new core range set using the calculated number of cores
-//             CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size,
-//             true); new_shard_spec.grid = new_core_range;
+        std::cout << "optimal_shard_height: " << optimal_shard_height << std::endl;
+        // Create new core range set using the calculated number of cores
+        CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
+        new_shard_spec.grid = new_core_range;
 
-//             auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
-//             // need to reshard
-//             std::cout << "Resharding to new memory config: " << new_mem_config << std::endl;
-//             return ttnn::reshard(input, new_mem_config, std::nullopt);
-//         }
-//         return input;
-// }
+        auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
+        // need to reshard
+        std::cout << "Resharding to new memory config: " << new_mem_config << std::endl;
+        return ttnn::reshard(input, new_mem_config, std::nullopt);
+    }
+    return input;
+}
 /* use transpose as fold change */
 
 // ttnn::SmallVector<PadSpecDim> padded_shape = {{
@@ -471,7 +467,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 // //     .at(0);
 
 Tensor FoldOperation::invoke(
-    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& input_tensor_,
     uint32_t stride_h,
     uint32_t stride_w,
     bool use_transpose_as_fold,
@@ -481,20 +477,21 @@ Tensor FoldOperation::invoke(
     uint32_t pad_w,
     const std::optional<CoreRangeSet>& core_grid,
     const std::optional<MemoryConfig>& override_memory_config) {
-    if (use_transpose_as_fold) {
+    Tensor input_tensor = input_tensor_;
+    if (use_transpose_as_fold == false) {
         if (input_tensor.is_sharded()) {
             if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-                return fold_with_transpose_sharded_(
-                           input_tensor,
-                           output_shape,
-                           stride_h,
-                           stride_w,
-                           pad_c,
-                           pad_h,
-                           pad_w,
-                           core_grid.value_or(CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{1, 1}}}),
-                           override_memory_config)
-                    .at(0);
+                /* use transpose as fold change */
+
+                ttnn::SmallVector<PadSpecDim> padded_shape = {{{0, 0}, {pad_h, pad_h}, {pad_w, pad_w}, {0, pad_c}}};
+                std::cout << "pad shape: " << padded_shape << std::endl;
+                auto pad_output = ttnn::pad(input_tensor, padded_shape, 0, true, std::nullopt);
+                pad_output = reshard_if_needed(pad_output, stride_h, stride_w);
+                // if (input_tensor.buffer() != pad_output.buffer()) {
+                //     input_tensor.deallocate(true);
+                // }
+                auto result = ttnn::prim::fold(pad_output, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+                return result;
             } else {
                 TT_THROW("fold op does not support non height-sharding!");
             }

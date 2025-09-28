@@ -60,6 +60,31 @@ Fold::MultiCore::cached_program_t fold_multi_core(
         all_cores,
         WriterDataMovementConfig({cb_src0_index, cb_dst0_index}, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
 
+    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
+        all_cores,
+        ReaderDataMovementConfig({cb_src0_index, cb_dst0_index}, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
+    // Reader run-time args
+    SetRuntimeArgs(
+        program,
+        reader_kernel_id,
+        all_cores,
+        {
+            pixel_size,
+            aligned_pixel_size,
+            aligned_dst_pixel_size,
+            num_pixels,
+            num_dst_pixels,
+            stride_w * aligned_pixel_size,
+            width * aligned_pixel_size,
+            stride_h,
+            stride_w,
+            num_dst_rows,
+            width / stride_w,
+            pixels_per_dst_row * aligned_pixel_size,
+            true,
+        });
     // Writer run-time args
     SetRuntimeArgs(
         program,
@@ -78,9 +103,10 @@ Fold::MultiCore::cached_program_t fold_multi_core(
             num_dst_rows,
             width / stride_w,
             pixels_per_dst_row * aligned_pixel_size,
+            false,
         });
 
-    return {std::move(program), {writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0}};
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0}};
 }
 
 Fold::MultiCore::cached_program_t Fold::MultiCore::create(
@@ -96,6 +122,7 @@ void Fold::MultiCore::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
+    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
     auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     auto& stride_h = cached_program.shared_variables.stride_h;
     auto& stride_w = cached_program.shared_variables.stride_w;
@@ -129,6 +156,25 @@ void Fold::MultiCore::override_runtime_arguments(
 
     SetRuntimeArgs(
         program,
+        reader_kernel_id,
+        all_cores,
+        {
+            pixel_size,
+            aligned_pixel_size,
+            aligned_dst_pixel_size,
+            num_pixels,
+            num_dst_pixels,
+            stride_w * aligned_pixel_size,
+            width * aligned_pixel_size,
+            stride_h,
+            stride_w,
+            num_dst_rows,
+            width / stride_w,
+            pixels_per_dst_row * aligned_pixel_size,
+            true,
+        });
+    SetRuntimeArgs(
+        program,
         writer_kernel_id,
         all_cores,
         {
@@ -144,6 +190,7 @@ void Fold::MultiCore::override_runtime_arguments(
             num_dst_rows,
             width / stride_w,
             pixels_per_dst_row * aligned_pixel_size,
+            false,
         });
 }
 

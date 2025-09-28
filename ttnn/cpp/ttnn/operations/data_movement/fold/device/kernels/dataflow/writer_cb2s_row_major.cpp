@@ -25,6 +25,7 @@ void kernel_main() {
     const uint32_t num_dst_rows = get_arg_val<uint32_t>(9);
     const uint32_t num_dst_cols = get_arg_val<uint32_t>(10);
     const uint32_t dst_row_offset = get_arg_val<uint32_t>(11);
+    const uint32_t is_reader = get_arg_val<uint32_t>(12);
 
     auto copy_next_dst_pixel = [&](uint64_t src_noc_address, uint32_t dst_l1_addr) -> void {
         for (uint32_t row = 0, row_offset = 0; row < stride_h; ++row, row_offset += aligned_row_size) {
@@ -37,14 +38,17 @@ void kernel_main() {
     };
 
     uint64_t src_noc_addr = get_noc_addr(get_read_ptr(src_shard_cb));
-    uint32_t dst_addr = get_write_ptr(dst_shard_cb);
+    uint32_t dst_addr_base = get_write_ptr(dst_shard_cb);
+
+    const uint32_t dst_row_size = num_dst_cols * aligned_dst_pixel_size;
 
     for (uint32_t i = 0; i < num_dst_rows; ++i) {
-        uint64_t src_col_offset = 0;
-        for (uint32_t j = 0; j < num_dst_cols; ++j) {
+        uint64_t src_col_offset = is_reader ? 0 : aligned_chunk_size;
+        uint32_t dst_addr = dst_addr_base + (i * dst_row_size) + (is_reader ? 0 : aligned_dst_pixel_size);
+        for (uint32_t j = 0; j < num_dst_cols; j += 2) {
             copy_next_dst_pixel(src_noc_addr + src_col_offset, dst_addr);
-            src_col_offset += aligned_chunk_size;
-            dst_addr += aligned_dst_pixel_size;
+            src_col_offset += aligned_chunk_size * 2;
+            dst_addr += aligned_dst_pixel_size * 2;
         }
         src_noc_addr += dst_row_offset;
         noc_async_read_barrier();
