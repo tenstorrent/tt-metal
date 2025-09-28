@@ -257,8 +257,10 @@ jobs:
         pip install pyyaml # Needed for clang-tidy-diff-20.py
     - name: Prepare .clang-tidy with extra checks
       run: |
-        grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
-        mv .clang-tidy-new .clang-tidy
+        if [ -f .clang-tidy-light ]; then
+          grep -v -F -f .clang-tidy-light .clang-tidy > .clang-tidy-new
+          mv .clang-tidy-new .clang-tidy
+        fi
         cat .clang-tidy
     - name: Prepare compile_commands.json
       run: |
