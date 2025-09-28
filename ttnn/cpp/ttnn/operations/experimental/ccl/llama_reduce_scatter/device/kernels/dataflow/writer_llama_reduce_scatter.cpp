@@ -119,7 +119,7 @@ void kernel_main() {
         for (uint32_t target_device_id : device_order) {
             // Calculate device-specific constants once per device
             const uint32_t num_hops = distance<ring_topology>(chip_id, target_device_id, num_devices);
-            unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+            fabric_set_unicast_route<false>(unicast_packet_header, num_hops);
             auto& fabric_conn =
                 get_fabric_connection<ring_topology>(fabric_connection, chip_id, target_device_id, num_devices);
 
