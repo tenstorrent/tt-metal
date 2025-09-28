@@ -59,9 +59,9 @@ class Generator:
         self.tokenizer = tokenizer
         self.data_parallel = len(self.model)
         self.prev_page_table = None
-        self.trace_id_prefill = defaultdict(lambda: None)
-        self.trace_inputs_prefill = defaultdict(lambda: None)
-        self.trace_output_prefill = defaultdict(lambda: None)
+        self.trace_id_prefill = defaultdict(lambda: defaultdict(lambda: None))
+        self.trace_inputs_prefill = defaultdict(lambda: defaultdict(lambda: None))
+        self.trace_output_prefill = defaultdict(lambda: defaultdict(lambda: None))
 
     def _capture_trace_prefill(
         self,
@@ -134,10 +134,8 @@ class Generator:
         prefill_seq_len=None,
         **kwargs,
     ):
-        # Extract batch_size from prefill_ids to create unique trace keys per batch size
-        batch_size = prefill_ids.shape[0]
-        trace_key = f"{prefill_seq_len}_{batch_size}"
-        if self.trace_id_prefill[trace_key] is None:
+        trace_key = f"{prefill_seq_len}_{model_id}"
+        if self.trace_id_prefill[trace_key][model_id] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 prefill_ids,
                 page_table=page_table,
@@ -147,14 +145,14 @@ class Generator:
                 model_id=model_id,
                 **kwargs,
             )
-            self.trace_id_prefill[trace_key] = trace_id
-            self.trace_inputs_prefill[trace_key] = device_inputs
-            self.trace_output_prefill[trace_key] = tt_out_trace
+            self.trace_id_prefill[trace_key][model_id] = trace_id
+            self.trace_inputs_prefill[trace_key][model_id] = device_inputs
+            self.trace_output_prefill[trace_key][model_id] = tt_out_trace
 
         tt_out_trace = self._prefill_forward_trace_prefill(
-            self.trace_id_prefill[trace_key],
-            self.trace_inputs_prefill[trace_key],
-            self.trace_output_prefill[trace_key],
+            self.trace_id_prefill[trace_key][model_id],
+            self.trace_inputs_prefill[trace_key][model_id],
+            self.trace_output_prefill[trace_key][model_id],
             prefill_ids,
             user_id,
             page_table=page_table,
@@ -197,7 +195,7 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
-        enable_trace=True,
+        enable_trace=False,
         **kwargs,
     ):
         if page_table is not None:
