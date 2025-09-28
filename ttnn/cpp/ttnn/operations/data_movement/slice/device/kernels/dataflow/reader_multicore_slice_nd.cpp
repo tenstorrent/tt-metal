@@ -66,21 +66,21 @@ void kernel_main() {
     // Get dimension arrays from runtime arguments
     // Layout: input_dims[rank], output_dims[rank], slice_starts[rank], slice_ends[rank], slice_steps[rank]
     // Read input dimensions
-    volatile tt_l1_ptr uint32_t* input_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx++));
+    volatile tt_l1_ptr uint32_t* input_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
     rt_args_idx += tensor_rank;
 
     // Read output dimensions
-    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx++));
+    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
     rt_args_idx += tensor_rank;
 
     // Read slice parameters
-    volatile tt_l1_ptr uint32_t* slice_starts = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx++));
+    volatile tt_l1_ptr uint32_t* slice_starts = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
     rt_args_idx += tensor_rank;
 
-    volatile tt_l1_ptr uint32_t* slice_ends = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx++));
+    volatile tt_l1_ptr uint32_t* slice_ends = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
     rt_args_idx += tensor_rank;
 
-    volatile tt_l1_ptr uint32_t* slice_steps = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx++));
+    volatile tt_l1_ptr uint32_t* slice_steps = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
 
     // Calculate sizes - working with rows, not tiles
     uint32_t input_bytes_per_row = input_dims[tensor_rank - 1] * element_size;
