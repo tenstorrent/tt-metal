@@ -998,7 +998,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             l1_usage.CB_allocation_size,
             approx_input_size_per_core);
         return core_count_and_size{
-            .core_count = input_parallel_config.grid.num_cores(),
+            .core_count = std::max(input_parallel_config.grid.num_cores(), output_parallel_config.grid.num_cores()),
             .size = l1_usage.CB_allocation_size + l1_usage.tensor_allocation_size,
             .conv_config = conv_config};
     };
