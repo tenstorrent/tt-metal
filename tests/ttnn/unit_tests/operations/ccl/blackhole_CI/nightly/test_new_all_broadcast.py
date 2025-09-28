@@ -9,7 +9,6 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_grayskull
 
 
 def run_with_trace(
@@ -233,7 +232,6 @@ def run_all_broadcast_impl(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, layout, input_dtype",
     [
