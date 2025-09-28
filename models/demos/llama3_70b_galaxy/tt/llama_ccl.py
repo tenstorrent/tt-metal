@@ -589,6 +589,8 @@ class TT_CCL:
             buffers_dict = (
                 {
                     "QKV": [(1, 1, seqlen, 1280)],
+                    "SDPA": [(1, 1, seqlen // 2, 1024)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
                     "WO": [(1, 1, seqlen, 2048)],
                     "FF1": [(1, 1, seqlen, 3584)],
                     "FF3": [(1, 1, seqlen, 3584)],
@@ -599,6 +601,8 @@ class TT_CCL:
                 if not self.use_qwen_mlp
                 else {
                     "QKV": [(1, 1, seqlen, 1280)],
+                    "SDPA": [(1, 1, seqlen // 2, 1024)],
+                    "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
                     "WO": [(1, 1, seqlen, 1280)],
                     "FF1": [(1, 1, seqlen, 3200)],
                     "FF3": [(1, 1, seqlen, 3200)],

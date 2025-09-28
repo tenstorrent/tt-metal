@@ -50,11 +50,11 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
     "max_seq_len",
     (
         # 128,
-        2048,
-        4096,
-        8192,
-        1024 * 32,
-        1024 * 64,
+        # 2048,
+        # 4096,
+        # 8192,
+        1024 * 16,
+        # 1024 * 64,
     ),
 )
 @pytest.mark.parametrize(

@@ -82,8 +82,6 @@ class TtLlamaAttention(LightweightModule):
         self.dtype = dtype
         self.qk_norm = configuration.qk_norm
 
-        self.max_seq_len = configuration.max_seq_len
-        self.max_seq_len = 256
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
