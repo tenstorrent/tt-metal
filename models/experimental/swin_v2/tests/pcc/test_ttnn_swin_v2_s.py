@@ -135,11 +135,8 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
     torch_model = SwinTransformer(
         patch_size=[4, 4], embed_dim=96, depths=[2, 2, 18, 2], num_heads=[3, 6, 12, 24], window_size=[8, 8]
     )
-
     torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
-
-    # Input tensor for testing
-    torch_input_tensor = torch.randn(1, 3, 512, 512)  # Sample input tensor
+    torch_input_tensor = torch.randn(1, 3, 512, 512)
     torch_output_tensor = torch_model(torch_input_tensor)
 
     parameters = preprocess_model_parameters(
@@ -147,8 +144,6 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
     )
 
     attn_mask_tuple = preprocess_attn_mask([1, 3, 512, 512], [4, 4], [8, 8], [3, 3], device)
-
-    # Convert the model to TTNN
     ttnn_model = TtSwinTransformer(
         device,
         parameters,
@@ -159,8 +154,6 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
         window_size=[8, 8],
         attn_mask_tuple=attn_mask_tuple,
     )
-
-    # Convert input tensor to TTNN format
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
@@ -169,11 +162,7 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Apply TTNN model
     output_tensor = ttnn_model(input_tensor)
-
-    # Convert output tensor back to Torch format
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
