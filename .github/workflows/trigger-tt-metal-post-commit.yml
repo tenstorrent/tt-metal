@@ -385,7 +385,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
           # Format L2 Nightly results (runs with All post-commit tests)
-          L2_RESULT=$(format_test_result "Wormhole C++ tests" \
+          L2_RESULT=$(format_test_result "Wormhole C++" \
             "${{ needs.detect-changes.outputs.run-wormhole }}" \
             "${{ steps.parse-results.outputs.l2-status }}" \
             "${{ steps.parse-results.outputs.l2-url }}" \
