@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -50,7 +50,6 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -512,7 +511,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
         GTEST_SKIP() << "Skipping test for a unit-size mesh device";
     }
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::Float16_b);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::Float16_b);
 
     uint32_t num_tiles = 1;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;

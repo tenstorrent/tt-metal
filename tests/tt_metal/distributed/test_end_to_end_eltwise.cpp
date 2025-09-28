@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <functional>
@@ -173,7 +173,7 @@ TEST_F(MeshEndToEnd2x4Tests, BufferRoundtripTest) {
     // We will create a distributed buffer with 2 shards of {32, 32} and distribute it across the devices in the mesh.
     auto shard_shape = Shape2D{32, 32};
     auto distributed_buffer_shape = Shape2D{32 * mesh_device_->num_rows(), 32 * mesh_device_->num_cols()};
-    uint32_t tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::UInt32);
+    uint32_t tile_size_bytes = tt::tile_size(tt::DataFormat::UInt32);
 
     uint32_t distributed_buffer_size_bytes =
         mesh_device_->num_rows() * 32 * mesh_device_->num_cols() * 32 * tile_size_bytes;
@@ -204,7 +204,7 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device_->num_rows(), shard_shape.width() * mesh_device_->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =
@@ -267,7 +267,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device_->num_rows(), shard_shape.width() * mesh_device_->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =
@@ -331,7 +331,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device_->num_rows(), shard_shape.width() * mesh_device_->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
     auto local_buffer_config =

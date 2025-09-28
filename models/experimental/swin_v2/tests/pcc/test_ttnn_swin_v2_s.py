@@ -12,7 +12,6 @@ from ttnn.model_preprocessing import (
     preprocess_linear_bias,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_grayskull
 from models.experimental.swin_v2.reference.patchmerging_v2 import PatchMergingV2
 from models.experimental.swin_v2.reference.swin_transformer import SwinTransformer
 from models.experimental.swin_v2.tt.tt_swin_transformer import TtSwinTransformer
@@ -131,7 +130,6 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_V2_L1_SMALL_SIZE}], indirect=True)
 def test_swin_s_transformer(device, reset_seeds, model_location_generator):
     torch_model = SwinTransformer(
