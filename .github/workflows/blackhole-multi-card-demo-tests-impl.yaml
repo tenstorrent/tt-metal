@@ -83,6 +83,8 @@ jobs:
       - name: Save environment data
         if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
         timeout-minutes: 15
+        env:
+          ARCH_NAME: ${{ matrix.test-group.arch }}
         run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
@@ -160,6 +162,8 @@ jobs:
       - name: Save environment data
         if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
         timeout-minutes: 15
+        env:
+          ARCH_NAME: ${{ matrix.test-group.arch }}
         run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
 
       - name: Upload benchmark data
