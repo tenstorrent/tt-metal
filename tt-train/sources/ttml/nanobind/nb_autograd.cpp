@@ -156,8 +156,6 @@ void py_module(nb::module_& m) {
     {
         auto py_auto_context = static_cast<nb::class_<AutoContext>>(m.attr("AutoContext"));
         py_auto_context.def_static("get_instance", &AutoContext::get_instance, nb::rv_policy::reference);
-        py_auto_context.def("get_generator", &AutoContext::get_generator);
-        py_auto_context.def("set_generator", &AutoContext::set_generator, nb::arg("generator"));
         py_auto_context.def("set_seed", &AutoContext::set_seed, nb::arg("seed"));
         py_auto_context.def("get_seed", &AutoContext::get_seed);
         py_auto_context.def(
