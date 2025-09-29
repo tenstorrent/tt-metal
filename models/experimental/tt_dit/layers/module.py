@@ -159,7 +159,12 @@ class Module:
             child.load(directory / name)
 
         for name, parameter in self.named_parameters():
-            parameter.load(directory / f"{name}.tensorbin")
+            path = directory / f"{name}.tensorbin"
+            try:
+                parameter.load(path)
+            except ParameterLoadingError as err:
+                msg = f"{err} while loading {path}"
+                raise ParameterLoadingError(msg) from err
 
     def to_cached_state_dict(self, path_prefix: str) -> dict[str, str]:
         cache_dict = {}
@@ -183,7 +188,12 @@ class Module:
             child.from_cached_state_dict(substate(cache_dict, name))
 
         for name, parameter in self.named_parameters():
-            parameter.load(cache_dict[name])
+            path = cache_dict[name]
+            try:
+                parameter.load(path)
+            except ParameterLoadingError as err:
+                msg = f"{err} while loading {path}"
+                raise ParameterLoadingError(msg) from err
 
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -232,13 +242,19 @@ class Parameter:
         self.to_host = to_host
         self._data = None
 
+        local_shape = list(self.shape)
+        for k, v in self.mesh_mapping.items():
+            if k is not None:
+                local_shape[v] //= self.device.shape[k]
+        self.local_shape = tuple(local_shape)
+
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
         shape = tuple(torch_tensor.shape)
         if shape != self.shape:
             msg = f"expected tensor shape {self.shape}, got {shape}"
             raise ParameterLoadingError(msg)
 
-        self._data = tensor.from_torch(
+        self.data = tensor.from_torch(
             torch_tensor,
             device=self.device,
             layout=self.layout,
@@ -252,9 +268,39 @@ class Parameter:
         ttnn.dump_tensor(path, self.data)
 
     def load(self, path: str | Path, /) -> None:
-        self._data = ttnn.load_tensor(path, device=None if self.to_host else self.device)
+        self.data = ttnn.load_tensor(path, device=None if self.to_host else self.device)
 
     @property
     def data(self) -> ttnn.Tensor:
         assert self._data is not None, "parameter has no data"
         return self._data
+
+    @data.setter
+    def data(self, value: ttnn.Tensor) -> None:
+        self._check_data(value)
+        self._data = value
+
+    def _check_data(self, value: ttnn.Tensor) -> None:
+        if self.to_host:
+            if value.device() is not None:
+                msg = "expected host tensor, got device tensor"
+                raise ParameterLoadingError(msg)
+        elif value.device() != self.device:
+            msg = "device mismatch"
+            raise ParameterLoadingError(msg)
+
+        if value.dtype != self.dtype:
+            msg = f"dtype mismatch: expected {self.dtype}, got {value.dtype}"
+            raise ParameterLoadingError(msg)
+
+        if value.layout != self.layout:
+            msg = f"layout mismatch: expected {self.layout}, got {value.layout}"
+            raise ParameterLoadingError(msg)
+
+        if value.memory_config() != self.memory_config:
+            msg = f"memory config mismatch: expected {self.memory_config}, got {value.memory_config()}"
+            raise ParameterLoadingError(msg)
+
+        if value.shape != self.local_shape:
+            msg = f"shape mismatch: expected {self.local_shape}, got {tuple(value.shape)}"
+            raise ParameterLoadingError(msg)
