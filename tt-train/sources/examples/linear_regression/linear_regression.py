@@ -30,9 +30,8 @@ from sklearn.metrics import mean_squared_error, r2_score
 # ---------------------------------------------------------------------------
 # Import TTML (adjust path if needed)
 # ---------------------------------------------------------------------------
-sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/build/sources/ttml")
-sys.path.append(f"{os.environ['TT_METAL_HOME']}/build/tt-train/sources/ttml")
-import _ttml  # noqa: E402
+sys.path.append(f"{os.environ['TT_METAL_HOME']}/tt-train/sources/ttml")
+import ttml  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +85,10 @@ def train_ttml_linear_regression(
     Trains TTML linear regression (2D -> 1D generalizes via n_features).
     Shapes TTML expects: [B, 1, 1, n_features] for inputs, [B, 1, 1, 1] for targets.
     """
-    model = _ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
-    loss_fn = _ttml.ops.loss.mse_loss
-    opt_cfg = _ttml.optimizers.SGDConfig.make(cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov)
-    opt = _ttml.optimizers.SGD(model.parameters(), opt_cfg)
+    model = ttml.models.linear_regression.create_linear_regression_model(n_features, 1)
+    loss_fn = ttml.ops.loss.mse_loss
+    opt_cfg = ttml.optimizers.SGDConfig.make(cfg.lr, cfg.momentum, cfg.weight_decay, cfg.dampening, cfg.nesterov)
+    opt = ttml.optimizers.SGD(model.parameters(), opt_cfg)
     model.train()
 
     num_samples = x_train.shape[0]
@@ -107,16 +106,16 @@ def train_ttml_linear_regression(
             x_batch = x_train[batch_idx].reshape(bsz, 1, 1, n_features)
             y_batch = y_train[batch_idx].reshape(bsz, 1, 1, 1)
 
-            tt_x = _ttml.autograd.Tensor.from_numpy(x_batch.astype(np.float32))
-            tt_y = _ttml.autograd.Tensor.from_numpy(y_batch.astype(np.float32))
+            tt_x = ttml.autograd.Tensor.from_numpy(x_batch.astype(np.float32))
+            tt_y = ttml.autograd.Tensor.from_numpy(y_batch.astype(np.float32))
             opt.zero_grad()
             tt_pred = model(tt_x)
-            tt_loss = loss_fn(tt_pred, tt_y, _ttml.ops.ReduceType.MEAN)
+            tt_loss = loss_fn(tt_pred, tt_y, ttml.ops.ReduceType.MEAN)
             tt_loss.backward(False)
             opt.step()
 
             if verbose:
-                loss_val = float(tt_loss.to_numpy(_ttml.autograd.DataType.FLOAT32))
+                loss_val = float(tt_loss.to_numpy(ttml.autograd.DataType.FLOAT32))
                 print(f"[epoch {epoch+1}/{cfg.epochs}] step_loss={loss_val:.6f}")
 
             pos = end_pos
@@ -136,8 +135,8 @@ def predict_ttml(model, x: np.ndarray, n_features: int, batch_size: int = 256) -
         end_pos = min(num_samples, pos + batch_size)
         bsz = end_pos - pos
         x_batch = x[pos:end_pos].reshape(bsz, 1, 1, n_features)
-        tt_x = _ttml.autograd.Tensor.from_numpy(x_batch.astype(np.float32))
-        tt_y = model(tt_x).to_numpy(_ttml.autograd.DataType.FLOAT32).reshape(bsz)
+        tt_x = ttml.autograd.Tensor.from_numpy(x_batch.astype(np.float32))
+        tt_y = model(tt_x).to_numpy(ttml.autograd.DataType.FLOAT32).reshape(bsz)
         preds.append(tt_y)
         pos = end_pos
     return np.concatenate(preds, axis=0)
@@ -227,9 +226,9 @@ def main():
     params = model.parameters()
     print(params.keys())
     ttml_w = (
-        params["linear/weight"].to_numpy(_ttml.autograd.DataType.FLOAT32).reshape(-1)
+        params["linear/weight"].to_numpy(ttml.autograd.DataType.FLOAT32).reshape(-1)
     )  # shape: [n_features] (no bias)
-    ttml_b = params["linear/bias"].to_numpy(_ttml.autograd.DataType.FLOAT32).item()
+    ttml_b = params["linear/bias"].to_numpy(ttml.autograd.DataType.FLOAT32).item()
 
     # sklearn baseline
     sk = fit_sklearn_baseline(split.x_train, split.y_train, split.x_test, split.y_test)
