@@ -533,15 +533,17 @@ class StableDiffusion3Pipeline:
             if seed is not None:
                 torch.manual_seed(seed)
 
-            # We let randn generate a permuted latent tensor, so that the generated noise matches the
-            # reference implementation.
             shape = [
                 batch_size * num_images_per_prompt,
                 self._num_channels_latents,
                 height // self._vae_scale_factor,
                 width // self._vae_scale_factor,
             ]
-            latents = self.transformers[0].patchify(torch.randn(shape, dtype=torch.bfloat16).permute(0, 2, 3, 1))
+            # We let randn generate a permuted latent tensor in float32, so that the generated noise
+            # matches the reference implementation.
+            latents = self.transformers[0].patchify(
+                torch.randn(shape, dtype=torch.float32).to(dtype=torch.bfloat16).permute(0, 2, 3, 1)
+            )
 
             tt_prompt_embeds_list = []
             tt_pooled_prompt_embeds_list = []

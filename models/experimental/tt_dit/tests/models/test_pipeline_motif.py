@@ -102,10 +102,10 @@ def test_motif_pipeline(
 
     # Define test prompt
     prompt = (
-        "An epic, high-definition cinematic shot of a rustic snowy cabin glowing "
-        "warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle "
-        "snow-covered pines and delicate falling snowflakes - captured in a rich, "
-        "atmospheric, wide-angle scene with deep cinematic depth and warmth."
+        "cinematic film still of Kodak Motion Picture Film (Sharp Detailed Image) An Oscar winning movie for Best "
+        "Cinematography a woman in a kimono standing on a subway train in Japan Kodak Motion Picture Film Style, "
+        "shallow depth of field, vignette, highly detailed, high budget, bokeh, cinemascope, moody, epic, gorgeous, "
+        "film grain, grainy"
     )
 
     if no_prompt:
