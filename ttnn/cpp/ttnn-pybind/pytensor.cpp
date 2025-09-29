@@ -946,7 +946,6 @@ void pytensor_module(py::module& m_tensor) {
             "deallocate",
             [](Tensor& self, bool force) {
                 self.deallocate(force);
-                return;
             },
             py::arg("force") = false,
             R"doc(

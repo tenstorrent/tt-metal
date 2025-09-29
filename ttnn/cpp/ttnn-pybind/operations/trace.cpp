@@ -40,7 +40,6 @@ void py_module(py::module& module) {
         "end_trace_capture",
         [](MeshDevice* device, MeshTraceId trace_id, std::optional<ttnn::QueueId> cq_id) {
             ttnn::operations::trace::end_trace_capture(device, trace_id, cq_id);
-            return;
         },
         py::arg("mesh_device"),
         py::arg("trace_id"),
