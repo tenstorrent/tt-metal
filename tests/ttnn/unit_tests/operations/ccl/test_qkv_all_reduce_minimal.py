@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@ import os
 
 from conftest import is_6u
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_grayskull
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
@@ -337,7 +336,6 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 
 # Test 1: test_all_reduce_create_qkv_heads_fuse
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[1, 0]])
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize("validate_all", [True])
@@ -413,7 +411,6 @@ def test_all_reduce_qkv_heads_fuse(
 
 # Test 2: test_all_reduce_create_qkv_heads_fuse_perf
 @pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize("validate_all", [True])
@@ -489,7 +486,6 @@ def test_all_reduce_qkv_heads_fuse_perf(
 
 # Test 2: test_all_reduce_create_qkv_heads_fuse_perf
 @pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize("validate_all", [True])

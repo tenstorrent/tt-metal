@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -227,7 +227,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
         mesh_device->reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
-    detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
+    ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
@@ -296,7 +296,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         mesh_device->reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
-    detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
+    ReadMeshDeviceProfilerResults(*mesh_device);
 }
 
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.

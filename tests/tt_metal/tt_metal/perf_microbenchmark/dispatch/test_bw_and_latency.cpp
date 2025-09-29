@@ -42,7 +42,6 @@
 #include "impl/dispatch/command_queue_common.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -494,7 +493,7 @@ int main(int argc, char** argv) {
         }
 
         if (read_profiler_results) {
-            tt_metal::detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
+            tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
         }
 
         pass &= mesh_device->close();
