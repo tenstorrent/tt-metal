@@ -6,6 +6,7 @@
 #include <vector>
 #include <cmath>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::tt_metal;
 
