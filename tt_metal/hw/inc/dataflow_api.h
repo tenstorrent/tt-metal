@@ -1543,7 +1543,9 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
 
     WAYPOINT("NRBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_reads_flushed(noc));
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_reads_flushed(noc));
     } else {
         while (!ncrisc_noc_reads_flushed(noc));
     }
@@ -1571,7 +1573,9 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
 
     WAYPOINT("NWBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
     } else {
         while (!ncrisc_noc_nonposted_writes_flushed(noc));
     }
@@ -1598,7 +1602,9 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
 
     WAYPOINT("NWFW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
     } else {
         while (!ncrisc_noc_nonposted_writes_sent(noc));
     }
@@ -1621,7 +1627,9 @@ FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
     WAYPOINT("NPWW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
     } else {
         while (!ncrisc_noc_posted_writes_sent(noc));
     }
@@ -1647,7 +1655,9 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 
     WAYPOINT("NABW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx));
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx));
     } else {
         while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
     }
@@ -1669,15 +1679,25 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
     RECORD_NOC_EVENT(NocEventType::FULL_BARRIER);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         WAYPOINT("NFBW");
-        while (!ncrisc_dynamic_noc_reads_flushed(noc_idx));
+        while (!ncrisc_dynamic_noc_reads_flushed(noc_idx)) {
+            invalidate_l1_cache();
+        }
         WAYPOINT("NFCW");
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc_idx));
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc_idx)) {
+            invalidate_l1_cache();
+        }
         WAYPOINT("NFDW");
-        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc_idx));
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc_idx)) {
+            invalidate_l1_cache();
+        }
         WAYPOINT("NFEW");
-        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx));
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx)) {
+            invalidate_l1_cache();
+        }
         WAYPOINT("NFFW");
-        while (!ncrisc_dynamic_noc_posted_writes_sent(noc_idx));
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc_idx)) {
+            invalidate_l1_cache();
+        }
         WAYPOINT("NFBD");
     } else {
         WAYPOINT("NFBW");
