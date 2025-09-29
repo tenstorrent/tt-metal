@@ -74,11 +74,11 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 20000
+      num_packets: 100000
 
     patterns:
       - type: full_ring
-        iterations: 30
+        iterations: 3
 
   - name: "FullRingUnicast"
     benchmark_mode: true
@@ -93,11 +93,11 @@ Tests:
 
     defaults:
       ftype: unicast
-      num_packets: 20000
+      num_packets: 100000
 
     patterns:
       - type: full_ring
-        iterations: 30
+        iterations: 3
 
   - name: "HalfRingMulticast"
     benchmark_mode: true
@@ -112,7 +112,7 @@ Tests:
 
     defaults:
       ftype: mcast
-      num_packets: 20000
+      num_packets: 100000
 
     patterns:
       - type: half_ring
