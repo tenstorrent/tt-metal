@@ -24,9 +24,10 @@ class StatsCollector:
             "riscv_0": {"analysis": "riscv_0_analysis", "events": "riscv_0_events"},
         }
 
-    def gather_analysis_stats(self):
+    def gather_analysis_stats(self, stats=None):
         # Gather stats from csv and set up analysis
-        stats = self.gather_stats_from_csv()
+        if stats is None:
+            stats = self.gather_stats_from_csv()
         cores = [
             key
             for key in stats["devices"][0]["cores"].keys()
