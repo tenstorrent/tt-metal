@@ -21,6 +21,7 @@ def run_efficientnetb0_inference(
     resolution,
     act_dtype=ttnn.bfloat16,
     weight_dtype=ttnn.bfloat16,
+    expected_inference_throughput=None,
 ):
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
     performant_runner = EfficientNetb0PerformantRunner(
@@ -55,6 +56,10 @@ def run_efficientnetb0_inference(
         f"Model: ttnn_efficientnetb0 - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size / inference_time_avg)}"
     )
 
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
@@ -70,15 +75,16 @@ def run_efficientnetb0_inference(
         (224, 224),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        160 if ttnn.get_num_devices() < 2 else 134,
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant(
-    model_location_generator,
-    device,
-    batch_size,
-    act_dtype,
-    weight_dtype,
-    resolution,
+    model_location_generator, device, batch_size, act_dtype, weight_dtype, resolution, expected_inference_throughput
 ):
     run_efficientnetb0_inference(
         model_location_generator,
@@ -87,6 +93,7 @@ def test_e2e_performant(
         resolution,
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat16,
+        expected_inference_throughput=expected_inference_throughput,
     )
 
 
@@ -104,6 +111,12 @@ def test_e2e_performant(
         (224, 224),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        263,
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant_dp(
@@ -113,7 +126,11 @@ def test_e2e_performant_dp(
     act_dtype,
     weight_dtype,
     resolution,
+    expected_inference_throughput,
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
     run_efficientnetb0_inference(
         model_location_generator,
         mesh_device,
@@ -121,4 +138,5 @@ def test_e2e_performant_dp(
         resolution,
         act_dtype=ttnn.bfloat16,
         weight_dtype=ttnn.bfloat16,
+        expected_inference_throughput=expected_inference_throughput,
     )
