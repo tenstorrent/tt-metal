@@ -97,7 +97,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const size_t packet_size_bytes =
         tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
-    // uint32_t num_packets_per_row = std::ceil(static_cast<double>(row_size) / max_packet_size);
     uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
