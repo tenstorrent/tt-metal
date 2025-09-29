@@ -132,16 +132,13 @@ ResultWithOptions conv2d(
         }
     } else {
         bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor);
-        if (input_is_on_device && input_tensor.memory_config().is_dram()) {
-            if (std::getenv("TTNN_CONV2D_DISABLE_AUTO_DRAM") != nullptr) {
-                TT_THROW("Automatically selected Conv2D DRAM when it's disabled");
-            }
+        if (input_is_on_device && input_tensor.memory_config().is_l1()) {
             log_info(
                 LogOp,
                 "Using conv dram without slice config as input tensor {} is in DRAM",
                 input_tensor.logical_shape());
             return result_to_result_with_options(
-                conv2d_DRAM(
+                conv2d_L1(
                     input_tensor,
                     weight_tensor,
                     device,
@@ -159,13 +156,12 @@ ResultWithOptions conv2d(
                     bias_tensor,
                     conv_config_,
                     compute_config_,
-                    memory_config_,
-                    std::nullopt),
+                    memory_config_),
                 return_output_dim,
                 return_weights_and_bias);
         }
         return result_to_result_with_options(
-            conv2d_L1(
+            conv2d_DRAM(
                 input_tensor,
                 weight_tensor,
                 device,
@@ -183,7 +179,8 @@ ResultWithOptions conv2d(
                 bias_tensor,
                 conv_config_,
                 compute_config_,
-                memory_config_),
+                memory_config_,
+                std::nullopt),
             return_output_dim,
             return_weights_and_bias);
     }
