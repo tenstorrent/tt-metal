@@ -75,7 +75,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     zif = _float_to_int32_exp21f_(d2 * d3);
 
     // Restore exponent
-    // Is this compiling properly to 1 instruction (vs. add + setexp)
     zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), zii));  // restore exponent
 
     y = sfpi::reinterpret<sfpi::vFloat>(zii);
