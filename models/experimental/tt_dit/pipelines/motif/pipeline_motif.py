@@ -526,7 +526,7 @@ class StableDiffusion3Pipeline:
                 ]
             )
 
-            timesteps = sigmas[:-2]
+            timesteps = sigmas[:-2] * 1000
 
             logger.info("preparing latents...")
 
@@ -675,7 +675,7 @@ class StableDiffusion3Pipeline:
                 torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
 
                 torch_latents = self.transformers[0].unpatchify(
-                    latents, height=height // self._vae_scale_factor, width=width // self._vae_scale_factor
+                    torch_latents, height=height // self._vae_scale_factor, width=width // self._vae_scale_factor
                 )
 
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
