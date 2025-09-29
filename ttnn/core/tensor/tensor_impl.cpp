@@ -38,7 +38,7 @@ namespace tt_metal {
 
 namespace tensor_impl {
 
-TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE = TensorPrintProfile::Short;
+PrintOptions TTNN_PRINT_OPTIONS;
 
 std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
     switch (dtype) {
@@ -270,11 +270,11 @@ struct DimensionShortener {
 };
 
 inline DimensionShortener get_dimension_shortener(std::size_t size) {
-    switch (TTNN_TENSOR_PRINT_PROFILE) {
+    switch (TTNN_PRINT_OPTIONS.profile) {
         case TensorPrintProfile::Empty: return DimensionShortener{size, 0};
         case TensorPrintProfile::Short: return DimensionShortener{size, 4};
         case TensorPrintProfile::Full: return DimensionShortener{size, std::nullopt};
-        default: TT_THROW("Unrecognized TTNN_TENSOR_PRINT_PROFILE {}", TTNN_TENSOR_PRINT_PROFILE);
+        default: TT_THROW("Unrecognized TTNN_TENSOR_PRINT_PROFILE {}", TTNN_PRINT_OPTIONS.profile);
     }
 }
 
@@ -285,22 +285,65 @@ inline void print_trailing_comma(std::ostream& ss, std::size_t index, std::size_
 }
 
 template <typename T>
-inline void print_datum(std::ostream& ss, T datum) {
+inline void print_datum(std::ostream& ss, T datum, bool use_scientific = false) {
     if (std::is_integral<T>::value) {
         ss << std::setw(5) << datum;
     } else {
-        ss << std::fixed << std::setw(8) << std::setprecision(5) << datum;
+        int precision = TTNN_PRINT_OPTIONS.precision;
+        if (use_scientific) {
+            // Note: scientific required fixed width + 4 (e+/-AB, e.g. 1.23456e+08)
+            ss << std::scientific << std::setw(precision + 7) << std::setprecision(precision) << datum;
+        } else {
+            ss << std::fixed << std::setw(precision + 3) << std::setprecision(precision) << datum;
+        }
     }
 }
 
 template <>
-inline void print_datum(std::ostream& ss, bfloat16 datum) {
-    print_datum(ss, static_cast<float>(datum));
+inline void print_datum(std::ostream& ss, bfloat16 datum, bool use_scientific) {
+    print_datum(ss, static_cast<float>(datum), use_scientific);
 }
 
 template <>
-inline void print_datum(std::ostream& ss, uint8_t datum) {
-    print_datum<uint32_t>(ss, datum);
+inline void print_datum(std::ostream& ss, uint8_t datum, bool use_scientific) {
+    print_datum<uint32_t>(ss, datum, use_scientific);
+}
+
+// Helper function to determine if scientific notation should be used
+template <typename T>
+bool should_use_scientific_notation(tt::stl::Span<const T> buffer) {
+    if (TTNN_PRINT_OPTIONS.sci_mode == SciMode::Enable) {
+        return true;
+    }
+    if (TTNN_PRINT_OPTIONS.sci_mode == SciMode::Disable) {
+        return false;
+    }
+
+    // SciMode::Default - auto-detect based on data range
+    if constexpr (std::is_integral_v<T>) {
+        return false;  // Never use scientific notation for integers
+    } else {
+        double nonzero_finite_min = std::numeric_limits<double>::max();
+        double nonzero_finite_max = std::numeric_limits<double>::lowest();
+        bool found_nonzero_finite = false;
+
+        for (const auto& value : buffer) {
+            double val = static_cast<double>(value);
+            if (std::isfinite(val) && val != 0.0) {
+                double abs_val = std::abs(val);
+                nonzero_finite_min = std::min(nonzero_finite_min, abs_val);
+                nonzero_finite_max = std::max(nonzero_finite_max, abs_val);
+                found_nonzero_finite = true;
+            }
+        }
+
+        if (!found_nonzero_finite) {
+            return false;  // No nonzero finite values, don't use scientific notation
+        }
+
+        return (nonzero_finite_max / nonzero_finite_min > 1000.0) || (nonzero_finite_max > 1.0e8) ||
+               (nonzero_finite_min < 1.0e-4);
+    }
 }
 
 constexpr int constexpr_strlen(const char* str) { return *str ? 1 + constexpr_strlen(str + 1) : 0; }
@@ -317,7 +360,8 @@ void to_string_row_major(
     std::size_t outer_index,
     const std::size_t buffer_offset,
     int64_t rank,
-    int64_t dim = 0) {
+    int64_t dim,
+    bool use_scientific) {
     auto stride = dim < strides.size() ? strides[dim] : 0;
 
     std::string spaces = std::string(TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH + dim, ' ');
@@ -355,9 +399,10 @@ void to_string_row_major(
         }
 
         if (rank > 1) {
-            to_string_row_major(ss, buffer, shape, strides, index, buffer_offset + index * stride, rank - 1, dim + 1);
+            to_string_row_major(
+                ss, buffer, shape, strides, index, buffer_offset + index * stride, rank - 1, dim + 1, use_scientific);
         } else {
-            print_datum(ss, buffer[buffer_offset + index]);
+            print_datum(ss, buffer[buffer_offset + index], use_scientific);
         }
         print_trailing_comma(ss, index, rank != 0 ? shape[-rank] : 1, after_comma);
     }
@@ -376,10 +421,11 @@ void to_string(
     Layout layout) {
     ss << TENSOR_TYPE_STRING << "(";
 
-    if (TTNN_TENSOR_PRINT_PROFILE == TensorPrintProfile::Empty) {
+    if (TTNN_PRINT_OPTIONS.profile == TensorPrintProfile::Empty) {
         ss << "...";
     } else {
-        to_string_row_major<T>(ss, buffer, shape, strides, 0, 0, shape.rank());
+        bool use_scientific = should_use_scientific_notation<T>(buffer);
+        to_string_row_major<T>(ss, buffer, shape, strides, 0, 0, shape.rank(), 0, use_scientific);
     }
     ss << ", shape=" << fmt::format("{}", shape) << ", dtype=" << fmt::format("{}", dtype)
        << ", layout=" << fmt::format("{}", layout) << ")";
