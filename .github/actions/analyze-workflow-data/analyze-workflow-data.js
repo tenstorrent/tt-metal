@@ -66,7 +66,11 @@ async function run() {
 
     for (const checkRun of filteredRuns) {
       core.startGroup(`Annotations for ${checkRun.name} (id: ${checkRun.id})`);
-      const annotations = await fetchAnnotations(octokit, owner, repo, checkRun.id, maxAnnotations);
+      const annotationsRaw = await fetchAnnotations(octokit, owner, repo, checkRun.id, maxAnnotations);
+      const annotations = annotationsRaw
+        .filter(ann => (ann.annotation_level || '').toLowerCase() === 'failure')
+        .map(sanitizeAnnotation)
+        .filter(ann => ann !== null);
       if (annotations.length === 0) {
         core.info('No annotations returned.');
       } else {
@@ -189,10 +193,38 @@ function buildAnnotationsMarkdown(collected) {
 }
 
 function formatMultiline(text, indent = '') {
+  if (!text) return '';
   return text
     .split(/\r?\n/)
     .map(line => `${indent}${line}`)
     .join('\n');
+}
+
+function sanitizeAnnotation(ann) {
+  if (!ann) return null;
+  const message = stripBacktrace(ann.message);
+  const details = stripBacktrace(ann.raw_details);
+  if (!message && !details) {
+    // If both message and details are empty after sanitizing, drop the annotation.
+    return {
+      ...ann,
+      message: undefined,
+      raw_details: undefined,
+    };
+  }
+  return {
+    ...ann,
+    message: message || undefined,
+    raw_details: details || undefined,
+  };
+}
+
+function stripBacktrace(text) {
+  if (!text) return '';
+  const lower = text.toLowerCase();
+  const idx = lower.indexOf('backtrace:');
+  const truncated = idx !== -1 ? text.slice(0, idx) : text;
+  return truncated.trim();
 }
 
 if (require.main === module) {
