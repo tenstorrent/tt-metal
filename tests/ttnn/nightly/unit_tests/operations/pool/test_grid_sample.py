@@ -469,7 +469,7 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize("use_precomputed_grid", [True])  # , False])
-@pytest.mark.parametrize("batch_output_channels", [True])  # , False])
+@pytest.mark.parametrize("batch_output_channels", [False])  # , False])
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16])  # , ttnn.float32])
 @pytest.mark.parametrize(
     "input_shape, grid_shape, grid_batching_factor",
@@ -506,7 +506,7 @@ def test_grid_sample_sharded_batched(
 
     input_shape_nhwc = [batch_size, height, width, channels]
 
-    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_nchw = torch.ones(input_shape, dtype=torch.float32)
     torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1

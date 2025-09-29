@@ -135,19 +135,18 @@ void MAIN {
                 reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
             }
 
-                cb_pop_front(curr_in_cb_id, 1);
-                // }
+            cb_pop_front(curr_in_cb_id, 1);
 
-                tile_regs_commit();
-                tile_regs_wait();
+            tile_regs_commit();
+            tile_regs_wait();
 
-                // Pack output directly to row-major format (no tiling needed for grid sample)
-                if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                } else {
-                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                }
+            // Pack output directly to row-major format (no tiling needed for grid sample)
+            if (last_c_block) {
+                pack_untilize_dest<partial_iter_output_tiles>(
+                    out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+            } else {
+                pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+            }
 
             cb_push_back(out_cb_id, output_faces);
             tile_regs_release();

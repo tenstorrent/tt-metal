@@ -20,11 +20,11 @@
 #define TILE_WIDTH 32
 
 // Simplified tilize_in function for grid sample (no split reader support needed)
-template <bool init_tilize = true, bool uninit_tilize = false>
+template <bool init_tilize = true, bool uninit_tilize = true>
 void tilize_in(uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
     if constexpr (init_tilize) {
-        // DPRINT << "Fast tilize init started \n";
         tilize_init(in_cb_id, in_block_w, out_cb_id);
+        DPRINT << "Tilize init done\n";
     }
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         cb_wait_front(in_cb_id, 1);
@@ -89,7 +89,7 @@ void MAIN {
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
 
-    compute_kernel_hw_startup(in_cb_id_0, tilized_input_cb_id);
+    // compute_kernel_hw_startup(in_cb_id_0, tilized_input_cb_id);
 
     // Initialize for separate tilization and reduction steps
     // Initialize reduction from tilized data to output (SUM reduction for bilinear interpolation)
@@ -99,6 +99,8 @@ void MAIN {
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
+
+    compute_kernel_hw_startup(in_cb_id_0, tilized_input_cb_id);
 
     // Wait for initialization to complete
     if constexpr (one_scalar_per_core) {
@@ -130,41 +132,53 @@ void MAIN {
             // Reserve output space
             cb_reserve_back(out_cb_id, output_faces);
 
-            // Reconfigure tilize if needed for this block
-            // if constexpr (tilize_reconfig) {
-            //     if (first_c_block || last_c_block) {
-            //         UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-            //             in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
-            //     }
-            // }
-
-            // Step 1: Tilize input data into tilized CB
-
             tilize_in(curr_in_cb_id, tiles_to_reduce, 1, tilized_input_cb_id);
 
             tile_regs_acquire();
 
-            reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(tilized_input_cb_id, curr_scalar_cb_id, out_cb_id);
+            DPRINT << "Reduce init started \n";
+
+            tensix_sync();
+            reduce_init(tilized_input_cb_id, curr_scalar_cb_id, out_cb_id);
+            tensix_sync();
+
+            DPRINT << "Reduce init completed, reduce starting \n";
 
             for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                 // Perform reduction on already tilized data (sum for bilinear interpolation)
-
-                UNPACK((llk_unpack_AB(tilized_input_cb_id, curr_scalar_cb_id, math_tile_idx, 0)));
+                // UNPACK((llk_unpack_AB(tilized_input_cb_id, curr_scalar_cb_id, math_tile_idx, 0)));
                 // REDUCE_OP is expected to come from add_define
-                reduce_tile_math(math_tile_idx);
+                // reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+
+                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(
+                    tilized_input_cb_id, curr_scalar_cb_id, math_tile_idx, 0, math_tile_idx);
             }
+
+            DPRINT << "Reduce math completed\n";
+
+            reduce_uninit();
 
             tile_regs_commit();
             tile_regs_wait();
 
             // Pack output directly to row-major format (no tiling needed for grid sample)
 
+            DPRINT << "Pack untilize dest init started \n";
+
+            // tensix_sync();
+            pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
+            // tensix_sync();
+
+            DPRINT << "Pack untilize dest init completed, pack starting \n";
+
             pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
 
             cb_push_back(out_cb_id, output_faces);
             cb_pop_front(tilized_input_cb_id, tiles_to_reduce);
 
+            DPRINT << "Pack untilize completed, releasing tile regs\n";
             tile_regs_release();
+            DPRINT << "Stick " << n << " channel block " << c_i << " done\n";
         }
 
         if constexpr (!one_scalar_per_core) {
@@ -173,6 +187,7 @@ void MAIN {
     }
     // Clean up reduce operation
     // reduce_uninit();
+    DPRINT << "Kernel done\n";
 }
 
 }  // namespace NAMESPACE
