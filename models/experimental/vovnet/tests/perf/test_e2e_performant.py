@@ -21,7 +21,14 @@ def get_expected_times(name):
 
 
 def run_e2e_performant(
-    device, device_batch_size, act_dtype, weight_dtype, model_location_generator, resolution, channels=3
+    device,
+    device_batch_size,
+    act_dtype,
+    weight_dtype,
+    model_location_generator,
+    resolution,
+    channels=3,
+    expected_inference_throughput=None,
 ):
     total_batch_size = device_batch_size * device.get_num_devices()
     performant_runner = VovnetPerformantRunner(
@@ -63,6 +70,10 @@ def run_e2e_performant(
         inference_time_cpu=0.0,
     )
 
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+
 
 @pytest.mark.parametrize(
     "device_batch_size, act_dtype, weight_dtype",
@@ -80,6 +91,12 @@ def run_e2e_performant(
     [{"l1_small_size": VOVNET_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        146 if ttnn.get_num_devices() < 2 else 140,
+    ],
+)
 def test_vovnet_e2e_performant(
     device,
     device_batch_size,
@@ -87,8 +104,17 @@ def test_vovnet_e2e_performant(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
-    return run_e2e_performant(device, device_batch_size, act_dtype, weight_dtype, model_location_generator, resolution)
+    return run_e2e_performant(
+        device,
+        device_batch_size,
+        act_dtype,
+        weight_dtype,
+        model_location_generator,
+        resolution,
+        expected_inference_throughput=expected_inference_throughput,
+    )
 
 
 @pytest.mark.parametrize(
@@ -108,6 +134,12 @@ def test_vovnet_e2e_performant(
     [{"l1_small_size": VOVNET_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        270,
+    ],
+)
 def test_vovnet_e2e_performant_dp(
     mesh_device,
     device_batch_size,
@@ -115,7 +147,16 @@ def test_vovnet_e2e_performant_dp(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
     return run_e2e_performant(
-        mesh_device, device_batch_size, act_dtype, weight_dtype, model_location_generator, resolution
+        mesh_device,
+        device_batch_size,
+        act_dtype,
+        weight_dtype,
+        model_location_generator,
+        resolution,
+        expected_inference_throughput=expected_inference_throughput,
     )
