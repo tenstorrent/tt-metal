@@ -93,7 +93,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     // L1 Scratch CB Creation
-    constexpr size_t MAX_PACKET_SIZE_BYTES = 4 * 1088;
+    size_t MAX_PACKET_SIZE_BYTES = tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : 4 * 1088;
     const size_t packet_size_bytes =
         tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
