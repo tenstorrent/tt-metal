@@ -3,7 +3,7 @@ const github = require('@actions/github');
 
 const DEFAULT_OWNER = 'tenstorrent';
 const DEFAULT_REPO = 'tt-metal';
-const DEFAULT_RUN_ID = 18101502836;
+const DEFAULT_RUN_ID = 18082047199;
 const DEFAULT_WORKFLOW_NAME = 'Galaxy unit tests';
 const DEFAULT_CHECK_NAMES = ['Galaxy Fabric tests', 'Galaxy unit tests', 'galaxy-unit-tests'];
 
