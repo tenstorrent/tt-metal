@@ -2,6 +2,11 @@ name: "(Single-card) Model perf tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      models-to-run:
+        description: "List of requested model groups as JSON array, for example: [\"llm_javelin\", \"cnn_javelin\", \"other\"]. Default is 'all'"
+        default: "all"
+        type: string
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
@@ -23,3 +28,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      models-to-run: ${{ inputs.models-to-run }}
