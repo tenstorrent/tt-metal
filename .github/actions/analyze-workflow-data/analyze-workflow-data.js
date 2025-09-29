@@ -45,9 +45,20 @@ async function run() {
     const failingJobNames = new Set(failingJobs.map(job => (job.name || '').toLowerCase()));
     core.info(`Failing job IDs: ${failingJobIds.size > 0 ? Array.from(failingJobIds).join(', ') : 'none'}`);
     core.info(`Failing job names: ${failingJobNames.size > 0 ? Array.from(failingJobNames).join(' | ') : 'none'}`);
+    failingJobs.forEach(job => core.info(` - Job ${job.id}: ${job.name || 'unnamed'} (status=${job.status}, conclusion=${job.conclusion})`));
 
-    const { data: checksResponse } = await octokit.rest.checks.listForRef({ owner, repo, ref: headSha, per_page: 100 });
-    const checkRuns = Array.isArray(checksResponse.check_runs) ? checksResponse.check_runs : [];
+    let checkRuns = await fetchCheckRunsForJobs(octokit, owner, repo, failingJobs);
+    const haveDirectJobMapping = checkRuns.length > 0;
+    let usedFallbackCheckRuns = false;
+
+    if (checkRuns.length === 0) {
+      const { data: checksResponse } = await octokit.rest.checks.listForRef({ owner, repo, ref: headSha, per_page: 100 });
+      checkRuns = Array.isArray(checksResponse.check_runs) ? checksResponse.check_runs : [];
+      usedFallbackCheckRuns = true;
+      core.info(`Fetched ${checkRuns.length} check run(s) via listForRef fallback.`);
+    } else {
+      core.info(`Fetched ${checkRuns.length} check run(s) directly via job check_run_url.`);
+    }
 
     if (checkRuns.length === 0) {
       core.info('No check runs found for this commit.');
@@ -60,13 +71,16 @@ async function run() {
       : [];
 
     let filteredRuns = checkRuns;
-    if (failingJobNames.size > 0) {
+    if (!haveDirectJobMapping && !usedFallbackCheckRuns && failingJobNames.size > 0) {
+      const failingNamesArray = Array.from(failingJobNames);
       const before = filteredRuns.length;
-      filteredRuns = filteredRuns.filter(run => failingJobNames.has((run.name || '').toLowerCase()));
+      filteredRuns = filteredRuns.filter(run => {
+        const runName = (run.name || '').toLowerCase();
+        return failingNamesArray.some(name => runName.includes(name));
+      });
       core.info(`Matched ${filteredRuns.length} check run(s) out of ${before} using failing job names.`);
     }
-    if (filteredRuns.length === 0 && failingJobIds.size > 0) {
-      // Some old runs may only expose job IDs in URLs; attempt a secondary match.
+    if (!haveDirectJobMapping && filteredRuns.length === 0 && failingJobIds.size > 0) {
       filteredRuns = checkRuns.filter(run => {
         const jobId = extractJobId(run.details_url || run.html_url);
         return jobId && failingJobIds.has(jobId);
@@ -229,6 +243,28 @@ function stripBacktrace(text) {
 function extractJobId(url) {
   if (!url) return null;
   const match = url.match(/\/jobs\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+async function fetchCheckRunsForJobs(octokit, owner, repo, jobs) {
+  const collected = [];
+  for (const job of jobs) {
+    const checkRunId = extractCheckRunIdFromUrl(job.check_run_url);
+    if (!checkRunId) continue;
+    try {
+      const { data } = await octokit.rest.checks.get({ owner, repo, check_run_id: checkRunId });
+      data.__job = job;
+      collected.push(data);
+    } catch (error) {
+      core.warning(`Failed to fetch check run ${checkRunId} for job ${job.id}: ${error.message}`);
+    }
+  }
+  return collected;
+}
+
+function extractCheckRunIdFromUrl(url) {
+  if (!url) return null;
+  const match = url.match(/\/check-runs\/(\d+)/);
   return match ? match[1] : null;
 }
 
