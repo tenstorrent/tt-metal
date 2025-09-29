@@ -202,19 +202,12 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
         WAYPOINT("NISD");
     }
 
-    noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, flags, CQ_NOC_wait, CQ_NOC_send, false, false, false>(
-        noc, dst_addr, val, be);
+    noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, flags, CQ_NOC_wait, CQ_NOC_send>(noc, dst_addr, val, be);
 
     if constexpr (send) {
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc, NCRISC_WR_REG_CMD_BUF);
-        noc_inline_dw_write_with_state<
-            NCRISC_WR_REG_CMD_BUF,
-            CQ_NOC_INLINE_ndvb,
-            CQ_NOC_wait,
-            send,
-            false,
-            false,
-            false>(noc, dst_addr, val, be);
+        noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_INLINE_ndvb, CQ_NOC_wait, send>(
+            noc, dst_addr, val, be);
     }
 #endif
 }
