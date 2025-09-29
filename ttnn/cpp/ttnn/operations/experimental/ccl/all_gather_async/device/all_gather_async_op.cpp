@@ -177,7 +177,6 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_w
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
-    auto target_device_coord = coord;
 
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
 
@@ -194,7 +193,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
             log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
             return all_gather_async_llama_sharded(
                 input_tensors[0],
-                target_device_coord,
+                coord,
                 forward_coord,
                 backward_coord,
                 output_tensors[0],
@@ -214,7 +213,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
             log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_minimal_default is called");
             return all_gather_async_minimal_default(
                 input_tensors[0],
-                target_device_coord,
+                coord,
                 forward_coord,
                 backward_coord,
                 output_tensors[0],

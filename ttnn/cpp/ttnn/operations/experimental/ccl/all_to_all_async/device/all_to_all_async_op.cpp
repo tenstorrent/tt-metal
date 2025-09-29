@@ -124,10 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
     auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
 
-    auto target_device_coord = coord;
-
-    std::optional<MeshCoordinate> backward_coord = std::nullopt;
-    std::optional<MeshCoordinate> forward_coord = std::nullopt;
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
     uint32_t device_index = this->ring_size;  // Initialize device index
 
     TT_FATAL(this->topology == ttnn::ccl::Topology::Ring, "DEBUG: topology: {}", this->topology);
@@ -138,42 +136,42 @@ tt::tt_metal::operation::ProgramWithCallbacks AllToAllAsync::create_program_at(
         if (devices_to_use.at(i) == target_device) {
             device_index = i;
             if (i != 0) {
-                backward_coord = MeshCoordinate(coord[0], i - 1);
+                backward_device = devices_to_use.at(i - 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                backward_coord = MeshCoordinate(coord[0], this->ring_size - 1);
+                backward_device = devices_to_use.at(this->ring_size - 1);
             }
             if (i != this->ring_size - 1) {
-                forward_coord = MeshCoordinate(coord[0], i + 1);
+                forward_device = devices_to_use.at(i + 1);
             } else if (topology == ttnn::ccl::Topology::Ring) {
-                forward_coord = MeshCoordinate(coord[0], 0);
+                forward_device = devices_to_use.at(0);
             }
         }
     }
 
     TT_FATAL(device_index < this->ring_size, "DEBUG: device_index: {}", device_index);
     TT_FATAL(
-        forward_coord.value() != backward_coord.value(),
+        forward_device.value()->id() != backward_device.value()->id(),
         "DEBUG: forward and backward devices are the same: {}, {}",
-        forward_coord.value(),
-        backward_coord.value());
+        forward_device.value()->id(),
+        backward_device.value()->id());
     TT_FATAL(
-        forward_coord.value() != target_device_coord,
+        forward_device.value()->id() != target_device->id(),
         "DEBUG: forward device is the same as target device: {}, {}",
-        forward_coord.value(),
-        target_device_coord);
+        forward_device.value()->id(),
+        target_device->id());
     TT_FATAL(
-        backward_coord.value() != target_device_coord,
+        backward_device.value()->id() != target_device->id(),
         "DEBUG: backward device is the same as target device: {}, {}",
-        backward_coord.value(),
-        target_device_coord);
+        backward_device.value()->id(),
+        target_device->id());
 
     return all_to_all_async_minimal(
         input_tensors[0],
         output_tensors.at(0),
         output_tensors.at(1),
-        target_device_coord,
-        forward_coord,
-        backward_coord,
+        target_device,
+        forward_device,
+        backward_device,
         this->in_dim,
         this->out_dim,
         this->num_links,
