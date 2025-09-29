@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@ import ttnn
 import itertools
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from models.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole
 
 
 def random_torch_tensor(dtype, shape):

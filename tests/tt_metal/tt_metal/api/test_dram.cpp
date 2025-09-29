@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -336,7 +336,7 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
         for (auto idle_eth_core : device->get_inactive_ethernet_cores()) {
             log_info(tt::LogTest, "Single Idle Eth Loopback. Logical core {}", idle_eth_core.str());
             dram_test_config.core_range = {idle_eth_core, idle_eth_core};
-            unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config);
+            ASSERT_TRUE(unit_tests_common::dram::test_dram::dram_single_core(this, mesh_device, dram_test_config));
         }
     }
 }
@@ -344,7 +344,11 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
 // This test will hang on BH when both nocs use the same DRAM endpoint due to SYS-1419, hang can be reproduced by
 // increasing `num_iterations` DRAM arbiter seems to drop requests from one noc when both nocs are issuing requests to
 // the same DRAM endpoint at a fast rate.
-TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
+// This test should be kept to facilitate getting a scandump for root-causing SYS-1419 but keep it DISABLED so it doesn't run on CI
+TEST_F(MeshDispatchFixture, DISABLED_TensixLoopDRAMReadSingleCoreBothProcessors) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "This test has hardcoded parameters for Blackhole to repro hang described in SYS-1419";
+    }
     auto mesh_device = devices_.at(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -367,7 +371,7 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
     uint32_t ncrisc_num_pages_to_read = ((brisc_base_addr - ncrisc_base_addr) / page_size) * num_drams;
 
     std::vector<uint32_t> brisc_compile_time_args = {};
-    tt_metal::TensorAccessorArgs().append_to(brisc_compile_time_args);
+    tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(brisc_compile_time_args);
 
     tt_metal::KernelHandle brisc_kernel = tt_metal::CreateKernel(
         program_,
@@ -385,7 +389,7 @@ TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
         {brisc_base_addr, page_size, l1_address, brisc_num_pages_to_read, num_iterations});
 
     std::vector<uint32_t> ncrisc_compile_time_args = {};
-    tt_metal::TensorAccessorArgs().append_to(ncrisc_compile_time_args);
+    tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(ncrisc_compile_time_args);
 
     tt_metal::KernelHandle ncrisc_kernel = tt_metal::CreateKernel(
         program_,

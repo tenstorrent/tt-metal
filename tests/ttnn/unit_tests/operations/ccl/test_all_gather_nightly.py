@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     is_unsupported_case,
     run_all_gather_on_t3000_impl,
@@ -20,7 +19,6 @@ pytestmark = pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
@@ -82,7 +80,6 @@ def test_line_all_gather_on_t3000_nightly(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -207,7 +204,6 @@ def run_line_all_gather_instances(
                 assert eq, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
     "num_devices, num_instances, num_links, input_shape, dim, layout",

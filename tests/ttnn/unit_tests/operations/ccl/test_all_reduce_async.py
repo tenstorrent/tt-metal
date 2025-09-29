@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import skip_for_grayskull
 
 
 def run_all_reduce_test(
@@ -125,7 +124,6 @@ def run_all_reduce_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -199,7 +197,6 @@ def test_ring_all_reduce_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -365,6 +362,8 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = ttnn.to_torch(t)
+        tensor_unpadded_shape = list(golden_canonical_out_tensor.shape)
+        tt_output_tensor = tt_output_tensor[:, :, : tensor_unpadded_shape[2], : tensor_unpadded_shape[3]]
 
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
@@ -386,7 +385,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
@@ -447,7 +445,6 @@ def test_line_all_reduce_on_TG_rows_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
@@ -499,4 +496,67 @@ def test_line_all_reduce_on_TG_cols_post_commit(
         num_iters=num_iters,
         num_all_reduce_instances=replication_factor,
         cluster_axis=0,
+    )
+
+
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, layout",
+    [
+        (32, 3, [1, 1, 4096, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 2048, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 4096], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 2048], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 1024], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 33, 66], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 4094, 50300], ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize("replication_factor", [1])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+def test_line_all_reduce_training(
+    mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    function_level_defaults,
+    replication_factor,
+    num_iters=1,
+):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+
+    run_all_reduce_with_mesh_tensor_along_row(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        function_level_defaults,
+        num_iters=num_iters,
+        num_all_reduce_instances=replication_factor,
+        cluster_axis=1,
     )

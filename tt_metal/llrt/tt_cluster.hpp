@@ -23,7 +23,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
@@ -307,8 +307,11 @@ public:
     void initialize_fabric_config(
         tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
 
-    // Returns whether we are running on Galaxy.
+    // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
+
+    // Returns whether we are running on UBB Galaxy.
+    bool is_ubb_galaxy() const;
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;

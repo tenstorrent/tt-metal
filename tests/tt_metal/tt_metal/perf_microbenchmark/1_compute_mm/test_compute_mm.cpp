@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -39,7 +38,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -58,14 +57,13 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
 // This benchmark measures the compute performance of matmul. When in the slow
 // dispatch mode, it uses LaunchProgram API and measures performance via device
-// profiler. In the fast dispatch mode, it uses EnqueueProgram API and measures
+// profiler. In the fast dispatch mode, it uses EnqueueMeshWorkload API and measures
 // the execution time. Regarding kernels, the compute kernel used
 // “bmm_large_block_zm_fused_bias_activation.cpp” as is and the data movement
 // kernels were implemented with reference to kernels of
@@ -360,7 +358,7 @@ int main(int argc, char** argv) {
         if (single_core) {
             data_format = dtype == 0 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
         }
-        uint32_t single_tile_size = tt_metal::detail::TileSize(data_format);
+        uint32_t single_tile_size = tt::tile_size(data_format);
         TT_ASSERT(single_tile_size == (dtype == 0 ? (256 * 4) + (16 * 4) : 2048));
 
         auto grid_size = device->compute_with_storage_grid_size();
@@ -604,7 +602,7 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         // Create MeshWorkload
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
         tt_metal::distributed::AddProgramToMeshWorkload(
             mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 
@@ -636,7 +634,7 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::Finish(device->mesh_command_queue());
                 auto t_end = std::chrono::high_resolution_clock::now();
                 log_debug(LogTest, "EnqueueMeshWorkload done");
-                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+                tt_metal::ReadMeshDeviceProfilerResults(*device);
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end =

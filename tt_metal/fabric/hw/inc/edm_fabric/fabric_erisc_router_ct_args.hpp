@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -64,8 +64,12 @@ static_assert(
     "Stream IDs end marker not found. This implies some arguments were misaligned between host and device. Double "
     "check the CT args.");
 
-// Main configuration arguments (after stream IDs and marker)
-constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+// Downstream tensix connections argument (after stream IDs and marker)
+constexpr size_t NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX = STREAM_IDS_END_MARKER_IDX + 1;
+constexpr uint32_t num_downstream_tensix_connections = get_compile_time_arg_val(NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX);
+
+// Main configuration arguments (after stream IDs, marker, and downstream tensix connections)
+constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = NUM_DOWNSTREAM_TENSIX_CONNECTIONS_IDX + 1;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
@@ -85,12 +89,14 @@ static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
 static_assert(
-    wait_for_host_signal_IDX == 27, "wait_for_host_signal_IDX must be 27 (23 stream IDs + 1 marker + 3 config args)");
+    wait_for_host_signal_IDX == 28,
+    "wait_for_host_signal_IDX must be 28 (23 stream IDs + 1 marker + 1 tensix connections + 3 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
 static_assert(
-    MAIN_CT_ARGS_START_IDX == 28, "MAIN_CT_ARGS_START_IDX must be 28 (23 stream IDs + 1 marker + 4 config args)");
+    MAIN_CT_ARGS_START_IDX == 29,
+    "MAIN_CT_ARGS_START_IDX must be 29 (23 stream IDs + 1 marker + 1 tensix connections + 4 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED
@@ -184,10 +190,23 @@ constexpr size_t MAIN_CT_ARGS_IDX_2 = MAIN_CT_ARGS_IDX_1 + 19;
 constexpr uint32_t termination_signal_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2);
 constexpr uint32_t edm_local_sync_ptr_addr =
     wait_for_host_signal ? get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 1) : 0;
-constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
+constexpr uint32_t edm_local_tensix_sync_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
+constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
+
+// for blackhole we need to disable the noc flush in inline writes to L1 for better perf. For wormhole this flag is not
+// used.
+constexpr bool enable_read_counter_update_noc_flush = false;
+constexpr uint32_t notify_worker_of_read_counter_update_src_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 4);
+constexpr size_t NOTIFY_WORKER_SRC_ADDR_MARKER_IDX = MAIN_CT_ARGS_IDX_2 + 5;
+constexpr size_t NOTIFY_WORKER_SRC_ADDR_MARKER = 0x7A9B3C4D;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED ||
+        get_compile_time_arg_val(NOTIFY_WORKER_SRC_ADDR_MARKER_IDX) == NOTIFY_WORKER_SRC_ADDR_MARKER,
+    "Notify worker marker not found. This implies some arguments were misaligned between host and device. Double "
+    "check the CT args.");
 
 // Per-channel counters
-constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 3;
+constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 6;
 constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 0) != 0;
 constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 1);
 constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 2);

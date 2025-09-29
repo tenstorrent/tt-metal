@@ -155,6 +155,7 @@ target_sources(
         sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
         slice/device/slice_op.cpp
         slice/device/slice_program_factory.cpp
+        slice/device/slice_program_factory_stride.cpp
         slice/slice.cpp
         split/device/split_op.cpp
         split/device/split_program_factory.cpp

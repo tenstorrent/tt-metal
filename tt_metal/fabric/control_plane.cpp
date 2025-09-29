@@ -22,7 +22,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
@@ -165,7 +165,7 @@ bool check_connection_requested(
     }
 }
 
-std::string create_port_tag(port_id_t port_id) {
+[[maybe_unused]] std::string create_port_tag(port_id_t port_id) {
     return std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
 }
 
@@ -318,22 +318,28 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                     col_min_planes.at(mesh_coord_y));
             }
 
+            // Collect row and column mins from all hosts in a BigMesh
+            auto rows_min = *std::min_element(row_min_planes.begin(), row_min_planes.end());
+            auto cols_min = *std::min_element(col_min_planes.begin(), col_min_planes.end());
+            std::vector<size_t> rows_min_buf(*distributed_context.size());
+            std::vector<size_t> cols_min_buf(*distributed_context.size());
+            distributed_context.all_gather(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&rows_min), sizeof(size_t)),
+                tt::stl::as_writable_bytes(tt::stl::Span<size_t>{rows_min_buf.data(), rows_min_buf.size()}));
+            distributed_context.all_gather(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&cols_min), sizeof(size_t)),
+                tt::stl::as_writable_bytes(tt::stl::Span<size_t>{cols_min_buf.data(), cols_min_buf.size()}));
+            distributed_context.barrier();
+            const auto global_rows_min = std::min_element(rows_min_buf.begin(), rows_min_buf.end());
+            const auto global_cols_min = std::min_element(cols_min_buf.begin(), cols_min_buf.end());
             // TODO: specialize by topology for better perf
             if (topology == Topology::Mesh || topology == Topology::Torus) {
-                const auto rows_min = std::min_element(row_min_planes.begin(), row_min_planes.end());
-                const auto cols_min = std::min_element(col_min_planes.begin(), col_min_planes.end());
-                auto mesh_min = std::min(*rows_min, *cols_min);
-
-                std::vector<size_t> recv_buf(*distributed_context.size());
-                distributed_context.all_gather(
-                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&mesh_min), sizeof(size_t)),
-                    tt::stl::as_writable_bytes(tt::stl::Span<size_t>{recv_buf.data(), recv_buf.size()}));
-
-                distributed_context.barrier();
-
-                auto global_mesh_min = std::min(recv_buf.begin(), recv_buf.end());
-                std::fill(row_min_planes.begin(), row_min_planes.end(), *global_mesh_min);
-                std::fill(col_min_planes.begin(), col_min_planes.end(), *global_mesh_min);
+                auto global_mesh_min = std::min(*global_rows_min, *global_cols_min);
+                std::fill(row_min_planes.begin(), row_min_planes.end(), global_mesh_min);
+                std::fill(col_min_planes.begin(), col_min_planes.end(), global_mesh_min);
+            } else {
+                std::fill(row_min_planes.begin(), row_min_planes.end(), *global_rows_min);
+                std::fill(col_min_planes.begin(), col_min_planes.end(), *global_cols_min);
             }
 
             // Second pass: Apply minimums to each device
@@ -1098,6 +1104,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
             }
         }
     }
+
     this->initialize_dynamic_routing_plane_counts(intra_mesh_connectivity, fabric_config, reliability_mode);
 
     // Order the ethernet channels so that when we use them for deciding connections, indexing into ports per direction
@@ -1776,7 +1783,7 @@ void ControlPlane::write_all_to_all_routing_fields<1, false>(MeshId mesh_id) con
                              ? MAX_CHIPS_LOWLAT_1D
                              : static_cast<uint16_t>(local_mesh_chip_id_container.size());
 
-    routing_path_t<1, false> routing_path;
+    intra_mesh_routing_path_t<1, false> routing_path;
     routing_path.calculate_chip_to_all_routing_fields(0, num_chips);
 
     // For each source chip in the current mesh
@@ -1811,17 +1818,32 @@ void ControlPlane::write_all_to_all_routing_fields<2, true>(MeshId mesh_id) cons
         mesh_shape[1]);
 
     for (const auto& [_, src_chip_id] : local_mesh_chip_id_container) {
-        routing_path_t<2, true> routing_path;
+        intra_mesh_routing_path_t<2, true> routing_path;
         FabricNodeId src_fabric_node_id(mesh_id, src_chip_id);
 
         routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
         auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
-
         write_to_all_tensix_cores(
             &routing_path,
             sizeof(routing_path),
             tt::tt_metal::HalL1MemAddrType::TENSIX_ROUTING_PATH_2D,
             physical_chip_id);
+
+        // Build per-dst-mesh exit node table (1 byte per mesh) for this src chip
+        exit_node_table_t exit_table{};
+        std::fill_n(exit_table.nodes, MAX_NUM_MESHES, eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY);
+        const auto& inter_mesh_table = this->routing_table_generator_->get_inter_mesh_table();
+        for (const auto& dst_mesh_id : this->routing_table_generator_->mesh_graph->get_mesh_ids()) {
+            auto direction = inter_mesh_table[*mesh_id][src_chip_id][*dst_mesh_id];
+            if (direction == RoutingDirection::NONE) {
+                continue;
+            }
+            auto exit_node =
+                this->routing_table_generator_->get_exit_node_from_mesh_to_mesh(mesh_id, src_chip_id, dst_mesh_id);
+            exit_table.nodes[*dst_mesh_id] = static_cast<std::uint8_t>(exit_node.chip_id);
+        }
+        write_to_all_tensix_cores(
+            &exit_table, sizeof(exit_table), tt::tt_metal::HalL1MemAddrType::TENSIX_EXIT_NODE_TABLE, physical_chip_id);
     }
 }
 
@@ -2361,8 +2383,8 @@ PortDescriptorTable ControlPlane::generate_port_descriptors_for_exit_nodes() {
     const auto my_mesh_id = local_mesh_binding_.mesh_ids[0];
 
     TT_FATAL(
-        !requested_intermesh_connections.empty() || !requested_intermesh_ports.empty(),
-        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections.");
+        requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
+        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
 
     bool strict_binding = !requested_intermesh_ports.empty();
 
@@ -2645,6 +2667,10 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
 
     const auto& requested_intermesh_connections = mesh_graph->get_requested_intermesh_connections();
     const auto& requested_intermesh_ports = mesh_graph->get_requested_intermesh_ports();
+
+    TT_FATAL(
+        requested_intermesh_connections.empty() || requested_intermesh_ports.empty(),
+        "Mesh Graph Descriptor must specify either RelaxedGraph or Graph connections, not both.");
 
     bool strict_binding = !requested_intermesh_ports.empty();
 

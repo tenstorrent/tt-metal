@@ -23,7 +23,7 @@
 #include <tuple>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
 

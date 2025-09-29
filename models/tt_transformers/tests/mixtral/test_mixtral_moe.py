@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import pytest
@@ -6,13 +6,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.t3000.mixtral8x7b.reference.model import FeedForward
 from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import comp_allclose, comp_pcc
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_moe.py
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,6 +16,7 @@
 #include "socket_manager.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 
@@ -72,12 +73,8 @@ int main(int argc, char **argv) {
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 
     if (config.socket_type == ttnn::distributed::SocketType::FABRIC) {
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
-            throw std::runtime_error(fmt::format(
-                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
-                device_config.mesh_shape));
-        }
+        auto num_devices = device_config.mesh_shape[0] * device_config.mesh_shape[1];
+        ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     }
 
     three_tier_arch::initialize_device(device_config.mesh_shape, device_config.device_ids);
