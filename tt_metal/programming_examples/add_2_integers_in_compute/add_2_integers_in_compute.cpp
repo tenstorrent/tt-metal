@@ -138,9 +138,13 @@ int main() {
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
-    SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer->address(), src1_dram_buffer->address()});
+    SetRuntimeArgs(
+        program,
+        binary_reader_kernel_id,
+        core,
+        {(unsigned)src0_dram_buffer->address(), (unsigned)src1_dram_buffer->address()});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(unsigned)dst_dram_buffer->address()});
 
     // Add the program to the workload and execute it.
     workload.add_program(device_range, std::move(program));
