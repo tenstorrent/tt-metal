@@ -62,6 +62,10 @@ class TtnnYoloV11:
         x = self.conv1(self.device, x)
         x = self.conv2(self.device, x)
         x = self.c3k2_1(self.device, x)
+
+        # Move tensors to DRAM before conv3 for better memory management
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
         x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
