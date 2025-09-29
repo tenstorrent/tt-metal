@@ -28,6 +28,7 @@ def run_yolov8s_world_inference(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
 
@@ -79,6 +80,10 @@ def run_yolov8s_world_inference(
         inference_time_cpu=0.0,
     )
 
+    assert (
+        round(batch_size / inference_time) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time)} fps"
+
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
@@ -96,6 +101,12 @@ def run_yolov8s_world_inference(
         (640, 640),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        105 if ttnn.get_num_devices() < 2 else 96,
+    ],
+)
 def test_perf_yolov8s_world(
     device,
     batch_size_per_device,
@@ -103,6 +114,7 @@ def test_perf_yolov8s_world(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
     run_yolov8s_world_inference(
         device,
@@ -111,6 +123,7 @@ def test_perf_yolov8s_world(
         weight_dtype,
         model_location_generator,
         resolution,
+        expected_inference_throughput=expected_inference_throughput,
     )
 
 
@@ -130,6 +143,12 @@ def test_perf_yolov8s_world(
         (640, 640),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        189,
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_perf_yolov8s_world_dp(
@@ -139,7 +158,11 @@ def test_perf_yolov8s_world_dp(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
     run_yolov8s_world_inference(
         mesh_device,
         batch_size_per_device,
@@ -147,4 +170,5 @@ def test_perf_yolov8s_world_dp(
         weight_dtype,
         model_location_generator,
         resolution,
+        expected_inference_throughput=expected_inference_throughput,
     )
