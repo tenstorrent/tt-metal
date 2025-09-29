@@ -22,6 +22,7 @@ def run_yolov5x_inference(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
     performant_runner = YOLOv5xPerformantRunner(
@@ -57,6 +58,12 @@ def run_yolov5x_inference(
         f"ttnn_yolov5x_batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
     )
 
+    throughput_avg = batch_size / inference_time_avg
+
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+
 
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
@@ -66,6 +73,12 @@ def run_yolov5x_inference(
     "resolution",
     [
         (640, 640),
+    ],
+)
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        68 if ttnn.get_num_devices() < 2 else 50,
     ],
 )
 @pytest.mark.models_performance_bare_metal
@@ -82,6 +95,7 @@ def test_e2e_performant(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
     run_yolov5x_inference(
         device,
@@ -90,6 +104,7 @@ def test_e2e_performant(
         weight_dtype,
         model_location_generator,
         resolution,
+        expected_inference_throughput,
     )
 
 
@@ -101,6 +116,12 @@ def test_e2e_performant(
     "resolution",
     [
         (640, 640),
+    ],
+)
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        100,
     ],
 )
 @pytest.mark.models_performance_bare_metal
@@ -117,7 +138,11 @@ def test_e2e_performant_dp(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
     run_yolov5x_inference(
         mesh_device,
         batch_size_per_device,
@@ -125,4 +150,5 @@ def test_e2e_performant_dp(
         weight_dtype,
         model_location_generator,
         resolution,
+        expected_inference_throughput,
     )
