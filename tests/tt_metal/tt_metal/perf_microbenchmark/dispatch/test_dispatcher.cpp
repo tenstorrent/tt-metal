@@ -527,7 +527,6 @@ int main(int argc, char** argv) {
 
             auto range = 1 + max_paged_write_base_addr_g - min_paged_write_base_addr_g;
             // TODO: can we make these play better w/ the non-paged tests?
-            dram_data_addr = ((min_paged_write_base_addr_g + (std::rand() % range)) >> 4) << 4;
             l1_data_addr = ((min_paged_write_base_addr_g + (std::rand() % range)) >> 4) << 4;
         }
 
