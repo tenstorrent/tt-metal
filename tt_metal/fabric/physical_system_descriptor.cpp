@@ -224,6 +224,16 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         }
     }
 
+    // Populate host corners
+    system_graph_.host_corners[hostname] = {};
+    for (const auto& chip_id : chip_unique_ids) {
+        const size_t num_neighbors = asic_graph[AsicID{chip_id.second}].size();
+        if (num_neighbors == 2) {
+            system_graph_.host_corners[hostname].push_back(AsicID{chip_id.second});
+        }
+    }
+
+    // Populate exit nodes for cross-host connections
     for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
         auto local_unique_id = AsicID{chip_unique_ids.at(local_chip_id)};
         std::unordered_map<AsicID, size_t> visited_dst;
@@ -256,6 +266,7 @@ void PhysicalSystemDescriptor::run_global_discovery() {
         this->remove_unresolved_nodes();
         this->generate_cross_host_connections();
         this->validate_graphs();
+        this->rotate_host_corners();
     }
     this->exchange_metadata(false);
 }
@@ -561,6 +572,10 @@ void PhysicalSystemDescriptor::validate_graphs() {
             }
         }
     }
+}
+
+void PhysicalSystemDescriptor::rotate_host_corners() {
+    // FIXME: Implement this
 }
 
 std::vector<AsicID> PhysicalSystemDescriptor::get_asic_neighbors(AsicID asic_id) const {

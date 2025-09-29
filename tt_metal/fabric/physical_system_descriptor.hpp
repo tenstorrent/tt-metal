@@ -105,12 +105,16 @@ using AsicConnectionEdge = std::pair<AsicID, std::vector<EthConnection>>;
 using HostConnectionEdge = std::pair<std::string, std::vector<ExitNodeConnection>>;
 using AsicTopology = std::unordered_map<AsicID, std::vector<AsicConnectionEdge>>;
 using HostTopology = std::unordered_map<std::string, std::vector<HostConnectionEdge>>;
+using HostCorners =
+    std::vector<AsicID>;  // Vector of AsicIDs that are corners of the host, starting with NW corner and going clockwise
 
 // Graph representing connectivity of ASICs (detailed representation) and
 // Compute Nodes/Hosts (low resolution representation).
 struct PhysicalConnectivityGraph {
     // Track the ASIC Topology per host.
     std::unordered_map<std::string, AsicTopology> asic_connectivity_graph;
+    // Track the corners of each host assuming it is a 2D mesh
+    std::unordered_map<std::string, HostCorners> host_corners;
     // Track the Host Topology across the distributed system.
     HostTopology host_connectivity_graph;
 };
@@ -171,6 +175,7 @@ private:
     void remove_unresolved_nodes();
     void resolve_hostname_uniqueness();
     void validate_graphs();
+    void rotate_host_corners();
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;

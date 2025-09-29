@@ -581,6 +581,8 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
         return physical_chip_ids;
     }
 
+    // FIXME: Replace the new topology info with physical system descriptor graph
+
     // Build mesh adjacency map using BFS
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
