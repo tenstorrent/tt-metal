@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,8 +34,8 @@ void MAIN {
 
             exp_tile_init<1u>();
             exp_tile<1u>(0);
-            log1p_tile_init();
-            log1p_tile(0);
+            log1p_tile_init<true>();
+            log1p_tile<true>(0);
             tanh_tile_init();
             tanh_tile(0);
 

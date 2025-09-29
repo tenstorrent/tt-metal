@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
 
@@ -89,8 +90,8 @@ void kernel_main() {
         payload_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
         sem_inc_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_hops)});
     } else {
-        payload_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_to_receiver));
-        sem_inc_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_to_receiver));
+        fabric_set_unicast_route<false>(payload_packet_header, num_hops_to_receiver);
+        fabric_set_unicast_route<false>(sem_inc_packet_header, num_hops_to_receiver);
     }
     auto dest_semaphore_noc_addr =
         safe_get_noc_addr(static_cast<uint8_t>(my_x[0]), static_cast<uint8_t>(my_y[0]), semaphore_address, 0);
@@ -184,7 +185,7 @@ void kernel_main() {
                                      uint64_t teardown_noc_addr,
                                      size_t num_hops_on_fabric) {
         // Now that we are done, we need to notify all other congestion writers to teardown
-        packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops_on_fabric));
+        fabric_set_unicast_route<false>(packet_header, num_hops_on_fabric);
         packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             teardown_noc_addr, 1, std::numeric_limits<uint16_t>::max()});
 
