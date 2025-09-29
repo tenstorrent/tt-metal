@@ -12,6 +12,7 @@ import ttnn
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
 from ...layers.feedforward import ParallelFeedForward
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
+from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import substate
 from .attention_flux1 import Flux1Attention
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
-class Flux1SingleTransformerBlock:
+class Flux1SingleTransformerBlock(Module):
     def __init__(
         self,
         *,
@@ -37,6 +38,8 @@ class Flux1SingleTransformerBlock:
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
     ) -> None:
+        super().__init__()
+
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
@@ -92,6 +95,7 @@ class Flux1SingleTransformerBlock:
             ccl_manager=ccl_manager,
         )
 
+    # TODO: migrate to _prepare_torch_state
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], /) -> None:
         embedding_dim = state_dict["norm.linear.weight"].shape[1]
 
@@ -215,7 +219,7 @@ class Flux1SingleTransformerBlock:
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class Flux1TransformerBlock:
+class Flux1TransformerBlock(Module):
     def __init__(
         self,
         *,
@@ -228,6 +232,8 @@ class Flux1TransformerBlock:
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
     ):
+        super().__init__()
+
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = head_dim
@@ -330,6 +336,7 @@ class Flux1TransformerBlock:
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
+    # TODO: migrate to _prepare_torch_state
     def load_state_dict(self, state_dict):
         def _shuffle_ada_norm_linear(linear_state):
             # Rearrange QKV projections such column-fracturing shards the heads
@@ -513,7 +520,7 @@ def _re_fuse_proj_out_parameters(
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
-class Flux1Transformer:
+class Flux1Transformer(Module):
     def __init__(
         self,
         *,
@@ -566,7 +573,7 @@ class Flux1Transformer:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
         )
 
-        self.transformer_blocks = [
+        self.transformer_blocks = ModuleList(
             Flux1TransformerBlock(
                 dim=inner_dim,
                 num_heads=num_attention_heads,
@@ -578,9 +585,9 @@ class Flux1Transformer:
                 mesh_device=mesh_device,
             )
             for i in range(num_layers)
-        ]
+        )
 
-        self.single_transformer_blocks = [
+        self.single_transformer_blocks = ModuleList(
             Flux1SingleTransformerBlock(
                 dim=inner_dim,
                 num_heads=num_attention_heads,
@@ -591,7 +598,7 @@ class Flux1Transformer:
                 mesh_device=mesh_device,
             )
             for i in range(num_single_layers)
-        ]
+        )
 
         self.time_embed_out = Linear(
             inner_dim,
@@ -614,6 +621,7 @@ class Flux1Transformer:
             mesh_device=mesh_device,
         )
 
+    # TODO: migrate to _prepare_torch_state
     def load_state_dict(self, state_dict: dict[str, torch.Tensor], /) -> None:
         self.time_text_embed.load_state_dict(substate(state_dict, "time_text_embed"))
         self.context_embedder.load_state_dict(substate(state_dict, "context_embedder"))

@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from ...layers.linear import ColParallelLinear
+from ...layers.module import Module
 from ...layers.normalization import RMSNorm
 from ...utils.padding import PaddingConfig, pad_weight_tensor
 from ...utils.substate import substate
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/attention_processor.py
-class Flux1Attention:
+class Flux1Attention(Module):
     def __init__(
         self,
         *,
@@ -37,6 +38,8 @@ class Flux1Attention:
         padding_config: PaddingConfig | None,
         use_spatial_weights_for_prompt: bool = False,
     ) -> None:
+        super().__init__()
+
         self.head_dim = head_dim
         self.pre_only = pre_only
         self.mesh_device = mesh_device
@@ -87,6 +90,7 @@ class Flux1Attention:
             self.norm_added_k = None
             self.to_add_out = None
 
+    # TODO: migrate to _prepare_torch_state
     def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
         def pad_dense_out(state):
             # Pad dense output weights and biases to match the padded heads
