@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import torch
 import ttnn
 
+from ...layers.embeddings import PatchEmbed
 from ...layers.feedforward import FeedForward
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList, Parameter
@@ -96,66 +97,6 @@ class TimeTextProjection(Module):
         return timesteps_emb + text_emb
 
 
-class FlattenedPatchEmbed(Module):
-    def __init__(
-        self,
-        *,
-        in_channels: int,
-        out_channels: int,
-        patch_count_y: int,
-        patch_count_x: int,
-        sequence_padding: tuple[int, int] = (0, 0),
-        mesh_device: ttnn.MeshDevice,
-        parallel_config: DiTParallelConfig,
-    ) -> None:
-        super().__init__()
-
-        self.patch_count_y = patch_count_y
-        self.patch_count_x = patch_count_x
-        self.sequence_padding = sequence_padding
-
-        sp_axis = parallel_config.sequence_parallel.mesh_axis
-        tp_axis = parallel_config.tensor_parallel.mesh_axis
-
-        self.proj = ColParallelLinear(
-            in_channels,
-            out_channels,
-            mesh_device=mesh_device,
-            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
-        )
-
-        self.pos_embed = Parameter(
-            shape=[1, patch_count_y * patch_count_x + sequence_padding[0] + sequence_padding[1], out_channels],
-            device=mesh_device,
-            mesh_mapping={sp_axis: 1, tp_axis: 2},
-        )
-
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return self.proj(x) + self.pos_embed.data
-
-    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        if "proj.weight" in state:
-            weight = state.pop("proj.weight")
-            out_channels, in_channels, kernel_y, kernel_x = weight.shape
-            weight = weight.permute(0, 2, 3, 1)
-            weight = weight.reshape(out_channels, kernel_y * kernel_x * in_channels)
-            state["proj.weight"] = weight
-
-        if "pos_embed" in state:
-            state["pos_embed"] = self._crop_pos_embed(state.pop("pos_embed"))
-
-    def _crop_pos_embed(self, x: torch.Tensor) -> torch.Tensor:
-        pos_embed_max_size = math.isqrt(x.shape[1])
-        top = (pos_embed_max_size - self.patch_count_y) // 2
-        left = (pos_embed_max_size - self.patch_count_x) // 2
-
-        x = x.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
-        x = x[:, top : top + self.patch_count_y, left : left + self.patch_count_x, :]
-        x = x.reshape([1, -1, x.shape[-1]])
-
-        return torch.nn.functional.pad(x, (0, 0, *self.sequence_padding))
-
-
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
 class MotifTransformer(Module):
     ENCODED_TEXT_DIM = 4096
@@ -206,14 +147,17 @@ class MotifTransformer(Module):
             length=spatial_sequence_length, sp_factor=sp_factor
         )
 
-        self.pos_embed = FlattenedPatchEmbed(
-            in_channels=in_channels * patch_size * patch_size,
-            out_channels=inner_dim,
-            patch_count_x=latents_width // patch_size,
-            patch_count_y=latents_height // patch_size,
+        self.pos_embed = PatchEmbed(
+            in_channels=in_channels,
+            embed_dim=inner_dim,
+            pos_embed_max_size=pos_embed_max_size,
+            patch_size=patch_size,
+            width=latents_width,
+            height=latents_height,
             sequence_padding=(register_token_num, self.spatial_sequence_padding),
             mesh_device=mesh_device,
-            parallel_config=parallel_config,
+            tp_mesh_axis=tp_axis,
+            sp_mesh_axis=sp_axis,
         )
 
         self.time_text_embed = TimeTextProjection(
@@ -299,6 +243,12 @@ class MotifTransformer(Module):
             pooled: Tensor with shape [batch_size, pooled_projection_dim].
             timestep: Tensor with shape [batch_size, 1].
         """
+        if len(prompt.shape) == 4:
+            prompt = ttnn.squeeze(prompt, 0)
+        if len(pooled.shape) == 4:
+            pooled = ttnn.squeeze(ttnn.squeeze(pooled, 0), 0)
+        if len(timestep.shape) == 4:
+            timestep = ttnn.squeeze(ttnn.squeeze(timestep, 0), 0)
 
         batch_size, spatial_sequence_length, _ = spatial.shape
         assert len(prompt.shape) == 3
@@ -315,7 +265,7 @@ class MotifTransformer(Module):
         time_embed = time_embed.reshape([batch_size, 1, time_embed.shape[-1]])
         time_embed_silu = ttnn.silu(time_embed)
 
-        spatial = self.pos_embed.forward(spatial)
+        spatial = self.pos_embed.forward(spatial, already_unfolded=True)
         prompt = self.context_embedder(prompt)
 
         # the sequence already includes space for register tokens

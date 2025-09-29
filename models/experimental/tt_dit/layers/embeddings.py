@@ -9,8 +9,9 @@ import torch
 import ttnn
 
 from ..utils.substate import substate
-from ..utils.tensor import bf16_tensor, bf16_tensor_2dshard
-from .linear import Linear
+from ..utils.tensor import bf16_tensor
+from .linear import ColParallelLinear, Linear
+from .module import Module, Parameter
 
 
 # Helper classes for SD35Transformer2DModel
@@ -241,42 +242,37 @@ class CombinedTimestepGuidanceTextProjEmbeddings:
         return timesteps_emb + guidance_emb + text_emb
 
 
-class PatchEmbed:
+class PatchEmbed(Module):
     """
     Patch embedding with unfolded conv2d implementation.
+
     Converts input images to patch embeddings with positional encoding.
     """
 
     def __init__(
         self,
-        height,
-        width,
-        patch_size,
-        in_channels,
-        embed_dim,
-        pos_embed_max_size,
-        tp_mesh_axis,
-        sp_mesh_axis,
-        mesh_device=None,
-    ):
-        self.height = height // patch_size
-        self.width = width // patch_size
+        *,
+        height: int,
+        width: int,
+        patch_size: int,
+        in_channels: int,
+        embed_dim: int,
+        pos_embed_max_size: int,
+        tp_mesh_axis: int,
+        sp_mesh_axis: int,
+        sequence_padding: tuple[int, int] = (0, 0),
+        mesh_device: ttnn.MeshDevice,
+    ) -> None:
+        super().__init__()
+
+        self.patch_count_y = height // patch_size
+        self.patch_count_x = width // patch_size
         self.patch_size = patch_size
         self.in_channels = in_channels
         self.embed_dim = embed_dim
         self.pos_embed_max_size = pos_embed_max_size
         self.mesh_device = mesh_device
-        self.tp_mesh_axis = tp_mesh_axis
-        self.sp_mesh_axis = sp_mesh_axis
-
-        # Conv2d projection weights (unfolded)
-        # Weight shape: (kernel_h * kernel_w * in_channels, out_channels)
-        conv_in_features = patch_size * patch_size * in_channels
-        self.proj_weight = None
-        self.proj_bias = None
-
-        # Position embeddings
-        self.pos_embed = None
+        self.sequence_padding = sequence_padding
 
         # Compute kernel config for linear operations
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -287,77 +283,43 @@ class PatchEmbed:
             packer_l1_acc=False,
         )
 
-    def _cropped_pos_embed(self, pos_embed_param):
-        pos_embed_max_size = math.isqrt(pos_embed_param.shape[1])
-        top = (pos_embed_max_size - self.height) // 2
-        left = (pos_embed_max_size - self.width) // 2
-
-        spatial_pos_embed = pos_embed_param.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
-        spatial_pos_embed = spatial_pos_embed[:, top : top + self.height, left : left + self.width, :]
-        return spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
-
-    def to_cached_state_dict(self, path_prefix, path_suffix=".tensorbin"):
-        cache_dict = {}
-
-        # Cache proj_weight
-        proj_weight_path = path_prefix + "proj_weight" + path_suffix
-        ttnn.dump_tensor(proj_weight_path, self.proj_weight)
-        cache_dict["proj_weight"] = proj_weight_path
-
-        # Cache proj_bias if it exists
-        if self.proj_bias is not None:
-            proj_bias_path = path_prefix + "proj_bias" + path_suffix
-            ttnn.dump_tensor(proj_bias_path, self.proj_bias)
-            cache_dict["proj_bias"] = proj_bias_path
-
-        # Cache pos_embed
-        pos_embed_path = path_prefix + "pos_embed" + path_suffix
-        ttnn.dump_tensor(pos_embed_path, self.pos_embed)
-        cache_dict["pos_embed"] = pos_embed_path
-
-        return cache_dict
-
-    def from_cached_state_dict(self, cache_dict):
-        self.proj_weight = ttnn.load_tensor(cache_dict["proj_weight"], device=self.mesh_device)
-        if "proj_bias" in cache_dict:
-            self.proj_bias = ttnn.load_tensor(cache_dict["proj_bias"], device=self.mesh_device)
-        self.pos_embed = ttnn.load_tensor(cache_dict["pos_embed"], device=self.mesh_device)
-
-    def load_state_dict(self, state_dict):
-        """Load weights from PyTorch state dict."""
-        # Load conv2d projection weights
-        conv_weight = state_dict["proj.weight"]
-        # Convert from (out_channels, in_channels, kh, kw) to (kh*kw*in_channels, out_channels)
-        out_channels, in_c, kh, kw = conv_weight.shape
-        conv_weight = conv_weight.permute(2, 3, 1, 0)  # (kh, kw, in_c, out_channels)
-        conv_weight = conv_weight.reshape(kh * kw * in_c, out_channels)
-
-        self.proj_weight = bf16_tensor(
-            conv_weight,
-            device=self.mesh_device,
-            mesh_axis=self.tp_mesh_axis,
-            shard_dim=1,
+        self.proj = ColParallelLinear(
+            in_channels * patch_size * patch_size,
+            embed_dim,
+            mesh_device=mesh_device,
+            mesh_axis=tp_mesh_axis,
         )
 
-        if "proj.bias" in state_dict:
-            bias = state_dict["proj.bias"].reshape(1, 1, 1, -1)
-            self.proj_bias = bf16_tensor(
-                bias,
-                device=self.mesh_device,
-                mesh_axis=self.tp_mesh_axis,
-                shard_dim=3,
-            )
-
-        # Load position embeddings
-        pos_embed_param = state_dict["pos_embed"]
-        cropped_pos_embed = self._cropped_pos_embed(pos_embed_param)
-        self.pos_embed = bf16_tensor_2dshard(
-            cropped_pos_embed,
-            device=self.mesh_device,
-            shard_mapping={self.sp_mesh_axis: 1, self.tp_mesh_axis: 2},
+        seq_len = self.patch_count_y * self.patch_count_x + sequence_padding[0] + sequence_padding[1]
+        self.pos_embed = Parameter(
+            shape=[1, seq_len, embed_dim],
+            device=mesh_device,
+            mesh_mapping={sp_mesh_axis: 1, tp_mesh_axis: 2},
         )
 
-    def __call__(self, latent):
+    def _cropped_pos_embed(self, x: torch.Tensor) -> torch.Tensor:
+        pos_embed_max_size = math.isqrt(x.shape[1])
+        top = (pos_embed_max_size - self.patch_count_y) // 2
+        left = (pos_embed_max_size - self.patch_count_x) // 2
+
+        x = x.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
+        x = x[:, top : top + self.patch_count_y, left : left + self.patch_count_x, :]
+        x = x.reshape([1, -1, x.shape[-1]])
+
+        return torch.nn.functional.pad(x, (0, 0, *self.sequence_padding))
+
+    def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        if "proj.weight" in state:
+            weight = state.pop("proj.weight")
+            out_channels, in_channels, kernel_y, kernel_x = weight.shape
+            weight = weight.permute(0, 2, 3, 1)
+            weight = weight.reshape(out_channels, kernel_y * kernel_x * in_channels)
+            state["proj.weight"] = weight
+
+        if "pos_embed" in state:
+            state["pos_embed"] = self._cropped_pos_embed(state.pop("pos_embed"))
+
+    def forward(self, latent: ttnn.Tensor, *, already_unfolded: bool = False) -> ttnn.Tensor:
         """
         Forward pass: apply patch projection and add position embeddings.
 
@@ -369,13 +331,15 @@ class PatchEmbed:
             Patch embeddings of shape (batch_size, num_patches, embed_dim)
                 fractured dim 2 along sp_axis, dim 3 along tp_axis
         """
-        batch_size, img_h, img_w, img_c = latent.shape
-
         # Apply unfolded conv2d projection
-        latent = self._unfold_conv2d(latent)
-        return latent + self.pos_embed
+        if already_unfolded:
+            latent = self.proj.forward(latent, compute_kernel_config=self.compute_kernel_config)
+        else:
+            latent = self._unfold_conv2d(latent)
 
-    def _unfold_conv2d(self, x):
+        return latent + self.pos_embed.data
+
+    def _unfold_conv2d(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Unfold conv2d operation: reshape patches and apply linear transformation.
 
@@ -405,16 +369,9 @@ class PatchEmbed:
         x = ttnn.reshape(x, (batch_size, patches_h * patches_w, self.patch_size * self.patch_size * img_c))
 
         # Apply linear projection (equivalent to conv2d)
-        out = ttnn.linear(
-            x,
-            self.proj_weight,
-            bias=self.proj_bias,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=self.compute_kernel_config,
-        )
+        x = self.proj.forward(x, compute_kernel_config=self.compute_kernel_config)
 
-        out = ttnn.reshape(out, (1, batch_size, patches_h * patches_w, -1))
-        return out
+        return ttnn.reshape(x, (1, batch_size, patches_h * patches_w, -1))
 
 
 class MochiPatchEmbed:
