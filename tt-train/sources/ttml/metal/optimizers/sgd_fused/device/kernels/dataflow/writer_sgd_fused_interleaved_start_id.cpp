@@ -17,11 +17,16 @@ constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
 template <typename AddrGen>
 inline void write_cb_block_to_dram(
-    uint32_t cb_idx, const AddrGen& addr_gen, uint32_t start_idx, uint32_t block_size, uint32_t tile_size_bytes) {
+    uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    uint32_t start_idx,
+    uint32_t block_size,
+    uint32_t current_block_size,
+    uint32_t tile_size_bytes) {
     cb_wait_front(cb_idx, block_size);
     uint32_t l1_write_addr = get_read_ptr(cb_idx);
 
-    for (uint32_t k = 0; k < block_size; ++k) {
+    for (uint32_t k = 0; k < current_block_size; ++k) {
         noc_async_write_tile(start_idx + k, addr_gen, l1_write_addr);
         l1_write_addr += tile_size_bytes;
     }
@@ -46,12 +51,19 @@ void kernel_main() {
     for (uint32_t r = start_row; r < end_row; ++r) {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t start_idx = (r * Wt) + c;
+            uint32_t current_block_size = (c + block_size <= Wt) ? block_size : (Wt - c);
 
 #if USE_MOMENTUM
             write_cb_block_to_dram(
-                cb_momentum_to_dram_idx, momentum_out_addr_generator, start_idx, block_size, tile_size_bytes);
+                cb_momentum_to_dram_idx,
+                momentum_out_addr_generator,
+                start_idx,
+                block_size,
+                current_block_size,
+                tile_size_bytes);
 #endif
-            write_cb_block_to_dram(cb_param_out_idx, param_out_addr_generator, start_idx, block_size, tile_size_bytes);
+            write_cb_block_to_dram(
+                cb_param_out_idx, param_out_addr_generator, start_idx, block_size, current_block_size, tile_size_bytes);
             noc_async_write_barrier();
 #if USE_MOMENTUM
             cb_pop_front(cb_momentum_to_dram_idx, block_size);
