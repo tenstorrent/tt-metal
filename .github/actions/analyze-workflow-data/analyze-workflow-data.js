@@ -512,8 +512,8 @@ function getWorkflowStats(runs) {
     // Calculate the original run ID by subtracting (run_attempt - 1) from the current run ID
     const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
 
-    if (!uniqueRuns.has(originalRunId)) {
-      uniqueRuns.set(originalRunId, {
+    if (!uniqueRuns.has(originalRunId)) { // returns true if the run id is not in the map
+      uniqueRuns.set(originalRunId, { // set default values for the run
         run,
         attempts: 0,
         isSuccessful: false,
@@ -524,41 +524,41 @@ function getWorkflowStats(runs) {
     } else {
       // This is an attempt
       const existingRun = uniqueRuns.get(originalRunId);
-      existingRun.attempts++;
+      existingRun.attempts++; // this is just a re-run so increment the attempts
 
       // Update last attempt if this is a newer attempt
       if (run.run_attempt > existingRun.lastAttempt.run_attempt) {
-        existingRun.lastAttempt = run;
+        existingRun.lastAttempt = run; // update the last attempt to the current run
       }
     }
   }
 
   // Second pass: determine final status based on last attempt
-  for (const runInfo of uniqueRuns.values()) {
+  for (const runInfo of uniqueRuns.values()) { // iterate through the unique runs
     const lastAttempt = runInfo.lastAttempt;
-    if (lastAttempt.conclusion === 'success') {
+    if (lastAttempt.conclusion === 'success') { // if the last attempt is successful
       runInfo.isSuccessful = true;
-      totalSuccessfulUniqueRuns++;
+      totalSuccessfulUniqueRuns++; // increment the total successful unique runs
 
-      if (lastAttempt.run_attempt === 1) {
-        runInfo.succeededOnFirstTry = true;
-        successfulUniqueRunsOnFirstTry++;
+      if (lastAttempt.run_attempt === 1) { // if the last attempt is the first attempt
+        runInfo.succeededOnFirstTry = true; // set the succeeded on first try to true
+        successfulUniqueRunsOnFirstTry++; // increment the total successful unique runs on first try
       } else {
-        runInfo.requiredRetry = true;
-        successfulUniqueRunsWithRetries++;
+        runInfo.requiredRetry = true; // set the required retry to true
+        successfulUniqueRunsWithRetries++; // increment the total successful unique runs with retries
       }
     }
   }
 
-  const uniqueRunsArray = Array.from(uniqueRuns.values()).map(r => r.run);
-  const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', ');
+  const uniqueRunsArray = Array.from(uniqueRuns.values()).map(r => r.run); // creates an array of the run objects
+  const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', '); // create a string of all the even types that were used to trigger runs
 
   // Calculate rates
   const successRate = uniqueRunsArray.length === 0 ? "N/A" : (totalSuccessfulUniqueRuns / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
   const uniqueSuccessRate = uniqueRunsArray.length === 0 ? "N/A" : (successfulUniqueRunsOnFirstTry / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
   const retryRate = totalSuccessfulUniqueRuns === 0 ? "N/A" : (successfulUniqueRunsWithRetries / totalSuccessfulUniqueRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
 
-  return {
+  return { // return the eventypes, success rates, retry rates, and total run info
     eventTypes,
     successRate,
     uniqueSuccessRate,
@@ -577,9 +577,9 @@ function getWorkflowStats(runs) {
  * @returns {string} Full URL to the workflow in GitHub Actions
  */
 function getWorkflowLink(context, workflowFile) {
-  return workflowFile
+  return workflowFile // return the workflow link querying on main branch if the workflow file exists
     ? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${workflowFile}?query=branch%3Amain`
-    : `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`;
+    : `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`; // return the github actions link if the workflow file does not exist
 }
 
 /**
@@ -593,7 +593,6 @@ function getWorkflowLink(context, workflowFile) {
  */
 function findFirstFailInWindow(mainBranchRunsWindow) {
   let seenAnyFailure = false;
-  let oldestFailure = null;
   let firstFailInStreak = null; // oldest failure observed before crossing a success boundary
 
   for (const run of mainBranchRunsWindow) {
@@ -606,14 +605,13 @@ function findFirstFailInWindow(mainBranchRunsWindow) {
     } else if (run.conclusion && run.conclusion !== 'cancelled' && run.conclusion !== 'skipped') {
       // Treat anything non-success, non-cancelled/skipped as failure for this purpose
       seenAnyFailure = true;
-      firstFailInStreak = run; // update to become oldest failure within the current failing streak
-      oldestFailure = run; // this will end up as the oldest failure in the entire window
+      firstFailInStreak = run; // update to become oldest failure within the current failing streak (and window)
     }
   }
 
   if (seenAnyFailure) {
     // No success found in-window; report oldest failure in the window
-    return { run: oldestFailure, boundarySuccessRun: undefined, noSuccessInWindow: true };
+    return { run: firstFailInStreak, boundarySuccessRun: undefined, noSuccessInWindow: true };
   }
   return null;
 }
@@ -635,30 +633,30 @@ function findFirstFailInWindow(mainBranchRunsWindow) {
  * @param {Array<object>} scheduledMainRuns - Array of scheduled runs on main branch, sorted by date (newest first)
  * @param {object} context - GitHub Actions context
  * @returns {object} Object containing:
- *   - lastGoodSha: Short SHA of the last successful run (e.g., `a1b2c3d`)
- *   - earliestBadSha: Short SHA of the earliest failing run (e.g., `e4f5g6h`)
+ *   - newestGoodSha: Short SHA of the last successful run (e.g., `a1b2c3d`)
+ *   - newestBadSha: Short SHA of the earliest failing run (e.g., `e4f5g6h`)
  */
 function findGoodBadCommits(scheduledMainRuns, context) {
-  let lastGoodSha = EMPTY_VALUE;
-  let earliestBadSha = EMPTY_VALUE;
+  let newestGoodSha = EMPTY_VALUE;
+  let newestBadSha = EMPTY_VALUE;
   let foundGood = false;
   let foundBad = false;
 
   for (const run of scheduledMainRuns) {
-    if (!foundGood && run.conclusion === 'success') {
+    if (!foundGood && run.conclusion === 'success') { // find the most recent successful run
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      lastGoodSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`;
+      newestGoodSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`; // set the last good sha to the short sha of the most recent successful run
       foundGood = true;
     }
-    if (!foundBad && run.conclusion !== 'success') {
+    if (!foundBad && run.conclusion !== 'success') { // find the earliest failing run
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      earliestBadSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`;
+      newestBadSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`; // set the earliest bad sha to the short sha of the earliest failing run
       foundBad = true;
     }
-    if (foundGood && foundBad) break;
+    if (foundGood && foundBad) break; // break the loop if both good and bad runs are found
   }
 
-  return { lastGoodSha, earliestBadSha };
+  return { newestGoodSha, newestBadSha };
 }
 
 /**
@@ -671,7 +669,7 @@ function findGoodBadCommits(scheduledMainRuns, context) {
  */
 async function getLastRunInfo(mainBranchRuns, github, context) {
   const lastMainRun = mainBranchRuns[0];
-  if (!lastMainRun) {
+  if (!lastMainRun) { // if there is no last main run, return the empty values
     return {
       status: EMPTY_VALUE,
       sha: EMPTY_VALUE,
@@ -683,21 +681,21 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
     };
   }
 
-  const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha);
+  const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha); // fetch the PR info for the last main run
   // Current approach: filter by event type
-  const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch');
+  const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch'); // get the relevant main runs for finding good and bad commits
   // Alternative approach: include all runs on main branch
   // const mainRuns = mainBranchRuns;
-  const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns, context);
+  const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns, context); // find the newest good and bad commits
 
   return {
     status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
-    sha: `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${lastMainRun.head_sha})`,
-    run: `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`,
-    pr: prInfo.prNumber,
-    title: prInfo.prTitle,
-    lastGoodSha,
-    earliestBadSha: lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE
+    sha: `[\`${lastMainRun.head_sha.substring(0, SHA_SHORT_LENGTH)}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${lastMainRun.head_sha})`, // get the short sha hyperlink for the latest main run
+    run: `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`, // get the run hyperlink for the latest main run
+    pr: prInfo.prNumber, // get the PR number for the latest main run
+    title: prInfo.prTitle, // get the PR title for the latest main run
+    lastGoodSha, // get the last good sha for the latest main run
+    earliestBadSha: lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE // if the last main run is successful, don't bother showing the most recent failure
   };
 }
 
@@ -715,19 +713,19 @@ async function generateSummaryBox(grouped, github, context) {
   for (const [name, runs] of grouped.entries()) {
     const mainBranchRuns = runs
       .filter(r => r.head_branch === 'main')
-      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // for each workflow, sort the main runs by date within the window
 
-    const stats = getWorkflowStats(runs);
+    const stats = getWorkflowStats(runs); // get the workflow stats for the workflow
 
-    // Skip workflows that only have workflow_dispatch as their event type
+    // Skip workflows that only have workflow_dispatch as their event type. Presumably because if they have to be triggered to run they aren't super important
     if (stats.eventTypes === 'workflow_dispatch') {
-      continue;
+      continue; // if the workflow only has workflow_dispatch as its event type, skip it
     }
 
-    const workflowLink = getWorkflowLink(context, runs[0]?.path);
-    const runInfo = await getLastRunInfo(mainBranchRuns, github, context);
+    const workflowLink = getWorkflowLink(context, runs[0]?.path); // get the link to the workflow page that lists all the runs
+    const runInfo = await getLastRunInfo(mainBranchRuns, github, context); // get the last run info for the workflow
 
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`;
+    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`; // build the row of the summary table
     rows.push(row);
   }
 
@@ -737,7 +735,7 @@ async function generateSummaryBox(grouped, github, context) {
     '|----------|---------------|------------|-----------------|--------------|-------------------|------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
     ...rows,
     ''  // Empty line for better readability
-  ].join('\n');
+  ].join('\n'); // turn the array of rows into a single string so it can be rendered as a markdown table
 }
 
 /**
