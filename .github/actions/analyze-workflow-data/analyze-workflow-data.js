@@ -233,391 +233,60 @@ async function fetchCommitAuthor(octokit, context, commitSha) {
  * Returns an array of strings (snippets).
  */
 async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 50) {
-  const owner = context.repo.owner; // return the owner of the repository
-  const repo = context.repo.repo; // return the repository name
-  try {
-    await core.startGroup(`Extracting error snippets for run ${runId}`); // start a group to log the error snippets (we log this to the console)
-    const { data } = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId }); // downloadWorkflowRunLogs is a GitHub API call to download the logs for a run
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `runlogs-${runId}-`)); // create a temporary directory to store the logs
-    const zipPath = path.join(tmpDir, 'run_logs.zip'); // create a path to the zip file
-    fs.writeFileSync(zipPath, Buffer.from(data)); // write the logs to the zip file in the temporary directory
-    const extractDir = path.join(tmpDir, 'extract'); // create a path to the extract directory
-    fs.mkdirSync(extractDir, { recursive: true }); // create the extract directory
-    execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' }); // unzip the zip file to the extract directory. ignore the child process' IO
-    let snippets = findErrorSnippetsInDir(extractDir, maxSnippets); // find the error snippets in the extract directory
-    core.info(`Total snippets collected: ${snippets.length}`); // log the total number of snippets collected
+  const owner = context.repo.owner;
+  const repo = context.repo.repo;
+  await core.startGroup(`Extracting error snippets for run ${runId}`);
 
-    // Query job/step status once to validate findings and/or provide fallback
+  try {
+    const runResponse = await octokit.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+    const headSha = runResponse?.data?.head_sha;
+    const runName = runResponse?.data?.name || `workflow run ${runId}`;
+
     let hasFailingJob = false;
     let failingLabel = 'no failing job detected';
-    let apiCheckSucceeded = false;
     try {
-      const { data } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId }); // listJobsForWorkflowRun is a GitHub API call to list the jobs for a workflow run
-      const jobs = Array.isArray(data.jobs) ? data.jobs : []; // return the jobs array if it is an array, otherwise return an empty array
-      let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled'); // find the failing job. the assumption is a job is failing if the conclusion isn't success, skipped, or cancelled
-      let failingStep = undefined; // initialize the failing step to undefined
-      if (!failingJob) { // if there is no failing job, find the failing step (sometimes a job might pass while a step fails I guess)
+      const { data } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId });
+      const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+      let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled');
+      let failingStep = undefined;
+      if (!failingJob) {
         for (const job of jobs) {
           const step = (job.steps || []).find(s => s.conclusion === 'failure');
-          if (step) { failingJob = job; failingStep = step; break; } // if the step is a failure, set the failing job and step
+          if (step) { failingJob = job; failingStep = step; break; }
         }
       }
-      apiCheckSucceeded = true;
       if (failingJob) {
         hasFailingJob = true;
-        failingLabel = `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}`; // set the failing label to the job name and step name if the step is a failure
+        failingLabel = `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}`;
       }
     } catch (e) {
       core.info(`Job status lookup failed for run ${runId}: ${e.message}`);
     }
 
-    // If we found FAILED lines but the run has no failing job, suppress false positives
-    // Only do this if the API check succeeded; on API failure, keep the snippets.
-    // if ((snippets && snippets.length > 0) && apiCheckSucceeded && !hasFailingJob) {
-    //   snippets = [];
-    // }
+    if (!headSha) {
+      core.info(`Workflow run ${runId} does not expose a head SHA; cannot fetch check annotations.`);
+      if (hasFailingJob) {
+        const ownerLabel = findOwnerForLabel(failingLabel) || 'no owner found';
+        return [{ label: failingLabel, owner: ownerLabel, snippet: 'No annotation data available for this run.' }];
+      }
+      return [];
+    }
 
-    // If we did not find FAILED lines but the run has a failing job, emit synthetic entry
+    const snippets = await collectAnnotationSnippets(octokit, owner, repo, headSha, runName, maxSnippets);
+    core.info(`Total annotation snippets collected: ${snippets.length}`);
+
     if ((!snippets || snippets.length === 0) && hasFailingJob) {
-      const owner = findOwnerForLabel(failingLabel) || 'no owner found';
-      snippets = [{ label: failingLabel, owner, snippet: 'could not find failure in logs' }];
+      const ownerLabel = findOwnerForLabel(failingLabel) || 'no owner found';
+      return [{ label: failingLabel, owner: ownerLabel, snippet: 'No annotations were returned for the failing job.' }];
     }
 
     return snippets;
   } catch (e) {
-    core.info(`Failed to obtain run logs for ${runId}: ${e.message}`);
+    core.info(`Failed to obtain annotation data for run ${runId}: ${e.message}`);
     return [];
   } finally {
     core.endGroup();
   }
-}
-
-/**
- * Recursively find up to maxCount error snippets in a directory of text logs.
- */
-function findErrorSnippetsInDir(rootDir, maxCount) {
-  // Relaxed: match anywhere on the line (after prefix stripping)
-  const infoRegex = /info:/;
-  const backtraceRegex = /backtrace:/;
-  // Failure markers used both in primary and fallback passes
-  const failureMarkers = [
-    /\bFAILED\b/,          // pytest summary and generic FAILED
-    /\[\s*FAILED\s*\]/,  // gtest [  FAILED  ]
-    /\bERROR\b/i,           // generic ERROR
-    /Traceback\b/i,         // python tracebacks
-    /AssertionError\b/i,
-    /Segmentation fault/i
-  ];
-
-  const collected = [];
-  const stack = [rootDir]; // trace of the stack to use when recursing through the directories
-
-  while (stack.length && collected.length < maxCount) { // while the stack is not empty and the collected snippets are less than the max count
-    const dir = stack.pop(); //remove the last directory from the stack
-    const entries = fs.readdirSync(dir, { withFileTypes: true }); // list all the files and directories in the directory
-    for (const ent of entries) {
-      const p = path.join(dir, ent.name); // join the directory and the entry name to get the path to the entry
-      if (ent.isDirectory()) {
-        stack.push(p); // add the path to the stack
-      } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) { // if the entry is a file and the file name ends with .txt, .log, or doesn't include a period
-        // Only consider logs whose filenames indicate test content
-        const fileBaseName = path.basename(p); // get the base name of the file
-        if (!/tests?/i.test(fileBaseName)) { // if the file name doesn't include tests
-          core.info(`Skipping non-test log file: ${fileBaseName}`); // log the file name
-          continue; // continue to the next entry
-        }
-        try {
-          const text = fs.readFileSync(p, 'utf8'); // read the file as utf8
-          const rawLines = text.split(/\r?\n/); // split the text into lines
-          const lines = rawLines.map(l => l // map each line to a new line
-            .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '') // remove the timestamp
-            .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '') // remove the line number
-          );
-          core.info(`Scanning ${lines.length} lines in ${p}`); // log the number of lines in the file
-          let foundInFile = 0; // initialize the found in file count to 0
-
-          // A) info: ... until backtrace:
-          for (let i = 0; i < lines.length && collected.length < maxCount; i++) {
-            if (infoRegex.test(lines[i])) { // test if the line contains info:
-              // Guardrail: only consider this an error snippet if nearby lines include
-              // a failure marker or a backtrace. Scan a small window ahead.
-              const upper = Math.min(lines.length, i + 200); // set the upper limit to the length of the lines array or the index plus 200
-              let windowHasFailure = false;
-              for (let k = i; k < upper; k++) { // iterate through the lines in the window
-                const ln = lines[k]; // get the line
-                if (backtraceRegex.test(ln)) { // test if the line contains backtrace
-                  windowHasFailure = true; // set the window has failure to true
-                  break;
-                }
-              }
-              if (!windowHasFailure) continue; // if the window has no failure, continue to the next line
-
-              const block = [lines[i].trim()]; // add the line to the block
-              let j = i + 1; // set the index to the next line
-              while (j < lines.length && !backtraceRegex.test(lines[j]) && collected.length < maxCount) {
-                if (lines[j].trim() !== '') block.push(lines[j].trim()); // if the line is not empty, add it to the block
-                j++;
-              }
-              const testLabel = extractTestLabelBackward(lines, i); // extract the test label from the lines
-              const textBlock = block.join('\n'); // join the block into a single string
-              const fileBase = path.basename(p, path.extname(p)); // get the base name of the log file
-              const finalLabel = testLabel ? `${fileBase}:\n${testLabel}` : `${fileBase}:\nno label found`; // set the final label to the file base and test label if the test label is not empty, otherwise set it to the file base and no label found
-              collected.push({ snippet: textBlock.length > 600 ? textBlock.slice(0, 600) + '…' : textBlock, label: finalLabel }); // add the snippet to the collected snippets. if the text block is longer than 600 characters, truncate it to 600 characters
-              foundInFile++;
-              i = j;
-            }
-          }
-
-          // No other passes by design (keep it simple): only info..backtrace blocks
-
-          core.info(`Parsed log file: ${p} → found ${foundInFile} snippet(s)`); // log the number of snippets found in the file
-        } catch (_) { /* ignore */ }
-      }
-      if (collected.length >= maxCount) break; // if the collected snippets are greater than or equal to the max count, break the loop
-    }
-  }
-
-  // Fallback: if no snippets collected via primary heuristics, try to at least
-  // return names (and a small context) of log files that clearly indicate failure.
-  if (collected.length === 0) {
-
-    const stack2 = [rootDir]; // set up new stack
-    while (stack2.length && collected.length < maxCount) { // while the stack is not empty and the collected snippets are less than the max count
-      const dir = stack2.pop(); // remove the last directory from the stack
-      const entries = fs.readdirSync(dir, { withFileTypes: true }); // list all the files and directories in the directory
-      for (const ent of entries) {
-        const p = path.join(dir, ent.name); // join the directory and the entry name to get the path to the entry
-        if (ent.isDirectory()) { // if the entry is a directory
-          stack2.push(p); // add the path to the stack
-        } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
-          try { // try to read the file
-            // Simple fallback: Only consider lines where 'FAILED' is the first word after
-            // stripping leading timestamps and whitespace.
-            const text = fs.readFileSync(p, 'utf8'); // read the file as utf8
-            const rawLines = text.split(/\r?\n/); // split the text into lines
-            const timestampPrefix = /^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/; // regex to match the timestamp prefix
-            const FAILED_AT_START = /^FAILED\b/; // case-sensitive, first word is FAILED
-            for (let i = 0; i < rawLines.length && collected.length < maxCount; i++) { // iterate through the lines
-              const original = rawLines[i];
-              const modified = rawLines.slice(i, i + 2).join('\n'); // join two consecutive lines into a single string (safe because slice doesn't throw an error if the index is out of bounds)
-              const stripped = original.replace(timestampPrefix, '').replace(/^\s+/, ''); // remove the timestamp prefix and leading whitespace
-              if (FAILED_AT_START.test(stripped)) { // if the line starts with FAILED (this logic is flawed)
-                const fileBase = path.basename(p).split('.')[0]; // get the base name of the log file
-                collected.push({ // add the snippet to the collected snippets
-                  label: `${fileBase}:\nFAILED line`,
-                  // Return the original line (full context), truncated
-                  snippet: original.length > 600 ? original.slice(0, 600) + '…' : modified,
-                });
-                break; // one per file is enough
-              }
-            }
-          } catch (_) { /* ignore */ }
-        }
-        if (collected.length >= maxCount) break; // if the collected snippets are greater than or equal to the max count, break the loop
-      }
-    }
-  }
-  // TODO: the failure markers are incorrectly flagging the line below them when the failing test
-  // is actually far above them. the logic above needs to be changed
-
-  // Attach owners based on mapping
-  try {
-    for (const it of collected) { // iterate through the collected snippets
-      if (it && !it.owner) { // if the item is not empty and the owner is not set
-        const owner = findOwnerForLabel(it.label || '');
-        if (owner) it.owner = owner; // if the owner is found, set the owner to the owner
-      }
-    }
-  } catch (_) { /* ignore */ }
-
-  return collected; // return the collected snippets
-}
-
-/**
- * Try to extract a test identifier from the nearby log lines or path.
- */
-function extractTestLabelBackward(lines, errIdx) {
-  const runExact = /^\s*\[\s*RUN\s*\]\s*(.+)$/; // capture gtest name after [ RUN ]
-  const failedTests = /^\s*FAILED\s+tests\//;      // lines starting with FAILED tests/
-  const failedOnly = /^\s*FAILED\s*$/;      // exactly "FAILED"
-  const testsPathStart = /^\s*tests\//;       // must start with tests/
-
-  for (let i = errIdx; i >= 0; i--) {
-    // Normalize the line the same way as in the scanner (strip prefixes)
-    const raw = lines[i] || '';
-    const line = raw
-      .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-      .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, ''); //this basically removes timestamps and process/thread IDs
-    // gtest: return the part after [ RUN ]
-    const mRun = line.match(runExact); // check if the cleaned up line starts with [ RUN ]
-    if (mRun) return mRun[1].trim(); // if so, return the part after [ RUN ]
-    // pytest FAILED header: extract tests/...py::test_name (without params)
-    if (failedTests.test(line)) { // this is just a boolean check
-      const mF = line.match(/^\s*FAILED\s+((tests\/[^\s]+\.py))::([^\s\[]+)/); // this is a regex to match the test name
-      if (mF) return `${mF[1]}::${mF[3]}`; // return the test file path appended with the test name
-      // fallback to any tests path at start
-      const mFs = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/); // this is a regex to match the test file path. stops capturing after whitespace of [
-      if (mFs) return mFs[1]; // if so, return the test file path
-      return line.trim();
-    }
-    if (failedOnly.test(line)) {
-      // return first non-empty line below
-      let j = i + 1; // set the index to the next line
-      while (j < lines.length && lines[j].trim() === '') j++; // while the index is less than the length of the lines array and the line is empty, increment the index
-      if (j < lines.length) {
-        const candRaw = lines[j]; // get the line
-        const cand = candRaw // clean up the line
-          .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-          .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, ''); // this basically removes timestamps and process/thread IDs
-        const mPy = cand.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/); // this is a regex to match a test file path and test name
-        if (mPy) return `${mPy[1]}::${mPy[3]}`; // if so, return the test file path appended with the test name
-        const mStart = cand.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/); // simpler regex to match a test file path
-        if (mStart) return mStart[1]; // if so, return the test file path
-      }
-    }
-    if (testsPathStart.test(line)) { // this is just a boolean check to see if the line starts with tests/
-      const m = line.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/); // this is a regex to match a test file path and test name
-      if (m) return `${m[1]}::${m[3]}`; // if so, return the test file path appended with the test name
-      const m2 = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/); // simpler regex to match a test file path
-      if (m2) return m2[1]; // if so, return the test file path
-      return line.trim(); // return the trimmed line
-    }
-  }
-  return undefined; // return undefined if no test label is found
-}
-
-// END OF CODE FOR ERROR HANDLING
-
-/**
- * Calculates statistics for a set of workflow runs.
- *
- * @param {Array<object>} runs - Array of workflow run objects
- * @returns {object} Statistics object containing:
- *   - eventTypes: Comma-separated string of unique event types
- *   - successRate: Percentage of runs that succeeded (based on last attempt)
- *   - uniqueSuccessRate: Percentage of runs that succeeded on first attempt
- *   - retryRate: Percentage of successful runs that required retries
- *   - uniqueRuns: Number of unique runs (excluding attempts)
- *   - totalRuns: Total number of runs including attempts
- *   - successfulRuns: Number of runs that succeeded (based on last attempt)
- */
-function getWorkflowStats(runs) {
-  // Group runs by their original run ID to handle retries and reruns
-  const uniqueRuns = new Map();
-  let totalRunsIncludingRetries = 0;
-  let totalSuccessfulUniqueRuns = 0;
-  let successfulUniqueRunsOnFirstTry = 0;
-  let successfulUniqueRunsWithRetries = 0;
-
-  // First pass: identify all unique runs and their attempts
-  for (const run of runs) {
-    totalRunsIncludingRetries++;
-
-    // Calculate the original run ID by subtracting (run_attempt - 1) from the current run ID
-    const originalRunId = run.run_attempt > 1 ? run.id - (run.run_attempt - 1) : run.id;
-
-    if (!uniqueRuns.has(originalRunId)) { // returns true if the run id is not in the map
-      uniqueRuns.set(originalRunId, { // set default values for the run
-        run,
-        attempts: 0,
-        isSuccessful: false,
-        requiredRetry: false,
-        succeededOnFirstTry: false,
-        lastAttempt: run
-      });
-    } else {
-      // This is an attempt
-      const existingRun = uniqueRuns.get(originalRunId);
-      existingRun.attempts++; // this is just a re-run so increment the attempts
-
-      // Update last attempt if this is a newer attempt
-      if (run.run_attempt > existingRun.lastAttempt.run_attempt) {
-        existingRun.lastAttempt = run; // update the last attempt to the current run
-      }
-    }
-  }
-
-  // Second pass: determine final status based on last attempt
-  for (const runInfo of uniqueRuns.values()) { // iterate through the unique runs
-    const lastAttempt = runInfo.lastAttempt;
-    if (lastAttempt.conclusion === 'success') { // if the last attempt is successful
-      runInfo.isSuccessful = true;
-      totalSuccessfulUniqueRuns++; // increment the total successful unique runs
-
-      if (lastAttempt.run_attempt === 1) { // if the last attempt is the first attempt
-        runInfo.succeededOnFirstTry = true; // set the succeeded on first try to true
-        successfulUniqueRunsOnFirstTry++; // increment the total successful unique runs on first try
-      } else {
-        runInfo.requiredRetry = true; // set the required retry to true
-        successfulUniqueRunsWithRetries++; // increment the total successful unique runs with retries
-      }
-    }
-  }
-
-  const uniqueRunsArray = Array.from(uniqueRuns.values()).map(r => r.run); // creates an array of the run objects
-  const eventTypes = [...new Set(uniqueRunsArray.map(r => r.event))].join(', '); // create a string of all the even types that were used to trigger runs
-
-  // Calculate rates
-  const successRate = uniqueRunsArray.length === 0 ? "N/A" : (totalSuccessfulUniqueRuns / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
-  const uniqueSuccessRate = uniqueRunsArray.length === 0 ? "N/A" : (successfulUniqueRunsOnFirstTry / uniqueRunsArray.length * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
-  const retryRate = totalSuccessfulUniqueRuns === 0 ? "N/A" : (successfulUniqueRunsWithRetries / totalSuccessfulUniqueRuns * 100).toFixed(SUCCESS_RATE_DECIMAL_PLACES) + "%";
-
-  return { // return the eventypes, success rates, retry rates, and total run info
-    eventTypes,
-    successRate,
-    uniqueSuccessRate,
-    retryRate,
-    uniqueRuns: uniqueRunsArray.length,
-    totalRuns: totalRunsIncludingRetries,
-    successfulRuns: totalSuccessfulUniqueRuns
-  };
-}
-
-/**
- * Generates a GitHub Actions workflow URL.
- *
- * @param {object} context - GitHub Actions context
- * @param {string} workflowFile - Path to the workflow file relative to .github/workflows/
- * @returns {string} Full URL to the workflow in GitHub Actions
- */
-function getWorkflowLink(context, workflowFile) {
-  return workflowFile // return the workflow link querying on main branch if the workflow file exists
-    ? `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/workflows/${workflowFile}?query=branch%3Amain`
-    : `https://github.com/${context.repo.owner}/${context.repo.repo}/actions`; // return the github actions link if the workflow file does not exist
-}
-
-/**
- * Finds, within the provided window (newest→oldest, main branch only), either:
- * - the first failing run since the most recent success (oldest in the current failing streak), or
- * - if no success exists in-window, the oldest failing run in the window.
- * Returns null if there are no failing runs in the window.
- *
- * @param {Array<object>} mainBranchRunsWindow - Runs on main, sorted by created_at desc (newest first)
- * @returns {{run: object, noSuccessInWindow: boolean}|null}
- */
-function findFirstFailInWindow(mainBranchRunsWindow) {
-  let seenAnyFailure = false;
-  let firstFailInStreak = null; // oldest failure observed before crossing a success boundary
-
-  for (const run of mainBranchRunsWindow) {
-    if (run.conclusion === 'success') {
-      if (firstFailInStreak) {
-        // We found a success after observing failures: return the oldest failure in the streak
-        return { run: firstFailInStreak, boundarySuccessRun: run, noSuccessInWindow: false };
-      }
-      // Success encountered before any failure in the current scan; keep scanning older entries
-    } else if (run.conclusion && run.conclusion !== 'cancelled' && run.conclusion !== 'skipped') {
-      // Treat anything non-success, non-cancelled/skipped as failure for this purpose
-      seenAnyFailure = true;
-      firstFailInStreak = run; // update to become oldest failure within the current failing streak (and window)
-    }
-  }
-
-  if (seenAnyFailure) {
-    // No success found in-window; report oldest failure in the window
-    return { run: firstFailInStreak, boundarySuccessRun: undefined, noSuccessInWindow: true };
-  }
-  return null;
 }
 
 /**
@@ -1226,25 +895,21 @@ async function run() {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+            const author = it.first_failed_author_login
+              ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
+              : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
             // Error snippets first
             let errorsList = '';
-            const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
+            const errorsHtml = renderErrorsTable(it.error_snippets || []);
+            errorsList = ['','  - Errors (table below):','', errorsHtml, ''].join('\n');
             if (it.no_success_in_window) {
-              const latestWhenIso = it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : '';
-              const latestShaShort = it.latest_failed_head_short || (it.latest_failed_head_sha ? it.latest_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
-              const latestShaLink = (latestShaShort && it.latest_failed_head_sha)
-                ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})`
-                : '';
-              const latestLine = it.latest_failed_run_url
-                ? ` | Latest failing run: [Run](${it.latest_failed_run_url}) ${latestWhenIso}${latestShaLink}`
-                : '';
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList].filter(Boolean).join('\n');
+              const latestLink = it.latest_failed_run_url ? ` | Latest failing run: [Run](${it.latest_failed_run_url}) ${it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : ''} ${it.latest_failed_head_short ? `[\\\`${it.latest_failed_head_short}\\"](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})` : ''}` : '';
+              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLink}`, errorsList].filter(Boolean).join('\n');
             }
-            // If there is a success boundary in-window, show commits between; otherwise, just show first failure
+            // Include commits between success and failure
             let commitsList = '';
-            const commitsHtml2 = renderCommitsTable(it.commits_between || []);
-            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2, ''].join('\n');
+            const commitsHtml = renderCommitsTable(it.commits_between || []);
+            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml, ''].join('\n');
             const latestWhenIso = it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : '';
             const latestShaShort = it.latest_failed_head_short || (it.latest_failed_head_sha ? it.latest_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
             const latestShaLink = (latestShaShort && it.latest_failed_head_sha)
@@ -1253,39 +918,146 @@ async function run() {
             const latestLine = it.latest_failed_run_url
               ? `\n  - Latest failing run: [Run](${it.latest_failed_run_url}) ${latestWhenIso}${latestShaLink}`
               : '';
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
+            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
           return base;
         });
-        stayedFailingSection = ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
+        stayedFailingSection = ['', '## Stayed Failing', ...lines, ''].join('\n');
       } else {
-        stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
+        stayedFailingSection = ['','## Stayed Failing','- None',''].join('\n');
       }
-    } catch (_) {
-      // Fallback: always show headers even if nothing parsed
-      regressionsSection = ['','## Regressions (Pass → Fail)','- None',''].join('\n');
-      stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
+    } catch (e) {
+      core.warning(`Failed to generate regressions section: ${e.message}`);
     }
 
-    // Do not include alerts section inside the report; Slack message will carry it
-    const finalReport = [mainReport, regressionsSection, stayedFailingSection]
-      .filter(Boolean)
-      .join('\n');
+    // Generate the final report
+    const report = [
+      mainReport,
+      '\n## Status Changes',
+      ...changes.map(change => {
+        const changeRef = changes.find(c => c.name === change.name && c.change === change.change);
+        if (changeRef) {
+          const changeUrl = changeRef.run_url ? `[Run](${changeRef.run_url})` : 'No run found';
+          return `- **${change.name}**: ${change.change} since ${changeRef.created_at ? new Date(changeRef.created_at).toISOString() : 'Unknown time'} (${changeUrl})`;
+        }
+        return `- **${change.name}**: ${change.change} since unknown time`;
+      }),
+      '\n## Regressions',
+      regressionsSection,
+      '\n## Stayed Failing',
+      stayedFailingSection,
+    ].join('\n');
 
-    // Set outputs
-    core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
-    core.setOutput('report', finalReport);
-    if (alertAll) core.setOutput('alert_all_message', alertAllMessage || '');
-    core.setOutput('regressed_workflows', JSON.stringify(regressedDetails));
-
-    await core.summary.addRaw(finalReport).write();
-
-  } catch (error) {
-    core.setFailed(error.message);
+    core.setOutput('report', report);
+  } catch (e) {
+    core.error(`Failed to generate report: ${e.message}`);
+    core.setFailed(e.message);
   }
 }
 
-// Run the action if this file is executed directly
-if (require.main === module) {
-  run();
+/**
+ * Gather annotation-based snippets for a workflow run.
+ */
+async function collectAnnotationSnippets(octokit, owner, repo, headSha, runName, maxCount) {
+  const collected = [];
+
+  try {
+    const { data } = await octokit.rest.checks.listForRef({ owner, repo, ref: headSha, per_page: 100 });
+    const checkRuns = Array.isArray(data.check_runs) ? data.check_runs : [];
+
+    for (const checkRun of checkRuns) {
+      if (collected.length >= maxCount) break;
+
+      const conclusion = (checkRun.conclusion || '').toLowerCase();
+      const status = (checkRun.status || '').toLowerCase();
+      const shouldInspect = ['failure', 'timed_out', 'cancelled', 'action_required'].includes(conclusion) || status !== 'completed';
+      if (!shouldInspect) continue;
+
+      const remainingBudget = Math.max(maxCount - collected.length, 1);
+      const annotations = await collectAnnotationsForCheckRun(octokit, owner, repo, checkRun.id, remainingBudget);
+
+      if (annotations.length === 0) {
+        const summaryText = checkRun.output?.summary || checkRun.output?.text;
+        if (!summaryText) continue;
+        collected.push(buildAnnotationSnippet(runName, checkRun, undefined, summaryText));
+        continue;
+      }
+
+      for (const annotation of annotations) {
+        collected.push(buildAnnotationSnippet(runName, checkRun, annotation));
+        if (collected.length >= maxCount) break;
+      }
+    }
+  } catch (e) {
+    core.info(`Annotation lookup failed for commit ${headSha}: ${e.message}`);
+  }
+
+  return collected;
 }
+
+async function collectAnnotationsForCheckRun(octokit, owner, repo, checkRunId, budget) {
+  const annotations = [];
+  let page = 1;
+  const safeBudget = Math.max(budget || 1, 1);
+
+  while (annotations.length < safeBudget) {
+    const perPage = Math.min(100, safeBudget - annotations.length);
+    const { data } = await octokit.rest.checks.listAnnotations({
+      owner,
+      repo,
+      check_run_id: checkRunId,
+      per_page: perPage,
+      page,
+    });
+
+    const pageAnnotations = Array.isArray(data) ? data : [];
+    if (pageAnnotations.length === 0) break;
+
+    annotations.push(...pageAnnotations);
+    if (pageAnnotations.length < perPage) break;
+    page++;
+  }
+
+  return annotations;
+}
+
+function buildAnnotationSnippet(runName, checkRun, annotation, fallbackText) {
+  const labelParts = [];
+  if (runName) labelParts.push(runName);
+  if (checkRun?.name) labelParts.push(checkRun.name.trim());
+  if (annotation?.path) labelParts.push(annotation.path.trim());
+  if (annotation?.title) labelParts.push(annotation.title.trim());
+
+  const label = labelParts.length > 0
+    ? labelParts.join(' :: ')
+    : (checkRun?.name || runName || 'unknown check run');
+
+  const snippetLines = [];
+  if (annotation?.path) {
+    const start = annotation.start_line ?? annotation.start_column;
+    const end = annotation.end_line ?? annotation.end_column;
+    let suffix = '';
+    if (start !== undefined) {
+      suffix = `:${start}`;
+      if (end !== undefined && end !== start) suffix += `-${end}`;
+    }
+    snippetLines.push(`Location: ${annotation.path}${suffix}`);
+  }
+  if (annotation?.annotation_level) snippetLines.push(`Level: ${annotation.annotation_level}`);
+  if (annotation?.title) snippetLines.push(`Title: ${annotation.title}`);
+  const message = annotation?.message || fallbackText || '';
+  if (message) snippetLines.push(message.trim());
+  if (annotation?.raw_details) snippetLines.push(annotation.raw_details.trim());
+  if (checkRun?.html_url) snippetLines.push(`Check run: ${checkRun.html_url}`);
+
+  const snippet = snippetLines.filter(Boolean).join('\n');
+  const owner = findOwnerForLabel(label) || findOwnerForLabel(checkRun?.name || '') || undefined;
+
+  return {
+    label,
+    owner,
+    snippet: snippet.length > 600 ? snippet.slice(0, 600) + '…' : snippet,
+  };
+}
+
+// ... existing code ...
