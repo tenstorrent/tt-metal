@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -625,8 +625,7 @@ bool RunPipelinedWorkersTest(
         }
     }
     std::vector<tt::tt_metal::distributed::MeshWorkload> mesh_workloads(1);
-    tt::tt_metal::distributed::AddProgramToMeshWorkload(
-        mesh_workloads[0], std::move(program), tt::tt_fabric::MeshCoordinateRange({0, 0}, {0, 0}));
+    mesh_workloads[0].add_program(tt::tt_fabric::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
 
     run_workloads(mesh_workloads, {mesh_device});
 

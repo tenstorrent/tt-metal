@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_mlp import TtFalconMLP
@@ -97,7 +96,6 @@ def run_test_FalconMLP_inference(
         assert does_pass, f"PCC value is lower than {pcc}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len",

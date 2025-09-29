@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,14 +14,12 @@ from tests.sweep_framework.sweeps.conv2d.short.conv2d_ttforge_sweep import (
 )
 
 from models.common.utility_functions import (
-    skip_for_grayskull,
     is_wormhole_b0,
 )
 
 import pytest
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("input_spec", parameters_ttnn_pytorch["short_sweep_suite_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_ttnn_pytorch_sweep(device, input_spec):
@@ -41,7 +39,6 @@ def test_ttnn_pytorch_sweep(device, input_spec):
     assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("input_spec", parameters_ttnn_forge["ttforge_sweep_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_tt_forge_sweep(device, input_spec):
