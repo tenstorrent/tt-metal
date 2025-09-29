@@ -130,7 +130,6 @@ def vae_slice_reshard(
         final_semaphore=global_semaphore,
         barrier_semaphore=barrier_semaphore,
         num_links=ccl_manager.num_links,
-        mesh_device=x.device(),
         topology=ttnn.Topology.Linear,
     )
 
