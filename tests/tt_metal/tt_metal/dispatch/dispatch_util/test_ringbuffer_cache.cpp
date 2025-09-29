@@ -21,13 +21,15 @@ struct CacheTestParams {
     std::pair<int, int> pgm_ids;
     std::pair<int, int> pgm_sizes;
 };
+// NOLINTBEGIN(cppcoreguidelines-virtual-class-destructor)
 class RingbufferCacheRandomizedTestsFixture : public ::testing::TestWithParam<CacheTestParams> {
-public:
-
-
 protected:
     RingbufferCacheRandomizedTestsFixture() = default;
-    ~RingbufferCacheRandomizedTestsFixture() override = default; // NOLINT(cppcoreguidelines-virtual-class-destructor)
+    ~RingbufferCacheRandomizedTestsFixture() override = default;
+    RingbufferCacheRandomizedTestsFixture(const RingbufferCacheRandomizedTestsFixture&) = delete;
+    RingbufferCacheRandomizedTestsFixture& operator=(const RingbufferCacheRandomizedTestsFixture&) = delete;
+    RingbufferCacheRandomizedTestsFixture(RingbufferCacheRandomizedTestsFixture&&) = delete;
+    RingbufferCacheRandomizedTestsFixture& operator=(RingbufferCacheRandomizedTestsFixture&&) = delete;
 
     std::unique_ptr<RingbufferCacheManager> rb_cache_;
 
@@ -47,6 +49,7 @@ protected:
     auto get_valid_entry(size_t idx) const { return rb_cache_->valid_[idx]; }
     constexpr static auto invalid_entry_ = RingbufferCacheManager::invalid_cache_entry_;
 };
+// NOLINTEND(cppcoreguidelines-virtual-class-destructor)
 
 INSTANTIATE_TEST_SUITE_P(
     RingbufferCacheRandomSuite,
