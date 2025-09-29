@@ -2,6 +2,18 @@ add_executable(example_add)
 target_sources(example_add PRIVATE add/add.cpp)
 target_link_libraries(example_add PRIVATE TTNN::CPP)
 
+find_package(OpenCV REQUIRED)
+add_executable(example_opencv)
+target_sources(example_opencv PRIVATE opencv/opencv.cpp)
+target_link_libraries(
+    example_opencv
+    PRIVATE
+        TTNN::CPP
+        opencv_core
+        opencv_imgcodecs
+)
+target_include_directories(example_opencv PRIVATE ${OpenCV_INCLUDE_DIRS})
+
 install(
     DIRECTORY
         add
