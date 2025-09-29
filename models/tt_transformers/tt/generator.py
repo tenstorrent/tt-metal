@@ -222,18 +222,18 @@ class Generator:
 
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
-            if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
-                enable_trace = False
-            seq_len = tokens.shape[-1]
-            use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
-            if use_chunked_prefill:
-                enable_trace = False
-
             # Extracting data for the current user
             # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
             prefill_ids = torch.cat(
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
+
+            if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
+                enable_trace = False
+            use_chunked_prefill = prefill_ids.shape[-1] > self.model_args[model_id].max_prefill_chunk_size
+            if use_chunked_prefill:
+                enable_trace = False
+
             page_table_user = (
                 self._get_prefill_user_page_table(
                     page_table[idx : idx + 1],
