@@ -101,22 +101,22 @@ def convert_vision_hf_to_meta(state_dict, head_dim):
 
     old = map_vision_hf_to_meta_keys(state_dict, head_dim)
     # new = smart_map_vision_hf_to_meta_keys(state_dict, head_dim)
-    newest = smartest(state_dict, head_dim)
+    # newest = smartest(state_dict, head_dim)
 
-    temp = set()
-    temp
-    for i, key in enumerate(state_dict.keys()):
-        old_element, new_element = compare(key, smartest, head_dim=head_dim, tensor=state_dict[key])
-        temp.add(list(old_element.keys())[0])
+    # temp = set()
+    # temp
+    # for i, key in enumerate(state_dict.keys()):
+    #     old_element, new_element = compare(key, smartest, head_dim=head_dim, tensor=state_dict[key])
+    #     temp.add(list(old_element.keys())[0])
 
-    for k, v in newest.items():
-        assert (newest[k] == old[k]).all()
+    # for k, v in newest.items():
+    #     assert (newest[k] == old[k]).all()
 
-    print()
+    # print()
 
     # tmp_big_test(old=old, new=new)
 
-    return newest
+    return old
 
 
 def smartest(state_dict, head_dim):

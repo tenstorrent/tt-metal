@@ -16,21 +16,22 @@ from models.demos.gemma3.tt.model_config import ModelArgs
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.ccl import TT_CCL
 
-NR_ITER_E2E = 1
+NR_ITER_E2E = 7
 NR_FORWARD_ITERATIONS = 15
 TEST_FORWARD_INFERENCE_ONLY = True
 
 
 class BenchmarkProfilerWrapper:
-    def __init__(self):
+    def __init__(self, device):
+        self.device = device
         self.profiler_backbone = BenchmarkProfiler()
 
     def start(self, *args, **kwargs):
-        # syncr
+        ttnn.synchronize_device(self.device)
         self.profiler_backbone.start(*args, **kwargs)
 
     def end(self, *args, **kwargs):
-        # syncr
+        ttnn.synchronize_device(self.device)
         self.profiler_backbone.end(*args, **kwargs)
 
     def get_duration(self, *args, **kwargs):
@@ -63,11 +64,12 @@ def test_perf_gemma_vision(
     else:
         assert False, "Unknown model"
 
-    profiler = BenchmarkProfilerWrapper()
+    profiler = BenchmarkProfilerWrapper(device=mesh_device)
 
     keys_e2e = ["total_run", "model_load_and_initialization", "postprocessing_and_transfer"]
     key_model_forward = "model_forward"
 
+    logger.info("Started profiling")
     for cur_e2e_iteration in range(NR_ITER_E2E):
         if cur_e2e_iteration == 0:
             nr_forward_iterations_actual = NR_FORWARD_ITERATIONS
@@ -91,6 +93,7 @@ def test_perf_gemma_vision(
     measurements[key_model_forward + "_inference"] = [
         profiler.get_duration(key_model_forward + "_inference" + str(i), i) for i in range(NR_FORWARD_ITERATIONS - 1)
     ]
+    logger.info("Ended profiling")
 
     measurements_summarised = (
         dict()
@@ -119,7 +122,10 @@ def test_perf_gemma_vision(
 
         helper_write_to_json(os.environ.get("MESH_DEVICE"), measurements_summarised)
 
-    targets = load_targets("models/demos/gemma3/tests/test_my_benchmark_json.json", os.environ.get("MESH_DEVICE"))
+    targets = load_targets(
+        "models/demos/gemma3/tests/targets_test_benchmark_vision_cross_attention_transformer.json",
+        os.environ.get("MESH_DEVICE"),
+    )
 
     if TEST_FORWARD_INFERENCE_ONLY:
         metric_keys_to_test = ["model_forward_inference"]
