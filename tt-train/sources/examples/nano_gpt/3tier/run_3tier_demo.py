@@ -22,18 +22,41 @@ BINARIES = ("nano_gpt", "nano_gpt_aggregator", "nano_gpt_optimizer")
 SCP_OPTS = ["-p"]  # preserve times & modes
 
 HOSTS = [
+    # "metal-wh-01",
+    # "metal-wh-02",
+    # "metal-wh-03",
+    # "metal-wh-04",
+    # "metal-wh-05",
+    # "metal-wh-06",
+    # "metal-wh-07",
+    # "metal-wh-08",
+    # "metal-wh-09",
+    # "metal-wh-10",
+    # "metal-wh-11",
+    # "metal-wh-12",
     "metal-wh-01",
+    "metal-wh-02",
     "metal-wh-05",
+    "metal-wh-06",
+    "metal-wh-08",
+    "metal-wh-18",
+    "metal-wh-13",
+    "metal-wh-14",
+    "metal-wh-15",
+    "metal-wh-16",
     "metal-wh-03",
     "metal-wh-04",
-    "metal-wh-06",
 ]
 
 # Default MESH_IDS per global rank; falls back to rank id if list is shorter than TOTAL_RANKS
-DEFAULT_MESH_IDS = [0, 0, 0, 0, 0]
+DEFAULT_MESH_IDS = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
 # If config contains "socket_type: fabric", override MESH_IDS with this:
-FABRIC_MESH_IDS = [4, 1, 3, 2, 0]
-MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.yaml"
+
+# FABRIC_MESH_IDS = [4, 1, 3, 2, 0]
+# MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/new_nano_exabox_1x8_mesh_graph_descriptor.yaml"
+
+FABRIC_MESH_IDS = [5, 4, 2, 3, 6, 7, 11, 10, 9, 8, 0, 1]
+MESH_GRAPH_DESC_REL = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/lbox12_exabox_1x8_mesh_graph_descriptor.yaml"
 
 
 # --------------------------

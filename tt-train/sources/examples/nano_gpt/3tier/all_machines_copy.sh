@@ -9,10 +9,17 @@ BUILD_DIR="/home/$USER/git/tt-metal"
 DEST_DIR="/home/$USER/git/"
 
 MACHINES=(
+    metal-wh-02
     metal-wh-03
     metal-wh-04
     metal-wh-05
     metal-wh-06
+    metal-wh-08
+    metal-wh-18
+    metal-wh-13
+    metal-wh-14
+    metal-wh-15
+    metal-wh-16
 )
 
 DOCKER_CMD="sudo docker run -it \
