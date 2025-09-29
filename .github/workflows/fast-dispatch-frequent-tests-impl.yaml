@@ -21,65 +21,65 @@ jobs:
   create-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      filtered_test_groups: ${{ steps.ctm.outputs.filtered_test_groups }}
+      test_matrix: ${{ steps.ctm.outputs.test_matrix }}
+      test_matrix_count: ${{ steps.ctm.outputs.test_matrix_count }}
     steps:
       - id: ctm
         shell: bash
         run: |
           set -euo pipefail
 
-          # Define all available test groups based on the matrix
+          # Define all available test groups with their full configuration
           ALL_TEST_GROUPS='[
-            "WH N300 pgm dispatch nightly",
-            "WH N300 dispatch bandwidth nightly"
+            {
+              "name": "WH N300 pgm dispatch nightly",
+              "arch": "wormhole_b0",
+              "runs-on": ["cloud-virtual-machine", "N300", "in-service"],
+              "run-args": "mkdir -p generated/test_reports\n./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json\n./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py pgm_bench.json",
+              "timeout": 15
+            },
+            {
+              "name": "WH N300 dispatch bandwidth nightly",
+              "arch": "wormhole_b0",
+              "runs-on": ["cloud-virtual-machine", "N300", "in-service"],
+              "run-args": "mkdir -p generated/test_reports\n./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json\n# We shouldn't fail the job for now as this benchmark is not yet stable\n./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true",
+              "timeout": 15
+            }
           ]'
 
           SEL='${{ inputs.models-to-run }}'
           echo "SEL raw: ${SEL}"
           echo "${SEL}" | jq -e type && echo "Looks like valid JSON" || echo "Not JSON"
 
-          # ---- Normalize selection to a JSON array (SEL_ARR) ----
+          # ---- Filter test groups based on selection ----
           if [ -z "${SEL}" ] || [ "${SEL}" = "all" ]; then
             # Keep all test groups
-            FILTERED_TEST_GROUPS="${ALL_TEST_GROUPS}"
+            FILTERED_MATRIX="${ALL_TEST_GROUPS}"
           else
             if echo "${SEL}" | jq -e type >/dev/null 2>&1; then
               # already JSON; expect an array of strings
               SEL_ARR="$(echo "${SEL}" | jq -c '.')"
-              FILTERED_TEST_GROUPS=$(jq --argjson sel "$SEL_ARR" --argjson all "$ALL_TEST_GROUPS" '$all | map(select(. as $item | $sel | index($item)))' <<< "{}")
+              FILTERED_MATRIX=$(jq --argjson sel "$SEL_ARR" '[.[] | select(.name as $name | $sel | index($name))]' <<< "$ALL_TEST_GROUPS")
             else
               echo "Not supported input format"
               exit 1
             fi
           fi
 
-          echo "filtered_test_groups=$(echo $FILTERED_TEST_GROUPS | tr -d '\n')" >> "$GITHUB_OUTPUT"
+          echo "test_matrix=$(echo $FILTERED_MATRIX | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+          FILTERED_COUNT="$(jq 'length' <<< "${FILTERED_MATRIX}")"
+          echo "test_matrix_count=${FILTERED_COUNT}" >> "$GITHUB_OUTPUT"
 
   fd-frequent:
     needs: create-test-matrix
+    if: ${{ needs.create-test-matrix.outputs.test_matrix_count != '0' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group:
-          - name: "WH N300 pgm dispatch nightly"
-            arch: wormhole_b0
-            runs-on: ["cloud-virtual-machine", "N300", "in-service"]
-            run-args: |
-              mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json
-              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py pgm_bench.json
-            timeout: 15
-          - name: "WH N300 dispatch bandwidth nightly"
-            arch: wormhole_b0
-            runs-on: ["cloud-virtual-machine", "N300", "in-service"]
-            run-args: |
-              mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json
-              # We shouldn't fail the job for now as this benchmark is not yet stable
-              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true
-            timeout: 15
+        test-group: ${{ fromJSON(needs.create-test-matrix.outputs.test_matrix) }}
     name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO
@@ -104,7 +104,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         uses: ./.github/actions/docker-run
-        if: ${{ contains(fromJSON(needs.create-test-matrix.outputs.filtered_test_groups), matrix.test-group.name) }}
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -117,31 +116,31 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
           run_args: ${{ matrix.test-group.run-args }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() && contains(fromJSON(needs.create-test-matrix.outputs.filtered_test_groups), matrix.test-group.name) }}
+        if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U01Q0T3J3D0 # Paul Keller
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() && contains(fromJSON(needs.create-test-matrix.outputs.filtered_test_groups), matrix.test-group.name) }}
+        if: ${{ !cancelled() }}
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() && contains(fromJSON(needs.create-test-matrix.outputs.filtered_test_groups), matrix.test-group.name) }}
+        if: ${{ failure() }}
         with:
           test-report-path: generated/test_reports/
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() && contains(fromJSON(needs.create-test-matrix.outputs.filtered_test_groups), matrix.test-group.name) }}
+        if: ${{ !cancelled() }}
         with:
           path: |
             pgm_bench.json
           prefix: "pgm_benchmarks_json_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() && contains(fromJSON(needs.create-test-matrix.outputs.filtered_test_groups), matrix.test-group.name) }}
+        if: ${{ !cancelled() }}
         with:
           path: |
             buffer_bench.json
