@@ -107,9 +107,7 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
     if (!c_sharded && !a_sharded && b_sharded) {
         // If only B is sharded, then output shape must match input B shape
         // This is to avoid ambiguity when both A and C are not sharded
-        TT_FATAL(
-            c.logical_shape() == b->logical_shape(),
-            "If input B is sharded and input A is not, output shape must match input B shape");
+        TT_FATAL(c_shape == b_shape, "If input B is sharded and input A is not, output shape must match input B shape");
     }
     return AllShardSpecs{
         a_sharded ? *a.shard_spec() : adjust_to_shape(c_shard_spec, c_shape, a_shape),

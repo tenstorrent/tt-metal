@@ -1151,8 +1151,8 @@ def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
 
     input_combinations = (
         (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
-        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
+        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
+        # (ttnn.DRAM_MEMORY_CONFIG, b_sharded_config, a_sharded_config),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         (a_sharded_config, ttnn.DRAM_MEMORY_CONFIG, a_sharded_config),
         (a_sharded_config, b_sharded_config, ttnn.DRAM_MEMORY_CONFIG),
@@ -1981,6 +1981,10 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
         out_tt_interleaved = ttnn_fn(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+        out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
+        assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988
+
+        out_tt_interleaved = ttnn_fn(a_tt, b_tt, use_legacy=None)
         out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
         assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988
 

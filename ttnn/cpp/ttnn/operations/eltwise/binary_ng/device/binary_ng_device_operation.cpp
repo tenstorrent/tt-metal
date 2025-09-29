@@ -520,6 +520,7 @@ BinaryNgDeviceOperation::invoke(
             {rhs_activations.begin(), rhs_activations.end()},
             {post_activations.begin(), post_activations.end()},
             scalar,
+            // TODO : verify memory config choice is correct, by fall back to input a
             memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
             input_tensor_a.dtype(),
