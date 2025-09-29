@@ -118,7 +118,7 @@ class SegformerTestInfra:
             parameters=self.parameters,
         )
 
-    def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=16):
+    def setup_l1_sharded_input(self, device, torch_input_tensor=None, min_channels=8):
         assignment_time = time.time()
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)

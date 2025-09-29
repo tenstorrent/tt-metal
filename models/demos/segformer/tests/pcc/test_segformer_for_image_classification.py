@@ -67,20 +67,20 @@ def test_segformer_image_classificaton(device, model_location_generator):
     )
     # CONV2D_MIN_CHANNEL_SIZE = 8
     # # adjust padding if necessary
-    # if ttnn_input_tensor.shape[3] < CONV2D_MIN_CHANNEL_SIZE:
+    # if ttnn_input_tensor.shape[1] < CONV2D_MIN_CHANNEL_SIZE:
     #     padded_shape = [
     #         ttnn_input_tensor.shape[0],
-    #         ttnn_input_tensor.shape[1],
-    #         ttnn_input_tensor.shape[2],
     #         CONV2D_MIN_CHANNEL_SIZE,
+    #         ttnn_input_tensor.shape[2],
+    #         ttnn_input_tensor.shape[3],
     #     ]
     #     ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0, 0, 0, 0], 0)
-    # elif ttnn_input_tensor.shape[3] > CONV2D_MIN_CHANNEL_SIZE and ttnn_input_tensor.shape[3] % 32 != 0:
+    # elif ttnn_input_tensor.shape[1] > CONV2D_MIN_CHANNEL_SIZE and ttnn_input_tensor.shape[1] % 32 != 0:
     #     padded_shape = [
     #         ttnn_input_tensor.shape[0],
-    #         ttnn_input_tensor.shape[1],
-    #         ttnn_input_tensor.shape[2],
     #         (ttnn_input_tensor.shape[3] + 31) // 32 * 32,
+    #         ttnn_input_tensor.shape[2],
+    #         ttnn_input_tensor.shape[3],
     #     ]
     #     ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0, 0, 0, 0], 0)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)

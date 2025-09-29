@@ -64,7 +64,7 @@ def move_to_device(object, device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_for_semantic_segmentation(device, model_location_generator, min_channels=16):
+def test_segformer_for_semantic_segmentation(device, model_location_generator, min_channels=8):
     processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     image = Image.open(requests.get(url, stream=True).raw)
@@ -96,7 +96,7 @@ def test_segformer_for_semantic_segmentation(device, model_location_generator, m
 
     ttnn_model = TtSegformerForSemanticSegmentation(config, parameters)
 
-    sharded_input_enabled = 1
+    sharded_input_enabled = 0
 
     if not sharded_input_enabled:
         # torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
@@ -140,7 +140,7 @@ def test_segformer_for_semantic_segmentation(device, model_location_generator, m
             device=device,
             memory_config=input_mem_config,
         )
-        # ttnn_input_tensor = ttnn.pad(ttnn_input_tensor_unpadded, [N, H, W, 8], [0, 0, 0, 0], 0)
+        # ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, [n, c, h, w], [0, 0, 0, 0], 0)
 
     ttnn_output = ttnn_model(
         device,
