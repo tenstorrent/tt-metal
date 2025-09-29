@@ -95,7 +95,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         }
     }
     const auto num_chips = cluster_desc->get_all_chips().size();
-    TT_ASSERT(num_chips > 0, "No chips detected in the cluster");
+    TT_FATAL(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
@@ -627,16 +627,17 @@ std::optional<int> Cluster::get_physical_slot(chip_id_t chip) const {
     return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
 }
 
-void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
+void Cluster::deassert_risc_reset_at_core(
+    const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets, bool staggered_start) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->deassert_risc_reset_at_core(core.chip, core_coord, soft_resets);
+    this->driver_->deassert_risc_reset(core.chip, core_coord, soft_resets, staggered_start);
 }
 
-void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
+void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->assert_risc_reset_at_core(core.chip, core_coord, soft_resets);
+    this->driver_->assert_risc_reset(core.chip, core_coord, soft_resets);
 }
 
 void Cluster::write_dram_vec(

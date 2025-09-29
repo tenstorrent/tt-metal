@@ -980,10 +980,6 @@ def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
     return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
 
 
-def skip_for_grayskull(reason_str="not working for Grayskull"):
-    return pytest.mark.skipif(is_grayskull(), reason=reason_str)
-
-
 def run_for_blackhole(reason_str="only runs for Blackhole"):
     return pytest.mark.skipif(not is_blackhole(), reason=reason_str)
 
@@ -994,6 +990,14 @@ def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
 
 def run_for_grayskull(reason_str="only runs for Grayskull"):
     return pytest.mark.skipif(not is_grayskull(), reason=reason_str)
+
+
+def is_slow_dispatch():
+    return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
+
+
+def skip_for_slow_dispatch(reason_str="not working for slow dispatch"):
+    return pytest.mark.skipif(is_slow_dispatch(), reason=reason_str)
 
 
 def get_devices_for_t3000(all_devices, num_devices):

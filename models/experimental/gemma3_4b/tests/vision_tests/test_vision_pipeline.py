@@ -17,10 +17,9 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 from models.experimental.gemma3_4b.tt.gemma_vision_model import TtSiglipGemmaVisionModel
 from models.experimental.gemma3_4b.tests.references import reference_vision_model
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [

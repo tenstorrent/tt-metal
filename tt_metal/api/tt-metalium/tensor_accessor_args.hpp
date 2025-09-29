@@ -33,6 +33,9 @@ public:
         const std::shared_ptr<distributed::MeshBuffer>& buffer,
         tensor_accessor::ArgsConfig args_config = tensor_accessor::ArgConfig::None);
 
+    static TensorAccessorArgs create_dram_interleaved();
+    static TensorAccessorArgs create_l1_interleaved();
+
     void append_to(std::vector<uint32_t>& compile_time_args) const;
     void append_to(std::vector<uint32_t>& compile_time_args, std::vector<uint32_t>& common_runtime_args) const;
 

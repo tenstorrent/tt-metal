@@ -24,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -305,10 +305,10 @@ int main(int argc, char** argv) {
                     program, mm_reader_kernel, core, {l1_buffer_addr, l1_buffer_offset, num_blocks, cb_n});
             }
         }
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+        mesh_workload.add_program(device_range, std::move(program));
         log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
         auto begin = std::chrono::steady_clock::now();
         tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
@@ -318,7 +318,7 @@ int main(int argc, char** argv) {
         auto bw = (total_tiles_size_bytes / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0);
         log_info(LogTest, "Total bytes transfered: {} Bytes", total_tiles_size_bytes);
         log_info(LogTest, "Read global to L1: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, bw);
-        tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+        tt_metal::ReadMeshDeviceProfilerResults(*device);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
