@@ -1429,6 +1429,174 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     return route;
 }
 
+bool ControlPlane::detect_routing_cycles_in_inter_mesh_traffic(
+    const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs, const std::string& test_name) const {
+    // Type aliases for cycle detection
+    using NodeGraph = std::unordered_map<FabricNodeId, std::vector<FabricNodeId>>;
+    using CyclePath = std::vector<FabricNodeId>;
+    enum class DFSState { UNVISITED, VISITING, VISITED };
+
+    // Filter to ONLY inter-mesh traffic pairs - intra-mesh uses dimension-ordered routing (no cycles possible)
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> inter_mesh_pairs;
+    for (const auto& [src, dest] : traffic_pairs) {
+        if (src.mesh_id != dest.mesh_id) {
+            inter_mesh_pairs.push_back({src, dest});
+        }
+    }
+
+    if (inter_mesh_pairs.empty()) {
+        log_debug(
+            tt::LogFabric,
+            "No inter-mesh traffic pairs found in test '{}' - no cycle detection needed (intra-mesh uses "
+            "dimension-ordered routing)",
+            test_name);
+        return false;  // No cycles possible in intra-mesh traffic
+    }
+
+    log_debug(
+        tt::LogFabric,
+        "Detecting cycles in {} inter-mesh traffic pairs (out of {} total pairs) for test '{}'",
+        inter_mesh_pairs.size(),
+        traffic_pairs.size(),
+        test_name);
+
+    // Build routing graph using control plane's get_fabric_route
+    NodeGraph routing_graph;
+
+    for (const auto& [src, dest] : inter_mesh_pairs) {
+        try {
+            // Use channel 0 as default - the routing path structure should be the same regardless of channel
+            auto route = get_fabric_route(src, dest, 0);
+
+            // Convert route to node-only path (ignore channels for cycle detection)
+            std::vector<FabricNodeId> path;
+            for (const auto& [node, channel] : route) {
+                path.push_back(node);
+            }
+
+            // Add edges to routing graph
+            for (size_t i = 0; i < path.size() - 1; ++i) {
+                routing_graph[path[i]].push_back(path[i + 1]);
+            }
+
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogFabric,
+                "Failed to get fabric route for {}->{} in test '{}': {}",
+                src,
+                dest,
+                test_name,
+                e.what());
+            // Continue with other pairs - partial routing graph is still useful
+        }
+    }
+
+    if (routing_graph.empty()) {
+        log_warning(tt::LogFabric, "No valid routing paths found for test '{}'", test_name);
+        return false;
+    }
+
+    // DFS cycle detection function
+    std::function<bool(
+        const NodeGraph&,
+        FabricNodeId,
+        std::unordered_map<FabricNodeId, DFSState>&,
+        std::vector<FabricNodeId>&,
+        std::vector<CyclePath>&)>
+        has_cycle_dfs = [&has_cycle_dfs](
+                            const NodeGraph& graph,
+                            FabricNodeId node,
+                            std::unordered_map<FabricNodeId, DFSState>& state,
+                            std::vector<FabricNodeId>& path,
+                            std::vector<CyclePath>& cycles) -> bool {
+        if (state[node] == DFSState::VISITING) {
+            // Found a back edge - extract the cycle
+            auto cycle_start = std::find(path.begin(), path.end(), node);
+            if (cycle_start != path.end()) {
+                CyclePath cycle(cycle_start, path.end());
+                cycle.push_back(node);  // Close the cycle
+                cycles.push_back(cycle);
+                return true;
+            }
+        }
+
+        if (state[node] == DFSState::VISITED) {
+            return false;
+        }
+
+        state[node] = DFSState::VISITING;
+        path.push_back(node);
+
+        bool found_cycle = false;
+        auto neighbors_it = graph.find(node);
+        if (neighbors_it != graph.end()) {
+            for (const auto& neighbor : neighbors_it->second) {
+                if (has_cycle_dfs(graph, neighbor, state, path, cycles)) {
+                    found_cycle = true;
+                    // Continue exploring to find all cycles
+                }
+            }
+        }
+
+        path.pop_back();
+        state[node] = DFSState::VISITED;
+        return found_cycle;
+    };
+
+    // Detect cycles using DFS
+    std::vector<CyclePath> cycles;
+    std::unordered_map<FabricNodeId, DFSState> state;
+
+    // Initialize all nodes as unvisited
+    for (const auto& [node, neighbors] : routing_graph) {
+        state[node] = DFSState::UNVISITED;
+        for (const auto& neighbor : neighbors) {
+            state[neighbor] = DFSState::UNVISITED;
+        }
+    }
+
+    // Run DFS from each unvisited node
+    for (const auto& [node, neighbors] : routing_graph) {
+        if (state[node] == DFSState::UNVISITED) {
+            std::vector<FabricNodeId> path;
+            has_cycle_dfs(routing_graph, node, state, path, cycles);
+        }
+    }
+
+    bool has_cycles = !cycles.empty();
+
+    if (has_cycles) {
+        log_warning(
+            tt::LogFabric,
+            "Cycle detection found {} cycle(s) in inter-mesh traffic for test '{}' ({} inter-mesh pairs out of {} "
+            "total pairs)",
+            cycles.size(),
+            test_name,
+            inter_mesh_pairs.size(),
+            traffic_pairs.size());
+
+        // Log cycle details
+        for (size_t i = 0; i < cycles.size(); ++i) {
+            std::stringstream cycle_str;
+            for (size_t j = 0; j < cycles[i].size(); ++j) {
+                if (j > 0) {
+                    cycle_str << " -> ";
+                }
+                cycle_str << cycles[i][j];
+            }
+            log_debug(tt::LogFabric, "Cycle {}: {}", i + 1, cycle_str.str());
+        }
+    } else {
+        log_debug(
+            tt::LogFabric,
+            "No cycles detected in inter-mesh traffic for test '{}' ({} inter-mesh pairs)",
+            test_name,
+            inter_mesh_pairs.size());
+    }
+
+    return has_cycles;
+}
+
 std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const {
     auto src_mesh_id = src_fabric_node_id.mesh_id;
