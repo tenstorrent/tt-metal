@@ -337,22 +337,14 @@ void MAIN {
 
                 if (last_c_block) {
                     PACK(DeviceZoneScopedN("P PACK TILE"));
-                    PACK(tensix_sync());
+                    tensix_sync();
                     PACK((llk_pack_hw_configure_disaggregated<false>(idx_tmp_cb_id)));
 #ifdef ARCH_BLACKHOLE
                     PACK(
                         (llk_pack_init<false /*untilize*/, false /*skip_inputs*/, false /*tilize en*/>(idx_tmp_cb_id)));
 #endif
-                    PACK(tensix_sync());
+                    tensix_sync();
                     pack_tile<true>(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
-                    PACK(tensix_sync());
-                    PACK((llk_pack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE, false /*untilize*/>(
-                        out_cb_id, num_out_sticks, output_faces)));
-#ifdef ARCH_BLACKHOLE
-                    PACK((llk_pack_untilize_init<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM>(
-                        out_cb_id, num_out_sticks, output_faces)));
-#endif
-                    PACK(tensix_sync());
 
                     // sync PACK and UNPACK here to indirectly sync MATH and UNPACK by forcing UNPACK to wait for
                     // tile_regs_wait this is necessary to ensure MATH finishes incrementing indices before UNPACK
