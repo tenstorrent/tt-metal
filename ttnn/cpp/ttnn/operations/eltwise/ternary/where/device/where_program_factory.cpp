@@ -53,6 +53,223 @@ void add_scalar_broadcast_defines(
                                  : "0";  // Second tensor (CB1)
 }
 
+// Helper function to detect broadcast patterns for different variants and broadcast types
+void detect_broadcasts(
+    bool& pred_is_bcast,
+    bool& true_is_bcast,
+    bool& false_is_bcast,
+    ttnn::operations::ternary::WhereVariant variant,
+    ttnn::operations::ternary::WhereBroadcastType broadcast_type,
+    const ttnn::Tensor& predicate_tensor,
+    const std::optional<ttnn::Tensor>& value_true_tensor,
+    const std::optional<ttnn::Tensor>& value_false_tensor) {
+    auto pred_shape = predicate_tensor.logical_shape();
+
+    if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
+        // Column broadcast detection
+        auto pred_w = pred_shape[pred_shape.rank() - 1];
+
+        if (variant == ttnn::operations::ternary::WhereVariant::TTS) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto true_w = true_shape[true_shape.rank() - 1];
+            pred_is_bcast = (pred_w == 1 && true_w > 1);
+            true_is_bcast = (true_w == 1 && pred_w > 1);
+            false_is_bcast = false;  // False is scalar for TTS
+        } else if (variant == ttnn::operations::ternary::WhereVariant::TST) {
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto false_w = false_shape[false_shape.rank() - 1];
+            pred_is_bcast = (pred_w == 1 && false_w > 1);
+            false_is_bcast = (false_w == 1 && pred_w > 1);
+            true_is_bcast = false;  // True is scalar for TST
+        } else {                    // TTT
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto true_w = true_shape[true_shape.rank() - 1];
+            auto false_w = false_shape[false_shape.rank() - 1];
+            pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
+            true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
+            false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
+        }
+    } else if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::ROW_BCAST) {
+        // Row broadcast detection
+        auto pred_h = pred_shape[pred_shape.rank() - 2];
+
+        if (variant == ttnn::operations::ternary::WhereVariant::TTS) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto true_h = true_shape[true_shape.rank() - 2];
+            pred_is_bcast = (pred_h == 1 && true_h > 1);
+            true_is_bcast = (true_h == 1 && pred_h > 1);
+            false_is_bcast = false;  // False is scalar for TTS
+        } else if (variant == ttnn::operations::ternary::WhereVariant::TST) {
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto false_h = false_shape[false_shape.rank() - 2];
+            pred_is_bcast = (pred_h == 1 && false_h > 1);
+            true_is_bcast = false;  // True is scalar for TST
+            false_is_bcast = (false_h == 1 && pred_h > 1);
+        } else {  // TTT
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto true_h = true_shape[true_shape.rank() - 2];
+            auto false_h = false_shape[false_shape.rank() - 2];
+            pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
+            true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
+            false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
+        }
+    } else if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_BCAST) {
+        // Scalar broadcast detection (all dimensions must be broadcast)
+        auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
+
+        auto pred_w = pred_shape[-1], pred_h = pred_shape[-2];
+        auto true_w = true_shape[-1], true_h = true_shape[-2];
+        auto false_w = false_shape[-1], false_h = false_shape[-2];
+
+        auto max_h = std::max({pred_h, true_h, false_h});
+        auto max_w = std::max({pred_w, true_w, false_w});
+
+        bool pred_row_bcast = (pred_h == 1 && max_h > 1);
+        bool true_row_bcast = (true_h == 1 && max_h > 1);
+        bool false_row_bcast = (false_h == 1 && max_h > 1);
+
+        bool pred_col_bcast = (pred_w == 1 && max_w > 1);
+        bool true_col_bcast = (true_w == 1 && max_w > 1);
+        bool false_col_bcast = (false_w == 1 && max_w > 1);
+
+        pred_is_bcast = (pred_row_bcast && pred_col_bcast);
+        true_is_bcast = (true_row_bcast && true_col_bcast);
+        false_is_bcast = (false_row_bcast && false_col_bcast);
+    }
+}
+
+// Helper function to set up reader defines based on variant and broadcast type
+void setup_reader_defines(
+    std::map<std::string, std::string>& reader_defines,
+    ttnn::operations::ternary::WhereVariant variant,
+    ttnn::operations::ternary::WhereBroadcastType broadcast_type,
+    const ttnn::Tensor& predicate_tensor,
+    const std::optional<ttnn::Tensor>& value_true_tensor,
+    const std::optional<ttnn::Tensor>& value_false_tensor,
+    bool pred_is_bcast,
+    bool true_is_bcast,
+    bool false_is_bcast) {
+    // Handle the main cases first
+    if (variant == ttnn::operations::ternary::WhereVariant::TTT &&
+        (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST ||
+         broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_BCAST)) {
+        // Use binary_ng style dataflow defines
+        reader_defines = ttnn::operations::ternary::make_dataflow_defines(
+            predicate_tensor.dtype(), value_true_tensor.value().dtype(), value_false_tensor.value().dtype());
+        auto [predicate_sharded, value_true_sharded, value_false_sharded] =
+            get_tensor_sharding_status(predicate_tensor, value_true_tensor, value_false_tensor);
+        add_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, value_false_sharded);
+        add_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false_is_bcast);
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (
+        variant == ttnn::operations::ternary::WhereVariant::TTT &&
+        broadcast_type == ttnn::operations::ternary::WhereBroadcastType::ROW_BCAST) {
+        reader_defines = ttnn::operations::ternary::make_dataflow_defines(
+            predicate_tensor.dtype(), value_true_tensor.value().dtype(), value_false_tensor.value().dtype());
+        auto [predicate_sharded, value_true_sharded, value_false_sharded] =
+            get_tensor_sharding_status(predicate_tensor, value_true_tensor, value_false_tensor);
+        add_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, value_false_sharded);
+        add_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false_is_bcast);
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (
+        (variant == ttnn::operations::ternary::WhereVariant::TTS ||
+         variant == ttnn::operations::ternary::WhereVariant::TST) &&
+        broadcast_type == ttnn::operations::ternary::WhereBroadcastType::ROW_BCAST) {
+        // Row broadcast for TTS/TST
+        ttnn::DataType cb1_dtype = (variant == ttnn::operations::ternary::WhereVariant::TTS)
+                                       ? value_true_tensor.value().dtype()
+                                       : value_false_tensor.value().dtype();
+        reader_defines = ttnn::operations::ternary::make_dataflow_defines(
+            predicate_tensor.dtype(), cb1_dtype, predicate_tensor.dtype());
+
+        auto [predicate_sharded, tensor_sharded, _] =
+            (variant == ttnn::operations::ternary::WhereVariant::TTS)
+                ? get_tensor_sharding_status(predicate_tensor, value_true_tensor, std::nullopt)
+                : get_tensor_sharding_status(predicate_tensor, std::nullopt, value_false_tensor);
+
+        bool cb1_sharded =
+            (variant == ttnn::operations::ternary::WhereVariant::TTS)
+                ? tensor_sharded
+                : std::get<2>(get_tensor_sharding_status(predicate_tensor, std::nullopt, value_false_tensor));
+
+        add_sharding_defines(
+            reader_defines,
+            predicate_sharded,
+            (variant == ttnn::operations::ternary::WhereVariant::TTS) ? cb1_sharded : false,
+            (variant == ttnn::operations::ternary::WhereVariant::TST) ? cb1_sharded : false);
+        add_broadcast_defines(
+            reader_defines,
+            pred_is_bcast,
+            (variant == ttnn::operations::ternary::WhereVariant::TTS) ? true_is_bcast : false_is_bcast,
+            false);
+    } else if (
+        (variant == ttnn::operations::ternary::WhereVariant::TTS ||
+         variant == ttnn::operations::ternary::WhereVariant::TST) &&
+        broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
+        // Column broadcast for TTS/TST
+        ttnn::DataType cb1_dtype = (variant == ttnn::operations::ternary::WhereVariant::TTS)
+                                       ? value_true_tensor.value().dtype()
+                                       : value_false_tensor.value().dtype();
+        reader_defines = ttnn::operations::ternary::make_dataflow_defines(
+            predicate_tensor.dtype(), cb1_dtype, predicate_tensor.dtype());
+
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool cb1_sharded = (variant == ttnn::operations::ternary::WhereVariant::TTS)
+                               ? value_true_tensor.value().memory_config().is_sharded()
+                               : value_false_tensor.value().memory_config().is_sharded();
+
+        add_sharding_defines(
+            reader_defines,
+            predicate_sharded,
+            (variant == ttnn::operations::ternary::WhereVariant::TTS) ? cb1_sharded : false,
+            (variant == ttnn::operations::ternary::WhereVariant::TST) ? cb1_sharded : false);
+        add_broadcast_defines(
+            reader_defines,
+            pred_is_bcast,
+            (variant == ttnn::operations::ternary::WhereVariant::TTS) ? true_is_bcast : false,
+            (variant == ttnn::operations::ternary::WhereVariant::TST) ? false_is_bcast : false);
+        reader_defines["BCAST_LLK"] = "0";
+    }
+
+    // Handle special cases (OUTER_BCAST, SCALAR_A_BCAST, SCALAR_B_BCAST)
+    if (variant == ttnn::operations::ternary::WhereVariant::TTT &&
+        broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST) {
+        // Sharding not currently supported for TTT OUTER_BCAST
+        reader_defines["SRC_SHARDED_A"] = "0";
+        reader_defines["SRC_SHARDED_B"] = "0";
+        reader_defines["SRC_SHARDED_C"] = "0";
+    } else if (
+        (variant == ttnn::operations::ternary::WhereVariant::TTS ||
+         variant == ttnn::operations::ternary::WhereVariant::TST) &&
+        broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST) {
+        // Sharding not currently supported for TTS/TST OUTER_BCAST
+        bool predicate_sharded = false;
+        bool tensor_sharded = false;
+        add_sharding_defines(reader_defines, predicate_sharded, tensor_sharded, false);
+    } else if (
+        (variant == ttnn::operations::ternary::WhereVariant::TTS ||
+         variant == ttnn::operations::ternary::WhereVariant::TST) &&
+        (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_A_BCAST ||
+         broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_B_BCAST)) {
+        // Scalar broadcast for TTS/TST
+        ttnn::DataType tensor_dtype = (variant == ttnn::operations::ternary::WhereVariant::TTS)
+                                          ? value_true_tensor.value().dtype()
+                                          : value_false_tensor.value().dtype();
+        reader_defines = ttnn::operations::ternary::make_dataflow_defines(predicate_tensor.dtype(), tensor_dtype);
+
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool tensor_sharded = (variant == ttnn::operations::ternary::WhereVariant::TTS)
+                                  ? value_true_tensor.value().memory_config().is_sharded()
+                                  : value_false_tensor.value().memory_config().is_sharded();
+
+        add_sharding_defines(reader_defines, predicate_sharded, tensor_sharded, false);
+        add_scalar_broadcast_defines(reader_defines, broadcast_type);
+    }
+}
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::ternary;
@@ -122,8 +339,8 @@ void setup_ts_reader_args(
     uint32_t a_num_tiles,
     uint32_t tensor_num_tiles,  // number of tiles for the tensor operand
     uint32_t c_current_shard_width,
-    WhereBroadcastType broadcast_type,
-    WhereVariant variant) {  // TTS or TST
+    ttnn::operations::ternary::WhereBroadcastType broadcast_type,
+    ttnn::operations::ternary::WhereVariant variant) {  // TTS or TST
     // Standard first 5 arguments
     reader_runtime_args[0] = predicate_tensor.buffer()->address();  // 0: src0_addr (predicate)
     reader_runtime_args[1] = tensor_operand.buffer()->address();    // 1: src1_addr (tensor operand)
@@ -132,7 +349,7 @@ void setup_ts_reader_args(
     reader_runtime_args[4] = start_tile_id;                         // 4: start_id
 
     // Extended broadcast arguments
-    if (broadcast_type != WhereBroadcastType::NONE) {
+    if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::NONE) {
         reader_runtime_args[5] = pred_strides.nD_stride;  // 5: nD_stride
         reader_runtime_args[6] = pred_strides.d_stride;   // 6: d_stride
         reader_runtime_args[7] = pred_strides.n_stride;   // 7: n_stride
@@ -144,38 +361,80 @@ void setup_ts_reader_args(
         reader_runtime_args[13] = output_dims.Wt;         // 13: Wt
         reader_runtime_args[14] = output_dims.ND;         // 14: cND
 
-        if (variant == WhereVariant::TTS) {
-            // TTS: tensor operand is true, scalar operand is false
-            reader_runtime_args[15] = tensor_strides.nD_stride;  // 15: true_nD_stride
-            reader_runtime_args[16] = tensor_strides.d_stride;   // 16: true_d_stride
-            reader_runtime_args[17] = tensor_strides.n_stride;   // 17: true_n_stride
-            reader_runtime_args[18] = tensor_strides.c_stride;   // 18: true_c_stride
-            reader_runtime_args[19] = tensor_num_tiles;          // 19: true_num_tiles
-            // False is scalar, so no strides needed
-            reader_runtime_args[20] = 0u;  // 20: false_nD_stride
-            reader_runtime_args[21] = 0u;  // 21: false_d_stride
-            reader_runtime_args[22] = 0u;  // 22: false_n_stride
-            reader_runtime_args[23] = 0u;  // 23: false_c_stride
-            reader_runtime_args[24] = 0u;  // 24: false_num_tiles
-        } else {                           // TST
-            // TST: scalar operand is true, tensor operand is false
-            // False is tensor operand
-            reader_runtime_args[15] = tensor_strides.nD_stride;  // 15: false_nD_stride
-            reader_runtime_args[16] = tensor_strides.d_stride;   // 16: false_d_stride
-            reader_runtime_args[17] = tensor_strides.n_stride;   // 17: false_n_stride
-            reader_runtime_args[18] = tensor_strides.c_stride;   // 18: false_c_stride
-            reader_runtime_args[19] = tensor_num_tiles;          // 19: false_num_tiles
-            // True is scalar, so no strides needed
-            reader_runtime_args[20] = 0u;  // 20: true_nD_stride (true is scalar)
-            reader_runtime_args[21] = 0u;  // 21: true_d_stride
-            reader_runtime_args[22] = 0u;  // 22: true_n_stride
-            reader_runtime_args[23] = 0u;  // 23: true_c_stride
-            reader_runtime_args[24] = 0u;  // 24: true_num_tiles
-        }
+        // Both TTS and TST: tensor operand strides in 15-19, scalar operand zeros in 20-24
+        reader_runtime_args[15] = tensor_strides.nD_stride;  // 15: tensor_operand_nD_stride
+        reader_runtime_args[16] = tensor_strides.d_stride;   // 16: tensor_operand_d_stride
+        reader_runtime_args[17] = tensor_strides.n_stride;   // 17: tensor_operand_n_stride
+        reader_runtime_args[18] = tensor_strides.c_stride;   // 18: tensor_operand_c_stride
+        reader_runtime_args[19] = tensor_num_tiles;          // 19: tensor_operand_num_tiles
+        // Scalar operand has no strides
+        reader_runtime_args[20] = 0u;  // 20: scalar_operand_nD_stride
+        reader_runtime_args[21] = 0u;  // 21: scalar_operand_d_stride
+        reader_runtime_args[22] = 0u;  // 22: scalar_operand_n_stride
+        reader_runtime_args[23] = 0u;  // 23: scalar_operand_c_stride
+        reader_runtime_args[24] = 0u;  // 24: scalar_operand_num_tiles
 
         reader_runtime_args[25] = c_current_shard_width;  // 25: dst_shard_width
         reader_runtime_args[26] = a_num_tiles;            // 26: src_num_tiles (predicate)
     }
+}
+
+// Helper function to set up reader runtime arguments and dimensions for TTS/TST variants
+void setup_ts_reader_args_and_dims(
+    std::array<uint32_t, 27>& reader_runtime_args,
+    const ttnn::Tensor& predicate_tensor,
+    const ttnn::Tensor& tensor_operand,  // true tensor for TTS, false tensor for TST
+    const ttnn::Tensor& output,
+    uint32_t num_tiles_per_core,
+    uint32_t start_tile_id,
+    uint32_t& a_num_tiles,
+    uint32_t& tensor_num_tiles,  // number of tiles for the tensor operand
+    uint32_t& c_current_shard_width,
+    ttnn::operations::ternary::WhereBroadcastType broadcast_type,
+    ttnn::operations::ternary::WhereVariant variant,  // TTS or TST
+    bool& has_sharding) {
+    // Check for sharding based on variant
+    if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
+        if (variant == ttnn::operations::ternary::WhereVariant::TTS) {
+            has_sharding = predicate_tensor.memory_config().is_sharded() ||
+                           tensor_operand.memory_config().is_sharded() || output.memory_config().is_sharded();
+        } else {  // TST
+            has_sharding = predicate_tensor.memory_config().is_sharded() ||
+                           tensor_operand.memory_config().is_sharded() || output.memory_config().is_sharded();
+        }
+    }
+
+    // Extract dimensions using helper functions
+    auto output_dims = extract_tensor_dimensions(output, output.logical_shape(), output.tensor_spec());
+    auto pred_dims = extract_tensor_dimensions(predicate_tensor, output.logical_shape(), output.tensor_spec());
+    auto tensor_dims = extract_tensor_dimensions(tensor_operand, output.logical_shape(), output.tensor_spec());
+
+    auto pred_strides = calculate_strides(pred_dims);
+    auto tensor_strides = calculate_strides(tensor_dims);
+
+    // Only set tile counts if sharding is enabled
+    if (has_sharding) {
+        a_num_tiles = pred_dims.Ht * pred_dims.Wt;           // predicate tiles per core
+        tensor_num_tiles = tensor_dims.Ht * tensor_dims.Wt;  // tensor operand tiles per core
+        c_current_shard_width = output_dims.Wt;
+    }
+
+    setup_ts_reader_args(
+        reader_runtime_args,
+        predicate_tensor,
+        tensor_operand,
+        num_tiles_per_core,
+        start_tile_id,
+        pred_dims,
+        tensor_dims,
+        output_dims,
+        pred_strides,
+        tensor_strides,
+        a_num_tiles,
+        tensor_num_tiles,
+        c_current_shard_width,
+        broadcast_type,
+        variant);
 }
 
 template <typename F>
@@ -188,7 +447,7 @@ void set_or_update_runtime_arguments(
     const WhereDeviceOperation::operation_attributes_t& operation_attributes,
     const WhereDeviceOperation::tensor_args_t& tensor_args,
     WhereDeviceOperation::tensor_return_value_t& output,
-    WhereBroadcastType broadcast_type,
+    ttnn::operations::ternary::WhereBroadcastType broadcast_type,
     F handle_args) {
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
@@ -262,7 +521,7 @@ void set_or_update_runtime_arguments(
         //                 value_false_tensor.value().memory_config().is_sharded() ||
         //                 output.memory_config().is_sharded();
 
-        if (variant == WhereVariant::TTT) {
+        if (variant == ttnn::operations::ternary::WhereVariant::TTT) {
             // Initialize binary_ng style variables for TTT column broadcast
             bND = extract_nD_dims(value_true_tensor.value(), out_rank);   // value_true nD
             fND = extract_nD_dims(value_false_tensor.value(), out_rank);  // value_false nD
@@ -297,89 +556,29 @@ void set_or_update_runtime_arguments(
         }
 
         // Set reader runtime arguments based on variant
-        if (variant == WhereVariant::TTS) {
-            // TTS: predicate (arg 0) + value_true tensor (arg 1)
-            // For column broadcast, read predicate to CB0 and true tensor to CB1
-            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-                has_sharding = predicate_tensor.memory_config().is_sharded() ||
-                               value_true_tensor.value().memory_config().is_sharded() ||
-                               output.memory_config().is_sharded();
-            }
-
-            // Extract dimensions using helper functions
-            auto output_dims = extract_tensor_dimensions(output, output.logical_shape(), output.tensor_spec());
-            auto pred_dims = extract_tensor_dimensions(predicate_tensor, output.logical_shape(), output.tensor_spec());
-            auto true_dims =
-                extract_tensor_dimensions(value_true_tensor.value(), output.logical_shape(), output.tensor_spec());
-
-            auto pred_strides = calculate_strides(pred_dims);
-            auto true_strides = calculate_strides(true_dims);
-
-            // Only set tile counts if sharding is enabled
-            if (has_sharding) {
-                a_num_tiles = pred_dims.Ht * pred_dims.Wt;  // predicate tiles per core
-                b_num_tiles = true_dims.Ht * true_dims.Wt;  // value_true tiles per core
-                c_current_shard_width = output_dims.Wt;
-            }
+        if (variant == ttnn::operations::ternary::WhereVariant::TTS ||
+            variant == ttnn::operations::ternary::WhereVariant::TST) {
+            // Get the appropriate tensor operand
+            const auto& tensor_operand = (variant == ttnn::operations::ternary::WhereVariant::TTS)
+                                             ? value_true_tensor.value()
+                                             : value_false_tensor.value();
+            uint32_t& tensor_num_tiles_ref =
+                (variant == ttnn::operations::ternary::WhereVariant::TTS) ? b_num_tiles : f_num_tiles;
 
             std::array<uint32_t, num_reader_args> reader_runtime_args{};
-            setup_ts_reader_args(
+            setup_ts_reader_args_and_dims(
                 reader_runtime_args,
                 predicate_tensor,
-                value_true_tensor.value(),  // tensor operand (true for TTS)
+                tensor_operand,
+                output,
                 num_tiles_per_core,
                 start_tile_id,
-                pred_dims,
-                true_dims,  // tensor dims (true for TTS)
-                output_dims,
-                pred_strides,
-                true_strides,  // tensor strides (true for TTS)
                 a_num_tiles,
-                b_num_tiles,  // tensor num tiles (true for TTS)
+                tensor_num_tiles_ref,
                 c_current_shard_width,
                 broadcast_type,
-                WhereVariant::TTS);
-            handle_args(program, reader_kernel_id, core, reader_runtime_args);
-        } else if (variant == WhereVariant::TST) {
-            // TST: predicate (arg 0) + value_false tensor (arg 1, maps to c_1)
-            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-                has_sharding = predicate_tensor.memory_config().is_sharded() ||
-                               value_false_tensor.value().memory_config().is_sharded() ||
-                               output.memory_config().is_sharded();
-            }
-
-            // Extract dimensions using helper functions
-            auto output_dims = extract_tensor_dimensions(output, output.logical_shape(), output.tensor_spec());
-            auto pred_dims = extract_tensor_dimensions(predicate_tensor, output.logical_shape(), output.tensor_spec());
-            auto false_dims =
-                extract_tensor_dimensions(value_false_tensor.value(), output.logical_shape(), output.tensor_spec());
-
-            auto pred_strides = calculate_strides(pred_dims);
-            auto false_strides = calculate_strides(false_dims);
-
-            if (has_sharding) {
-                a_num_tiles = pred_dims.Ht * pred_dims.Wt;    // predicate tiles per core
-                f_num_tiles = false_dims.Ht * false_dims.Wt;  // value_false tiles per core
-                c_current_shard_width = output_dims.Wt;
-            }
-
-            std::array<uint32_t, num_reader_args> reader_runtime_args{};
-            setup_ts_reader_args(
-                reader_runtime_args,
-                predicate_tensor,
-                value_false_tensor.value(),  // tensor operand (false for TST)
-                num_tiles_per_core,
-                start_tile_id,
-                pred_dims,
-                false_dims,  // tensor dims (false for TST)
-                output_dims,
-                pred_strides,
-                false_strides,  // tensor strides (false for TST)
-                a_num_tiles,
-                f_num_tiles,  // tensor num tiles (false for TST)
-                c_current_shard_width,
-                broadcast_type,
-                WhereVariant::TST);
+                variant,
+                has_sharding);
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TTT) {
             uint32_t c_start_id = 0;
@@ -402,7 +601,7 @@ void set_or_update_runtime_arguments(
             reader_runtime_args[4] = c_start_id;                                      // 4: start_id
 
             // Extended broadcast arguments (only when broadcast != NONE)
-            if (broadcast_type != WhereBroadcastType::NONE) {
+            if (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::NONE) {
                 reader_runtime_args[5] = aHt * aWt * aC * aN * aD * (aND > 1);   // 5: nD_stride
                 reader_runtime_args[6] = aHt * aWt * aC * aN * (aD > 1);         // 6: d_stride
                 reader_runtime_args[7] = aHt * aWt * aC * (aN > 1);              // 7: n_stride
@@ -441,8 +640,8 @@ void set_or_update_runtime_arguments(
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
         // Compute runtime args - binary_ng style for TTT column broadcast
-        if (variant == WhereVariant::TTT) {
-            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+        if (variant == ttnn::operations::ternary::WhereVariant::TTT) {
+            if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
                 // Calculate freq and counter like binary_ng for column broadcast
                 uint32_t start_t = start_tile_id % (cHt * cWt);
                 uint32_t start_tw = start_t % cWt;
@@ -451,7 +650,7 @@ void set_or_update_runtime_arguments(
 
                 std::array compute_runtime_args = {num_tiles_per_core, freq, counter, 0u};
                 handle_args(program, compute_kernel_id, core, compute_runtime_args);
-            } else if (broadcast_type == WhereBroadcastType::SCALAR_BCAST) {
+            } else if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_BCAST) {
                 // Calculate freq and counter like binary_ng for scalar broadcast
                 uint32_t start_t = start_tile_id % (cHt * cWt);
                 uint32_t freq = cHt * cWt;   // scalar broadcast frequency
@@ -466,11 +665,10 @@ void set_or_update_runtime_arguments(
             }
 
         } else if (variant == WhereVariant::TTS) {
-
             auto bit_cast_scalar =
                 pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
 
-            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+            if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
                 // For TTS column broadcast, calculate freq and counter for dedicated kernel
                 uint32_t start_t = start_tile_id % (cHt * cWt);
                 uint32_t start_tw = start_t % cWt;
@@ -481,8 +679,8 @@ void set_or_update_runtime_arguments(
                 std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
                 handle_args(program, compute_kernel_id, core, compute_runtime_args);
             } else if (
-                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+                broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_B_BCAST) {
                 // Calculate freq and counter like binary_ng for scalar broadcast
                 auto HtWt = cHt * cWt;
                 uint32_t start_t = start_tile_id % HtWt;
@@ -498,7 +696,7 @@ void set_or_update_runtime_arguments(
         } else if (variant == WhereVariant::TST) {
             auto bit_cast_scalar =
                     pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
-            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+            if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
                 // For TST column broadcast, calculate freq and counter for dedicated kernel
                 uint32_t start_t = start_tile_id % (cHt * cWt);
                 uint32_t start_tw = start_t % cWt;
@@ -509,8 +707,8 @@ void set_or_update_runtime_arguments(
                 std::array compute_runtime_args = {num_tiles_per_core, freq, counter, bit_cast_scalar};
                 handle_args(program, compute_kernel_id, core, compute_runtime_args);
             } else if (
-                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+                broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == ttnn::operations::ternary::WhereBroadcastType::SCALAR_B_BCAST) {
                 // Calculate freq and counter like binary_ng for scalar broadcast
                 auto HtWt = cHt * cWt;
                 uint32_t start_t = start_tile_id % HtWt;
@@ -541,7 +739,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
     // Declare broadcast detection variable at function level
-    bool is_height_bcast = false;  // Track if this is height broadcasting for TTS
 
     WhereVariant variant = operation_attributes.where_variant;
     WhereBroadcastType broadcast_type = operation_attributes.broadcast_type;
@@ -680,255 +877,28 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         output_data_format);  // output
 
     // BROADCAST DETECTION - Common for both reader and compute kernels
-    // Variables are declared at function level, just initialize them here
-    pred_is_bcast = false;
-    true_is_bcast = false;
-    false_is_bcast = false;
-    is_height_bcast = false;  // Initialize to false for broadcast detection
-    if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // Determine which tensor is actually broadcast based on logical shapes (not padded)
-        auto pred_shape = predicate_tensor.logical_shape();
-
-        if (variant == WhereVariant::TTS) {
-            // For TTS: only predicate and true tensor, false is scalar
-            auto true_shape = value_true_tensor.value().logical_shape();
-            auto pred_w = pred_shape[pred_shape.rank() - 1];
-            auto true_w = true_shape[true_shape.rank() - 1];
-
-            // Check for width or height broadcasting
-            pred_is_bcast = (pred_w == 1 && true_w > 1);
-            true_is_bcast = (true_w == 1 && pred_w > 1);
-            false_is_bcast = false;  // False is scalar for TTS
-        } else if (variant == WhereVariant::TST) {
-            // For TST: only predicate and false tensor, true is scalar
-            auto false_shape = value_false_tensor.value().logical_shape();
-            auto pred_w = pred_shape[pred_shape.rank() - 1];
-            auto false_w = false_shape[false_shape.rank() - 1];
-
-            // Check for width or height broadcasting
-            pred_is_bcast = (pred_w == 1 && false_w > 1);
-            false_is_bcast = (false_w == 1 && pred_w > 1);
-            true_is_bcast = false;  // True is scalar for TST
-        } else {
-            // TTT case
-            auto true_shape = value_true_tensor.value().logical_shape();
-            auto false_shape = value_false_tensor.value().logical_shape();
-            auto pred_w = pred_shape[pred_shape.rank() - 1];
-            auto true_w = true_shape[true_shape.rank() - 1];
-            auto false_w = false_shape[false_shape.rank() - 1];
-
-            pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
-            true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
-            false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
-        }
-    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // Determine which tensor is actually broadcast based on logical shapes (not padded)
-        auto pred_shape = predicate_tensor.logical_shape();
-
-        if (variant == WhereVariant::TTS) {
-            // TTS case
-            auto true_shape = value_true_tensor.value().logical_shape();
-            auto pred_h = pred_shape[pred_shape.rank() - 2];
-            auto true_h = true_shape[true_shape.rank() - 2];
-
-            pred_is_bcast = (pred_h == 1 && true_h > 1);
-            true_is_bcast = (true_h == 1 && pred_h > 1);
-            false_is_bcast = false;  // False is scalar for TTS
-        } else if (variant == WhereVariant::TST) {
-            // TST case
-            auto false_shape = value_false_tensor.value().logical_shape();
-            auto pred_h = pred_shape[pred_shape.rank() - 2];
-            auto false_h = false_shape[false_shape.rank() - 2];
-
-            pred_is_bcast = (pred_h == 1 && false_h > 1);
-            true_is_bcast = false;  // True is scalar for TST
-            false_is_bcast = (false_h == 1 && pred_h > 1);
-        } else {
-            // TTT case
-            auto true_shape = value_true_tensor.value().logical_shape();
-            auto false_shape = value_false_tensor.value().logical_shape();
-            auto pred_h = pred_shape[pred_shape.rank() - 2];
-            auto true_h = true_shape[true_shape.rank() - 2];
-            auto false_h = false_shape[false_shape.rank() - 2];
-
-            pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
-            true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
-            false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
-        }
-    } else if (broadcast_type == WhereBroadcastType::SCALAR_BCAST) {
-        // Determine which tensor is actually broadcast based on logical shapes (not padded)
-        auto pred_shape = predicate_tensor.logical_shape();
-        auto true_shape = value_true_tensor.value().logical_shape();
-        auto false_shape = value_false_tensor.value().logical_shape();
-
-        auto pred_w = pred_shape[-1];
-        auto true_w = true_shape[-1];
-        auto false_w = false_shape[-1];
-
-        auto pred_h = pred_shape[-2];  // height (second-to-last dimension)
-        auto true_h = true_shape[-2];
-        auto false_h = false_shape[-2];
-
-        auto max_h = std::max({pred_h, true_h, false_h});
-        auto max_w = std::max({pred_w, true_w, false_w});
-
-        bool pred_row_bcast = (pred_h == 1 && max_h > 1);
-        bool true_row_bcast = (true_h == 1 && max_h > 1);
-        bool false_row_bcast = (false_h == 1 && max_h > 1);
-
-        bool pred_col_bcast = (pred_w == 1 && max_w > 1);
-        bool true_col_bcast = (true_w == 1 && max_w > 1);
-        bool false_col_bcast = (false_w == 1 && max_w > 1);
-
-        pred_is_bcast = (pred_row_bcast && pred_col_bcast);
-        true_is_bcast = (true_row_bcast && true_col_bcast);
-        false_is_bcast = (false_row_bcast && false_col_bcast);
-    }
+    detect_broadcasts(
+        pred_is_bcast,
+        true_is_bcast,
+        false_is_bcast,
+        variant,
+        broadcast_type,
+        predicate_tensor,
+        value_true_tensor,
+        value_false_tensor);
 
     // READER KERNEL - Use kernel path from utils
-    // Create dataflow defines for column broadcast kernels like binary_ng
     std::map<std::string, std::string> reader_defines;
-    if (variant == WhereVariant::TTT &&
-        (broadcast_type == WhereBroadcastType::COL_BCAST || broadcast_type == WhereBroadcastType::SCALAR_BCAST)) {
-        // Use binary_ng style dataflow defines with predicate and value_true dtypes
-        reader_defines = make_dataflow_defines(
-            predicate_tensor.dtype(),
-            value_true_tensor.value().dtype(),
-            value_false_tensor.value().dtype());  // For predicate (a) and value_true (b)
-
-        // Add binary_ng style sharding defines
-        auto [predicate_sharded, value_true_sharded, value_false_sharded] =
-            get_tensor_sharding_status(predicate_tensor, value_true_tensor, value_false_tensor);
-        add_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, value_false_sharded);
-
-        // Set broadcast defines based on actual detection
-        add_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false_is_bcast);
-
-        reader_defines["BCAST_LLK"] = "0";
-    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // ROW_BCAST: need dataflow defines for FILL_TILE_WITH_FIRST_ROW_B etc.
-        reader_defines = make_dataflow_defines(
-            predicate_tensor.dtype(),
-            value_true_tensor.value().dtype(),
-            value_false_tensor.value().dtype());  // For predicate (a) and value_true (b)
-
-        auto [predicate_sharded, value_true_sharded, value_false_sharded] =
-            get_tensor_sharding_status(predicate_tensor, value_true_tensor, value_false_tensor);
-        add_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, value_false_sharded);
-
-        // Set broadcast defines to match ternary reader kernel expectations
-        // CB0 = predicate, CB1 = true tensor, CB2 = false tensor
-        add_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false_is_bcast);
-
-        reader_defines["BCAST_LLK"] = "0";
-    } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // TTS row broadcast
-        reader_defines = make_dataflow_defines(
-            predicate_tensor.dtype(),
-            value_true_tensor.value().dtype(),  // CB1 uses true tensor dtype
-            predicate_tensor.dtype());          // For predicate (a), true (b), false is scalar
-
-        // Add basic sharding defines
-        auto [predicate_sharded, true_sharded, _] =
-            get_tensor_sharding_status(predicate_tensor, value_true_tensor, std::nullopt);
-        add_sharding_defines(reader_defines, predicate_sharded, true_sharded, false);
-
-        // Set broadcast defines for TTS row broadcast
-        // CB0 = predicate, CB1 = true tensor (false is scalar for TTS)
-        add_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false);
-
-    } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // TST row broadcast
-        reader_defines = make_dataflow_defines(
-            predicate_tensor.dtype(),
-            value_false_tensor.value().dtype(),  // CB1 uses false tensor dtype
-            predicate_tensor.dtype());           // For predicate (a), true is scalar, false (b)
-
-        // Add basic sharding defines
-        auto [predicate_sharded, _, false_sharded] =
-            get_tensor_sharding_status(predicate_tensor, std::nullopt, value_false_tensor);
-        add_sharding_defines(reader_defines, predicate_sharded, false_sharded, false);
-
-        // Set broadcast defines for TST row broadcast
-        // CB0 = predicate, CB1 = false tensor (true is scalar for TST)
-        add_broadcast_defines(reader_defines, pred_is_bcast, false_is_bcast, false);
-    } else if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // TTS column broadcast
-        reader_defines = make_dataflow_defines(
-            predicate_tensor.dtype(),
-            value_true_tensor.value().dtype(),  // CB1 uses true tensor dtype
-            predicate_tensor.dtype());          // For predicate (a), true (b), false is scalar
-
-        // Add basic sharding defines
-        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
-        bool true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        add_sharding_defines(reader_defines, predicate_sharded, true_sharded, false);
-
-        // Set broadcast defines for TTS column broadcast
-        add_broadcast_defines(reader_defines, pred_is_bcast, true_is_bcast, false);
-
-        // Add BCAST_LLK define
-        reader_defines["BCAST_LLK"] = "0";
-    } else if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // TST column broadcast
-        reader_defines = make_dataflow_defines(
-            predicate_tensor.dtype(),
-            value_false_tensor.value().dtype(),  // For predicate (a), true is scalar
-            predicate_tensor.dtype());           // CB1 uses false tensor dtype
-
-        // Add basic sharding defines
-        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
-        bool false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        add_sharding_defines(reader_defines, predicate_sharded, false, false_sharded);
-
-        // Set broadcast defines for TST column broadcast
-        add_broadcast_defines(reader_defines, pred_is_bcast, false, false_is_bcast);
-
-        // Add BCAST_LLK define
-        reader_defines["BCAST_LLK"] = "0";
-    }
-
-    if (variant == WhereVariant::TTT && (broadcast_type == WhereBroadcastType::OUTER_BCAST)) {
-        // Sharding not currently supported for TTT OUTER_BCAST
-        bool predicate_sharded = false;
-        bool value_true_sharded = false;
-        bool value_false_sharded = false;
-        reader_defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";
-        reader_defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";
-    }
-    if (variant == WhereVariant::TTS && broadcast_type == WhereBroadcastType::OUTER_BCAST) {
-        // Sharding not currently supported for TTS OUTER_BCAST
-        bool predicate_sharded = false;
-        bool value_true_sharded = false;
-        add_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, false);
-    }
-    if (variant == WhereVariant::TST && broadcast_type == WhereBroadcastType::OUTER_BCAST) {
-        // Sharding not currently supported for TST OUTER_BCAST
-        bool predicate_sharded = false;
-        bool value_false_sharded = false;
-        add_sharding_defines(reader_defines, predicate_sharded, value_false_sharded, false);
-    }
-    if (variant == WhereVariant::TTS && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-                                         broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
-        // Sharding not currently supported for TTS scalar broadcast
-        reader_defines = make_dataflow_defines(predicate_tensor.dtype(), value_true_tensor.value().dtype());
-
-        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
-        bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
-        add_sharding_defines(reader_defines, predicate_sharded, value_true_sharded, false);
-        add_scalar_broadcast_defines(reader_defines, broadcast_type);
-    }
-    if (variant == WhereVariant::TST && (broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-                                         broadcast_type == WhereBroadcastType::SCALAR_B_BCAST)) {
-        // Sharding not currently supported for TST scalar broadcast
-        reader_defines = make_dataflow_defines(predicate_tensor.dtype(), value_false_tensor.value().dtype());
-
-        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
-        bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
-        add_sharding_defines(reader_defines, predicate_sharded, value_false_sharded, false);
-        add_scalar_broadcast_defines(reader_defines, broadcast_type);
-    }
+    setup_reader_defines(
+        reader_defines,
+        variant,
+        broadcast_type,
+        predicate_tensor,
+        value_true_tensor,
+        value_false_tensor,
+        pred_is_bcast,
+        true_is_bcast,
+        false_is_bcast);
 
     tt_metal::ReaderDataMovementConfig reader_config;
 
