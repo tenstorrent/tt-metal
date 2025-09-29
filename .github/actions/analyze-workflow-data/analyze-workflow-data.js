@@ -15,21 +15,14 @@ async function run() {
     const repoInput = core.getInput('repo');
     const runIdInput = core.getInput('run-id');
     const checkName = core.getInput('check-name');
-    const workflowNameInput = core.getInput('workflow-name');
     const maxAnnotations = parseInt(core.getInput('max-annotations') || '50', 10);
 
     const owner = ownerInput || github.context.repo?.owner || DEFAULT_OWNER;
     const repo = repoInput || github.context.repo?.repo || DEFAULT_REPO;
-    const workflowNameCandidate = workflowNameInput || DEFAULT_WORKFLOW_NAME;
-    const shouldResolveRunId = !runIdInput && workflowNameCandidate;
-    const runId = runIdInput
-      ? Number(runIdInput)
-      : shouldResolveRunId
-        ? await resolveRunId(token, owner, repo, workflowNameCandidate, DEFAULT_RUN_ID)
-        : DEFAULT_RUN_ID;
+    const runId = runIdInput ? Number(runIdInput) : DEFAULT_RUN_ID;
 
     if (!runId) {
-      throw new Error('No run-id available. Provide the run-id input or ensure the workflow has previous runs.');
+      throw new Error('No run-id available. Provide the run-id input.');
     }
 
     const octokit = github.getOctokit(token);
@@ -55,8 +48,10 @@ async function run() {
       return;
     }
 
-    const checkFilters = checkName ? [checkName] : DEFAULT_CHECK_NAMES;
-    const filteredRuns = Array.isArray(checkFilters) && checkFilters.length > 0
+    const checkFilters = checkName
+      ? checkName.split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+    const filteredRuns = checkFilters.length > 0
       ? checkRuns.filter(run => checkFilters.some(name => (run.name || '').toLowerCase().includes(name.toLowerCase())))
       : checkRuns;
 
@@ -142,31 +137,7 @@ async function fetchAnnotations(octokit, owner, repo, checkRunId, budget) {
 }
 
 async function resolveRunId(token, owner, repo, workflowName, fallbackRunId) {
-  if (!workflowName) {
-    return fallbackRunId;
-  }
-  try {
-    const octokit = github.getOctokit(token);
-    const workflows = await octokit.rest.actions.listRepoWorkflows({ owner, repo, per_page: 100 });
-    const workflow = workflows.data.workflows.find(w => w.name === workflowName);
-    if (!workflow) {
-      core.info(`Workflow "${workflowName}" not found; falling back to ${fallbackRunId}.`);
-      return fallbackRunId;
-    }
-
-    const runs = await octokit.rest.actions.listWorkflowRuns({ owner, repo, workflow_id: workflow.id, status: 'completed', per_page: 20 });
-    const failingRun = runs.data.workflow_runs.find(r => r.conclusion && r.conclusion !== 'success');
-    if (failingRun) {
-      core.info(`Resolved failing run ${failingRun.id} for workflow "${workflowName}".`);
-      return failingRun.id;
-    }
-
-    core.info(`No failing runs found for "${workflowName}"; using fallback ${fallbackRunId}.`);
-    return fallbackRunId;
-  } catch (e) {
-    core.warning(`Failed to resolve run id for workflow ${workflowName}: ${e.message}`);
-    return fallbackRunId;
-  }
+  return fallbackRunId;
 }
 
 function buildAnnotationsMarkdown(collected) {
