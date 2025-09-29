@@ -195,7 +195,7 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
-        enable_trace=False,
+        enable_trace=True,
         **kwargs,
     ):
         if page_table is not None:
