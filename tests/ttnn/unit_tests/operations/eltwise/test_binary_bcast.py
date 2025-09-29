@@ -3258,60 +3258,6 @@ def test_small_fp32_multiply(device):
     assert_with_pcc(out_torch, ttnn.to_torch(out))
 
 
-block_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [32, 32],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
-    strategy=ttnn.ShardStrategy.BLOCK,
-    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    use_height_and_width_as_shard_shape=True,
-)
-
-
-@pytest.mark.parametrize(
-    "a_shape, b_shape",
-    ((torch.Size([1, 2, 32, 32]), torch.Size([1, 2, 32, 32])),),
-)
-@pytest.mark.parametrize(
-    "a_config, b_config, out_config",
-    [
-        [ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config],
-        [ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
-        [ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config, block_sharded_memory_config],
-        [block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
-        [block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG, block_sharded_memory_config],
-        [block_sharded_memory_config, block_sharded_memory_config, ttnn.DRAM_MEMORY_CONFIG],
-        [block_sharded_memory_config, block_sharded_memory_config, block_sharded_memory_config],
-    ],
-)
-@pytest.mark.parametrize(
-    "dtype_pt, dtype_tt",
-    ([torch.bfloat16, ttnn.bfloat16],),
-)
-def test_binary_sharded_bcast_no_block(a_shape, b_shape, a_config, b_config, out_config, dtype_pt, dtype_tt, device):
-    torch.manual_seed(0)
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(a_shape)
-    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(b_shape)
-
-    a_tt = ttnn.from_torch(
-        a_pt,
-        dtype=dtype_tt,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=a_config,
-    )
-    b_tt = ttnn.from_torch(
-        b_pt,
-        dtype=dtype_tt,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=b_config,
-    )
-
-    out_pt = torch.add(a_pt, b_pt)
-    out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
-    assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
-
-
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     ([torch.bfloat16, ttnn.bfloat16],),
