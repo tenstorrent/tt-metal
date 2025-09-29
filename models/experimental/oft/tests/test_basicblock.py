@@ -22,6 +22,7 @@ from loguru import logger
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 1024}], indirect=True)
 def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stride, sharding, is_sliced):
     skip_if_not_blackhole_20_cores(device)
+    device.disable_and_clear_program_cache()  # test hangs without this line on P150
     torch.manual_seed(42)
     input_tensor = torch.randn(n, in_ch, h, w)
     # Create 8 BasicBlock modules from oft
