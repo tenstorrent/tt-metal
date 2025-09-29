@@ -850,7 +850,7 @@ void issue_read_buffer_dispatch_command_sequence(
                 const uint64_t dst_noc_addr = pinned_noc_base + dst_offset_base;
                 pinned_dst_addr_lo = static_cast<uint32_t>(dst_noc_addr - pcie_base);
                 const auto& soc = cluster.get_soc_desc(mmio_device_id);
-                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, soc.get_umd_coord_system());
+                const auto& pcie_cores = soc.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
                 TT_FATAL(!pcie_cores.empty(), "No PCIE core found on MMIO device {}", mmio_device_id);
                 pinned_dst_noc_xy =
                     MetalContext::instance().hal().noc_xy_encoding(pcie_cores.front().x, pcie_cores.front().y);
