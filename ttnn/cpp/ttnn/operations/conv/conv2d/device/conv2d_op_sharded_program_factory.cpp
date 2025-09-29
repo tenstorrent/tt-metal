@@ -1279,7 +1279,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
     std::vector<CoreCoord> mcast_sender_cores_vec;
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
-        // TODO check if we need to set row_wise based on the transpose_mcast flag
         std::vector<CoreCoord> core_range_vec = grid_to_cores(core_range.start_coord, core_range.end_coord, true);
         mcast_sender_cores_vec.insert(mcast_sender_cores_vec.end(), core_range_vec.begin(), core_range_vec.end());
     }
