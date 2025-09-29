@@ -159,7 +159,7 @@ class OFT:
         if features.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
             features = ttnn.to_layout(features, ttnn.TILE_LAYOUT)
 
-        if self.integral_image_quantization_strategy == None:
+        if self.integral_image_quantization_strategy is None:
             integral_image = ttnn_integral_image_channel_last(features)
         elif self.integral_image_quantization_strategy == "to_uint32":
             features = ttnn.mul(features, self.prescaler, dtype=ttnn.bfloat16)

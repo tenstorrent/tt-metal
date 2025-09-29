@@ -212,7 +212,7 @@ class TTResNetFeatures:
             batch_size=cv2.shape[0],
             input_h=out_h,  # conv1.shape[1],
             input_w=out_w,  # conv1.shape[2],
-            channels=cv1.shape[3],
+            channels=cv2.shape[3],
             kernel_size=[3, 3],
             stride=[2, 2],
             padding=[1, 1],
