@@ -22,6 +22,7 @@ def run_yolov10x_inference(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
 
@@ -56,6 +57,10 @@ def run_yolov10x_inference(
         f"ttnn_yolov10_batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round( batch_size / inference_time_avg)}"
     )
 
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
@@ -73,6 +78,12 @@ def run_yolov10x_inference(
         (640, 640),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        48 if ttnn.get_num_devices() < 2 else 46,
+    ],
+)
 def test_e2e_performant(
     device,
     batch_size_per_device,
@@ -80,6 +91,7 @@ def test_e2e_performant(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
     run_yolov10x_inference(
         device,
@@ -88,6 +100,7 @@ def test_e2e_performant(
         weight_dtype,
         model_location_generator,
         resolution,
+        expected_inference_throughput=expected_inference_throughput,
     )
 
 
@@ -107,6 +120,12 @@ def test_e2e_performant(
         (640, 640),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        90,
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant_dp(
@@ -116,7 +135,11 @@ def test_e2e_performant_dp(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
     run_yolov10x_inference(
         mesh_device,
         batch_size_per_device,
@@ -124,4 +147,5 @@ def test_e2e_performant_dp(
         weight_dtype,
         model_location_generator,
         resolution,
+        expected_inference_throughput=expected_inference_throughput,
     )
