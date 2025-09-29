@@ -845,27 +845,27 @@ async function listCommitsBetween(octokit, context, startShaExclusive, endShaInc
 async function run() {
   try {
     // Get inputs
-    const cachePath = core.getInput('cache-path', { required: true });
-    const previousCachePath = core.getInput('previous-cache-path', { required: false });
-    const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true }));
-    const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
-    const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true';
+    const cachePath = core.getInput('cache-path', { required: true }); // get the workflow data cache made by the fetch-workflow-data action
+    const previousCachePath = core.getInput('previous-cache-path', { required: false }); // get the previous workflow data cache made by the fetch-workflow-data action from the most recent previous run on main branch
+    const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true })); // get the json of pipelines that we want to analyze
+    const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
+    const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true'; // get the alert-all input from the action inputs
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
-      throw new Error(`Cache file not found at ${cachePath}`);
+      throw new Error(`Cache file not found at ${cachePath}`); // throw an error if the cache file does not exist (no data was fetched)
     }
     if (!Array.isArray(workflowConfigs)) {
-      throw new Error('Workflow configs must be a JSON array');
+      throw new Error('Workflow configs must be a JSON array'); // throw an error if the workflow configs are not a JSON array
     }
     if (isNaN(days) || days <= 0) {
-      throw new Error('Days must be a positive number');
+      throw new Error('Days must be a positive number'); // throw an error if the days is not a positive number
     }
 
     // Load cached data
-    const grouped = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-    const hasPrevious = previousCachePath && fs.existsSync(previousCachePath);
-    const previousGrouped = hasPrevious ? JSON.parse(fs.readFileSync(previousCachePath, 'utf8')) : null;
+    const grouped = JSON.parse(fs.readFileSync(cachePath, 'utf8')); // parse the cached data into a json object
+    const hasPrevious = previousCachePath && fs.existsSync(previousCachePath); // check if the previous cache file exists
+    const previousGrouped = hasPrevious ? JSON.parse(fs.readFileSync(previousCachePath, 'utf8')) : null; // parse the previous cached data into a json object
 
     // Track failed workflows
     const failedWorkflows = [];
@@ -873,35 +873,36 @@ async function run() {
     // Filter and process each workflow configuration
     const filteredGrouped = new Map();
     const filteredPreviousGrouped = new Map();
-    for (const config of workflowConfigs) {
-      core.info(`Processing config: ${JSON.stringify(config)}`);
-      for (const [name, runs] of grouped) {
+    for (const config of workflowConfigs) { // for each pipeline name that we want to analyze
+      core.info(`Processing config: ${JSON.stringify(config)}`); // log the config that we are processing
+      for (const [name, runs] of grouped) { // for each set of pipeline runs in the cached data
         if ((config.wkflw_name && name === config.wkflw_name) ||
-            (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
+            (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) { // if the pipeline run name matches the pipeline name or pipeline prefix
           core.info(`Matched workflow: ${name} with config: ${JSON.stringify(config)}`);
           // Filter runs by date range
-          const filteredRuns = filterRunsByDate(runs, days);
+          const filteredRuns = filterRunsByDate(runs, days); // filter the runs by the number of days to look back for workflow data
           if (filteredRuns.length > 0) {
-            filteredGrouped.set(name, filteredRuns);
+            filteredGrouped.set(name, filteredRuns); // set the filtered runs in the filtered grouped map
 
             // Check if latest run on main is failing
             const mainBranchRuns = filteredRuns
               .filter(r => r.head_branch === 'main')
-              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); // sort the runs by date within the window
             if (mainBranchRuns[0]?.conclusion !== 'success') {
-              failedWorkflows.push(name);
+              failedWorkflows.push(name); // if the latest run on main is failing, add the pipeline name to the failed workflows array
             }
           }
         }
       }
 
       if (hasPrevious && Array.isArray(previousGrouped)) {
-        for (const [name, runs] of previousGrouped) {
+        for (const [name, runs] of previousGrouped) { // for each set of pipeline runs in the previous cached data
           if ((config.wkflw_name && name === config.wkflw_name) ||
-              (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) {
-            const filteredRuns = filterRunsByDate(runs, days);
+              (config.wkflw_prefix && name.startsWith(config.wkflw_prefix))) { // if the pipeline run name matches the pipeline name or pipeline prefix
+            const filteredRuns = filterRunsByDate(runs, days); // filter the runs by the number of days to look back for workflow data
             if (filteredRuns.length > 0) {
-              filteredPreviousGrouped.set(name, filteredRuns);
+              filteredPreviousGrouped.set(name, filteredRuns); // set the filtered runs in the filtered previous grouped map
+              // this should make it so that if a specific pipeline run from the old aggregated data is no longer within the time window, it stops being used
             }
           }
         }
