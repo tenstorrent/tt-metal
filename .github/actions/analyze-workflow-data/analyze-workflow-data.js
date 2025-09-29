@@ -1061,3 +1061,7 @@ function buildAnnotationSnippet(runName, checkRun, annotation, fallbackText) {
 }
 
 // ... existing code ...
+// Run the action if this file is executed directly
+if (require.main === module) {
+  run();
+}
