@@ -22,11 +22,12 @@ inline void read_tiles(
     const AddrGen& addr_gen,
     const uint32_t start_tile_idx,
     const uint32_t block_size,
+    const uint32_t current_block_size,
     const uint32_t tile_size_bytes) {
     // Reads `num_tiles` tiles from DRAM starting at logical tile index `start_tile` into circular buffer `cb_idx`.
     cb_reserve_back(cb_idx, block_size);
     uint32_t l1_write_addr = get_write_ptr(cb_idx);
-    for (uint32_t k = 0; k < block_size; ++k) {
+    for (uint32_t k = 0; k < current_block_size; ++k) {
         noc_async_read_tile(start_tile_idx + k, addr_gen, l1_write_addr);
         l1_write_addr += tile_size_bytes;
     }
@@ -57,12 +58,20 @@ void kernel_main() {
     for (uint32_t r = start_row; r < end_row; ++r) {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t row_tile_idx = (r * Wt) + c;
+            uint32_t current_block_size = (c + block_size <= Wt) ? block_size : (Wt - c);
 
-            read_tiles(cb_param_in_idx, param_in_addr_gen, row_tile_idx, block_size, tile_size_bytes);
-            read_tiles(cb_grad_idx, grad_addr_gen, row_tile_idx, block_size, tile_size_bytes);
+            read_tiles(
+                cb_param_in_idx, param_in_addr_gen, row_tile_idx, block_size, current_block_size, tile_size_bytes);
+            read_tiles(cb_grad_idx, grad_addr_gen, row_tile_idx, block_size, current_block_size, tile_size_bytes);
 
 #if USE_MOMENTUM
-            read_tiles(cb_momentum_in_idx, momentum_in_addr_gen, row_tile_idx, block_size, tile_size_bytes);
+            read_tiles(
+                cb_momentum_in_idx,
+                momentum_in_addr_gen,
+                row_tile_idx,
+                block_size,
+                current_block_size,
+                tile_size_bytes);
 #endif
             noc_async_read_barrier();
             cb_push_back(cb_param_in_idx, block_size);
