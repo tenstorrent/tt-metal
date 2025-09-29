@@ -10,14 +10,14 @@ from ...layers.module import Module, Parameter
 
 
 class TinyLinear(Module):
-    def __init__(self, in_dim: int, out_dim: int, *, device: ttnn.MeshDevice) -> None:
+    def __init__(self, in_dim: int, out_dim: int, *, bias: bool, device: ttnn.MeshDevice) -> None:
         super().__init__()
 
         self.weight = Parameter(shape=[in_dim, out_dim], device=device)
-        self.bias = Parameter(shape=[out_dim], device=device)
+        self.bias = Parameter(shape=[out_dim], device=device) if bias else None
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.linear(x, self.weight.data, bias=self.bias.data)
+        return ttnn.linear(x, self.weight.data, bias=self.bias.data if self.bias is not None else None)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
