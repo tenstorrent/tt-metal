@@ -26,7 +26,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -312,9 +312,8 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Num tests {}", num_tests);
 
         // Create MeshWorkload for kernel execution
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application

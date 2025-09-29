@@ -4,7 +4,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <cstdint>
 #include <string>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/kernel_types.hpp"
@@ -19,7 +19,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <utility>
@@ -47,9 +46,11 @@ struct ActivationReuseConfig {
     CoreCoord partial_work_core{0, 0};
     uint32_t partial_core_reader_tiles_to_push = 0;
     uint32_t partial_core_writer_remaining_tiles_to_push_to_push = 0;
+    bool single_core_processes_multiple_batches = false;
 };
 
 ActivationReuseConfig calculate_activation_reuse_params(
+    uint32_t output_image_height,
     uint32_t output_image_width,
     uint32_t filter_w,
     uint32_t filter_h,
@@ -65,7 +66,8 @@ ActivationReuseConfig calculate_activation_reuse_params(
     uint32_t padded_total_output_height_ntiles,
     const std::vector<CBInfo>& cb_info,
     bool enable_split_reader,
-    const CoreRangeSet& input_cores) {
+    const CoreRangeSet& input_cores,
+    uint32_t batch) {
     ActivationReuseConfig config;
 
     // Calculate compile time args needed for activation reuse feature
@@ -150,6 +152,13 @@ ActivationReuseConfig calculate_activation_reuse_params(
     for (uint32_t i = start_idx; i < all_input_cores.size(); i++) {
         config.cores_with_non_meaningful_work.insert(all_input_cores[i]);
     }
+
+    // If we have cores processing data from more than 1 batch, we need to trigger a check inside the kernel
+    // to 'restart' the optimization and fill in the whole output image width
+    // before the reuse for the new batch starts
+    const uint32_t per_core_out_hw = single_core_height_ntiles * tt::constants::TILE_HEIGHT;
+    const uint32_t total_batch_out_hw = output_image_height * output_image_width;
+    config.single_core_processes_multiple_batches = (batch > 1) && (total_batch_out_hw % per_core_out_hw != 0);
 
     return config;
 }
@@ -620,7 +629,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     const bool needs_act_block_zero_out =
         act_block_w_extra_align_scalars % 16 != 0 && tt::tt_metal::is_block_float(output.dtype());
 
-    const uint32_t tilized_act_tile_size = tt::tt_metal::detail::TileSize(tilized_act_df);
+    const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
     // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
     // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -720,6 +729,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     ActivationReuseConfig activation_reuse_config;
     if (enable_activation_reuse) {
         activation_reuse_config = calculate_activation_reuse_params(
+            output_image_height,
             output_image_width,
             filter_w,
             filter_h,
@@ -735,7 +745,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             act_matrix_height_ntiles,
             cb_info,
             enable_split_reader,
-            input_cores);
+            input_cores,
+            batch);
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -795,7 +806,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             activation_reuse_config.image_width_tiles,
             output_image_width,
             activation_reuse_config.reuse_window_offset,
-            static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0)};
+            static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
+            static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
@@ -894,7 +906,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                     activation_reuse_config.image_width_tiles,
                     output_image_width,
                     activation_reuse_config.reuse_window_offset,
-                    static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0)};
+                    static_cast<uint32_t>(activation_reuse_config.num_cores_with_non_meaningful_work > 0),
+                    static_cast<uint32_t>(activation_reuse_config.single_core_processes_multiple_batches)};
                 split_reader_args.insert(
                     split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
             }
@@ -954,7 +967,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         }
     }
 
-    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const tt::tt_metal::NOC reader_noc =
         writer_mcast_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 

@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -197,7 +196,7 @@ int main() {
     // Upload inputs (non-blocking), enqueue mesh workload (non-blocking), read back result, then wait for completion
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
     distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::EnqueueReadMeshBuffer(cq, dst_vec, dst_buffer, true);
     distributed::Finish(cq);

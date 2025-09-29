@@ -11,7 +11,7 @@
 #include <iomanip>
 #include <optional>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -47,25 +47,6 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
         case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
         default: TT_THROW("Invalid routing direction: {}", routing_direction);
     }
-}
-
-FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
-    const auto& dim_types = topology.dim_types();
-
-    TT_FATAL(dim_types.size() == 2, "Torus topology must have 2 dimensions");
-
-    if (dim_types[0] == proto::TorusTopology::RING && dim_types[1] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_XY;
-    } else if (dim_types[0] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_Y;
-    } else if (dim_types[1] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_X;
-    } else if (dim_types[0] == proto::TorusTopology::LINE && dim_types[1] == proto::TorusTopology::LINE) {
-        return FabricType::MESH;
-    }
-
-    TT_THROW("Invalid torus topology");
-    return FabricType::MESH;
 }
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&

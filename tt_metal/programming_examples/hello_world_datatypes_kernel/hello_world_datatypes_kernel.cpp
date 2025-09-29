@@ -66,7 +66,7 @@ int main() {
 
     // Set runtime args, add program to mesh workload, and enqueue (non-blocking)
     SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     fmt::print("Hello, Core {{0, 0}} on Device 0, please handle the data.\n");

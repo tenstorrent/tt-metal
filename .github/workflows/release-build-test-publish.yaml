@@ -159,7 +159,7 @@ jobs:
     needs: build-artifact
     if: ${{ github.ref == 'refs/heads/main' || inputs.dry-run }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.packages-artifact-name || 'packages artifact unresolved!' }}
@@ -207,7 +207,7 @@ jobs:
           pip install s3pypi
 
       - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           path: ./wheels

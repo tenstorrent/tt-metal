@@ -33,8 +33,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -231,12 +229,12 @@ static void RunTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto& cq = mesh_device->mesh_command_queue();
 
     // Create an input CB with the right data format
-    uint32_t tile_size = detail::TileSize(data_format);
+    uint32_t tile_size = tt::tile_size(data_format);
     CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
                                               .set_page_size(CBIndex::c_0, tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);

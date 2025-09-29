@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -490,7 +490,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     """
     # Skip flag for dependency checks
     try:
-        skip_check = bool(args.get("--skip-version-check", False)) if args else False
+        skip_check = bool(args["--skip-version-check"])
     except Exception:
         skip_check = False
 

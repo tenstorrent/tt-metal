@@ -23,7 +23,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -233,9 +233,8 @@ int main(int argc, char** argv) {
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
         log_info(LogTest, "Num tests {}", num_tests);
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();

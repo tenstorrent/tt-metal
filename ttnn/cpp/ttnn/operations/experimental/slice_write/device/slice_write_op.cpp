@@ -1,11 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
 #include "slice_write_op.hpp"
 #include "slice_write_program_factory.hpp"
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 using namespace tt::tt_metal;

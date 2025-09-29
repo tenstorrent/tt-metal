@@ -15,7 +15,7 @@
 #include <string>
 #include <variant>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
@@ -41,7 +41,8 @@ BuildEnvManager::BuildEnvManager() {
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     build_state_indices_.resize(programmable_core_type_count);
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-        uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
+        uint32_t processor_class_count =
+            hal.get_processor_classes_count(hal.get_programmable_core_type(programmable_core));
         build_state_indices_[programmable_core].resize(processor_class_count);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
             uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
@@ -150,7 +151,8 @@ std::vector<JitBuildState> create_build_state(
     // Loop through programmable core types and their processor classes/types.
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-        uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
+        uint32_t processor_class_count =
+            hal.get_processor_classes_count(hal.get_programmable_core_type(programmable_core));
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
             JitBuiltStateConfig config{
                 .core_type = static_cast<HalProgrammableCoreType>(programmable_core),
