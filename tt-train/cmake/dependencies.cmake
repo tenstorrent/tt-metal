@@ -28,7 +28,8 @@ CPMAddPackage(
 CPMAddPackage(
     NAME yaml-cpp
     GITHUB_REPOSITORY jbeder/yaml-cpp
-    GIT_TAG 0.8.0
+    GIT_TAG
+        2f86d13775d119edbb69af52e5f566fd65c6953b # 0.8.0 + patches
     OPTIONS
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"

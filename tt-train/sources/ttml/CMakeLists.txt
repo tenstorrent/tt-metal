@@ -382,9 +382,8 @@ target_link_libraries(
         z
         pthread
         atomic
-        Metalium::Metal
-        Metalium::TTNN
-        Metalium::TTNNCPP
+        TT::Metalium
+        TTNN::TTNN
         Python3::Python
         fmt::fmt-header-only
         enchantum::enchantum
