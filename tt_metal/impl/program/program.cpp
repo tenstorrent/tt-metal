@@ -1530,6 +1530,10 @@ bool detail::ProgramImpl::kernel_binary_always_stored_in_ringbuffer() {
 
 Program::Program(Program&& other) noexcept = default;
 
+const ProgramTransferInfo& Program::get_program_transfer_info() const noexcept {
+    return internal_->get_program_transfer_info();
+}
+
 Program& Program::operator=(Program&& other) noexcept = default;
 
 Program::~Program() noexcept = default;

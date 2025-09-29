@@ -41,6 +41,7 @@ public:
     uint32_t get_sem_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_base_addr(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
+    std::shared_ptr<MeshBuffer> get_kernel_bin_buf() const;
     MeshWorkloadImpl& impl() { return *pimpl_; }
 
 private:

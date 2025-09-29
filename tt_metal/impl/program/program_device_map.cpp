@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "program_device_map.hpp"
+#include <tt-metalium/program.hpp>
 
 namespace tt::tt_metal {
 

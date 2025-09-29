@@ -519,6 +519,24 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                     local_test_functions::ReadFromUnitMeshBuffer(mesh_device, test_config, res, buf, std::nullopt);
                 }
                 EXPECT_EQ(src, res);
+                // if (src != res) {
+                //     const auto& soc_d =
+                //     tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id()); std::cout <<
+                //     "Buffer size: " << buf_size << std::endl; std::cout << "Page size bytes: " << config.page_size()
+                //     << std::endl; std::cout << "Num DRAM banks: " <<
+                //     mesh_device->allocator()->get_num_banks(BufferType::DRAM) << std::endl; for (int bank = 0; bank <
+                //     mesh_device->allocator()->get_num_banks(BufferType::DRAM); bank++) {
+                //         std::cout << "Bank " << bank << " Core: "  <<
+                //         soc_d.get_preferred_worker_core_for_dram_view(bank, 0).str() << std::endl;
+                //     }
+                //     for (size_t i = 0; i < src.size(); i++) {
+                //         if (src[i] != res[i]) {
+                //             std::cout << "src[" << i << "] = " << src[i] << ", res[" << i << "] = " << res[i] <<
+                //             std::endl;
+                //         }
+                //     }
+                //     // exit(0);
+                // }
             }
         }
     }

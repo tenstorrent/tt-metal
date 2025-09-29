@@ -486,4 +486,6 @@ uint32_t MeshWorkload::get_cb_size(
     return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
 }
 
+std::shared_ptr<MeshBuffer> MeshWorkload::get_kernel_bin_buf() const { return pimpl_->get_kernel_bin_buf(); }
+
 }  // namespace tt::tt_metal::distributed

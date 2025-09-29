@@ -273,7 +273,7 @@ public:
 
     // Ensures that statically allocated circular buffers do not grow into L1 buffer space
     void validate_circular_buffer_region(const IDevice* device);
-
+    const ProgramTransferInfo& get_program_transfer_info() const noexcept;
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
@@ -387,7 +387,6 @@ private:
     void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
     void set_program_attrs_across_core_types(IDevice* device);
 
-    const ProgramTransferInfo& get_program_transfer_info() const noexcept;
     std::shared_ptr<Buffer> get_kernels_buffer(IDevice* device) const noexcept;
 
     friend void program_dispatch::assemble_device_commands(
