@@ -66,7 +66,7 @@ void kernel_main() {
                             //  write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
                             cb_wait_front(cb_id_dst, onetile);
                             uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                            noc_async_write_tile(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
+                            noc_async_write_page(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
                             noc_async_write_barrier();
                             cb_pop_front(cb_id_dst, onetile);
 #endif

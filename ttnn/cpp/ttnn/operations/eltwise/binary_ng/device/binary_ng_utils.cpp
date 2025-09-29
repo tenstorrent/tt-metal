@@ -33,67 +33,52 @@ struct fmt::formatter<ttnn::operations::binary_ng::Lowercase> : fmt::formatter<s
 namespace ttnn::operations::binary_ng {
 
 BinaryNgKernelConfig::BinaryNgKernelConfig(SubtileBroadcastType subtile_broadcast_type) {
+    // TODO: completely remove old kernels and its old kernel parameters
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE:
             reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterNoBcast;
+            writer_kernel = KernelName::WriterScalar;
             bcast_input = std::nullopt;
             break;
 
-        case SubtileBroadcastType::SCALAR_A:
-            reader_kernel = KernelName::ReaderScalarBcast;
+        case SubtileBroadcastType::SCALAR_A:;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::SCALAR_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterScalarBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_A:
-            reader_kernel = KernelName::ReaderRowBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::ROW_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeNoBcast;
-            writer_kernel = KernelName::WriterRowBcast;
             bcast_input = std::nullopt;
             break;
 
         case SubtileBroadcastType::COL_A:
-            reader_kernel = KernelName::ReaderColBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterNoBcast;
             bcast_input = 0;
             break;
 
         case SubtileBroadcastType::COL_B:
-            reader_kernel = KernelName::ReaderNoBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterColBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_A_COL_B:
-            reader_kernel = KernelName::ReaderRowBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterColBcast;
             bcast_input = 1;
             break;
 
         case SubtileBroadcastType::ROW_B_COL_A:
-            reader_kernel = KernelName::ReaderColBcast;
             compute_kernel = KernelName::ComputeBcast;
-            writer_kernel = KernelName::WriterRowBcast;
             bcast_input = 0;
             break;
     }
@@ -122,13 +107,6 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
             return fmt::format(dataflow, root_ng, "reader_interleaved_scalar_bcast.cpp");
         case KernelName::WriterNoBcastNg: return fmt::format(dataflow, root_ng, "writer_interleaved_no_bcast.cpp");
         case KernelName::ReaderNoBcast: return fmt::format(dataflow, root, "reader_interleaved_no_bcast.cpp");
-        case KernelName::ReaderRowBcast: return fmt::format(dataflow, root, "reader_interleaved_row_bcast.cpp");
-        case KernelName::ReaderColBcast: return fmt::format(dataflow, root, "reader_interleaved_col_bcast.cpp");
-        case KernelName::ReaderScalarBcast: return fmt::format(dataflow, root, "reader_interleaved_scalar_bcast.cpp");
-        case KernelName::WriterNoBcast: return fmt::format(dataflow, root, "writer_interleaved_no_bcast.cpp");
-        case KernelName::WriterRowBcast: return fmt::format(dataflow, root, "writer_interleaved_row_bcast.cpp");
-        case KernelName::WriterColBcast: return fmt::format(dataflow, root, "writer_interleaved_col_bcast.cpp");
-        case KernelName::WriterScalarBcast: return fmt::format(dataflow, root, "writer_interleaved_scalar_bcast.cpp");
         case KernelName::WriterScalar: return fmt::format(dataflow, root, "writer_interleaved_scalar.cpp");
         case KernelName::ComputeNoBcast:
             return fmt::format(
