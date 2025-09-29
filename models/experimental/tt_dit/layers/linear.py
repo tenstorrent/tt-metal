@@ -52,7 +52,7 @@ class Linear(Module):
         output = ttnn.linear(
             x,
             self.weight.data,
-            bias=self.bias.data,
+            bias=self.bias.data if self.bias is not None else None,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
@@ -182,7 +182,7 @@ class ColParallelLinear(Module):
         output = ttnn.linear(
             x,
             weight,
-            bias=self.bias.data,
+            bias=self.bias.data if self.bias is not None else None,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
@@ -291,7 +291,7 @@ class RowParallelLinear(Module):
         output = ttnn.linear(
             x,
             weight,
-            bias=self.bias.data,
+            bias=self.bias.data if self.bias is not None else None,
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
