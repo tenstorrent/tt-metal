@@ -61,7 +61,6 @@ void py_module(py::module& module) {
         "release_trace",
         [](MeshDevice* device, MeshTraceId trace_id) {
             ttnn::operations::trace::release_trace(device, trace_id);
-            return;
         },
         py::arg("mesh_device"),
         py::arg("trace_id"));
