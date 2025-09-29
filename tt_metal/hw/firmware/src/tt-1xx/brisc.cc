@@ -498,6 +498,7 @@ int main() {
                     WAYPOINT("NKFW");
                     // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed
                     // and the NOC interface is in a known idle state for the next kernel.
+                    invalidate_l1_cache();
                     for (int noc = 0; noc < NUM_NOCS; noc++) {
                         ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
                         ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
