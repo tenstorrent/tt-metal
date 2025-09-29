@@ -10,6 +10,7 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt_stl/optional_reference.hpp>
 
 std::ostream& operator<<(std::ostream& os, const std::vector<bool>& value) {
     os << "[";
@@ -77,27 +78,27 @@ std::ostream& operator<<(
 }
 
 std::ostream& operator<<(std::ostream& os, const std::variant<float, int>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    std::visit([&os](const auto& v) { os << v; }, value);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const std::variant<int, float>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    std::visit([&os](const auto& v) { os << v; }, value);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const std::variant<unsigned int, float>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    std::visit([&os](const auto& v) { os << v; }, value);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const std::variant<float, unsigned int>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    std::visit([&os](const auto& v) { os << v; }, value);
     return os;
 }
 
 std::ostream& operator<<(std::ostream& os, const std::variant<int, ttsl::SmallVector<int, 8ul>>& value) {
-    tt::stl::reflection::operator<<(os, value);
+    std::visit([&os](const auto& v) { os << v; }, value);
     return os;
 }
 
@@ -124,6 +125,16 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::GlobalSemaphore& 
     return os;
 }
 
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::experimental::GlobalCircularBuffer& value) {
+    tt::stl::reflection::operator<<(os, value);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const std::variant<float, tt::tt_metal::Tensor>& value) {
+    std::visit([&os](const auto& v) { os << v; }, value);
+    return os;
+}
+
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::optional<T>& value) {
     if (value.has_value()) {
@@ -137,7 +148,40 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& value) {
 // Helper function to serialize a value
 template <typename T>
 void serialize_value(std::ostringstream& oss, const T& value) {
-    oss << value;
+    // Try to use operator<<, but fallback to type name if it doesn't exist
+    if constexpr (requires { oss << value; }) {
+        oss << value;
+    } else {
+        oss << "<" << graph_demangle(typeid(value).name()) << ">";
+    }
+}
+
+// Specialization for ttsl::optional_reference
+template <typename T>
+void serialize_value(std::ostringstream& oss, const ttsl::optional_reference<T>& value) {
+    if (value.has_value()) {
+        serialize_value(oss, value.value());
+    } else {
+        oss << "nullopt";
+    }
+}
+
+template <typename... Types>
+void serialize_value(std::ostringstream& oss, const std::variant<Types...>& value) {
+    std::visit([&oss](const auto& v) { serialize_value(oss, v); }, value);
+}
+
+// Helper function to serialize a SmallVector
+template <typename T, std::size_t N>
+void serialize_small_vector(std::ostringstream& oss, const ttsl::SmallVector<T, N>& vec) {
+    oss << "[";
+    for (size_t i = 0; i < vec.size(); ++i) {
+        serialize_value(oss, vec[i]);
+        if (i < vec.size() - 1) {
+            oss << ", ";
+        }
+    }
+    oss << "]";
 }
 
 std::string graph_demangle(const std::string_view name) {
@@ -164,16 +208,20 @@ template <typename T, std::size_t N>
 void GraphArgumentSerializer::register_small_vector() {
     auto conversion_function = [](const std::any& value) -> std::string {
         std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<T, N>>>(value);
-        const auto& vec = referenced_value.get();
-        oss << "SmallVector([";
-        for (size_t i = 0; i < vec.size(); ++i) {
-            serialize_value(oss, vec[i]);
-            if (i < vec.size() - 1) {
-                oss << ", ";
-            }
+        if (value.type() == typeid(std::reference_wrapper<ttsl::SmallVector<T, N>>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<T, N>>>(value);
+            const auto& vec = referenced_value.get();
+            serialize_small_vector(oss, vec);
+        } else if (value.type() == typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<const ttsl::SmallVector<T, N>>>(value);
+            const auto& vec = referenced_value.get();
+            serialize_small_vector(oss, vec);
+        } else if (value.type() == typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<const ttsl::SmallVector<T, N>>>(value);
+            const auto& vec = referenced_value.get();
+            serialize_small_vector(oss, vec);
         }
-        oss << "])";
+
         return oss.str();
     };
 
@@ -181,53 +229,160 @@ void GraphArgumentSerializer::register_small_vector() {
     registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)] = conversion_function;
     registry()[typeid(const std::reference_wrapper<ttsl::SmallVector<T, N>>)] = conversion_function;
     registry()[typeid(std::reference_wrapper<ttsl::SmallVector<const T, N>>)] = conversion_function;
+    registry()[typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)] = conversion_function;
 }
 
 template <typename T, std::size_t N>
 void GraphArgumentSerializer::register_array() {
-    registry()[typeid(std::reference_wrapper<std::array<T, N>>)] = [](const std::any& value) -> std::string {
-        auto referenced_value = std::any_cast<std::reference_wrapper<std::array<T, N>>>(value);
-        const auto& arr = referenced_value.get();
+    auto array_function = [](const std::any& value) -> std::string {
         std::ostringstream oss;
+
+        const void* arr = nullptr;
+        size_t arr_size = 0;
+        if (value.type() == typeid(std::reference_wrapper<std::array<T, N>>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<std::array<T, N>>>(value);
+            arr = &referenced_value.get();
+            arr_size = referenced_value.get().size();
+        } else if (value.type() == typeid(std::reference_wrapper<const std::array<T, N>>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<const std::array<T, N>>>(value);
+            arr = &referenced_value.get();
+            arr_size = referenced_value.get().size();
+        } else if (value.type() == typeid(std::reference_wrapper<std::array<const T, N>>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<std::array<const T, N>>>(value);
+            arr = &referenced_value.get();
+            arr_size = referenced_value.get().size();
+        } else {
+            oss << "Unable to parse" << graph_demangle(value.type().name());
+            return oss.str();
+        }
+
         oss << "[";
-        for (size_t i = 0; i < arr.size(); ++i) {
-            serialize_value(oss, arr[i]);
-            if (i < arr.size() - 1) {
+        for (size_t i = 0; i < arr_size; ++i) {
+            if (value.type() == typeid(std::reference_wrapper<std::array<const T, N>>)) {
+                auto const_arr = static_cast<const std::array<const T, N>*>(arr);
+                serialize_value(oss, (*const_arr)[i]);
+            } else {
+                auto const_arr = static_cast<const std::array<T, N>*>(arr);
+                serialize_value(oss, (*const_arr)[i]);
+            }
+            if (i < arr_size - 1) {
                 oss << ", ";
             }
         }
         oss << "]";
+
         return oss.str();
     };
+
+    registry()[typeid(std::reference_wrapper<std::array<T, N>>)] = array_function;
+    registry()[typeid(std::reference_wrapper<const std::array<T, N>>)] = array_function;
+    registry()[typeid(std::reference_wrapper<const std::array<T, N>>)] = array_function;
+    registry()[typeid(std::reference_wrapper<std::array<const T, N>>)] = array_function;
 }
 
 template <typename T>
 void GraphArgumentSerializer::register_vector() {
-    registry()[typeid(std::reference_wrapper<std::vector<T, std::allocator<T>>>)] =
-        [](const std::any& value) -> std::string {
-        auto referenced_value = std::any_cast<std::reference_wrapper<std::vector<T, std::allocator<T>>>>(value);
-        const auto& vec = referenced_value.get();
+    auto register_function = [](const std::any& value) -> std::string {
         std::ostringstream oss;
-        oss << "std::vector([";
-        for (size_t i = 0; i < vec.size(); ++i) {
-            serialize_value(oss, vec[i]);
-            if (i < vec.size() - 1) {
-                oss << ", ";
+        auto serialize_vector_contents = [&](const std::vector<T>& vec) {
+            oss << "[";
+            for (size_t i = 0; i < vec.size(); ++i) {
+                serialize_value(oss, vec[i]);
+                if (i < vec.size() - 1) {
+                    oss << ", ";
+                }
             }
+            oss << "]";
+        };
+
+        if (value.type() == typeid(std::reference_wrapper<std::vector<T>>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<std::vector<T>>>(value);
+            serialize_vector_contents(referenced_value.get());
+        } else if (value.type() == typeid(std::reference_wrapper<const std::vector<T>>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<const std::vector<T>>>(value);
+            serialize_vector_contents(referenced_value.get());
+        } else {
+            oss << "Unable to parse" << graph_demangle(value.type().name());
+            return oss.str();
         }
-        oss << "])";
+
         return oss.str();
     };
+
+    registry()[typeid(std::reference_wrapper<std::vector<T>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<const std::vector<T>>)] = register_function;
 }
 
 template <typename OptionalT>
 void GraphArgumentSerializer::register_optional_type() {
-    registry()[typeid(std::reference_wrapper<OptionalT>)] = [](const std::any& value) -> std::string {
+    auto register_function = [](const std::any& value) -> std::string {
         std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<OptionalT>>(value);
-        auto& referenced_optional = referenced_value.get();
-        if (referenced_optional.has_value()) {
-            serialize_value(oss, *referenced_optional);
+        // Handle basic optional
+        if (value.type() == typeid(std::reference_wrapper<OptionalT>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<OptionalT>>(value);
+            auto& referenced_optional = referenced_value.get();
+            if (referenced_optional.has_value()) {
+                serialize_value(oss, *referenced_optional);
+            } else {
+                oss << "nullopt";
+            }
+        } else {
+            auto handle_optional_array = [&]<std::size_t N>() -> bool {
+                if (value.type() == typeid(std::reference_wrapper<std::array<OptionalT, N>>)) {
+                    auto referenced_value = std::any_cast<std::reference_wrapper<std::array<OptionalT, N>>>(value);
+                    auto& referenced_optional = referenced_value.get();
+                    oss << "[";
+                    for (std::size_t i = 0; i < N; ++i) {
+                        if (i > 0) {
+                            oss << ", ";
+                        }
+                        if (referenced_optional[i].has_value()) {
+                            serialize_value(oss, *referenced_optional[i]);
+                        } else {
+                            oss << "nullopt";
+                        }
+                    }
+                    oss << "]";
+                    return true;
+                }
+                return false;
+            };
+
+            // This is not the most elegant solution in the world, but since the api
+            // is flexible enough to allow things like this:
+            // std::reference_wrapper<std::optional<
+            // std::vector<std::optional<tt::tt_metal::Tensor>, std::allocator<std::optional<tt::tt_metal::Tensor> > > >
+            // > It gets tricky to do a generic solution.
+            if (!handle_optional_array.template operator()<1ul>() &&
+                !handle_optional_array.template operator()<2ul>() &&
+                !handle_optional_array.template operator()<3ul>() &&
+                !handle_optional_array.template operator()<4ul>() &&
+                !handle_optional_array.template operator()<8ul>() &&
+                !handle_optional_array.template operator()<16ul>()) {
+                oss << "Unable to parse" << graph_demangle(value.type().name());
+            }
+        }
+
+        return oss.str();
+    };
+
+    registry()[typeid(std::reference_wrapper<OptionalT>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 1ul>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 2ul>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 3ul>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 4ul>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 8ul>>)] = register_function;
+    registry()[typeid(std::reference_wrapper<std::array<OptionalT, 16ul>>)] = register_function;
+}
+
+template <typename T>
+void GraphArgumentSerializer::register_optional_reference_type() {
+    registry()[typeid(std::reference_wrapper<ttsl::optional_reference<T>>)] = [](const std::any& value) -> std::string {
+        std::ostringstream oss;
+        auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::optional_reference<T>>>(value);
+        auto& referenced_optional_reference = referenced_value.get();
+        if (referenced_optional_reference.has_value()) {
+            serialize_value(oss, referenced_optional_reference.value());
         } else {
             oss << "nullopt";
         }
@@ -246,8 +401,17 @@ void GraphArgumentSerializer::register_type() {
         } else if (value.type() == typeid(std::reference_wrapper<const T>)) {
             auto referenced_value = std::any_cast<std::reference_wrapper<const T>>(value);
             serialize_value(oss, referenced_value.get());
+        } else if (value.type() == typeid(std::reference_wrapper<const T>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<const T>>(value);
+            serialize_value(oss, referenced_value.get());
+        } else if (value.type() == typeid(std::reference_wrapper<T*>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<T*>>(value);
+            serialize_value(oss, referenced_value.get());
+        } else if (value.type() == typeid(std::reference_wrapper<const T*>)) {
+            auto referenced_value = std::any_cast<std::reference_wrapper<const T*>>(value);
+            serialize_value(oss, referenced_value.get());
         } else {
-            oss << "Unable to parse";
+            oss << "Unable to parse" << graph_demangle(value.type().name());
         }
 
         return oss.str();
@@ -256,13 +420,29 @@ void GraphArgumentSerializer::register_type() {
     // regular cases
     registry()[typeid(std::reference_wrapper<T>)] = regular_function;
     registry()[typeid(std::reference_wrapper<const T>)] = regular_function;
+    registry()[typeid(std::reference_wrapper<const T>)] = regular_function;
     registry()[typeid(const std::reference_wrapper<T>)] = regular_function;
+    registry()[typeid(std::reference_wrapper<T*>)] = regular_function;
+    registry()[typeid(std::reference_wrapper<const T*>)] = regular_function;
+    registry()[typeid(const std::reference_wrapper<T*>)] = regular_function;
+    registry()[typeid(const std::reference_wrapper<const T*>)] = regular_function;
 
-    // Particular cases for optional
-    register_optional_type<std::optional<T>>();
-    register_optional_type<const std::optional<T>>();
-    register_optional_type<std::optional<const T>>();
-    register_optional_type<const std::optional<const T>>();
+    // Particular cases for optional (only if T is not abstract)
+    if constexpr (!std::is_abstract_v<T>) {
+        register_optional_type<std::optional<T>>();
+    }
+    // register optional types (only if T is not abstract)
+    if constexpr (!std::is_abstract_v<T>) {
+        register_optional_type<const std::optional<T>>();
+        register_optional_type<std::optional<const T>>();
+        register_optional_type<std::optional<const T>>();
+        register_optional_type<const std::optional<const T>>();
+    }
+
+    register_optional_reference_type<ttsl::optional_reference<T>>();
+    register_optional_reference_type<ttsl::optional_reference<const T>>();
+    register_optional_reference_type<ttsl::optional_reference<const T>>();
+
     // Handle complex types (feel free to add more in the future)
     // Small vector
     register_small_vector<T, 2>();
@@ -271,15 +451,26 @@ void GraphArgumentSerializer::register_type() {
     register_small_vector<T, 16>();
 
     // Skip array registration for bool type due to std::array<bool, N> serialization issues
-    if constexpr (!std::is_same_v<T, bool>) {
+    if constexpr (!std::is_same_v<T, bool> && !std::is_abstract_v<T>) {
         register_array<T, 2>();
+        register_array<T, 3>();
         register_array<T, 4>();
         register_array<T, 8>();
         register_array<T, 16>();
         register_vector<T>();
+
+        // Register optional arrays
+        register_optional_type<std::optional<std::array<T, 2>>>();
+        register_optional_type<std::optional<std::array<T, 3>>>();
+        register_optional_type<std::optional<std::array<T, 4>>>();
+        register_optional_type<std::optional<std::array<T, 8>>>();
+        register_optional_type<std::optional<std::array<T, 16>>>();
     }
 
-    register_vector<std::optional<T>>();
+    // register vector of optional (only if T is not abstract)
+    if constexpr (!std::is_abstract_v<T>) {
+        register_vector<std::optional<T>>();
+    }
 }
 
 std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::any>& span) {
@@ -307,7 +498,6 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
             result.push_back(oss.str());
         }
     }
-
     return result;
 }
 
@@ -351,6 +541,7 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<std::variant<int, ttsl::SmallVector<int, 8>>>();
     GraphArgumentSerializer::register_type<std::variant<int, ttsl::SmallVector<int, 16>>>();
     GraphArgumentSerializer::register_type<std::variant<int, ttsl::SmallVector<int, 8ul>>>();
+    GraphArgumentSerializer::register_type<std::variant<float, tt::tt_metal::Tensor>>();
     GraphArgumentSerializer::register_type<
         std::set<tt::tt_metal::distributed::MeshCoordinate, std::less<tt::tt_metal::distributed::MeshCoordinate>>>();
     GraphArgumentSerializer::register_type<std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor>>();
@@ -364,6 +555,9 @@ void GraphArgumentSerializer::initialize() {
     GraphArgumentSerializer::register_type<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag>>();
     GraphArgumentSerializer::register_type<
         ttsl::StrongType<unsigned long, tt::tt_metal::experimental::GlobalCircularBuffer>>();
+
+    GraphArgumentSerializer::register_type<tt::tt_metal::experimental::GlobalCircularBuffer>();
+    GraphArgumentSerializer::register_type<tt::tt_metal::IDevice>();
 }
 
 }  // namespace ttnn::graph

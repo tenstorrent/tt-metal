@@ -46,6 +46,9 @@ private:
     template <typename OptionalT>
     void register_optional_type();
 
+    template <typename T>
+    void register_optional_reference_type();
+
     void initialize();
 
     std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction> map;
