@@ -473,7 +473,7 @@ inline std::string op_meta_data_serialized_json(
         }
 
         auto msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(4));
-        if (msg.size() > std::numeric_limits<uint16_t>::max()) {
+        if (msg.size() >= std::numeric_limits<uint16_t>::max()) {
             msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
         }
         return msg;
