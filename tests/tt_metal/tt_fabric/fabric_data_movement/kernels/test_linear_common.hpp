@@ -4,9 +4,16 @@
 
 #pragma once
 
-#include "fabric/fabric_edm_packet_header.hpp"
+#ifdef API_TYPE_Linear
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 using namespace tt::tt_fabric::linear::experimental;
+#elif defined(API_TYPE_Mesh)
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+using namespace tt::tt_fabric::mesh::experimental;
+#else
+#error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
+#endif
+#include "fabric/fabric_edm_packet_header.hpp"
 
 template <uint8_t num_send_dir>
 union HopInfo {
@@ -42,6 +49,7 @@ void set_state(
     uint8_t route_id,
     HopInfo<num_send_dir>& hop_info,
     uint16_t packet_size) {
+#ifdef API_TYPE_Linear
     if constexpr (is_chip_multicast) {
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE: {
@@ -148,4 +156,54 @@ void set_state(
             } break;
         }
     }
+#elif defined(API_TYPE_Mesh)
+    switch (noc_send_type) {
+        case NOC_UNICAST_WRITE: {
+            fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+                connection_manager, route_id, nullptr, packet_size);
+        } break;
+        case NOC_UNICAST_INLINE_WRITE: {
+            tt::tt_fabric::NocUnicastInlineWriteCommandHeader hdr;
+            hdr.value = 0xDEADBEEF;
+            fabric_unicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
+                connection_manager, route_id, hdr);
+        } break;
+        case NOC_UNICAST_SCATTER_WRITE: {
+            tt::tt_fabric::NocUnicastScatterCommandHeader shdr;
+            shdr.chunk_size[0] = static_cast<uint16_t>(packet_size / 2);
+            fabric_unicast_noc_scatter_write_set_state<
+                UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
+                connection_manager, route_id, shdr, packet_size);
+        } break;
+        case NOC_UNICAST_ATOMIC_INC: {
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader ah(
+                0,                                     // dummy noc_address
+                1,                                     // val
+                std::numeric_limits<uint16_t>::max(),  // wrap
+                true                                   // flush
+            );
+            fabric_unicast_noc_unicast_atomic_inc_set_state<
+                UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+                connection_manager, route_id, ah);
+        } break;
+        case NOC_FUSED_UNICAST_ATOMIC_INC: {
+            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fh(
+                0,                                     // dummy noc_address
+                0,                                     // dummy semaphore_noc_address
+                1,                                     // val
+                std::numeric_limits<uint16_t>::max(),  // wrap
+                true                                   // flush
+            );
+            fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<
+                UnicastFusedAtomicIncUpdateMask::PayloadSize | UnicastFusedAtomicIncUpdateMask::Wrap |
+                UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                connection_manager, route_id, fh, packet_size);
+        } break;
+        default: {
+            ASSERT(false);
+        } break;
+    }
+#else
+#error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
+#endif
 }

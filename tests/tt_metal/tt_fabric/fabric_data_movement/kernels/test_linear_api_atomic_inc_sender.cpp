@@ -2,7 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#ifdef API_TYPE_Linear
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+using namespace tt::tt_fabric::linear::experimental;
+#elif defined(API_TYPE_Mesh)
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+using namespace tt::tt_fabric::mesh::experimental;
+#else
+#error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
+#endif
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -10,7 +18,6 @@
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 
-using namespace tt::tt_fabric::linear::experimental;
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
@@ -46,6 +53,7 @@ void kernel_main() {
     }
 
     for (uint32_t i = 0; i < num_packets; i++) {
+#ifdef API_TYPE_Linear
         if constexpr (is_chip_multicast) {
             switch (noc_send_type) {
                 case NOC_UNICAST_ATOMIC_INC: {
@@ -157,6 +165,64 @@ void kernel_main() {
                 } break;
             }
         }
+#elif defined(API_TYPE_Mesh)
+        if constexpr (is_chip_multicast) {
+        } else {
+            switch (noc_send_type) {
+                case NOC_UNICAST_ATOMIC_INC: {
+                    if constexpr (with_state) {
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            connections,
+                            route_id,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, 0, false));
+                    } else {
+                        fabric_unicast_noc_unicast_atomic_inc(
+                            connections,
+                            route_id,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                1,
+                                std::numeric_limits<uint16_t>::max(),
+                                true});
+                    }
+                } break;
+                case NOC_FUSED_UNICAST_ATOMIC_INC: {
+                    if constexpr (with_state) {
+                        fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
+                            UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
+                            UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
+                            connections,
+                            route_id,
+                            source_l1_buffer_address,
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                                get_noc_addr(noc_x_start, noc_y_start, target_address),
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                0,
+                                0,
+                                false));
+                    } else {
+                        fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                            connections,
+                            route_id,
+                            source_l1_buffer_address,
+                            packet_payload_size_bytes,
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                                get_noc_addr(noc_x_start, noc_y_start, target_address),
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                1,
+                                std::numeric_limits<uint16_t>::max(),
+                                true});
+                    }
+                } break;
+                default: {
+                    ASSERT(false);
+                } break;
+            }
+        }
+#else
+#error "API_TYPE_Linear or API_TYPE_Mesh must be defined"
+#endif
         noc_async_writes_flushed();
     }
 

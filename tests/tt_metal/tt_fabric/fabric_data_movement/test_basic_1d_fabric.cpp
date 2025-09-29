@@ -2122,6 +2122,7 @@ void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t>>& pair_ordered_dirs,
+    const std::string api_type,
     bool with_state) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
@@ -2203,6 +2204,8 @@ void FabricUnicastCommon(
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
+    std::map<std::string, std::string> defines = {{"API_TYPE_" + api_type, "1"}};
+
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
@@ -2212,7 +2215,8 @@ void FabricUnicastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
+            .compile_args = compile_time_args,
+            .defines = defines});
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
@@ -2299,6 +2303,7 @@ void FabricMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
     const std::vector<std::tuple<RoutingDirection, uint32_t, uint32_t>>& pair_ordered_dir_configs,
+    const std::string api_type,
     bool with_state) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
@@ -2362,6 +2367,8 @@ void FabricMulticastCommon(
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
+    std::map<std::string, std::string> defines = {{"API_TYPE_" + api_type, "1"}};
+
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -2396,7 +2403,8 @@ void FabricMulticastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
+            .compile_args = compile_time_args,
+            .defines = defines});
 
     append_routing_plane_connection_manager_rt_args(
         src_fabric_node_id,
@@ -2480,6 +2488,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1DWithState
         this,
         NOC_UNICAST_WRITE,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
+        "Linear",
         true);
 }
 
@@ -2497,6 +2506,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocAtomicInc1DWithState) {
         this,
         NOC_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
+        "Linear",
         true);
 }
 
@@ -2514,6 +2524,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocScatterWrite1DWithState
         this,
         NOC_UNICAST_SCATTER_WRITE,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
+        "Linear",
         true);
 }
 
@@ -2531,6 +2542,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocInlineWrite1DWithState)
         this,
         NOC_UNICAST_INLINE_WRITE,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
+        "Linear",
         true);
 }
 
@@ -2548,6 +2560,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1DWithSta
         this,
         NOC_FUSED_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1), std::make_tuple(RoutingDirection::W, 1)},
+        "Linear",
         true);
 }
 
@@ -2565,6 +2578,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1DWithSta
         this,
         NOC_UNICAST_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
+        "Linear",
         true);
 }
 
@@ -2582,6 +2596,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocAtomicInc1DWithState)
         this,
         NOC_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
+        "Linear",
         true);
 }
 
@@ -2599,6 +2614,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocScatterWrite1DWithSta
         this,
         NOC_UNICAST_SCATTER_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
+        "Linear",
         true);
 }
 
@@ -2616,6 +2632,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocInlineWrite1DWithStat
         this,
         NOC_UNICAST_INLINE_WRITE,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
+        "Linear",
         true);
 }
 
@@ -2633,6 +2650,7 @@ TEST_F(NightlyFabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1DWithS
         this,
         NOC_FUSED_UNICAST_ATOMIC_INC,
         {std::make_tuple(RoutingDirection::E, 1, 2), std::make_tuple(RoutingDirection::W, 1, 1)},
+        "Linear",
         true);
 }
 

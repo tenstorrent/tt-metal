@@ -14,7 +14,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 
-namespace tt::tt_fabric::linear::experimental {
+namespace tt::tt_fabric::mesh::experimental {
 
 // hop info e/w/n/s
 struct MeshMcastRange {
@@ -254,16 +254,6 @@ static FORCE_INLINE void populate_unicast_fused_atomic_inc_fields(
         packet_header->payload_size_bytes = packet_size_bytes;
     }
 }
-
-// static FORCE_INLINE void fabric_set_mcast_route(
-//     volatile PACKET_HEADER_TYPE* packet_header,
-//     uint8_t dst_dev_id,
-//     uint16_t dst_mesh_id,
-//     MeshMcastRange ranges,
-//     uint8_t i) {
-//     fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges[i].e, ranges[i].w, ranges[i].n,
-//     ranges[i].s);
-// }
 
 // clang-format off
 /**
@@ -1366,9 +1356,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
     MeshMcastRange* ranges,
-    tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
-    uint8_t start_distance,
-    uint8_t range) {
+    tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
     fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
@@ -2067,4 +2055,4 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     });
 }
 
-}  // namespace tt::tt_fabric::linear::experimental
+}  // namespace tt::tt_fabric::mesh::experimental
