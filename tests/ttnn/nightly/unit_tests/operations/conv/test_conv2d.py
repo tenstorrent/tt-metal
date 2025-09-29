@@ -4945,3 +4945,74 @@ def test_conv2d_1kX1k(
         enable_weights_double_buffer=w_db,
         slice_config=slice_config,
     )
+
+# CB pointer update regression test
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
+    (
+        # ResNet50 first conv parameters - batch_size=32, input_shape={32; 115; 115; 16}
+        (32, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 49 * 32}),
+    ),
+)
+def test_resnet50_first_conv_p150(
+    device,
+    torch_tensor_map,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    shard_layout,
+    config_override,
+):
+    # Test runs on Blackhole P150
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) != (13, 10):
+        pytest.skip("Test is only supported on Blackhole P150")
+
+    input_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
+        }
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(input_core_range_set, (3328, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        (pad_h, pad_w),
+        config_override,
+        shard_layout=shard_layout,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        deallocate_activation=True,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        input_dtype=ttnn.bfloat16,
+        sharded_cfg=memory_config,
+        enable_activation_reuse=True,
+    )
