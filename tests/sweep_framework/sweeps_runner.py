@@ -441,11 +441,13 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                         result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
 
                 # Handle XFail suites - invert the logic for expected failures
-                if suite_name.lower() == "xfail":
+                if suite_name.lower().startswith("xfail"):
                     if result["status"] == TestStatus.PASS:
                         # Test passed but was expected to fail - this is unexpected
                         result["status"] = TestStatus.XPASS
-                        logger.warning(f"UNEXPECTED PASS: Test in XFail suite passed unexpectedly: {vector_id}")
+                        logger.warning(
+                            f"UNEXPECTED PASS: Test in XFail suite '{suite_name}' passed unexpectedly: {vector_id}"
+                        )
                     elif result["status"] in [
                         TestStatus.FAIL_ASSERT_EXCEPTION,
                         TestStatus.FAIL_L1_OUT_OF_MEM,
@@ -454,7 +456,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     ]:
                         # Test failed as expected in XFail suite
                         result["status"] = TestStatus.XFAIL
-                        logger.info(f"EXPECTED FAILURE: Test in XFail suite failed as expected: {vector_id}")
+                        logger.info(
+                            f"EXPECTED FAILURE: Test in XFail suite '{suite_name}' failed as expected: {vector_id}"
+                        )
                     # Note: FAIL_CRASH_HANG is still treated as a real failure even in XFail suites
                     # since crashes/hangs are infrastructure issues, not test logic failures
 
