@@ -535,21 +535,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
         runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
     }
 
-    tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp",
-        all_cores,
-        tt_metal::ReaderDataMovementConfig(compile_time_args));
-
-    tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp",
-        all_cores,
-        tt_metal::WriterDataMovementConfig(compile_time_args));
-
-    tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, runtime_args_0);
-    tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, runtime_args_1);
-
     auto override_runtime_arguments_callback = [num_input_tensors, cb_dst_id, cb_inputs, cb_output](
                                                    const void* operation,
                                                    Program& program,
@@ -640,9 +625,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             reader_runtime_args.push_back(input_shard_spec.shape[0]);
             writer_runtime_args.push_back(input_id);
         }
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
 
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
         core_id++;
     }
 
@@ -680,9 +663,6 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
                     reader_runtime_args.push_back(input_shard_spec.shape[1]);
                     writer_runtime_args.push_back(input_id);
                 }
-                tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-
-                tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
             }
         };
 
@@ -874,7 +854,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, rm_orientation);
     uint32_t g1_num_cores = core_group_1.num_cores();
     for (uint32_t i = 0, num_pages_written = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores[i];
         uint32_t num_pages_per_core = 0;
         if (i < g1_num_cores) {
             num_pages_per_core = num_tiles_per_core_group_1;
@@ -914,9 +893,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         } else {
             writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
         }
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
 
-        tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
         num_pages_written += num_pages_per_core;
     }
 
