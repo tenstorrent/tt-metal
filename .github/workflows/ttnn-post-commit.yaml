@@ -12,7 +12,11 @@ on:
       timeout:
         required: false
         type: number
-        default: 60
+        default: 120
+      num-groups:
+        required: false
+        type: number
+        default: 12
       docker-image:
         required: true
         type: string
