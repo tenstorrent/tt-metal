@@ -23,13 +23,13 @@ Use the following command to run the model:
 ### Performant Model with Trace+2CQ
 
 #### Single Device (BS=1):
-- end-2-end perf is `365` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- end-2-end perf is `366` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 
   ```
   pytest --disable-warnings models/demos/ufld_v2/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant
   ```
 #### Multi Device (DP=2, N300):
-- end-2-end perf is `572` FPS
+- end-2-end perf is `632` FPS
 
   ```
   pytest --disable-warnings models/demos/ufld_v2/tests/perf/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant_dp
