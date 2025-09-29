@@ -441,6 +441,9 @@ class FileResultDestination(ResultDestination):
             _op_kind = _parts[0] if len(_parts) > 0 and _parts[0] else (header.get("op_kind") or "unknown")
             _op_name = _parts[-1] if len(_parts) > 0 and _parts[-1] else (header.get("op_name") or "unknown")
 
+            exception = str(raw.get("exception", None))
+            error_hash = generate_error_hash(exception)
+
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
                 full_test_name=header.get("sweep_name"),
@@ -450,8 +453,8 @@ class FileResultDestination(ResultDestination):
                 filepath=header.get("sweep_name"),
                 success=is_success,
                 skipped=is_skipped,
-                error_message=raw.get("exception", None),
-                error_hash=generate_error_hash(raw.get("exception", None)),
+                error_message=exception,
+                error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
                 model_name="n/a",

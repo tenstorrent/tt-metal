@@ -426,16 +426,16 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     result["exception"] = message
 
                     # Log device exceptions
-                    if "DEVICE EXCEPTION" in message:
+                    if "DEVICE EXCEPTION" in str(message):
                         logger.error(
                             f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
                         )
                         logger.info("Device error detected. The suite will be aborted after this test.")
 
                     # Set failure status based on error type
-                    if "Out of Memory: Not enough space to allocate" in message:
+                    if "Out of Memory: Not enough space to allocate" in str(message):
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-                    elif "Watcher" in message:
+                    elif "Watcher" in str(message):
                         result["status"] = TestStatus.FAIL_WATCHER
                     else:
                         result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
@@ -523,7 +523,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         results.append(result)
 
         # Abort the suite if a fatal device error was encountered
-        if "DEVICE EXCEPTION" in result.get("exception", ""):
+        if "DEVICE EXCEPTION" in str(result.get("exception", "")):
             logger.error("Aborting test suite due to fatal device error.")
             if p and p.is_alive():
                 p.terminate()
