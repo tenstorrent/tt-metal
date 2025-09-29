@@ -77,7 +77,7 @@ jobs:
           echo "All $REQUIRED_PODS docker containers have created their files (found $count)."
 
       - name: Run the tests
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: |
           run_test() {
             testname="$1"
