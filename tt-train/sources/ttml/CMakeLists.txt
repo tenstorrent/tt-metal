@@ -503,3 +503,20 @@ target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/api)
 target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd/device/api)
 target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_stl)
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
+install(
+    TARGETS
+        _ttml
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tar
+)
+install(
+    TARGETS
+        _ttml
+        DESTINATION
+        ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
+        COMPONENT
+        tt_pybinds
+)
