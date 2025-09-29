@@ -39,7 +39,8 @@ void py_module(py::module& module) {
     module.def(
         "end_trace_capture",
         [](MeshDevice* device, MeshTraceId trace_id, std::optional<ttnn::QueueId> cq_id) {
-            return ttnn::operations::trace::end_trace_capture(device, trace_id, cq_id);
+            ttnn::operations::trace::end_trace_capture(device, trace_id, cq_id);
+            return;
         },
         py::arg("mesh_device"),
         py::arg("trace_id"),
@@ -49,7 +50,8 @@ void py_module(py::module& module) {
     module.def(
         "execute_trace",
         [](MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking) {
-            return ttnn::operations::trace::execute_trace(device, trace_id, cq_id, blocking);
+            ttnn::operations::trace::execute_trace(device, trace_id, cq_id, blocking);
+            return;
         },
         py::arg("mesh_device"),
         py::arg("trace_id"),
@@ -60,7 +62,8 @@ void py_module(py::module& module) {
     module.def(
         "release_trace",
         [](MeshDevice* device, MeshTraceId trace_id) {
-            return ttnn::operations::trace::release_trace(device, trace_id);
+            ttnn::operations::trace::release_trace(device, trace_id);
+            return;
         },
         py::arg("mesh_device"),
         py::arg("trace_id"));

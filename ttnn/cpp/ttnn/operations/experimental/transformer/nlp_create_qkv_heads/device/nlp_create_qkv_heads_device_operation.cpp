@@ -101,9 +101,7 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
 }
 
 void NlpCreateHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return;
-}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
 
 NlpCreateHeadsDeviceOperation::spec_return_value_t NlpCreateHeadsDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

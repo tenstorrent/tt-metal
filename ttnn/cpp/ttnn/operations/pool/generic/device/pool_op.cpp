@@ -95,7 +95,7 @@ void validate_pool2d(
 }
 
 void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_pool2d(
+    validate_pool2d(
         tensors.input_tensors_,
         op_attr.pool_type_,
         op_attr.sliding_window_config_,
@@ -106,7 +106,7 @@ void Pool2D::validate_on_program_cache_miss(const operation_attributes_t& op_att
 }
 
 void Pool2D::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_pool2d(
+    validate_pool2d(
         tensors.input_tensors_,
         op_attr.pool_type_,
         op_attr.sliding_window_config_,

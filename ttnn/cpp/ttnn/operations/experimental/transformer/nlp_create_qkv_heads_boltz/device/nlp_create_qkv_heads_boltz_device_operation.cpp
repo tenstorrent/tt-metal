@@ -98,9 +98,7 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
 }
 
 void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return;
-}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {}
 
 NlpCreateHeadsBoltzDeviceOperation::spec_return_value_t NlpCreateHeadsBoltzDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
