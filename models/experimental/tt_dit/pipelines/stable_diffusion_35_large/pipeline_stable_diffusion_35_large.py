@@ -5,9 +5,9 @@
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
-from typing import Dict, List
-from PIL import Image
+from typing import TYPE_CHECKING
 
 import torch
 import tqdm
@@ -18,18 +18,20 @@ from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel 
 from diffusers.schedulers.scheduling_flow_match_euler_discrete import FlowMatchEulerDiscreteScheduler
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, T5EncoderModel, T5TokenizerFast
-from contextlib import contextmanager, nullcontext
 
-from ...encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from ...encoders.t5.model_t5 import T5Encoder, T5Config
+from ...encoders.clip.model_clip import CLIPConfig, CLIPEncoder
+from ...encoders.t5.model_t5 import T5Config, T5Encoder
 
 # NOTE: SD35Transformer is the new tt-dit implementation
 from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
 from ...models.vae.vae_sd35 import VAEDecoder
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
+from ...utils.cache import cache_dict_exists, get_and_create_cache_path, load_cache_dict, save_cache_dict
 from ...utils.padding import PaddingConfig
-from ...utils.cache import save_cache_dict, load_cache_dict, cache_dict_exists, get_and_create_cache_path
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 TILE_SIZE = 32
 
@@ -39,15 +41,15 @@ class TimingData:
     clip_encoding_time: float = 0.0
     t5_encoding_time: float = 0.0
     total_encoding_time: float = 0.0
-    denoising_step_times: List[float] = field(default_factory=list)
+    denoising_step_times: list[float] = field(default_factory=list)
     vae_decoding_time: float = 0.0
     total_time: float = 0.0
 
 
 class TimingCollector:
     def __init__(self):
-        self.timings: Dict[str, float] = {}
-        self.step_timings: Dict[str, List[float]] = {}
+        self.timings: dict[str, float] = {}
+        self.step_timings: dict[str, list[float]] = {}
 
     @contextmanager
     def time_section(self, name: str):
@@ -571,7 +573,7 @@ class StableDiffusion3Pipeline:
         seed: int | None = None,
         traced: bool = False,
         clip_skip: int | None = None,
-    ) -> List[Image.Image]:
+    ) -> list[Image.Image]:
         timer = self.timing_collector
 
         with timer.time_section("total") if timer else nullcontext():
@@ -812,15 +814,15 @@ class StableDiffusion3Pipeline:
         *,
         do_classifier_free_guidance: bool,
         guidance_scale: float,
-        latents: List[ttnn.Tensor],  # device tensor
-        timestep: List[ttnn.Tensor],  # host tensor
-        pooled_prompt_embeds: List[ttnn.Tensor],  # device tensor
-        prompt_embeds: List[ttnn.Tensor],  # device tensor
-        sigma_difference: List[ttnn.Tensor],  # device tensor
+        latents: list[ttnn.Tensor],  # device tensor
+        timestep: list[ttnn.Tensor],  # host tensor
+        pooled_prompt_embeds: list[ttnn.Tensor],  # device tensor
+        prompt_embeds: list[ttnn.Tensor],  # device tensor
+        sigma_difference: list[ttnn.Tensor],  # device tensor
         prompt_sequence_length: int,
         spatial_sequence_length: int,
         traced: bool,
-    ) -> List[ttnn.Tensor]:
+    ) -> list[ttnn.Tensor]:
         def inner(latent, prompt, pooled_projection, timestep, cfg_index):
             if do_classifier_free_guidance and not self.dit_parallel_config.cfg_parallel.factor > 1:
                 latent_model_input = ttnn.concat([latent, latent])
