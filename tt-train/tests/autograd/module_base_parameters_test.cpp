@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -84,7 +84,7 @@ TEST_F(ModuleBaseParametersTest, AllParametersIncluded) {
     EXPECT_EQ(model_params.size(), 4);
 };
 
-TEST_F(ModuleBaseParametersTest, UnusedParametersInModuleSGD) {
+TEST_F(ModuleBaseParametersTest, NIGHTLY_UnusedParametersInModuleSGD) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     ModelUnusedLayer model;
@@ -99,7 +99,7 @@ TEST_F(ModuleBaseParametersTest, UnusedParametersInModuleSGD) {
     optimizer.step();
 }
 
-TEST_F(ModuleBaseParametersTest, UnusedParametersInModuleAdamW) {
+TEST_F(ModuleBaseParametersTest, NIGHTLY_UnusedParametersInModuleAdamW) {
     auto* device = &ttml::autograd::ctx().get_device();
 
     ModelUnusedLayer model;

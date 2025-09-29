@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
 #include <algorithm>
@@ -38,7 +37,7 @@ bool runTest(
     std::vector<uint32_t> compile_args{args_addr};
 
     auto program(tt::tt_metal::CreateProgram());
-    distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
+    distributed::MeshWorkload workload;
     CreateKernel(
         program,
         path,
@@ -132,7 +131,7 @@ bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }
 
-using tt::tt_metal::CommandQueueSingleCardProgramFixture;
+using tt::tt_metal::UnitMeshCQSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};

@@ -79,6 +79,14 @@ inline uint8_t get_relative_logical_y() {
 
 // clang-format off
 /**
+ * Helper function to check if an address is in L1 memory space (not register space).
+ * L1 addresses must be below NOC_REG_SPACE_START_ADDR.
+ */
+// clang-format on
+bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_START_ADDR); }
+
+// clang-format off
+/**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via
  * SetRuntimeArgs() API.
  *
@@ -1520,9 +1528,7 @@ void noc_async_read_barrier(uint8_t noc = noc_index) {
 
     WAYPOINT("NRBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_reads_flushed(noc)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_reads_flushed(noc));
     } else {
         while (!ncrisc_noc_reads_flushed(noc));
     }
@@ -1550,9 +1556,7 @@ void noc_async_write_barrier(uint8_t noc = noc_index) {
 
     WAYPOINT("NWBW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
     } else {
         while (!ncrisc_noc_nonposted_writes_flushed(noc));
     }
@@ -1579,9 +1583,7 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
 
     WAYPOINT("NWFW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
     } else {
         while (!ncrisc_noc_nonposted_writes_sent(noc));
     }
@@ -1604,9 +1606,7 @@ FORCE_INLINE
 void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
     WAYPOINT("NPWW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_posted_writes_sent(noc)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
     } else {
         while (!ncrisc_noc_posted_writes_sent(noc));
     }
@@ -1632,9 +1632,7 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
 
     WAYPOINT("NABW");
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx)) {
-            invalidate_l1_cache();
-        }
+        while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_idx));
     } else {
         while (!ncrisc_noc_nonposted_atomics_flushed(noc_idx));
     }
@@ -1778,33 +1776,51 @@ void noc_semaphore_set(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
  * | be                                       | Byte-enable                                                | uint8_t  | 0x1-0xF                          | False    |
  * | noc                                      | NOC to use for the transaction                             | uint8_t  | 0 or 1                           | False    |
  * | vc                                       | Virtual channel to use for the transaction                 | uint8_t  | 0-3 (Unicast VCs)                | False    |
- * | InlineWriteDst (template parameter)      | Whether the write is targeting L1 or a Stream Register     | InlineWriteDst     | DEFAULT, L1, REG       | False    |
+ * | customized_src_addr                      | Custom source address for storing the value to be written  | uint32_t | Any uint32_t value               | False    |
+ * |                                          | (required when `flush` is false)                           |          |                                  |          |
+ * | dst_type            (template parameter) | Whether the write is targeting L1 or a Stream Register     | InlineWriteDst     | DEFAULT, L1, REG       | False    |
  * | posted              (template parameter) | Whether the call is posted (i.e. ack requirement)          | bool     | true or false                    | False    |
+ * | flush               (template parameter) | Whether to flush the NOC transaction before issuing the    | bool     | true or false                    | False    |
+ * |                                          | write (`false` callers must prevent races on the caller    |          |                                  |          |
+ * |                                          | side)                                                      |          |                                  |          |
+ *
+ * When `flush` is disabled the caller is responsible for providing a valid `customized_src_addr` scratch location and
+ * ensuring no outstanding inline write uses that address before issuing another write.
  */
 // clang-format on
-template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false>
+template <InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool posted = false, bool flush = true>
 FORCE_INLINE void noc_inline_dw_write(
-    uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+    uint64_t addr,
+    uint32_t val,
+    uint8_t be = 0xF,
+    uint8_t noc = noc_index,
+    uint8_t vc = NOC_UNICAST_WRITE_VC,
+    uint32_t customized_src_addr = 0) {
     WAYPOINT("NWIW");
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
     DEBUG_SANITIZE_NO_DRAM_ADDR(noc, addr, 4);
 #if defined(ARCH_BLACKHOLE) && defined(WATCHER_ENABLED)
     if constexpr (dst_type == InlineWriteDst::L1) {
-        uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
-        DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+        if constexpr (!flush) {
+            ASSERT(customized_src_addr != 0);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, customized_src_addr, 4);
+        } else {
+            uint32_t src_addr = noc_get_interim_inline_value_addr(noc, addr);
+            DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, addr, src_addr, 4);
+        }
     }
 #endif
 
-    noc_fast_write_dw_inline<noc_mode, dst_type>(
+    noc_fast_write_dw_inline<noc_mode, dst_type, flush>(
         noc,
         write_at_cmd_buf,
         val,
         addr,
         be,  // byte-enable
         vc,
-        false,  // mcast
-        posted  // posted
-    );
+        false,   // mcast
+        posted,  // posted
+        customized_src_addr);
     WAYPOINT("NWID");
 }
 
@@ -1885,9 +1901,23 @@ template <
     bool update_val = false>
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
+    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
+    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
+    constexpr bool update_counter_in_callee = true;
+#else
+    constexpr bool update_counter_in_callee = update_counter;
+#endif
+
     WAYPOINT("NWIW");
-    noc_fast_write_dw_inline_with_state<noc_mode, update_addr_lo, update_addr_hi, update_val, posted, update_counter>(
-        noc, cmd_buf, val, addr);
+    noc_fast_write_dw_inline_with_state<
+        noc_mode,
+        update_addr_lo,
+        update_addr_hi,
+        update_val,
+        posted,
+        update_counter_in_callee>(noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }
 
@@ -1931,10 +1961,13 @@ FORCE_INLINE void noc_semaphore_inc(
 }
 
 inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
+    // Posting heartbeat at this address is only needed for Wormhole
+#if !defined(ARCH_BLACKHOLE)
     invalidate_l1_cache();
     volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
     heartbeat++;
     ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
+#endif
 }
 
 // clang-format off
@@ -1943,7 +1976,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
  * This is similar to \a noc_async_read_set_state, except that the source location is determined by the bank_base_address and bank_id.
  * In addition, the VC used for the transactions can also be configured.
  *
- * Return value: None
+ * Return value: source address
  *
  * | Argument                   | Description                               | Data type | Valid range                                            | required |
  * |----------------------------|-------------------------------------------|-----------|--------------------------------------------------------|----------|
@@ -2112,7 +2145,16 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
 
-    ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter>(
+#ifdef ARCH_BLACKHOLE
+    // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
+    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
+    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
+    constexpr bool update_counter_in_callee = true;
+#else
+    constexpr bool update_counter_in_callee = update_counter;
+#endif
+
+    ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter_in_callee>(
         noc,
         cmd_buf,
         src_local_l1_addr,
@@ -2200,9 +2242,18 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     // In order to sanitize, need to grab full noc addr + xfer size from state.
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_STATE(noc, dst_local_l1_addr, src_local_l1_addr, size);
 
+#ifdef ARCH_BLACKHOLE
+    // Issue https://github.com/tenstorrent/tt-metal/issues/28758: always update counter for blackhole as a temporary
+    // workaround for avoiding hangs in fabric router, as counters will be checked inside the
+    // noc_fast_spoof_write_dw_inline, will remove this restriction once all inline write change to stream reg write.
+    constexpr bool update_counter_in_callee = true;
+#else
+    constexpr bool update_counter_in_callee = update_counter;
+#endif
+
     WAYPOINT("NWPW");
     ncrisc_noc_set_transaction_id(noc, cmd_buf, trid);
-    ncrisc_noc_write_with_state<noc_mode, posted, update_counter>(
+    ncrisc_noc_write_with_state<noc_mode, posted, update_counter_in_callee>(
         noc, cmd_buf, src_local_l1_addr, dst_local_l1_addr, size);
     WAYPOINT("NWPD");
 }
@@ -2230,4 +2281,22 @@ void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     }
     invalidate_l1_cache();
     WAYPOINT("NWTD");
+}
+
+// clang-format off
+/**
+ * This resets the barrier counter for a given transaction id on a given NOC using a mask.
+ * Only the N bits up to the number of transaction ids are used.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                               | Type     | Valid Range      | Required |
+ * |----------|-------------------------------------------|----------|------------------|----------|
+ * | id_mask  | Transaction id mask for the transaction   | uint32_t | 0x0 - 0xFFFFFFFF | False    |
+ * | noc      | Which NOC to use for the transaction      | uint8_t  | 0 or 1           | False    |
+ */
+// clang-format on
+FORCE_INLINE
+void reset_noc_trid_barrier_counter(uint32_t id_mask = NOC_CLEAR_OUTSTANDING_REQ_MASK, uint32_t noc = noc_index) {
+    noc_clear_outstanding_req_cnt(noc, id_mask);
 }

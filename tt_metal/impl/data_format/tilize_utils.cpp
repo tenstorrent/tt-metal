@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <ostream>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "constants.hpp"
 #include <tt_stl/span.hpp>
 
@@ -60,7 +60,7 @@ std::vector<T> convert_layout_row_major_to_tile_swizzled(
     size_t W = shape[1];
     size_t B = in_row_major.size() / (H * W);
 
-    TT_FATAL(in_row_major.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_FATAL(!in_row_major.empty() and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
     TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
@@ -98,7 +98,7 @@ std::vector<T> convert_layout_tile_swizzled_to_row_major(
     size_t W = shape[1];
     size_t B = in_tile_swizzled.size() / (H * W);
 
-    TT_FATAL(in_tile_swizzled.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_FATAL(!in_tile_swizzled.empty() and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
     TT_FATAL((in_tile_swizzled.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
@@ -280,7 +280,7 @@ std::vector<T> convert_layout_row_major_to_tile_nfaces(
     size_t col_tiles = W / tile_W;
     size_t row_of_tiles_num_elements = tile_H * W;
 
-    TT_FATAL(in_row_major.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_FATAL(!in_row_major.empty() and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
     TT_FATAL((in_row_major.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
@@ -365,7 +365,7 @@ std::vector<T> convert_layout_tile_nfaces_to_row_major(
     // We don't transpose face order if we have only one face in the row or column
     transpose_face_order = transpose_face_order && row_faces > 1 && col_faces > 1;
 
-    TT_FATAL(in_nfaces.size() > 0 and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
+    TT_FATAL(!in_nfaces.empty() and H > 0 and W > 0, "None of the input size, H, nor W can be 0");
     TT_FATAL((in_nfaces.size() % (H * W)) == 0, "Input size must be divisible by H and W");
     TT_FATAL((H % tile_H == 0) and (W % tile_W == 0), "H and W must be divisible by {} and {}", tile_H, tile_W);
 
@@ -500,7 +500,7 @@ std::vector<T> convert_layout(
 
 template <typename T>
 std::vector<T> tilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n) {
-    TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
+    TT_FATAL(!input.empty() and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
     return convert_layout<T>(
@@ -509,7 +509,7 @@ std::vector<T> tilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t
 
 template <typename T>
 std::vector<T> untilize_swizzled(const std::vector<T>& input, uint32_t m, uint32_t n) {
-    TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
+    TT_FATAL(!input.empty() and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
     return convert_layout<T>(
@@ -518,7 +518,7 @@ std::vector<T> untilize_swizzled(const std::vector<T>& input, uint32_t m, uint32
 
 template <typename T>
 std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n) {
-    TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
+    TT_FATAL(!input.empty() and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
     return convert_layout<T>(
@@ -527,7 +527,7 @@ std::vector<T> tilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n
 
 template <typename T>
 std::vector<T> untilize_nfaces(const std::vector<T>& input, uint32_t m, uint32_t n) {
-    TT_FATAL(input.size() > 0 and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
+    TT_FATAL(!input.empty() and m > 0 and n > 0, "None of the input size, m, nor n can be 0");
     TT_FATAL((input.size() % (m * n)) == 0, "Input size must be divisible by m  and n");
 
     return convert_layout<T>(

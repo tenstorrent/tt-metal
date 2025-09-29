@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,6 +72,8 @@
 #include <ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward.hpp>                       // NOLINT
 #include <ttnn/operations/moreh/moreh_sum/moreh_sum.hpp>                                                   // NOLINT
 #include <ttnn/operations/normalization/softmax/softmax.hpp>                                               // NOLINT
+#include <ttnn/operations/rand/rand.hpp>                                                                   // NOLINT
+#include <ttnn/operations/reduction/argmax/argmax.hpp>                                                     // NOLINT
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>                                        // NOLINT
 #include <ttnn/tensor/host_buffer/functions.hpp>                                                           // NOLINT
 #include <ttnn/tensor/layout/layout.hpp>                                                                   // NOLINT

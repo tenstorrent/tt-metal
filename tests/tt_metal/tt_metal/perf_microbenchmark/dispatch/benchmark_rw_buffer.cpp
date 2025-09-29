@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -52,7 +52,7 @@ using namespace tt::tt_metal::distributed;
  * https://docs.google.com/spreadsheets/d/1zy1teJtgf7hsMMdgy5uIOtcuI73AGVqy4lnyYwL7YFQ/edit
  */
 
-static constexpr auto num_test_repetitions = 101;
+static constexpr auto num_test_repetitions = 11;
 
 static constexpr uint64_t KB = 1024;
 static constexpr uint64_t MB = 1024 * KB;

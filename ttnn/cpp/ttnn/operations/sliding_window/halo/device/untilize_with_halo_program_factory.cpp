@@ -9,7 +9,6 @@
 #include <cmath>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -100,7 +99,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     uint32_t input_nblocks_per_core = tt::div_up(remapped_input_shard_shape_for_output_grid, TILE_HEIGHT);
     uint32_t input_npages = ntiles_per_block * input_nblocks_per_core;
 
-    uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
+    uint32_t in_page_size = tt::tile_size(in_df);
     if (skip_untilize) {
         uint32_t in_nbytes = datum_size(in_df);
         in_page_size = input_shard_shape[1] * in_nbytes;
@@ -108,7 +107,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core(
     }
 
     const uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
-    const uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    const uint32_t out_tile_size = tt::tile_size(out_df);
 
     CBIndices cb_indices = CBIndices();
 
@@ -393,6 +392,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     const bool padding_exists,
     const uint32_t ncores_nhw,
     const uint32_t ncores_c,
+    const uint32_t num_cores_x,
     const uint32_t max_out_nsticks_per_core,
     const uint32_t max_ref_size,
     const uint32_t in_out_shard_size_delta,
@@ -426,8 +426,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
 
     uint32_t out_stick_nbytes = output_shard_shape[1] * out_nbytes;
 
-    uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
-    uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t in_page_size = tt::tile_size(in_df);
+    uint32_t out_tile_size = tt::tile_size(out_df);
 
     const bool skip_untilize = input_tensor.layout() == Layout::ROW_MAJOR;
     bool wide_tensor = ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH;
@@ -559,8 +559,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     }
 
     // noc conversion function
-    auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
-        auto num_cores_x = device->compute_with_storage_grid_size().x;
+    auto core_id_to_noc_coords =
+        [is_block_sharded, transpose_mcast, device, num_cores_x](uint32_t core_id) -> CoreCoord {
         auto core_coord = CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
         return device->worker_core_from_logical_core(core_coord);
     };
@@ -571,7 +571,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     // compute the number of noop cores
     const bool is_rm_orientation = input_tensor.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_orientation);
-    int32_t num_cores_x = device->compute_with_storage_grid_size().x;
     int32_t num_active_cores = cores.size();
     int32_t num_cores_rectangular = is_block_sharded ? num_active_cores : tt::round_up(num_active_cores, num_cores_x);
     int32_t num_noop_cores = is_block_sharded ? 0 : num_cores_rectangular - num_active_cores;

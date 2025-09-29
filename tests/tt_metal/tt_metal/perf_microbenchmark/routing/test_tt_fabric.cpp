@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -72,12 +72,15 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
 
-    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
-    for (const auto& config : raw_test_configs) {
-        if (config.benchmark_mode) {
-            test_context.initialize_csv_file();
-            break;
+    bool benchmark_mode = std::any_of(raw_test_configs.begin(), raw_test_configs.end(),
+        [](const auto& config) {
+            return config.benchmark_mode;
         }
+    );
+
+    // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
+    if (benchmark_mode) {
+        test_context.initialize_csv_file();
     }
 
     cmdline_parser.apply_overrides(raw_test_configs);
@@ -132,6 +135,10 @@ int main(int argc, char** argv) {
         const auto& topology = test_config.fabric_setup.topology;
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
+        if (test_config.benchmark_mode) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(true);
+        }
+
         log_info(
             tt::LogTest,
             "Opening devices with topology: {}, routing type: {}, and fabric_tensix_config: {}",
@@ -149,9 +156,10 @@ int main(int argc, char** argv) {
 
             // Set benchmark mode and line sync for this test group
             test_context.set_benchmark_mode(test_config.benchmark_mode);
+            test_context.set_telemetry_enabled(test_config.benchmark_mode);
 
             for (auto& built_test : built_tests) {
-                log_info(tt::LogTest, "Running Test: {}", built_test.name);
+                log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
 
                 test_context.setup_devices();
                 log_info(tt::LogTest, "Device setup complete");
@@ -172,14 +180,20 @@ int main(int argc, char** argv) {
                 log_info(tt::LogTest, "Launching programs");
                 test_context.launch_programs();
 
+                log_info(tt::LogTest, "Waiting for programs");
                 test_context.wait_for_programs();
-                log_info(tt::LogTest, "Test {} Finished.", built_test.name);
+                log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
+
+                test_context.process_telemetry_data(built_test);
 
                 test_context.validate_results();
-                log_info(tt::LogTest, "Test {} Results validated.", built_test.name);
+                log_info(tt::LogTest, "Test {} Results validated.", built_test.parametrized_name);
 
                 if (test_context.get_benchmark_mode()) {
                     test_context.profile_results(built_test);
+                }
+                if (test_context.get_telemetry_enabled()) {
+                    test_context.clear_telemetry();
                 }
                 // Synchronize across all hosts after running the current test variant
                 fixture->barrier();
@@ -189,6 +203,13 @@ int main(int argc, char** argv) {
     }
 
     test_context.close_devices();
+
+    tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_telemetry(false);
+
+    // Setup Bandwidth CSV files for CI to upload
+    if (benchmark_mode) {
+        test_context.setup_ci_artifacts();
+    }
 
     // Check if any tests failed validation and throw at the end
     if (test_context.has_test_failures()) {

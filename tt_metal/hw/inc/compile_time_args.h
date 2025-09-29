@@ -9,8 +9,6 @@
 #include <cstdint>
 #include <string_view>
 
-#include "tt_metal/hw/inc/debug/assert.h"
-
 template <class T, class... Ts>
 FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
     return {T(values)...};

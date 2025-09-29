@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 #include "ttnn/operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -106,7 +105,7 @@ struct TileIterator {
         tile_end_w(in_end_w - 1),
         first(true) {};
 
-    inline bool next() {
+    bool next() {
         if (first) {
             first = false;
             return true;
@@ -136,9 +135,9 @@ protected:
     const uint32_t tile_end_w;
     bool first;
 
-    inline uint32_t h() { return start_h + tile_idx_h; }
+    uint32_t h() { return start_h + tile_idx_h; }
 
-    inline uint32_t w() { return start_w + tile_idx_w; }
+    uint32_t w() { return start_w + tile_idx_w; }
 };
 
 std::vector<SegmentMapData> reshape_map_output_page(

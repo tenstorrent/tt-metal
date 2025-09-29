@@ -97,7 +97,6 @@ def run_yolov8s_world_inference(
         (640, 640),
     ],
 )
-@pytest.mark.models_performance_bare_metal
 def test_perf_yolov8s_world(
     device,
     batch_size_per_device,
@@ -133,6 +132,7 @@ def test_perf_yolov8s_world(
     ],
 )
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 def test_perf_yolov8s_world_dp(
     mesh_device,
     batch_size_per_device,
@@ -155,7 +155,7 @@ def test_perf_yolov8s_world_dp(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 106.2],
+        [1, 115],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

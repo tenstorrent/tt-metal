@@ -97,6 +97,16 @@ target_sources(
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/n150_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/n300_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p100_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto
+            fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto
             fabric/fabric_edm_packet_header.hpp
             ${FABRIC_HW_INC}
             ${LITE_FABRIC_INC}
@@ -128,6 +138,19 @@ target_sources(
             ${TT_LLK_HEADERS}
 )
 
+include(CheckFunctionExists)
+
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+else()
+    set(EXECINFO_LIB "")
+endif()
+
 target_link_libraries(
     tt_metal
     PUBLIC
@@ -140,6 +163,7 @@ target_link_libraries(
         Reflect::Reflect
         TT::STL
         tt-logger::tt-logger
+        ${EXECINFO_LIB}
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs

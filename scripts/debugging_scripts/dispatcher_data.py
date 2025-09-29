@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import os
 from inspector_data import run as get_inspector_data, InspectorData
 from elfs_cache import run as get_elfs_cache, ElfsCache
-from triage import triage_singleton, ScriptConfig, run_script
+from triage import triage_singleton, ScriptConfig, run_script, log_check
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
@@ -35,22 +35,31 @@ class DispatcherCoreData:
     kernel_config_base: int = triage_field("Base", hex_serializer)
     kernel_text_offset: int = triage_field("Offset", hex_serializer)
     watcher_kernel_id: int = combined_field("kernel_name", "Kernel ID:Name", collection_serializer(":"))
+    watcher_previous_kernel_id: int = combined_field(
+        "previous_kernel_name", "Previous Kernel ID:Name", collection_serializer(":")
+    )
     kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer)
     firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
     kernel_path: str | None = combined_field()
     kernel_name: str | None = combined_field()
+    previous_kernel_name: str | None = combined_field()
     subdevice: int = triage_field("Subdevice")
     go_message: str = triage_field("Go Message")
     preload: bool = triage_field("Preload")
+    waypoint: str = triage_field("Waypoint")
 
 
 class DispatcherData:
     def __init__(self, inspector_data: InspectorData, context: Context, elfs_cache: ElfsCache):
         self.inspector_data = inspector_data
-        if inspector_data.kernels is None or len(inspector_data.kernels) == 0:
+        self.programs = inspector_data.getPrograms().programs
+        if self.programs is None or len(self.programs) == 0:
+            raise TTTriageError("No programs found in inspector data.")
+        self.kernels = {kernel.watcherKernelId: kernel for program in self.programs for kernel in program.kernels}
+        self.use_rpc_kernel_find = True
+        if len(self.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")
-
-        self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
+        self._a_kernel_path = next(iter(self.kernels.values())).path
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
         idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
 
@@ -105,6 +114,19 @@ class DispatcherData:
         except:
             pass
 
+    def find_kernel(self, watcher_kernel_id):
+        # Try to get kernel from RPC inspector data first, then fallback to cached kernels
+        # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
+        if self.use_rpc_kernel_find:
+            try:
+                return self.inspector_data.getKernel(watcher_kernel_id).kernel
+            except:
+                pass
+        if watcher_kernel_id in self.kernels:
+            self.use_rpc_kernel_find = False
+            return self.kernels[watcher_kernel_id]
+        raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
+
     def get_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         loc_mem_reader = ELF.get_mem_reader(location)
         if location._device.get_block_type(location) == "functional_workers":
@@ -136,7 +158,25 @@ class DispatcherData:
                 get_const_value("RUN_MSG_RESET_READ_PTR"): "RESET_READ_PTR",
                 get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
             }
+            self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
+        log_check(
+            launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
+            f"On device {location._device._id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
+        )
+
+        previous_launch_msg_rd_ptr = (launch_msg_rd_ptr - 1) % self._launch_msg_buffer_num_entries
+
+        kernel_config_base = -1
+        kernel_text_offset = -1
+        watcher_kernel_id = -1
+        watcher_previous_kernel_id = -1
+        kernel = None
+        previous_kernel = None
+        go_message_index = -1
+        go_data = -1
+        preload = False
+        waypoint = None
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mem_access(
@@ -144,14 +184,18 @@ class DispatcherData:
                 f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",
                 loc_mem_reader,
             )[0][0]
-
+        except:
+            pass
+        try:
             # Size 5 (NUM_PROCESSORS_PER_CORE_TYPE) - seems to be DM0,DM1,MATH0,MATH1,MATH2
             kernel_text_offset = mem_access(
                 fw_elf,
                 f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_text_offset[{proc_type}]",
                 loc_mem_reader,
             )[0][0]
-
+        except:
+            pass
+        try:
             # enum dispatch_core_processor_classes
             watcher_kernel_id = (
                 mem_access(
@@ -161,10 +205,33 @@ class DispatcherData:
                 )[0][0]
                 & 0xFFFF
             )
-
-            kernel = self.inspector_data.kernels.get(watcher_kernel_id)
+        except:
+            pass
+        try:
+            watcher_previous_kernel_id = (
+                mem_access(
+                    fw_elf,
+                    f"mailboxes->launch[{previous_launch_msg_rd_ptr}].kernel_config.watcher_kernel_ids[{proc_type}]",
+                    loc_mem_reader,
+                )[0][0]
+                & 0xFFFF
+            )
+        except:
+            pass
+        try:
+            kernel = self.find_kernel(watcher_kernel_id)
+        except:
+            pass
+        try:
+            previous_kernel = self.find_kernel(watcher_previous_kernel_id)
+        except:
+            pass
+        try:
             go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
             go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
+        except:
+            pass
+        try:
             preload = (
                 mem_access(fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.preload", loc_mem_reader)[0][
                     0
@@ -172,13 +239,12 @@ class DispatcherData:
                 != 0
             )
         except:
-            kernel_config_base = -1
-            kernel_text_offset = -1
-            watcher_kernel_id = -1
-            kernel = None
-            go_message_index = -1
-            go_data = -1
-            preload = False
+            pass
+        try:
+            waypoint_int = mem_access(fw_elf, f"mailboxes->watcher.debug_waypoint[{proc_type}]", loc_mem_reader)[0][0]
+            waypoint = waypoint_int.to_bytes(4, "little").rstrip(b"\x00").decode("utf-8", errors="replace")
+        except:
+            pass
 
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
             firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
@@ -209,15 +275,18 @@ class DispatcherData:
         return DispatcherCoreData(
             firmware_path=firmware_path,
             kernel_path=kernel_path,
+            previous_kernel_name=previous_kernel.name if previous_kernel else None,
             kernel_offset=kernel_offset,
             kernel_name=kernel.name if kernel else None,
             launch_msg_rd_ptr=launch_msg_rd_ptr,
             kernel_config_base=kernel_config_base,
             kernel_text_offset=kernel_text_offset,
             watcher_kernel_id=watcher_kernel_id,
+            watcher_previous_kernel_id=watcher_previous_kernel_id,
             subdevice=go_message_index,
             go_message=go_data_state,
             preload=preload,
+            waypoint=waypoint,
         )
 
     @staticmethod

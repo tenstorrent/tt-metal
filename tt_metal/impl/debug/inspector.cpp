@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "inspector.hpp"
-#include "inspector_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/data.hpp"
+#include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "mesh_device.hpp"
@@ -12,16 +13,19 @@
 #include "program.hpp"
 #include <memory>
 #include <tt-logger/tt-logger.hpp>
+#include "impl/kernels/kernel_impl.hpp"
 
 namespace tt::tt_metal {
 
-static inspector::Data* get_inspector_data() {
+namespace {
+inspector::Data* get_inspector_data() {
     auto* data = tt::tt_metal::MetalContext::instance().get_inspector_data();
     if (!data) {
         throw std::runtime_error("Inspector data is not initialized.");
     }
     return data;
 }
+}  // namespace
 
 bool Inspector::is_enabled() {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled();
@@ -40,6 +44,19 @@ std::unique_ptr<inspector::Data> Inspector::initialize() {
     catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to initialize Inspector: {}", e.what());
         throw;
+    }
+}
+
+void Inspector::serialize_rpc() {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        data->serialize_rpc();
+    }
+    catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to serialize RPC: {}", e.what());
     }
 }
 
@@ -71,6 +88,9 @@ void Inspector::program_destroyed(
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         data->logger.log_program_destroyed(program_data);
+        for (const auto& [kernel_id, _] : program_data.kernels) {
+            data->kernel_id_to_program_id.erase(kernel_id);
+        }
         data->programs_data.erase(program->get_id());
     }
     catch (const std::exception& e) {
@@ -132,6 +152,7 @@ void Inspector::program_kernel_compile_finished(
         kernel_data.name = kernel->name();
         kernel_data.path = build_options.path;
         kernel_data.source = kernel->kernel_source().source_;
+        data->kernel_id_to_program_id[kernel->get_watcher_kernel_id()] = program->get_id();
         data->logger.log_program_kernel_compile_finished(program_data, kernel_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program kernel compile finished: {}", e.what());
@@ -292,6 +313,19 @@ void Inspector::mesh_workload_set_program_binary_status(
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
     }
+}
+
+inspector::RpcServer& Inspector::get_rpc_server() {
+    if (is_enabled()) {
+        try {
+            auto* data = get_inspector_data();
+            return data->get_rpc_server();
+        } catch (const std::exception& e) {
+            TT_INSPECTOR_LOG("Failed to get RPC server: {}", e.what());
+        }
+    }
+    static inspector::RpcServer empty_rpc_server;
+    return empty_rpc_server;
 }
 
 }  // namespace tt::tt_metal

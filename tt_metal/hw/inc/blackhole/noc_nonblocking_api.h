@@ -142,6 +142,12 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
+inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_t noc, uint32_t id_mask) {
+    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CLEAR_OUTSTANDING_REQ_CNT;
+    volatile uint32_t* ptr = (volatile uint32_t*)offset;
+    *ptr = id_mask;
+}
+
 inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr(uint32_t noc, uint64_t dst_noc_addr) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has no back-pressure then the transaction will hang because there is no
@@ -152,7 +158,15 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
     // needs to respect 4B alignment.
     ASSERT((dst_noc_addr & 0x3) == 0);
     uint32_t offset = dst_noc_addr & 0xF;
+
+#if defined(COMPILE_FOR_IDLE_ERISC)
+    uint32_t src_addr = MEM_IERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#elif defined(COMPILE_FOR_ERISC)
+    uint32_t src_addr = MEM_AERISC_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#else
     uint32_t src_addr = MEM_L1_INLINE_BASE + (2 * MEM_L1_INLINE_SIZE_PER_NOC) * proc_type;
+#endif
+
 #ifdef COMPILE_FOR_TRISC
     ASSERT(0);  // we do not have L1 space for inline values for TRISCs.
 #endif
@@ -190,6 +204,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_reads_flushed(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
+    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::READS_NUM_ISSUED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -351,6 +366,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_sent(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
+    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -362,6 +378,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_writes_sent(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -373,6 +390,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -394,6 +412,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_trans
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_flushed(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
+    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -669,7 +688,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -678,19 +697,37 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t customized_src_addr = 0) {
     // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
     // time. If one port on the receipient has back-pressure then the transaction will hang because there is no
     // mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on
     // Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
     ASSERT((dest_addr & 0x3) == 0);
-    uint32_t src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
-
-    // Flush to make sure write left L1 before updating it
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+    uint32_t src_addr;
+    if constexpr (!flush) {
+        src_addr = customized_src_addr;
     } else {
-        while (!ncrisc_noc_nonposted_writes_sent(noc));
+        src_addr = noc_get_interim_inline_value_addr(noc, dest_addr);
+    }
+    // Flush to make sure write left L1 before updating it. Both posted and non-posted counters
+    // need to be checked because we don't know, in the moment, the history of spoofed writes and
+    // if they were posted or non-posted.
+    //
+    // An alternative to this is to force the spoofed write to be posted. However this breaks some
+    // niche user code cases. For example, when a user wants to send some data via an inline write
+    // (say if they need to send data where src/dest are not aligned), and they need to signal to
+    // a consumer when the write has completed (when the data and consumer are on different cores -
+    // a completion ack is needed to avoid race). Forcing posted removes this as a supported use
+    // case; it was not chosen as an approach.
+    if constexpr (flush) {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+            while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
+        } else {
+            while (!ncrisc_noc_nonposted_writes_sent(noc));
+            while (!ncrisc_noc_posted_writes_sent(noc));
+        }
     }
 
     volatile tt_l1_ptr uint32_t* interim_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
@@ -705,6 +742,7 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
     constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
 #endif
 
+    while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     ncrisc_noc_fast_write<noc_mode>(
         noc,
         write_cmd_buf,
@@ -769,7 +807,7 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
     }
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -778,15 +816,18 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t customized_src_addr = 0) {
     if constexpr (dst_type == InlineWriteDst::DEFAULT) {
         if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
             noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
         } else {
-            noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
+            noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
         }
     } else if constexpr (dst_type == InlineWriteDst::L1) {
-        noc_fast_spoof_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
+        noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
     } else {
         ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
         noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);

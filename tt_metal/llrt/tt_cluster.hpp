@@ -23,14 +23,13 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/tt_io.hpp>
-#include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -131,10 +130,9 @@ public:
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
-    void assert_risc_reset_at_core(
-        const tt_cxy_pair& physical_chip_coord,
-        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
+        const tt::umd::RiscType& soft_resets,
+        bool staggered_start = true) const;
+    void assert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord, const tt::umd::RiscType& soft_resets) const;
 
     void write_dram_vec(
         const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
@@ -189,11 +187,6 @@ public:
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
         auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
-    }
-
-    std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
-        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
-        return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
     }
 
     // Returns a writer object which holds a pointer to a static tlb
@@ -312,8 +305,11 @@ public:
     void initialize_fabric_config(
         tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
 
-    // Returns whether we are running on Galaxy.
+    // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
+
+    // Returns whether we are running on UBB Galaxy.
+    bool is_ubb_galaxy() const;
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;

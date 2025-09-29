@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <tt-metalium/utils.hpp>
 
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -38,8 +37,8 @@ inline std::string get_env_arch_name() {
 inline std::string get_umd_arch_name() {
 
     if(tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled()) {
-        tt_SimulationDeviceInit init(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
-        return tt::arch_to_str(init.get_arch_name());
+        auto soc_desc = tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(tt_metal::MetalContext::instance().rtoptions().get_simulator_path());
+        return tt::arch_to_str(tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc));
     }
 
     auto cluster_desc = tt::umd::Cluster::create_cluster_descriptor();

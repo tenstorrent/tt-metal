@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ Options:
     --initialize-with-noc1           Initialize debugger context with NOC1 enabled. [default: False]
     --verbosity=<verbosity>          Choose output verbosity. 1: ERROR, 2: WARN, 3: INFO, 4: VERBOSE, 5: DEBUG. [default: 3]
     --run=<script>                   Run specific script(s) by name. If not provided, all scripts will be run. [default: all]
-    --skip-version-check    Do not enforce debugger version check. [default: False]
+    --skip-version-check             Do not enforce debugger version check. [default: False]
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -39,6 +39,16 @@ except ImportError as e:
     install_script = os.path.join(os.path.dirname(script_dir), "install_debugger.sh")
     print(f"Module '{e}' not found. Please install tt-exalens by running:")
     print(f"  {utils.GREEN}{install_script}{utils.RST}")
+    exit(1)
+
+# Check if requirements are installed
+try:
+    import capnp
+except ImportError as e:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    requirements_path = os.path.join(script_dir, "requirements.txt")
+    print(f"Module '{e}' not found. Please install requirements.txt:")
+    print(f"  {utils.GREEN}pip install -r {requirements_path}{utils.RST}")
     exit(1)
 
 # Import necessary libraries
@@ -480,7 +490,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     """
     # Skip flag for dependency checks
     try:
-        skip_check = bool(args.get("--skip-version-check", False)) if args else False
+        skip_check = bool(args["--skip-version-check"])
     except Exception:
         skip_check = False
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,8 +21,19 @@ from models.demos.ttnn_resnet.tests.resnet50_performant import (
     "act_dtype, weight_dtype, math_fidelity",
     ((ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
 )
-def test_run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator):
-    run_resnet50_inference(device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator)
+@pytest.mark.parametrize("skip_compile_run", [True, False])
+def test_run_resnet50_inference(
+    device, batch_size, act_dtype, weight_dtype, math_fidelity, model_location_generator, skip_compile_run
+):
+    run_resnet50_inference(
+        device,
+        batch_size,
+        act_dtype,
+        weight_dtype,
+        math_fidelity,
+        model_location_generator,
+        skip_compile_run=skip_compile_run,
+    )
 
 
 @run_for_blackhole()

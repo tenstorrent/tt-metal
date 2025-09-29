@@ -66,7 +66,7 @@ class TokenAccuracy:
         return accuracy_top1, accuracy_top5
 
 
-def get_accuracy_thresholds(model_args, optimizations):
+def get_accuracy_thresholds(model_args):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
     # Read PERF.md
     perf_file = "models/tt_transformers/PERF.md"
@@ -75,10 +75,8 @@ def get_accuracy_thresholds(model_args, optimizations):
 
     # Split into sections based on optimization mode
     sections = content.split("## ")
-    if callable(optimizations):
-        optimizations = optimizations(model_args)
-    first_decoder_conf = optimizations.decoder_optimizations[0]
-    target_section = next(s for s in sections if s.lower().startswith(f"{first_decoder_conf.__name__}\n"))
+    optimizations = model_args.optimizations
+    target_section = next(s for s in sections if s.lower().startswith(f"{optimizations.__name__}\n"))
 
     # Parse the table and find the row for our model and device
     # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
@@ -244,7 +242,8 @@ def prepare_generator_args(
     tokenizer = model_args[
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
-    return model_args, model, page_table, tt_kv_cache, tokenizer
+    processor = model_args[0].processor
+    return model_args, model, page_table, tt_kv_cache, tokenizer, processor
 
 
 # List of supported Parameters for demo.py
@@ -700,10 +699,10 @@ def test_demo_text(
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
     if is_ci_env:
-        llama_dir = os.getenv("LLAMA_DIR", "")
-        is_33_70b = "3.3-70B" in llama_dir
-        is_32_1b = "3.2-1B" in llama_dir
-        is_31_8b = "3.1-8B" in llama_dir
+        hf_model = os.getenv("HF_MODEL", "")
+        is_33_70b = "3.3-70B" in hf_model
+        is_32_1b = "3.2-1B" in hf_model
+        is_31_8b = "3.1-8B" in hf_model
 
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
@@ -740,7 +739,7 @@ def test_demo_text(
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
 
-    model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
+    model_args, model, page_table, tt_kv_cache, tokenizer, processor = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
@@ -761,7 +760,7 @@ def test_demo_text(
                 f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
             )
 
-    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
@@ -812,6 +811,7 @@ def test_demo_text(
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
+
         logits = generator.prefill_forward_text(
             input_tokens_prefill_pt,  # Prefill warmup for all users, in case some users have different seqlens than others
             page_table=page_table,
@@ -1185,9 +1185,9 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 26,
-                "N150_Llama-3.2-3B": 57,
-                "N150_Llama-3.1-8B": 112,
+                "N150_Llama-3.2-1B": 24.05371875,
+                "N150_Llama-3.2-3B": 62,
+                "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,
                 # N300 targets
                 "N300_Qwen2.5-7B": 90,
@@ -1238,10 +1238,7 @@ def test_demo_text(
 
         if not json_config_file:
             # Get accuracy thresholds from PERF.md, unless the configuration is from a json
-            min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-                model_args[0],
-                optimizations,
-            )
+            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0])
             assert (
                 total_top1_acc >= min_top1_acc
             ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"

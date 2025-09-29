@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -35,8 +35,6 @@ namespace tt::tt_metal {
 class IDevice;
 
 namespace distributed {
-
-MeshWorkload CreateMeshWorkload();
 
 void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range);
 
@@ -96,10 +94,13 @@ void EnqueueReadMeshBuffer(
     std::vector<DType>& dst,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     bool blocking = true) {
-    TT_FATAL(
-        mesh_buffer->global_layout() == MeshBufferLayout::SHARDED,
-        "Can only read a Sharded MeshBuffer from a MeshDevice.");
-    dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
+    // This API supports reading MeshBuffers sharded across devices
+    // and a Unit-MeshBuffer with a replicated layout.
+    if (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED) {
+        dst.resize(mesh_buffer->global_shard_spec().global_size / sizeof(DType));
+    } else {
+        dst.resize(mesh_buffer->size() / sizeof(DType));
+    }
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 

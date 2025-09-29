@@ -52,6 +52,7 @@ jobs:
           - name: debug_tools and device and dispatch
             cmd: |
               ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=$GTEST_FILTER
+              ./build/test/tt_metal/unit_tests_inspector --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_device --gtest_filter=$GTEST_FILTER
               ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=$GTEST_FILTER
           - name: llk
@@ -101,7 +102,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06CXU895AP # Michael Chiou
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

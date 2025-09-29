@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -247,7 +247,6 @@ def prepare_sharded_ttnn_grid(
     return ttnn.to_memory_config(ttnn_grid_interleaved, grid_memory_config)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize("use_precomputed_grid", [False, True])
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
@@ -368,7 +367,6 @@ def test_grid_sample_batch_output_channels_flag(
     logger.info(pcc_message)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize(
@@ -424,7 +422,6 @@ def test_grid_sample_sharded(device, input_shape, grid_shape, use_precomputed_gr
     pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize("use_precomputed_grid", [True, False])
 @pytest.mark.parametrize("batch_output_channels", [True, False])
 @pytest.mark.parametrize("grid_dtype", [ttnn.bfloat16, ttnn.float32])

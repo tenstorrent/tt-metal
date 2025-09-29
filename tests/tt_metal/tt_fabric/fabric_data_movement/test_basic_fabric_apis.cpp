@@ -41,7 +41,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
@@ -169,8 +168,7 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         }
     }
 }
-
-void RunGetRoutingInfoTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
+void RunSetUnicastRouteTest(BaseFabricFixture* fixture, bool is_multi_mesh = false) {
     CoreCoord logical_core = {0, 0};
     const auto& devices = fixture->get_devices();
     const size_t NUM_DEVICES = devices.size();
@@ -231,7 +229,7 @@ void RunGetRoutingInfoTest(BaseFabricFixture* fixture, bool is_multi_mesh = fals
 
         auto kernel = tt_metal::CreateKernel(
             programs[src_idx],
-            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_get_routing_info.cpp",
+            "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_fabric_set_unicast_route.cpp",
             {logical_core},
             tt_metal::DataMovementConfig{.defines = defines});
 
@@ -260,6 +258,13 @@ void RunGetRoutingInfoTest(BaseFabricFixture* fixture, bool is_multi_mesh = fals
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
+            if (!is_2d_fabric && std::abs(
+                                     static_cast<long>(src_fabric_node_id.chip_id) -
+                                     static_cast<long>(dst_fabric_node_id.chip_id)) >= MAX_CHIPS_LOWLAT_1D) {
+                // Skip 1D route buffer comparison if src and dst are more than 16 chips apart
+                continue;
+            }
+
             uint32_t result_offset = dst_idx * RESULT_SIZE_PER_DEVICE;
             // Compare route buffers
             bool route_buffers_match = true;
@@ -1197,15 +1202,15 @@ TEST_F(NightlyFabric2DDynamicFixture, TestLineMcastN3HopsE3HopsW4Hops) {
     RunTestLineMcast(this, {e_routing_info, w_routing_info, n_routing_info});
 }
 
-TEST_F(Fabric1DFixture, TestGetRoutingInfo) { RunGetRoutingInfoTest(this, false); }
-
-// 1 mesh all-to-all
-TEST_F(Fabric2DFixture, TestGetRoutingInfo) {
+TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         GTEST_SKIP() << "Test applicable only on T3K";
     }
-    RunGetRoutingInfoTest(this, false);
+    RunSetUnicastRouteTest(this, false);
 }
+
+// 1 mesh all-to-all
+TEST_F(Fabric2DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

@@ -39,7 +39,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -389,7 +388,7 @@ void RunTestOnCore(
     std::string exception = "";
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
-    } while (exception == "");
+    } while (exception.empty());
     log_info(LogTest, "Reported error: {}", exception);
     EXPECT_EQ(MetalContext::instance().watcher_server()->exception_message(), expected);
 }

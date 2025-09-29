@@ -14,7 +14,7 @@
 #include <variant>
 #include <atomic>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 // Forward declaration
 namespace tt::tt_fabric {
@@ -33,7 +33,7 @@ enum Policy : int;
 enum RoutingDirection : int;
 }
 
-inline namespace v1_0 {
+inline namespace v1_1 {
 using LocalNodeId = uint32_t;   // Scoped to parent (mesh_id, graph_id, device index)
 using GlobalNodeId = uint32_t;  // Unique across the instantiated MGD
 using ConnectionId = uint32_t;
@@ -64,7 +64,6 @@ struct ConnectionData {
     std::vector<GlobalNodeId> nodes; // [src_global_device_id, dst_global_device_id]
     std::uint32_t count;             // ethernet lanes per connection
     proto::Policy policy;
-    bool directional;
     GlobalNodeId parent_instance_id;
 
     ConnectionId connection_id = generate_next_global_id();
@@ -78,7 +77,7 @@ private:
         return next_global_id_++;
     }
 };
-} // v1_0
+}  // namespace v1_1
 
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
@@ -214,7 +213,9 @@ private:
     void populate_intra_mesh_express_connections(GlobalNodeId mesh_id);
     void populate_inter_mesh_connections(GlobalNodeId graph_id);
     void populate_inter_mesh_manual_connections(GlobalNodeId graph_id);
-    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id); // TODO: To be implemented in seperate PR
+    void populate_inter_mesh_topology_connections(GlobalNodeId graph_id);  // TODO: To be implemented in seperate PR
+    void populate_inter_mesh_topology_connections_all_to_all(GlobalNodeId graph_id);
+    void populate_inter_mesh_topology_connections_ring(GlobalNodeId graph_id);
 
     GlobalNodeId find_instance_by_ref(GlobalNodeId parent_instance_id, const proto::NodeRef& node_ref);
 

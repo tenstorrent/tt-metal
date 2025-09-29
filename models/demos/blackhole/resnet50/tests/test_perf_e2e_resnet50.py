@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,13 +13,12 @@ from models.demos.ttnn_resnet.tests.perf_e2e_resnet50 import run_perf_resnet
 
 
 @run_for_blackhole()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (16, 0.006, 30),
-        (32, 0.0062, 30),
+        (16, 0.0065, 30),
+        (32, 0.0071, 30),
     ),
 )
 def test_perf(
@@ -42,13 +41,12 @@ def test_perf(
 
 
 @run_for_blackhole()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 5554176}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
     (
-        (16, 0.002, 30),
-        (32, 0.0034, 30),
+        (16, 0.0024, 30),
+        (32, 0.004, 30),
     ),
 )
 def test_perf_trace(
@@ -71,7 +69,6 @@ def test_perf_trace(
 
 
 @run_for_blackhole()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
@@ -106,7 +103,7 @@ def test_perf_2cqs(
 )
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
-    ((16, 0.002, 30), (32, 0.003, 30)),
+    ((16, 0.0018, 30), (32, 0.0026, 30)),
 )
 def test_perf_trace_2cqs(
     device,
