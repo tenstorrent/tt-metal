@@ -30,7 +30,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 def test_yolov12x(use_pretrained_weight, device, reset_seeds, model_location_generator):
-    torch_input, ttnn_input = create_yolov12x_input_tensors(device)
+    torch_input, ttnn_input = create_yolov12x_input_tensors(device, input_dtype=ttnn.bfloat8_b)
     state_dict = None
 
     torch_model = yolov12x.YoloV12x()
