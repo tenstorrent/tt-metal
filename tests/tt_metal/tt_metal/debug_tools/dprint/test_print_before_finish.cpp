@@ -28,7 +28,11 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+namespace {
+
+void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -88,3 +92,7 @@ TEST_F(DPrintMeshFixture, TensixTestPrintFinish) {
     // issues on multi-device setups.
     this->RunTestOnDevice(RunTest, mesh_devices.at(0));
 }
+
+}  // namespace
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
