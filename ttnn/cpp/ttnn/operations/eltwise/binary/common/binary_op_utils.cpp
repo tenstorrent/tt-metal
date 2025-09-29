@@ -462,11 +462,11 @@ std::map<std::string, std::string> get_defines_fp32(
             break;
         case BinaryOpType::HYPOT:
             // Hypot: sqrt(a^2 + b^2)
-            new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0"));
-            new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN1_0"));
+            new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0", idst, input_a_dtype));
+            new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN1_0", idst, input_b_dtype));
             new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
             op_name = "add_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst1, input_a_dtype));
             break;
         default:
             log_debug(tt::LogOp, "Undefined op type {}", op_type);

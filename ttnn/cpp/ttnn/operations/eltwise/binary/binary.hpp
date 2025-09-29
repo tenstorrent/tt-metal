@@ -165,39 +165,15 @@ struct BinaryOperationSubalpha {
 /**
  * @brief Performs element-wise hypot operation: sqrt(a^2 + b^2).
  * When inputs are Tensors, the supported dtypes are float32 and bfloat16.
- *
- * @param input_a The first input tensor
- * @param input_b The second input tensor
- * @return The result tensor
+ * Clean interface without activation parameters (uses bind_binary_composite).
  */
-struct ExecuteHypot {
-    // Main tensor-tensor interface
+template <BinaryOpType binary_op_type>
+struct BinaryOperationHypot {
     static Tensor invoke(
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
-        const std::optional<const DataType>& dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-
-    // Simple tensor-tensor interface
-    static Tensor invoke(
-        const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config);
-
-    // Tensor-scalar interfaces for pybind
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        float input_tensor_b,
-        const std::optional<const DataType>& dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 }  // namespace operations::binary
@@ -310,7 +286,9 @@ constexpr auto logical_right_shift = ttnn::register_operation<
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_RIGHT_SHIFT>>();
 constexpr auto xlogy = ttnn::
     register_operation<"ttnn::xlogy", operations::binary::BinaryOperation<operations::binary::BinaryOpType::XLOGY>>();
-constexpr auto hypot = ttnn::register_operation<"ttnn::hypot", operations::binary::ExecuteHypot>();
+constexpr auto hypot = ttnn::register_operation<
+    "ttnn::hypot",
+    operations::binary::BinaryOperationHypot<operations::binary::BinaryOpType::HYPOT>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& lhs, InputBType rhs) {
