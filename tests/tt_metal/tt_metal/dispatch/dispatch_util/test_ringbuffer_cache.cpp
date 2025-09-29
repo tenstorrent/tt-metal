@@ -23,13 +23,15 @@ struct CacheTestParams {
 };
 // NOLINTBEGIN(cppcoreguidelines-virtual-class-destructor)
 class RingbufferCacheRandomizedTestsFixture : public ::testing::TestWithParam<CacheTestParams> {
-protected:
-    RingbufferCacheRandomizedTestsFixture() = default;
-    ~RingbufferCacheRandomizedTestsFixture() override = default;
+public:
     RingbufferCacheRandomizedTestsFixture(const RingbufferCacheRandomizedTestsFixture&) = delete;
     RingbufferCacheRandomizedTestsFixture& operator=(const RingbufferCacheRandomizedTestsFixture&) = delete;
     RingbufferCacheRandomizedTestsFixture(RingbufferCacheRandomizedTestsFixture&&) = delete;
     RingbufferCacheRandomizedTestsFixture& operator=(RingbufferCacheRandomizedTestsFixture&&) = delete;
+
+protected:
+    RingbufferCacheRandomizedTestsFixture() = default;
+    ~RingbufferCacheRandomizedTestsFixture() override = default;
 
     std::unique_ptr<RingbufferCacheManager> rb_cache_;
 
