@@ -129,6 +129,8 @@ function findOwnerForLabel(label) {
 
 // END OF CODE FOR OWNERSHIP MAPPING
 
+// START OF CODE FOR ERROR HANDLING
+
 // Simple HTML escaping for rendering snippets safely in summary HTML
 // This is used to prevent XSS attacks by converting special characters to basic text that can't be rendered as HTML
 function escapeHtml(text) {
@@ -484,6 +486,8 @@ function extractTestLabelBackward(lines, errIdx) {
   return undefined; // return undefined if no test label is found
 }
 
+// END OF CODE FOR ERROR HANDLING
+
 /**
  * Calculates statistics for a set of workflow runs.
  *
@@ -747,8 +751,8 @@ async function generateSummaryBox(grouped, github, context) {
  * @returns {Promise<string>} Complete markdown report
  */
 async function buildReport(grouped, github, context) {
-  const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10);
-  const timestamp = new Date().toISOString();
+  const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
+  const timestamp = new Date().toISOString(); // get the timestamp for the report
   return [
     `# Workflow Summary (Last ${days} Days) - Generated at ${timestamp}\n`,
     await generateSummaryBox(grouped, github, context),
@@ -792,13 +796,15 @@ async function buildReport(grouped, github, context) {
  */
 function filterRunsByDate(runs, days) {
   const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - days);
+  cutoffDate.setDate(cutoffDate.getDate() - days); // set the cutoff date to the number of days ago
 
   return runs.filter(run => {
     const runDate = new Date(run.created_at);
-    return runDate >= cutoffDate;
+    return runDate >= cutoffDate; // return the runs that are within the date range
   });
 }
+
+// START MORE ERROR HANDLING CODE
 
 /**
  * Collect commits between two SHAs on the default branch (main), inclusive of endSha.
@@ -812,12 +818,11 @@ async function listCommitsBetween(octokit, context, startShaExclusive, endShaInc
       repo: context.repo.repo,
       base: startShaExclusive,
       head: endShaInclusive,
-    });
+    }); // compareCommits is a GitHub API call to get the commits between two SHAs
     // compareCommits includes both endpoints; to make start exclusive, filter it out explicitly
-    const commits = data.commits || [];
-    return commits
-      .filter(c => c.sha !== startShaExclusive)
-      .concat(data.merge_base_commit && data.merge_base_commit.sha === endShaInclusive ? [] : [])
+    const commits = data.commits || []; // get the commits between the two SHAs
+    return commits // return the commits between the two SHAs
+      .filter(c => c.sha !== startShaExclusive) // filter out the start SHA
       .map(c => ({
         sha: c.sha,
         short: c.sha.substring(0, SHA_SHORT_LENGTH),
@@ -825,12 +830,14 @@ async function listCommitsBetween(octokit, context, startShaExclusive, endShaInc
         author_login: c.author?.login,
         author_name: c.commit?.author?.name,
         author_url: c.author?.html_url,
-      }));
+      })); // return the commits with the necessary information
   } catch (e) {
     core.warning(`Failed to list commits between ${startShaExclusive}..${endShaInclusive}: ${e.message}`);
     return [];
   }
 }
+
+// END MORE ERROR HANDLING CODE
 
 /**
  * Main function to run the action
