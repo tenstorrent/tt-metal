@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -178,6 +178,9 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
+            // if (in_cb_id == 5) {
+            //     tt::data_movement::common::print_bf16_pages(get_write_ptr(in_cb_id), 32, 32);
+            // }
             cb_push_back(in_cb_id, 1);
         }
     }

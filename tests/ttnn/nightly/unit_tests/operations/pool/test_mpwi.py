@@ -11,9 +11,9 @@ import pytest
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 def test_max_pool2d_with_indices(device):
     in_n = 1
-    in_h = 10
+    in_h = 12
     in_w = 10
-    in_c = 1
+    in_c = 16
     kernel_size = [3, 3]
     stride = [1, 1]
     padding = [1, 1]
@@ -54,13 +54,13 @@ def test_max_pool2d_with_indices(device):
     # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
 
     # Create tensor where each element equals its HW coordinate (h * in_w + w)
-    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    # torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
-    # for n in range(in_n):
-    #     for c in range(in_c):
-    #         for h in range(in_h):
-    #             for w in range(in_w):
-    #                 torch_input[n, c, h, w] = h * in_w + w
+    # torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    torch_input = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+    for n in range(in_n):
+        for c in range(in_c):
+            for h in range(in_h):
+                for w in range(in_w):
+                    torch_input[n, c, h, w] = 1
 
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
@@ -75,7 +75,7 @@ def test_max_pool2d_with_indices(device):
         buffer_type=ttnn.BufferType.L1,
         shard_spec=ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 3))}),
-            [5, 32],
+            [6, 32],
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.ShardMode.PHYSICAL,
         ),
@@ -108,25 +108,25 @@ def test_max_pool2d_with_indices(device):
     ttnn_indices_torch = ttnn.to_torch(indices)
 
     # Check that ttnn_output_base is exactly equal to ttnn_output
-    ttnn_output_base = ttnn.max_pool2d(
-        input_tensor=ttnn_input,
-        batch_size=in_n,
-        input_h=in_h,
-        input_w=in_w,
-        channels=in_c,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        # applied_shard_scheme=shard_scheme,
-        ceil_mode=ceil_mode,
-        in_place_halo=True,  # test the base with IPH for a little more IPH coverage
-        deallocate_input=False,
-        reallocate_halo_output=True,
-        return_indices=False,
-    )
-    ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn_output_torch)
-    print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
+    # ttnn_output_base = ttnn.max_pool2d(
+    #     input_tensor=ttnn_input,
+    #     batch_size=in_n,
+    #     input_h=in_h,
+    #     input_w=in_w,
+    #     channels=in_c,
+    #     kernel_size=kernel_size,
+    #     stride=stride,
+    #     padding=padding,
+    #     dilation=dilation,
+    #     # applied_shard_scheme=shard_scheme,
+    #     ceil_mode=ceil_mode,
+    #     in_place_halo=True,  # test the base with IPH for a little more IPH coverage
+    #     deallocate_input=False,
+    #     reallocate_halo_output=True,
+    #     return_indices=False,
+    # )
+    # ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn_output_torch)
+    # print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
 
     # Run PyTorch max pool for reference
     torch_output, torch_indices = torch.nn.functional.max_pool2d(

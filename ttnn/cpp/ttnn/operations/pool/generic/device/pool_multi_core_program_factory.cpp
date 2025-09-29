@@ -367,6 +367,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
     const uint32_t in_cb_npages = params.multi_buffering_factor;
 
+    printf("in_cb_pagesize: %d\n", in_cb_pagesize);
+    printf("in_cb_npages: %d\n", in_cb_npages);
+
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
 
@@ -435,6 +438,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                             // block of c if its greater than 8 tiles)
         out_cb_npages = outputs[0].shard_spec().value().shape[0] * params.out_ntiles_c;
     }
+
+    printf("out_cb_pagesize: %d\n", out_cb_pagesize);
+    printf("out_cb_npages: %d\n", out_cb_npages);
 
     const auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++,

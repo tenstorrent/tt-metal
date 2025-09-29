@@ -116,8 +116,8 @@ FactoryParameters get_factory_parameters(
     Pool2DType pool_type,
     bool return_indices,
     const Layout& output_layout) {
-    uint32_t multi_buffering_factor = 2;
-    bool split_reader = true;
+    uint32_t multi_buffering_factor = 1;
+    bool split_reader = false;
 
     auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
