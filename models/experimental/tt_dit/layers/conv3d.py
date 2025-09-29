@@ -237,7 +237,7 @@ class ContextParallelConv3d:
             halo_tensor = vae_neighbor_pad(
                 self.ccl_manager,
                 halo_tensor,
-                cluster_axis=1,
+                cluster_axis=self.parallel_config.time_parallel.mesh_axis,
                 dim=0,
                 padding_left=2,
                 padding_right=0,
