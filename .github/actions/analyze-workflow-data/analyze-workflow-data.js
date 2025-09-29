@@ -445,46 +445,43 @@ function extractTestLabelBackward(lines, errIdx) {
     const raw = lines[i] || '';
     const line = raw
       .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-      .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '');
+      .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, ''); //this basically removes timestamps and process/thread IDs
     // gtest: return the part after [ RUN ]
-    const mRun = line.match(runExact);
-    if (mRun) return mRun[1].trim();
+    const mRun = line.match(runExact); // check if the cleaned up line starts with [ RUN ]
+    if (mRun) return mRun[1].trim(); // if so, return the part after [ RUN ]
     // pytest FAILED header: extract tests/...py::test_name (without params)
-    if (failedTests.test(line)) {
-      const mF = line.match(/^\s*FAILED\s+((tests\/[^\s]+\.py))::([^\s\[]+)/);
-      if (mF) return `${mF[1]}::${mF[3]}`;
+    if (failedTests.test(line)) { // this is just a boolean check
+      const mF = line.match(/^\s*FAILED\s+((tests\/[^\s]+\.py))::([^\s\[]+)/); // this is a regex to match the test name
+      if (mF) return `${mF[1]}::${mF[3]}`; // return the test file path appended with the test name
       // fallback to any tests path at start
-      const mFs = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
-      if (mFs) return mFs[1];
+      const mFs = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/); // this is a regex to match the test file path. stops capturing after whitespace of [
+      if (mFs) return mFs[1]; // if so, return the test file path
       return line.trim();
     }
     if (failedOnly.test(line)) {
       // return first non-empty line below
-      let j = i + 1;
-      while (j < lines.length && lines[j].trim() === '') j++;
+      let j = i + 1; // set the index to the next line
+      while (j < lines.length && lines[j].trim() === '') j++; // while the index is less than the length of the lines array and the line is empty, increment the index
       if (j < lines.length) {
-        const candRaw = lines[j];
-        const cand = candRaw
+        const candRaw = lines[j]; // get the line
+        const cand = candRaw // clean up the line
           .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
-          .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '');
-        const mPy = cand.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/);
-        if (mPy) return `${mPy[1]}::${mPy[3]}`;
-        const mStart = cand.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
-        if (mStart) return mStart[1];
-        const mRun2 = cand.match(runExact);
-        if (mRun2) return mRun2[1].trim();
-        return cand.trim();
+          .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, ''); // this basically removes timestamps and process/thread IDs
+        const mPy = cand.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/); // this is a regex to match a test file path and test name
+        if (mPy) return `${mPy[1]}::${mPy[3]}`; // if so, return the test file path appended with the test name
+        const mStart = cand.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/); // simpler regex to match a test file path
+        if (mStart) return mStart[1]; // if so, return the test file path
       }
     }
-    if (testsPathStart.test(line)) {
-      const m = line.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/);
-      if (m) return `${m[1]}::${m[3]}`;
-      const m2 = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/);
-      if (m2) return m2[1];
-      return line.trim();
+    if (testsPathStart.test(line)) { // this is just a boolean check to see if the line starts with tests/
+      const m = line.match(/^\s*((tests\/[^\s]+\.py))::([^\s\[]+)/); // this is a regex to match a test file path and test name
+      if (m) return `${m[1]}::${m[3]}`; // if so, return the test file path appended with the test name
+      const m2 = line.match(/^\s*(tests\/[^\s]+\.py(?:::[^\s\[]+)*)/); // simpler regex to match a test file path
+      if (m2) return m2[1]; // if so, return the test file path
+      return line.trim(); // return the trimmed line
     }
   }
-  return undefined;
+  return undefined; // return undefined if no test label is found
 }
 
 /**
