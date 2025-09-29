@@ -4,8 +4,10 @@
 
 import ttnn
 import json
-from tests.sweep_framework.framework.statuses import VectorValidity, VectorStatus
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+
+# below imports are necessary to make evals resolvable
+from tests.sweep_framework.framework.statuses import VectorValidity, VectorStatus
 from ttnn._ttnn.tensor import (
     DataType,
     Layout,
