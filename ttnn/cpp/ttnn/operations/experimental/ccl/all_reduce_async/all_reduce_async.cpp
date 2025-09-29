@@ -160,6 +160,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     }
     // Reduce scatter + all gather
     bool change_mem_config = false;
+    // when input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops
+    // convert to interleaved in this case
     if (input_is_sharded) {
         change_mem_config = true;
     }
