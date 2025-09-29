@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,12 +7,14 @@
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <optional>
+#include <thread>
 #include <string>
 #include <tuple>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
@@ -24,7 +26,6 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
-#include <utils.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
@@ -36,6 +37,39 @@ bool wrap_ge(uint32_t a, uint32_t b) {
     // Works as long as a and b are 2^31 apart
     int32_t diff = a - b;
     return diff >= 0;
+}
+
+// Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
+// Please note that the FuncBody is going to loop until the FuncWait returns false.
+template <typename FuncBody, typename FuncWait, typename OnTimeout>
+void loop_and_wait_with_timeout(
+    const FuncBody& func_body,
+    const FuncWait& wait_condition,
+    const OnTimeout& on_timeout,
+    std::chrono::duration<float> timeout_duration) {
+    if (timeout_duration.count() > 0.0f) {
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        do {
+            func_body();
+            if (wait_condition()) {
+                // If somehow finished up the operation, we don't need to yield
+                std::this_thread::yield();
+            }
+
+            auto current_time = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
+
+            if (elapsed >= timeout_duration.count()) {
+                on_timeout();
+                break;
+            }
+        } while (wait_condition());
+    } else {
+        do {
+            func_body();
+        } while (wait_condition());
+    }
 }
 }  // namespace
 
@@ -423,7 +457,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
-    tt::utils::loop_and_wait_with_timeout(
+    loop_and_wait_with_timeout(
         wait_operation_body,
         wait_condition,
         on_timeout,

@@ -73,7 +73,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
@@ -127,7 +127,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
@@ -172,7 +172,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = 4;
-    uint32_t output_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t output_unit_size = tt::tile_size(input_cb_data_format);
     uint32_t output_page_size = tt::align(output_unit_size, 4);
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, input_cb_data_format}})
@@ -180,7 +180,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
     tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -226,7 +226,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t out_cb_index = input_cb_index;
     uint32_t num_input_units = 4;
-    uint32_t output_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t output_unit_size = tt::tile_size(input_cb_data_format);
     ;
     uint32_t output_page_size = tt::align(output_unit_size, 4);
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
@@ -235,7 +235,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
     auto all_cores = CoreRangeSet({CoreRange(test_config.master_core_coord)});
     tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
@@ -289,7 +289,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -344,7 +344,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const T
             .set_page_size(out_cb_index, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, test_config.master_core_coord, output_cb_out_config);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 

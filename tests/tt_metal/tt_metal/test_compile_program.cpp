@@ -17,7 +17,7 @@
 #include <fmt/base.h>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -28,7 +28,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/utils.hpp>
 
 #include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"

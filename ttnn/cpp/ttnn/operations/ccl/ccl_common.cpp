@@ -350,8 +350,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
     std::optional<uint32_t> receiver_device_id,
     std::optional<uint32_t> sender_device_id) {
-    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::tt_metal::hal::get_arch());
-    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::hal::get_arch());
+    auto sender_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(tt::tt_metal::hal::get_arch());
+    auto receiver_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(tt::tt_metal::hal::get_arch());
     for (uint32_t i = 0; i < topology_config.num_links; ++i) {
         bool is_clockwise_direction_edm_enabled =
             !topology_config.is_linear || topology_config.ring_index != topology_config.ring_size - 1;
@@ -952,8 +952,9 @@ std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slic
     std::size_t max_slice_size_in_tiles = max_slice_size_in_pages;
 
     // Assign slices by assuming that the input tensor is flattened into a 1D Shape
-    std::size_t optim_worker_slice_len_tiles =
-        ceil(total_num_tiles / num_workers);  // Ceil so that the remainder worker will have a smaller slice
+    const std::size_t optim_worker_slice_len_tiles =
+        (total_num_tiles + static_cast<std::size_t>(num_workers) - 1) /
+        static_cast<std::size_t>(num_workers);  // Ceil so that the remainder worker will have a smaller slice
 
     if (max_slice_size_in_tiles < optim_worker_slice_len_tiles) {  // Each worker will have a full slice
         for (uint32_t w = 0; w < num_workers; ++w) {

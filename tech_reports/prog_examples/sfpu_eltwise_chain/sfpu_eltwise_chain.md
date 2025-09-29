@@ -37,9 +37,11 @@ The data pipeline is:
 ### Device and Program Setup
 
 ```cpp
-IDevice* device = CreateDevice(0);
-CommandQueue& cq = device->command_queue();
-Program program = CreateProgram();
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+distributed::Program program = distributed::CreateProgram();
 ```
 
 ---
@@ -87,16 +89,18 @@ We create input and output DRAM buffers to store our data:
 
 ```cpp
 constexpr uint32_t single_tile_size = sizeof(bfloat16) * constants::TILE_HEIGHT * constants::TILE_WIDTH;
-tt_metal::InterleavedBufferConfig dram_config{
-    .device = device,
-    .size = sizeof(bfloat16) * src_vec.size(),
+tt_metal::DeviceLocalBufferConfig dram_config{
     .page_size = single_tile_size,
     .buffer_type = tt_metal::BufferType::DRAM};
+distributed::ReplicatedBufferConfig buffer_config{
+    .size = sizeof(bfloat16) * src_vec.size()};
 
-std::shared_ptr<Buffer> src_dram_buffer = CreateBuffer(dram_config);
-std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
+    distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
+    distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
-EnqueueWriteBuffer(cq, src_dram_buffer, src_vec.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec.data(), false);
 ```
 
 ---
@@ -164,11 +168,12 @@ KernelHandle compute_kernel_id = CreateKernel(
 After executing the program, we validate the results using Pearson Correlation Coefficient:
 
 ```cpp
-EnqueueProgram(cq, program, false);
-Finish(cq);
+workload.add_program(device_range, std::move(program));
+distributed::EnqueueMeshWorkload(cq, workload, false);
+distributed::Finish(cq);
 
 std::vector<bfloat16> result_vec(constants::TILE_HW, 0);
-EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
 result_vec = untilize_nfaces(result_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);
 

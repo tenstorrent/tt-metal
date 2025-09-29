@@ -26,7 +26,7 @@
 #include <vector>
 #include <tt-metalium/distributed.hpp>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -42,7 +42,6 @@
 #include "impl/dispatch/command_queue_common.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -218,7 +217,7 @@ int main(int argc, char** argv) {
         auto& cq = mesh_device->mesh_command_queue();
         auto device_id = mesh_device->get_devices()[0]->id();
 
-        auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
         tt_metal::Program program = tt_metal::CreateProgram();
 
         std::string src_mem;
@@ -339,8 +338,8 @@ int main(int argc, char** argv) {
         if (page_size_as_runtime_arg_g) {
             tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, {page_size_g});
         }
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()));
+        mesh_workload.add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
 
         CoreCoord w = mesh_device->worker_core_from_logical_core(worker_g.start_coord);
         log_info(LogTest, "Master core: {}", w.str());
@@ -494,7 +493,7 @@ int main(int argc, char** argv) {
         }
 
         if (read_profiler_results) {
-            tt_metal::detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
+            tt_metal::ReadMeshDeviceProfilerResults(*mesh_device);
         }
 
         pass &= mesh_device->close();

@@ -29,7 +29,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
@@ -898,9 +898,6 @@ void ReadDeviceProfilerResults(
                 return;
             } else if (state == ProfilerReadState::LAST_FD_READ) {
                 profiler.setLastFDReadAsDone();
-            }
-            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-                Finish(device->command_queue(cq_id));
             }
         }
 

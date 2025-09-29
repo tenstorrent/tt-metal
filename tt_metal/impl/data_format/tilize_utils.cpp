@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <ostream>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "constants.hpp"
 #include <tt_stl/span.hpp>
 

@@ -7,7 +7,6 @@
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <map>
 #include <set>
 #include <utility>
@@ -48,7 +47,7 @@ void initialize_program(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     auto& program = workload.get_programs().at(device_range);
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     uint32_t num_tiles = 2048;
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -158,7 +157,7 @@ TEST_F(MeshDeviceFixture, TensixInitializeLegalSemaphores) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::create_and_read_max_num_semaphores(devices_.at(id), workload, core_range);
     }
@@ -170,7 +169,7 @@ TEST_F(MeshDeviceFixture, TensixInitializeIllegalSemaphores) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         CoreRange core_range({0, 0}, {1, 1});
         unit_tests::initialize_semaphores::try_creating_more_than_max_num_semaphores(
             devices_.at(id), workload, core_range);
@@ -182,7 +181,7 @@ TEST_F(MeshDeviceFixture, TensixCreateMultipleSemaphoresOnSameCore) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core0(0, 0);

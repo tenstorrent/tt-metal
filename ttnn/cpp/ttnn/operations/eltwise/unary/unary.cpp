@@ -138,24 +138,10 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::EXP>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
-
-template <UnaryOpType unary_op_type>
-Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
-    const Tensor& input_tensor,
-    const bool parameter,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input_tensor,
-        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-        memory_config,
-        optional_output_tensor);
-}
-
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG10>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG2>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG1P>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG10>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG2>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG1P>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
@@ -259,7 +245,7 @@ Tensor Sigmoid_accurate::invoke(
     return detail::unary_impl(
         input,
         {UnaryWithParam(UnaryOpType::NEG),
-         UnaryWithParam(UnaryOpType::EXP),
+         UnaryWithParam(UnaryOpType::EXP, 1.0f),
          UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
          UnaryWithParam(UnaryOpType::RECIP)},
         memory_config,
