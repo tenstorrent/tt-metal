@@ -157,6 +157,30 @@ class Module:
         for name, parameter in self.named_parameters():
             parameter.load(f"{path_prefix}{name}.tensorbin")
 
+    def to_cached_state_dict(self, path_prefix: str) -> dict[str, str]:
+        cache_dict = {}
+
+        for name, child in self.named_children():
+            child_cache_dict = child.to_cached_state_dict(f"{path_prefix}{name}.")
+            cache_dict.update({f"{name}.{k}": v for k, v in child_cache_dict.items()})
+
+        for name, parameter in self.named_parameters():
+            cache_dict[name] = path = f"{path_prefix}{name}.tensorbin"
+            parameter.save(path)
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict: Mapping[str, str]) -> None:
+        def substate(state: Mapping[str, str], key: str) -> dict[str, str]:
+            prefix = f"{key}."
+            return {k.removeprefix(prefix): v for k, v in state.items() if k.startswith(prefix)}
+
+        for name, child in self.named_children():
+            child.from_cached_state_dict(substate(cache_dict, name))
+
+        for name, parameter in self.named_parameters():
+            parameter.load(cache_dict[name])
+
     @abstractmethod
     def forward(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         pass
