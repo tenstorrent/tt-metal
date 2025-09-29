@@ -6,7 +6,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -141,6 +141,11 @@ void MAIN {
             tile_regs_wait();
 
             // Pack output directly to row-major format (no tiling needed for grid sample)
+            if (n == 0 || n == 1) {
+                dprint_tensix_dest_reg(0);
+                dprint_tensix_dest_reg(1);
+            }
+
             if (last_c_block) {
                 pack_untilize_dest<partial_iter_output_tiles>(
                     out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
