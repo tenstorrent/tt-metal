@@ -148,6 +148,8 @@ def get_ln_block_sharded_config(height_dim, hidden_dim):
         block_h=num_tiles_per_core_h,
         block_w=num_tiles_per_core_w,
         inplace=True,
+        legacy_reduction=True,
+        legacy_rsqrt=True,
     )
 
     return ln_block_sharded_mem_config, ln_block_sharded_prog_config, ln_block_sharded_compute_kernel_config
