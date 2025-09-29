@@ -101,23 +101,21 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto target_device_coord = mesh_coord;
-
     std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
         input_tensors[0],
-        target_device_coord,
+        mesh_coord,
         1,
         this->reduce_scatter_minimal_async_struct.topology,
         this->reduce_scatter_minimal_async_struct.cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
         input_tensors[0],
-        target_device_coord,
+        mesh_coord,
         -1,
         this->reduce_scatter_minimal_async_struct.topology,
         this->reduce_scatter_minimal_async_struct.cluster_axis);
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
-        input_tensors[0], target_device_coord, this->reduce_scatter_minimal_async_struct.cluster_axis);
+        input_tensors[0], mesh_coord, this->reduce_scatter_minimal_async_struct.cluster_axis);
 
     // Return the MatmulReduceScatterAsync program with callbacks
     return matmul_reduce_scatter_async_multi_core_with_workers(
@@ -128,7 +126,7 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         output_tensors[0],  // matmul_output_tensor
 
         /* Reduce Scatter Params */
-        target_device_coord,
+        mesh_coord,
         forward_coord,
         backward_coord,
         this->reduce_scatter_minimal_async_struct.dim,

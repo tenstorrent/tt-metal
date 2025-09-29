@@ -48,9 +48,9 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& buffer_tensor,
-    MeshCoordinate& target_device_coord,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
+    const MeshCoordinate& target_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     DataType output_dtype,
     const uint32_t num_links,

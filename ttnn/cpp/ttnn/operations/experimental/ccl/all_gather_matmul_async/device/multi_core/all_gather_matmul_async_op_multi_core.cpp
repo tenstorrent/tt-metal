@@ -40,9 +40,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
 
     /* All Gather Params */
     IDevice* target_device,
-    MeshCoordinate& target_device_coord,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
+    const MeshCoordinate& target_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,

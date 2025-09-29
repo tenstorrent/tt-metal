@@ -224,7 +224,6 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks ReduceScatterMinimalAsync::cr
 tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at {} is called", coord);
-    const auto& target_device_coord = coord;
     uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensors[0], this->cluster_axis);
 
     log_debug(tt::LogOp, "Getting forward neighbor for {}", coord);
@@ -243,7 +242,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
     return reduce_scatter_minimal_async(
         input_tensors[0],
         output_tensors[0],
-        target_device_coord,
+        coord,
         forward_coord,
         backward_coord,
         output_tensors[1],

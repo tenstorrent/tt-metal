@@ -92,18 +92,14 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: all_reduce_async create_program at physical coordinate {} is called", coord);
-    auto target_device_coord = coord;
 
-    auto tensor_topology = input_tensors[0].tensor_topology();
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(input_tensors[0], coord, this->cluster_axis);
 
-    uint32_t device_index =
-        ccl::get_linearized_index_from_physical_coord(input_tensors[0], target_device_coord, this->cluster_axis);
+    std::optional<MeshCoordinate> forward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, 1, this->topology, this->cluster_axis);
 
-    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
-        input_tensors[0], target_device_coord, 1, this->topology, this->cluster_axis);
-
-    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
-        input_tensors[0], target_device_coord, -1, this->topology, this->cluster_axis);
+    std::optional<MeshCoordinate> backward_coord =
+        ccl::get_physical_neighbor_from_physical_coord(input_tensors[0], coord, -1, this->topology, this->cluster_axis);
 
     auto input_tensor_shape = input_tensors[0].padded_shape();
 
@@ -130,7 +126,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],
-        target_device_coord,
+        coord,
         forward_coord,
         backward_coord,
         output_tensors[0],
