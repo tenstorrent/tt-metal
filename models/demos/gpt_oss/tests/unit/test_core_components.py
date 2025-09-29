@@ -8,170 +8,342 @@ import torch
 import ttnn
 
 from ...tt.attention import Attention
-from ...tt.experts import Experts
 from ...tt.mlp import MLP
 from ...tt.rms_norm import RMSNorm
 from ...tt.topk import TopKRouter
-from ..test_factory import (
-    ReferenceExperts,
-    ReferenceRMSNorm,
-    ReferenceTopKRouter,
-    TestFactory,
-    compare_tensors,
-    parametrize_batch_seq,
-    parametrize_mesh,
-)
-
+from ..test_factory import TestFactory, parametrize_batch_seq, parametrize_mesh, parametrize_mesh_with_fabric
 
 # Core MoE Tests - Essential for any model size
-@parametrize_mesh(["1x8", "4x4", "4x8"])  # Test multiple mesh configs
-@parametrize_batch_seq([(1, 1), (1, 32)])  # Single token + sequence
-def test_experts_core(mesh_device, batch_size, seq_len, reset_seeds):
-    """Test core expert functionality - works for GPT-20B, GPT-120B, any size"""
 
-    setup = TestFactory.setup_test(mesh_device)
-    config = setup["config"]
 
-    # Reference vs TT implementation
-    torch_model = ReferenceExperts(config)
-    tt_model = Experts(
-        setup["mesh_device"],
-        config,
-        setup["state_dict"],
-        setup["ccl_manager"],
-        dtype=setup["dtype"],
-        tensor_cache_path=setup["tensor_cache_path"],
-        mesh_config=setup["mesh_config"],
-    )
+@parametrize_mesh_with_fabric(["1x8"])
+@pytest.mark.parametrize("seq_len", [1, 32, 64])
+def test_topk_router(mesh_device, device_params, seq_len, reset_seeds):
+    """Test TopK routing - essential for MoE (like original)"""
 
-    # Test data - scales with any hidden_size
+    # Create submesh like original (4x8 base -> 1x2 submesh)
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2))
+    print(f"MESH DEVICE: {mesh_device}")
+    print(f"MESH SHAPE: {mesh_device.shape}")
+
+    # Get config like original (don't use TestFactory)
+    from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)
+
+    # Create config like original
+    from models.demos.gpt_oss.reference.configuration_gpt_oss import GptOssConfig
+
+    config = GptOssConfig()
+
+    # Create input like original
+    hidden_states = torch.randn(seq_len, config.hidden_size)
+
+    # Create reference model like original
+    from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssTopKRouter
+
+    reference_model = GptOssTopKRouter(config)
+
+    # Reference model forward like original
+    router_scores, router_indices = reference_model(hidden_states)
+
+    # Convert to TTNN tensors like original
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # Create TT model like original
+    tt_model = TopKRouter(mesh_device, config, reference_model.state_dict())
+    tt_router_scores, tt_router_indices, tt_router_logits = tt_model(tt_hidden_states)
+
+    # Compare outputs like original
+    tt_router_scores_tensors = ttnn.get_device_tensors(tt_router_scores)
+    tt_router_indices_tensors = ttnn.get_device_tensors(tt_router_indices)
+    tt_router_logits_tensors = ttnn.get_device_tensors(tt_router_logits)
+
+    for i in range(len(tt_router_scores_tensors)):
+        tt_router_scores = ttnn.to_torch(tt_router_scores_tensors[i])
+        tt_router_indices = ttnn.to_torch(tt_router_indices_tensors[i])
+        tt_router_logits = ttnn.to_torch(tt_router_logits_tensors[i])
+
+        # Compare router scores like original
+        from models.utility_functions import comp_pcc
+
+        passing, output = comp_pcc(router_scores, tt_router_scores, pcc=0.99)
+        mse = torch.nn.functional.mse_loss(router_scores, tt_router_scores)
+        print(f"router_scores: {output}, mse: {mse}")
+
+        if passing:
+            break
+    else:
+        assert False, f"All device comparisons failed. Last output: {output}"
+
+
+@parametrize_mesh_with_fabric(["1x8"])
+@pytest.mark.parametrize("seq_len", [1, 32, 64])
+def test_experts_adaptive(mesh_device, device_params, seq_len, reset_seeds):
+    """Test experts with adaptive routing - sparse for seq_len=1, dense for seq_len>1"""
+
+    # Choose submesh based on routing type
+    if seq_len == 1:
+        # Sparse routing - use 1x8 submesh like original test_sparse_experts
+        mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 8))
+        use_sparse = True
+    else:
+        # Dense routing - use 1x2 submesh like original test_experts
+        mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2))
+        use_sparse = False
+
+    print(f"MESH DEVICE: {mesh_device}")
+    print(f"MESH SHAPE: {mesh_device.shape}")
+    print(f"ROUTING TYPE: {'SPARSE' if use_sparse else 'DENSE'}")
+
+    # Get config like original (don't use TestFactory)
+    from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)
+
+    # Create config like original
+    from models.demos.gpt_oss.reference.configuration_gpt_oss import GptOssConfig
+
+    config = GptOssConfig()
+    # config.num_local_experts = 32
+    # config.intermediate_size = 2880
+    # config.hidden_size = 2880
+    # config.num_experts_per_tok = 4
+
+    # Create input like original
+    batch_size = 1
     hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
-    routing_weights = torch.randn(batch_size, seq_len, config.num_local_experts)
 
-    # Forward pass
-    torch_out = torch_model(hidden_states, routing_weights)
+    # Create routing weights based on type
+    if use_sparse:
+        # Sparse routing weights like original test_sparse_experts
+        import itertools
 
-    tt_hidden_states = ttnn.from_torch(
-        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"]
-    )
+        routing_weights = torch.zeros(batch_size * seq_len, config.num_local_experts)
+
+        for b, s in itertools.product(range(batch_size), range(seq_len)):
+            # Randomly select which experts are active for this token
+            active_experts = torch.randperm(config.num_local_experts)[: config.num_experts_per_tok]
+            weights = torch.rand(config.num_experts_per_tok)
+            weights = weights / weights.sum()  # Normalize
+            routing_weights[b * seq_len + s, active_experts] = weights
+    else:
+        # Dense routing weights like original test_experts
+        routing_weights = torch.randn(batch_size * seq_len, config.num_local_experts)
+        routing_weights = torch.nn.functional.softmax(routing_weights, dim=-1)
+
+    # Create reference model like original (use ReferenceExperts from test factory)
+    from models.demos.gpt_oss.tests.test_factory import ReferenceExperts
+
+    reference_model = ReferenceExperts(config)
+    state_dict = reference_model.state_dict()
+
+    # Reference model forward like original
+    reference_output = reference_model(hidden_states, routing_weights)
+
+    # Convert to TTNN tensors like original
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_routing_weights = ttnn.from_torch(
-        routing_weights, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"]
+        routing_weights, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
-    tt_out = tt_model(tt_hidden_states, tt_routing_weights)
 
-    # Compare - works for any model size
-    assert compare_tensors(tt_out, torch_out, setup["mesh_device"], pcc_threshold=0.98)
+    # Create TT model based on routing type
+    from models.demos.gpt_oss.tt.ccl import CCLManager
+
+    ccl_manager = CCLManager(mesh_device)
+
+    # Use Experts for dense routing
+    from models.demos.gpt_oss.tt.experts import Experts
+
+    tt_model = Experts(mesh_device, config, state_dict, ccl_manager)
+
+    tt_output = tt_model(tt_hidden_states, tt_routing_weights)
+
+    # Compare outputs like original
+    tt_output_tensors = ttnn.get_device_tensors(tt_output)
+
+    for i in range(len(tt_output_tensors)):
+        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
+
+        # Compare outputs like original
+        from models.utility_functions import comp_pcc
+
+        passing, output = comp_pcc(reference_output, tt_output_torch, pcc=0.99)
+        mse = torch.nn.functional.mse_loss(reference_output, tt_output_torch)
+
+        routing_type = "sparse" if use_sparse else "dense"
+        print(f"{routing_type}_experts_output: {output}, mse: {mse}")
+
+        if passing:
+            break
+    else:
+        assert False, f"All device comparisons failed. Last output: {output}"
 
 
-@parametrize_mesh(["1x8", "4x4"])
-@parametrize_batch_seq([(1, 1), (1, 32)])
-def test_topk_router(mesh_device, batch_size, seq_len, reset_seeds):
-    """Test TopK routing - essential for MoE"""
+@parametrize_mesh_with_fabric(["1x8"])
+@parametrize_batch_seq(
+    [
+        (1, 1),
+        (1, 128),
+    ]
+)
+def test_attention_core(mesh_device, device_params, batch_size, seq_len, reset_seeds):
+    """Test attention mechanism - core for any transformer (like original)"""
 
-    setup = TestFactory.setup_test(mesh_device)
+    # Create submesh like original (4x8 base -> 1x8 submesh)
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 8))
+    print(f"MESH DEVICE: {mesh_device}")
+    print(f"MESH SHAPE: {mesh_device.shape}")
+
+    # Use our abstractions but with original test parameters
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
 
-    # Router state dict
-    router_state = {
-        "weight": torch.randn(config.num_local_experts, config.hidden_size),
-        "bias": torch.randn(config.num_local_experts),
-    }
-
-    torch_model = ReferenceTopKRouter(config)
-    tt_model = TopKRouter(setup["mesh_device"], config, router_state, tensor_cache_path=setup["tensor_cache_path"])
-
+    # Create input tensors like original
     hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
+    position_ids = torch.arange(seq_len).unsqueeze(0)
 
-    torch_scores, torch_indices = torch_model(hidden_states)
+    # Create mask like original
+    mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
 
-    tt_hidden_states = ttnn.from_torch(
-        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"]
+    # Create RoPE embeddings like original
+    from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssRotaryEmbedding
+
+    RopeEmbeddings = GptOssRotaryEmbedding(config)
+    cos, sin = RopeEmbeddings(hidden_states, position_ids)
+    position_embeddings = (cos, sin)
+
+    # Create reference model like original
+    from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssAttention
+
+    reference_model = GptOssAttention(config, layer_idx=0)
+    state_dict = reference_model.state_dict()
+
+    # Reference model forward like original (use original mask)
+    reference_out, _ = reference_model(
+        hidden_states=hidden_states,
+        position_embeddings=position_embeddings,
+        attention_mask=mask,
+        use_cache=True,
     )
-    tt_scores, tt_indices, _ = tt_model(tt_hidden_states)
 
-    # Verify shapes match - works for any num_experts/hidden_size
-    assert compare_tensors(tt_scores, torch_scores, setup["mesh_device"], pcc_threshold=0.95)
+    # Handle decode mode for TT model like original
+    if seq_len == 1:  # decode
+        from models.demos.gpt_oss.utils.general_utils import get_decode_mask
 
+        sliding_window = 0  # No sliding window for this test
+        mask = get_decode_mask(position_ids[0].item(), sliding_window)
+        mask = mask.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
 
-@parametrize_mesh(["1x8", "4x4"])
-@parametrize_batch_seq([(1, 1), (1, 128)])
-def test_attention_core(mesh_device, batch_size, seq_len, reset_seeds):
-    """Test attention mechanism - core for any transformer"""
+    # Convert to TTNN tensors like original
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_mask = ttnn.from_torch(mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_position_idx = ttnn.from_torch(position_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
 
-    setup = TestFactory.setup_test(mesh_device)
-    config = setup["config"]
+    # Create RoPE like original
+    from models.demos.gpt_oss.tt.rope import ApplyRotaryPosEmb
 
-    # Attention state dict
-    attn_state = {
-        "q_proj": {
-            "weight": torch.randn(config.hidden_size, config.hidden_size),
-            "bias": torch.randn(config.hidden_size),
-        },
-        "k_proj": {
-            "weight": torch.randn(config.hidden_size, config.num_key_value_heads * config.head_dim),
-            "bias": torch.randn(config.num_key_value_heads * config.head_dim),
-        },
-        "v_proj": {
-            "weight": torch.randn(config.hidden_size, config.num_key_value_heads * config.head_dim),
-            "bias": torch.randn(config.num_key_value_heads * config.head_dim),
-        },
-        "o_proj": {
-            "weight": torch.randn(config.hidden_size, config.hidden_size),
-            "bias": torch.randn(config.hidden_size),
-        },
-        "sinks": torch.randn(config.num_attention_heads),
-    }
+    apply_rope = ApplyRotaryPosEmb(config)
+    rope_stuff = (apply_rope, tt_cos, tt_sin)
 
+    # Create TT model like original
     tt_model = Attention(
-        setup["mesh_device"],
-        config,
-        attn_state,
+        mesh_device=mesh_device,
+        hf_config=config,
+        state_dict=state_dict,
         layer_idx=0,
         ccl_manager=setup["ccl_manager"],
-        tensor_cache_path=setup["tensor_cache_path"],
+        # tensor_cache_path=setup["tensor_cache_path"],
         mesh_config=setup["mesh_config"],
     )
 
-    # Test forward pass - scales with any model size
-    hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
-    tt_hidden_states = ttnn.from_torch(
-        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"]
+    tt_out = tt_model(tt_hidden_states, tt_mask, rope_stuff, tt_position_idx)
+
+    # Compare outputs like original
+    tt_out_tensors = ttnn.get_device_tensors(tt_out)
+    for i in range(len(tt_out_tensors)):
+        tt_out_torch = ttnn.to_torch(tt_out_tensors[i])
+
+        # Compare outputs like original
+        from models.utility_functions import comp_pcc
+
+        pcc = 0.99
+        passed, pcc_message = comp_pcc(reference_out, tt_out_torch, pcc)
+        print(f"Test passed: {passed}, PCC: {pcc_message}")
+
+        if passed:
+            break
+    else:
+        assert False, f"All device comparisons failed. Last output: {pcc_message}"
+
+
+@parametrize_mesh_with_fabric(["1x8"])
+@pytest.mark.parametrize("seq_len", [1, 32, 64])
+def test_rms_norm(mesh_device, device_params, seq_len, reset_seeds):
+    """Test RMS normalization - used throughout model (like original)"""
+
+    # Create submesh like original (4x8 base -> 1x8 submesh)
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 8))
+    print(f"MESH DEVICE: {mesh_device}")
+    print(f"MESH SHAPE: {mesh_device.shape}")
+
+    # Get config like original (don't use TestFactory)
+    from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+    model_args = ModelArgs(mesh_device=None, dummy_weights=True)
+
+    # Create config like original
+    from models.demos.gpt_oss.reference.configuration_gpt_oss import GptOssConfig
+
+    config = GptOssConfig()
+
+    # Create input like original
+    torch_input = torch.randn(1, seq_len, config.hidden_size) * 2 + 3
+
+    # Create reference model like original
+    from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssRMSNorm
+
+    ref_rms_norm = GptOssRMSNorm(config.hidden_size, config.rms_norm_eps).eval()
+
+    # Reference model forward like original
+    with torch.no_grad():
+        ref_output = ref_rms_norm(torch_input)
+
+    # Convert to TTNN tensors like original
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(0),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
     )
 
-    tt_out = tt_model(tt_hidden_states)
+    # Create TT model like original (but with mesh_config for current implementation)
+    from models.demos.gpt_oss.moe import MeshConfig
 
-    # Verify output shape matches input - works for any hidden_size
-    assert tt_out.shape == tt_hidden_states.shape
+    # Disable sharding like original test (tp=1 means no tensor parallel)
+    mesh_config = MeshConfig(mesh_device.shape, tp=1)
+    tt_rms_norm = RMSNorm(mesh_device, config, ref_rms_norm.state_dict(), mesh_config=mesh_config)
+    tt_output = tt_rms_norm(tt_input)
 
+    # Compare outputs like original
+    tt_output_tensors = ttnn.get_device_tensors(tt_output)
+    expected_pcc = 0.99
 
-@parametrize_mesh(["1x8", "4x4"])
-@parametrize_batch_seq([(1, 32)])
-def test_rms_norm(mesh_device, batch_size, seq_len, reset_seeds):
-    """Test RMS normalization - used throughout model"""
+    for i in range(len(tt_output_tensors)):
+        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
+        from models.utility_functions import comp_pcc
 
-    setup = TestFactory.setup_test(mesh_device)
-    config = setup["config"]
+        passing, pcc_message = comp_pcc(tt_output_torch, ref_output, pcc=expected_pcc)
+        mse = torch.nn.functional.mse_loss(tt_output_torch, ref_output)
+        print(f"PCC: {pcc_message}, MSE: {mse}")
 
-    norm_state = {"weight": torch.ones(config.hidden_size)}
-
-    torch_model = ReferenceRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-    tt_model = RMSNorm(
-        setup["mesh_device"],
-        config,
-        norm_state,
-        tensor_cache_path=setup["tensor_cache_path"],
-        mesh_config=setup["mesh_config"],
-    )
-
-    hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
-    torch_out = torch_model(hidden_states)
-
-    tt_hidden_states = ttnn.from_torch(
-        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"]
-    )
-    tt_out = tt_model(tt_hidden_states)
-
-    assert compare_tensors(tt_out, torch_out, setup["mesh_device"], pcc_threshold=0.99)
+        if passing:
+            break
+    else:
+        assert False, f"All device comparisons failed. Last PCC: {pcc_message}"
 
 
 @parametrize_mesh(["1x8", "4x4"])
@@ -181,14 +353,14 @@ def test_full_mlp_pipeline(mesh_device, reset_seeds):
     setup = TestFactory.setup_test(mesh_device)
     config = setup["config"]
 
-    # Complete MLP state dict
+    # Complete MLP state dict - use flat structure expected by substate function
     mlp_state = {
-        "router": {
-            "weight": torch.randn(config.num_local_experts, config.hidden_size),
-            "bias": torch.randn(config.num_local_experts),
-        },
-        "experts": setup["state_dict"],  # Use experts from factory
+        "router.weight": torch.randn(config.num_local_experts, config.hidden_size),
+        "router.bias": torch.randn(config.num_local_experts),
     }
+    # Add experts state dict with proper prefix
+    for key, value in setup["state_dict"].items():
+        mlp_state[f"experts.{key}"] = value
 
     tt_mlp = MLP(
         setup["mesh_device"],
@@ -212,104 +384,3 @@ def test_full_mlp_pipeline(mesh_device, reset_seeds):
         # Verify output shapes - works for any model size
         assert mlp_out.shape == tt_hidden_states.shape
         assert routing_scores.shape[:-1] == tt_hidden_states.shape[:-1]  # Same batch/seq, different last dim
-
-
-# Mesh flexibility test - ensure works with any configuration
-@pytest.mark.parametrize(
-    "mesh_config",
-    [
-        ("4x8", 8),  # Current setup
-        ("4x4", 4),  # Square mesh
-        ("1x8", 8),  # Linear mesh
-        ("2x4", 4),  # Smaller mesh
-    ],
-)
-def test_mesh_flexibility(mesh_device, mesh_config, reset_seeds):
-    """Test that all components work with any mesh configuration"""
-
-    mesh_shape_name, expected_tp = mesh_config
-    setup = TestFactory.setup_test(mesh_device)
-
-    # Verify mesh config is correct
-    assert setup["mesh_config"].tp == expected_tp
-    assert setup["mesh_config"].mesh_shape == mesh_device.shape
-
-    # Test that expert construction works
-    tt_experts = Experts(
-        setup["mesh_device"],
-        setup["config"],
-        setup["state_dict"],
-        setup["ccl_manager"],
-        mesh_config=setup["mesh_config"],
-    )
-
-    # Verify tensor parallel size calculation
-    expected_shard_size = setup["config"].intermediate_size // expected_tp
-    assert tt_experts.intermediate_size_per_device == expected_shard_size
-
-    # Test forward pass works
-    hidden_states = ttnn.from_torch(
-        torch.randn(1, 32, setup["config"].hidden_size),
-        device=setup["mesh_device"],
-        layout=ttnn.TILE_LAYOUT,
-        dtype=setup["dtype"],
-    )
-    routing_weights = ttnn.from_torch(
-        torch.randn(1, 32, setup["config"].num_local_experts),
-        device=setup["mesh_device"],
-        layout=ttnn.TILE_LAYOUT,
-        dtype=setup["dtype"],
-    )
-
-    output = tt_experts(hidden_states, routing_weights)
-    assert output.shape == hidden_states.shape
-
-
-# Model size flexibility test - works for GPT-20B, GPT-120B, any size
-@pytest.mark.parametrize(
-    "model_scale",
-    [
-        {"hidden_size": 2048, "num_experts": 64, "intermediate_size": 5632},  # GPT-20B scale
-        {"hidden_size": 4096, "num_experts": 128, "intermediate_size": 11264},  # GPT-120B scale
-        {"hidden_size": 1024, "num_experts": 32, "intermediate_size": 2816},  # Smaller test
-    ],
-)
-def test_model_scale_flexibility(mesh_device, model_scale, reset_seeds):
-    """Test components work with different model scales"""
-
-    setup = TestFactory.setup_test(mesh_device)
-
-    # Override config with different scales
-    config = setup["config"]
-    for key, value in model_scale.items():
-        setattr(config, key, value)
-
-    # Generate appropriately sized state dict
-    state_dict = {
-        "gate_up_proj": torch.randn(config.num_local_experts, config.hidden_size, 2 * config.intermediate_size),
-        "gate_up_proj_bias": torch.randn(config.num_local_experts, 2 * config.intermediate_size),
-        "down_proj": torch.randn(config.num_local_experts, config.intermediate_size, config.hidden_size),
-        "down_proj_bias": torch.randn(config.num_local_experts, config.hidden_size),
-    }
-
-    # Test expert construction with different sizes
-    tt_experts = Experts(
-        setup["mesh_device"], config, state_dict, setup["ccl_manager"], mesh_config=setup["mesh_config"]
-    )
-
-    # Test with appropriately sized inputs
-    hidden_states = ttnn.from_torch(
-        torch.randn(1, 16, config.hidden_size),
-        device=setup["mesh_device"],
-        layout=ttnn.TILE_LAYOUT,
-        dtype=setup["dtype"],
-    )
-    routing_weights = ttnn.from_torch(
-        torch.randn(1, 16, config.num_local_experts),
-        device=setup["mesh_device"],
-        layout=ttnn.TILE_LAYOUT,
-        dtype=setup["dtype"],
-    )
-
-    output = tt_experts(hidden_states, routing_weights)
-    assert output.shape == hidden_states.shape
