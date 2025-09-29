@@ -9,7 +9,6 @@ from PIL import Image
 from transformers import CLIPTokenizer, CLIPModel
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
-from typing import Union, List
 
 
 def convert_from_ttnn(x):
@@ -63,98 +62,12 @@ def convert_ttnn_dtype(ttnn_tensor, dtype, new_shape=None):
     return ttnn.to_device(host_tensor, device=device)
 
 
-def calculate_pcc(tensor, reference_tensor):
-    if tensor.dtype == torch.bfloat16:
-        tensor = tensor.to(torch.float32)
-    if reference_tensor.dtype == torch.bfloat16:
-        reference_tensor = reference_tensor.to(torch.float32)
-    np_calculated = tensor.detach().flatten().numpy()
-    np_golden = reference_tensor.detach().flatten().numpy()
-    pcc = np.corrcoef(np_calculated, np_golden)[0, 1]
-    return pcc
-
-
-def assert_with_pcc(torch_tensor, reference_tensor, pcc_threshold=0.99):
-    pcc = calculate_pcc(torch_tensor, reference_tensor)
-    assert pcc > pcc_threshold, f"PCC is below threshold: {pcc} < {pcc_threshold}"
-
-    return pcc
-
-
-class LogAccuracy:
-    def __init__(self, output_file):
-        self.output_file = output_file
-
-        self.write_header()
-
-        self.cnt = 0
-
-    def write_header(self):
-        self.output_file.write(
-            f"id,step_name,pcc,ulp_error,relative_difference_between_means,relative_difference_between_std\n"
-        )
-
-    def log(self, golden_tensor, calculated_tensor, step_name):
-        pcc = calculate_pcc(calculated_tensor, golden_tensor)
-
-        # ULP Error (Mean)
-        ulp_error = 0.0  # TODO
-
-        # Relative Difference between Means
-        relative_difference_mean = torch.abs(calculated_tensor.mean() - golden_tensor.mean()) / torch.abs(
-            golden_tensor.mean()
-        )
-
-        # Relative Difference between Standard Deviations
-        relative_difference_std = torch.abs(calculated_tensor.std() - golden_tensor.std()) / torch.abs(
-            golden_tensor.std()
-        )
-        self.output_file.write(
-            f"{self.cnt},{step_name},{pcc},{ulp_error},{relative_difference_mean},{relative_difference_std}\n"
-        )
-        self.cnt += 1
-
-
-def compare_with_reference(tensor, reference_tensor_file, checkpoint_name=None, accuracy_logger=None):
-    assert tensor is not None
-    if isinstance(tensor, ttnn.Tensor):
-        tensor = ttnn.to_torch(tensor)
-
-    with torch.no_grad():
-        try:
-            reference_tensor = torch.load(reference_tensor_file)
-        except FileNotFoundError:
-            print(f"⚠️ {checkpoint_name}: Reference tensor not found at {reference_tensor_file}, skipping test")
-            return
-
-    if tensor.shape != reference_tensor.shape:
-        raise ValueError(f"tensor.shape: {tensor.shape}, reference_tensor.shape: {reference_tensor.shape}")
-    assert tensor.shape == reference_tensor.shape
-
-    if accuracy_logger is not None:
-        accuracy_logger.log(reference_tensor, tensor, checkpoint_name)
-
-    # pcc_threshold = 0.8
-    pcc_threshold = 0.85
-    pcc = calculate_pcc(tensor, reference_tensor)
-
-    # pcc = assert_with_pcc(tensor, reference_tensor)
-
-    if checkpoint_name is not None:
-        if pcc < pcc_threshold:
-            print(f"❌  {checkpoint_name} failed - PCC = {pcc}")
-        else:
-            print(f"✅  {checkpoint_name} passed - PCC = {pcc}")
-
-
 class Transformer:
-    def __init__(self, state_dict, heads, attention_mask=None, prefix="", accuracy_logger=None):
+    def __init__(self, state_dict, heads, attention_mask=None, prefix=""):
         self.layers = []
         self.heads = heads
         self.attention_mask = attention_mask
         self.prefix = prefix
-
-        self.accuracy_logger = accuracy_logger
 
         layer_pattern = re.compile(f"{prefix}\.layers\.(\d+)\.")
 
@@ -217,7 +130,6 @@ class Transformer:
 
     def forward(self, x):
         def mlp(x, layer):
-            # print(f"x.shape: {x.shape}, laywer['mlp_c_fc_weight'].shape: {layer['mlp_c_fc_weight'].shape}, layer['mlp_c_fc_bias'].shape: {layer['mlp_c_fc_bias'].shape}")
             x = ttnn.linear(x, layer["mlp_c_fc_weight"], bias=layer["mlp_c_fc_bias"], transpose_b=True)
             x = ttnn.gelu(x)
             x = ttnn.linear(x, layer["mlp_c_proj_weight"], bias=layer["mlp_c_proj_bias"], transpose_b=True)
@@ -335,10 +247,9 @@ class Transformer:
 
 
 class VisionTransformer:
-    def __init__(self, state_dict, prefix="", accuracy_logger=None):
+    def __init__(self, state_dict):
         torch.manual_seed(0)
         self.output_dim = 0
-        self.accuracy_logger = accuracy_logger
 
         conv2_state_dict_name = "vision_model.embeddings.patch_embedding.weight"
         self.vision_width = state_dict[conv2_state_dict_name].shape[0]
@@ -351,8 +262,6 @@ class VisionTransformer:
         self.positional_embedding = convert_ttnn_dtype(
             state_dict["vision_model.embeddings.position_embedding.weight"], dtype=ttnn.bfloat16
         )  # TODO: What's this ?
-
-        scale = self.vision_width**-0.5
 
         self.proj = convert_ttnn_dtype(state_dict["visual_projection.weight"], dtype=ttnn.bfloat16)
 
@@ -379,11 +288,7 @@ class VisionTransformer:
         self.ln_post_bias = state_dict["vision_model.post_layernorm.bias"]  # TODO: What's this ?
 
         self.transformer = Transformer(
-            state_dict,
-            self.vision_heads,
-            attention_mask=None,
-            prefix="vision_model.encoder",
-            accuracy_logger=self.accuracy_logger,
+            state_dict, self.vision_heads, attention_mask=None, prefix="vision_model.encoder"
         )
 
     def forward(self, x):
@@ -449,14 +354,7 @@ class VisionTransformer:
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         host_tensor = ttnn.to_torch(x, dtype=torch.float32)
 
-        assert host_tensor.shape == (1, 1, batch_size * output_height * output_width, out_channels)
         host_tensor = torch.reshape(host_tensor, (batch_size, output_height, output_width, out_channels))
-
-        assert host_tensor.shape == (batch_size, output_height, output_width, out_channels)
-        x_reshaped = torch.permute(host_tensor, [0, 3, 1, 2])  # (N, H, W, C_in) -> (N, C_in, H, W)
-        assert x_reshaped.shape == (batch_size, out_channels, output_height, output_width)
-
-        compare_with_reference(x_reshaped, "visual.conv1(x).pt", "conv1", accuracy_logger=self.accuracy_logger)
 
         x = ttnn.reshape(x, (x.shape[0], x.shape[1] * x.shape[2], x.shape[3]))
 
@@ -474,15 +372,6 @@ class VisionTransformer:
         # For now, move data to DRAM
         x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        print(f"x.shape: {x.shape}, class_embedding.shape: {class_embedding.shape}")
-        # print(f"padded shape = {ttnn.pad_to_tile_shape(x.shape)}")
-
-        # core_grid = ttnn.device.get_device_core_grid(device)
-        # padded_shape = ttnn.pad_to_tile_shape(x.shape)
-        # print(f"padded shape = {padded_shape}")
-        # memory_config = ttnn.create_sharded_memory_config(padded_shape, core_grid=core_grid, strategy=ttnn.ShardStrategy.WIDTH)
-        # x = ttnn.reshard(x, memory_config)
-
         class_embedding = ttnn.reshape(
             class_embedding, (class_embedding.shape[0], class_embedding.shape[1], class_embedding.shape[2])
         )
@@ -491,10 +380,6 @@ class VisionTransformer:
         # ERROR: RuntimeError: bad optional access (???)
         # TODO: Avoid move to host and keep on device
         x = ttnn.concat([class_embedding, x], dim=1, memory_config=None)  # shape = [*, grid ** 2 + 1, width]
-
-        compare_with_reference(
-            x, "visual.cat(x, class_embedding).pt", "ttnn.concat", accuracy_logger=self.accuracy_logger
-        )
 
         positional_embedding = convert_ttnn_dtype(self.positional_embedding, x.dtype, (1, x.shape[1], x.shape[2]))
         x = x + positional_embedding
@@ -505,16 +390,8 @@ class VisionTransformer:
         # Permute
         x = ttnn.permute(x, (1, 0, 2))  # NLD -> LND
 
-        compare_with_reference(
-            x, "visual.pre_layer_norm(x).pt", "ttnn.layer_norm", accuracy_logger=self.accuracy_logger
-        )
-
         # Transformer
         x = self.transformer.forward(x)
-
-        compare_with_reference(
-            x, "visual.transformer(x).pt", "visual.transformer(x).pt", accuracy_logger=self.accuracy_logger
-        )
 
         # Permute
         x = ttnn.permute(x, (1, 0, 2))  # LND -> NLD
@@ -522,24 +399,15 @@ class VisionTransformer:
         # LayerNorm
         x = ttnn.layer_norm(x[:, 0, :], weight=self.ln_post_weights, bias=self.ln_post_bias)
 
-        compare_with_reference(x, "visual.ln_post(x).pt", "visual.ln_post(x).pt", accuracy_logger=self.accuracy_logger)
-
-        assert self.proj is not None
         if self.proj is not None:
             self.proj = ttnn.transpose(self.proj, 0, 1)
             x = ttnn.matmul(x, self.proj)
-
-        compare_with_reference(
-            x, "visual.transformer-final(x).pt", "visual.transformer-final(x).pt", accuracy_logger=self.accuracy_logger
-        )
 
         return x
 
 
 class CLIP:
-    def __init__(self, state_dict, accuracy_logger=None):
-        self.accuracy_logger = accuracy_logger
-
+    def __init__(self, state_dict):
         self.token_embedding = convert_ttnn_dtype(
             state_dict["text_model.embeddings.token_embedding.weight"], dtype=ttnn.bfloat16
         )
@@ -558,23 +426,11 @@ class CLIP:
 
         self.logit_scale = state_dict["logit_scale"].item()
 
-        self.visual = VisionTransformer(state_dict, accuracy_logger)
+        self.visual = VisionTransformer(state_dict)
 
         self.transformer = Transformer(
-            state_dict,
-            transformer_heads,
-            attention_mask=self.build_attention_mask(),
-            prefix="text_model.encoder",
-            accuracy_logger=accuracy_logger,
+            state_dict, transformer_heads, attention_mask=self.build_attention_mask(), prefix="text_model.encoder"
         )
-
-        self.initialize_parameters()
-
-    def initialize_parameters(self):
-        def init_weights(shape, std, dtype=None):
-            torch_weights = torch.empty(to_torch_shape(shape))
-            torch.nn.init.normal_(torch_weights, std=std)
-            return ttnn.from_torch(torch_weights, device=device, layout=ttnn.TILE_LAYOUT)
 
     def build_attention_mask(self):
         # lazily create causal attention mask, with full attention between the vision tokens
@@ -594,68 +450,22 @@ class CLIP:
     def encode_text(self, tokens):
         tokens = convert_ttnn_dtype(tokens, dtype=ttnn.uint32)
 
-        compare_with_reference(
-            self.token_embedding,
-            "text.token_embedding.weight.pt",
-            "text.token_embedding.weight",
-            accuracy_logger=self.accuracy_logger,
-        )
-        compare_with_reference(
-            self.positional_embedding,
-            "text.positional_embedding.pt",
-            "text.positional_embedding",
-            accuracy_logger=self.accuracy_logger,
-        )
-
         x = ttnn.embedding(tokens, weight=self.token_embedding, dtype=ttnn.bfloat16)
 
         assert x.dtype == ttnn.bfloat16
 
-        compare_with_reference(
-            x, "text.token_embedding(text).pt", "ttnn.embedding", accuracy_logger=self.accuracy_logger
-        )
-
         # Add positional embedding
         x = x + self.positional_embedding
-
-        compare_with_reference(
-            x,
-            "text.token_embedding(text)+positional_embedding.pt",
-            "ttnn.embedding",
-            accuracy_logger=self.accuracy_logger,
-        )
 
         # Permute
         x = ttnn.permute(x, (1, 0, 2))  # NLD -> LND
         x = self.transformer.forward(x)
 
-        compare_with_reference(
-            x, "text.transformer(x).pt", "text.transformer(x).pt", accuracy_logger=self.accuracy_logger
-        )
-
         # Permute back
         x = ttnn.permute(x, (1, 0, 2))  # LND -> NLD
 
-        compare_with_reference(
-            x, "text.transformer(x)+permute.pt", "text.transformer(x)+permute.pt", accuracy_logger=self.accuracy_logger
-        )
-
         # LayerNorm
         x = ttnn.layer_norm(x, weight=self.ln_final_weights, bias=self.ln_final_bias)
-
-        compare_with_reference(
-            self.ln_final_weights,
-            "text.final_layer_norm.weight.pt",
-            "text.final_layer_norm.weight",
-            accuracy_logger=self.accuracy_logger,
-        )
-        compare_with_reference(
-            self.ln_final_bias,
-            "text.final_layer_norm.bias.pt",
-            "text.final_layer_norm.bias",
-            accuracy_logger=self.accuracy_logger,
-        )
-        compare_with_reference(x, "text.ln_final(x).pt", "text.final_layer_norm", accuracy_logger=self.accuracy_logger)
 
         # TODO: Change to TTNN
         # text_projection = ttnn.transpose(self.text_projection, -2, -1)
@@ -666,56 +476,11 @@ class CLIP:
 
         torch_x = torch_x[torch.arange(torch_x.shape[0]), torch_tokens.argmax(dim=-1)] @ text_projection.t()
 
-        compare_with_reference(
-            torch_x, "text.encode_text(x).pt", "text.encode_text(x).pt", accuracy_logger=self.accuracy_logger
-        )
         return ttnn.from_torch(torch_x, device=get_device(), layout=ttnn.TILE_LAYOUT)
-
-        torch_x = torch_x[torch.arange(torch_x.shape[0]), torch_tokens.argmax(dim=-1)] @ text_projection.t()
-
-        return ttnn.from_torch(torch_x, device=get_device(), layout=ttnn.TILE_LAYOUT)
-
-        # TODO: Fix the following
-        tokens = ttnn.to_layout(tokens, layout=ttnn.ROW_MAJOR_LAYOUT)  # argmax only support row major
-
-        ttnn_arange = ttnn.arange(x.shape[0], dtype=ttnn.int32)
-        ttnn_argmax = ttnn.argmax(tokens, dim=-1)
-        ttnn_argmax = convert_ttnn_dtype(ttnn_argmax, ttnn.int32)
-
-        ttnn_argmax = ttnn.to_device(ttnn_argmax, device=get_device())
-        ttnn_arange = ttnn.to_device(ttnn_arange, device=get_device())
-
-        index_size = ttnn_arange.shape[0] + ttnn_argmax.shape[0]
-        assert len(ttnn_arange.shape) == 1
-        assert len(ttnn_argmax.shape) == 1
-
-        ttnn_arange = ttnn.reshape(ttnn_arange, (1, 1, 1, -1))
-        ttnn_argmax = ttnn.reshape(ttnn_argmax, (1, 1, 1, -1))
-
-        ttnn_index = ttnn.concat([ttnn_arange, ttnn_argmax], dim=-1)
-
-        ttnn_index = ttnn.to_layout(ttnn_index, layout=ttnn.TILE_LAYOUT)
-
-        ttnn_gather = ttnn.gather(x, dim=0, index=ttnn_index)
-
-        ttnn_index = ttnn.reshape(ttnn_index, [index_size])
-
-        x = ttnn.matmul(ttnn_gather, self.text_projection)
-
-        compare_with_reference(
-            x, "text.encode_text(x).pt", "text.encode_text(x).pt", accuracy_logger=self.accuracy_logger
-        )
-
-        return x
 
     def forward(self, image, tokens):
         text_features = self.encode_text(tokens)
         image_features = self.encode_image(image)
-
-        compare_with_reference(
-            image_features, "encode_image(image).pt", "encode_image(image).pt", accuracy_logger=self.accuracy_logger
-        )
-        # compare_with_reference(text_features, "encode_text(tokens).pt", "encode_text(tokens).pt", accuracy_logger=self.accuracy_logger)
 
         # Normalize features
         norm_image_features = ttnn.operations.moreh.norm(image_features, p=2.0, dim=1, keepdim=True)
@@ -723,13 +488,6 @@ class CLIP:
 
         image_features = ttnn.divide(image_features, norm_image_features)
         text_features = ttnn.divide(text_features, norm_text_features)
-
-        compare_with_reference(
-            image_features, "norm_image_features.pt", "norm_image_features.pt", accuracy_logger=self.accuracy_logger
-        )
-        compare_with_reference(
-            text_features, "norm_text_features.pt", "norm_text_features.pt", accuracy_logger=self.accuracy_logger
-        )
 
         # Cosine similarity as logits
         logit_scale = math.exp(self.logit_scale)
@@ -807,12 +565,11 @@ if __name__ == "__main__":
     open_ttnn()
 
     logging_file = open("logging.csv", "w")
-    accuracy_logger = LogAccuracy(logging_file)
 
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
     state_dict = convert_model_to_ttnn(model.state_dict())
 
-    clip = CLIP(state_dict, accuracy_logger)
+    clip = CLIP(state_dict)
 
     root_dir = "/localdev/nmaurice/CLIP-tt"
     image_path = os.path.join(root_dir, "CLIP.png")
