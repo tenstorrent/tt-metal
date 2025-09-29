@@ -23,8 +23,6 @@
 
 namespace ttnn {
 
-using ccl::EriscDatamoverBuilder;
-
 struct NeighborPadAsync {
     std::vector<IDevice*> devices;
     const uint32_t dim;
@@ -111,48 +109,5 @@ struct NeighborPadAsync {
 
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, IDevice* device);
-
-tt::tt_metal::operation::ProgramWithCallbacks neighbor_pad_async_minimal(
-    const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t padding_left,
-    const uint32_t padding_right,
-    const std::string& padding_mode,
-    const GlobalSemaphore& final_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    const uint32_t num_links,
-    ccl::Topology topology,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape);
-
-namespace operations {
-namespace experimental {
-namespace ccl {
-
-Tensor neighbor_pad_async(
-    const Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t padding_left,
-    const uint32_t padding_right,
-    const std::string& padding_mode,
-    const uint32_t cluster_axis,
-    const GlobalSemaphore& final_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    const MeshDevice& mesh_device,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::ccl::Topology> topology = std::nullopt,
-    const std::optional<uint32_t> secondary_cluster_axis = std::nullopt,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape = std::nullopt);
-
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
 
 }  // namespace ttnn

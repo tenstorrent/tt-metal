@@ -25,38 +25,7 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               const uint32_t padding_left,   // top
-               const uint32_t padding_right,  // bottom
-               const std::string& padding_mode,
-               const uint32_t cluster_axis,
-               const GlobalSemaphore& final_semaphore,
-               const GlobalSemaphore& barrier_semaphore,
-               const MeshDevice& mesh_device,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology,
-               const std::optional<uint32_t> secondary_cluster_axis,
-               const std::optional<std::vector<uint32_t>>& secondary_mesh_shape) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    padding_left,
-                    padding_right,
-                    padding_mode,
-                    cluster_axis,
-                    final_semaphore,
-                    barrier_semaphore,
-                    mesh_device,
-                    num_links,
-                    memory_config,
-                    topology,
-                    secondary_cluster_axis,
-                    secondary_mesh_shape);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("dim"),
             py::arg("padding_left"),
@@ -65,7 +34,6 @@ void bind_neighbor_pad_async(pybind11::module& module, const ccl_operation_t& op
             py::arg("cluster_axis"),
             py::arg("final_semaphore"),
             py::arg("barrier_semaphore"),
-            py::arg("mesh_device"),
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
@@ -82,7 +50,7 @@ void py_bind_neighbor_pad_async(pybind11::module& module) {
         ttnn::experimental::neighbor_pad_async,
         R"doc(
 
-        Performs a padding operation on multi-device :attr:`input_tensor` across all devices, where the padding values come from the neighbor device's tensor.
+        Performs a halo-padding operation on multi-device input tensor, where the padding values come from the neighbor device's tensor when available, or as specified by padding mode when no neighbor device is present.
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
