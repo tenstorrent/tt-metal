@@ -204,7 +204,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_reads_flushed(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
-    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::READS_NUM_ISSUED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -366,7 +365,6 @@ inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_sent(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -378,7 +376,6 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_sent(uint
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_posted_writes_sent(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
-    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -390,7 +387,6 @@ inline __attribute__((always_inline)) bool ncrisc_noc_posted_writes_sent(uint32_
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_flushed(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
@@ -412,7 +408,6 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_trans
 
 inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_atomics_flushed(uint32_t noc) {
     uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
-    invalidate_l1_cache();
     uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc);
     uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc);
     return (status_reg_val == (self_risc_acked + other_risc_acked));
