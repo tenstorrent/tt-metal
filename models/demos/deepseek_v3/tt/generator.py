@@ -314,7 +314,7 @@ class DeepseekGenerator:
         generations: List[List[int]] = [[] for _ in range(len(prompts))]
         for gen_idx in range(max_new_tokens):
             # Decode one step with previous next_tokens
-            logger.info(f"Generating tocken# {gen_idx}/{max_new_tokens}")
+            logger.info(f"Generating token# {gen_idx}/{max_new_tokens}")
             logits = self._decode_step(next_tokens, positions)
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:
