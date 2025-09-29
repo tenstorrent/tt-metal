@@ -6,14 +6,11 @@ from typing import Dict
 
 import pytest
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 import ttnn
 
 from ..moe import MeshConfig
 from ..reference.configuration_gpt_oss import GptOssConfig
-from ..reference.hf_utils import get_state_dict
 from ..tt.ccl import CCLManager
 from ..tt.model_config import ModelArgs
 
@@ -22,7 +19,7 @@ class TestFactory:
     """One factory to rule them all - zero duplication testing"""
 
     # Common test configurations
-    MESH_SHAPES = {"4x8": (4, 8), "1x8": (1, 8), "4x4": (4, 4), "2x4": (2, 4)}
+    MESH_SHAPES = {"4x8": (4, 8), "1x8": (1, 8), "4x4": (4, 4), "2x4": (2, 4), "1x1": (1, 1)}
 
     BATCH_SEQ_CONFIGS = [
         (1, 1),  # Single token
@@ -31,7 +28,7 @@ class TestFactory:
     ]
 
     @staticmethod
-    def setup_test(mesh_device, use_real_weights=False, dtype=ttnn.bfloat8_b):
+    def setup_test(mesh_device, use_real_weights=True, dtype=ttnn.bfloat8_b):
         """Universal test setup - replaces all the duplicated setup code"""
 
         # Use mesh_device as-is (already created by conftest.py fixture)
@@ -46,30 +43,8 @@ class TestFactory:
         # Setup CCL
         ccl_manager = CCLManager(mesh_device)
 
-        # Get config and state dict
-        if use_real_weights:
-            config = GptOssConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
-            state_dict = get_state_dict(model_args.model_path, "", dtype=torch.bfloat16)
-        else:
-            # Use dummy config for testing
-            config = GptOssConfig(
-                vocab_size=201088,
-                hidden_size=2048,
-                intermediate_size=5632,
-                num_hidden_layers=32,
-                num_attention_heads=32,
-                num_key_value_heads=32,
-                num_local_experts=128,
-                num_experts_per_tok=2,
-                rms_norm_eps=1e-6,
-                rope_theta=10000.0,
-                sliding_window=4096,
-                max_position_embeddings=131072,  # Add missing attribute
-                layer_types=["full_attention"] * 32,
-            )
-            config.head_dim = config.hidden_size // config.num_attention_heads
-            # Generate dummy state dict
-            state_dict = TestFactory._generate_dummy_state_dict(config)
+        config = GptOssConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
+        # state_dict = TestFactory._generate_dummy_state_dict(config)
 
         return {
             "mesh_device": mesh_device,
@@ -77,7 +52,7 @@ class TestFactory:
             "mesh_config": mesh_config,
             "ccl_manager": ccl_manager,
             "config": config,
-            "state_dict": state_dict,
+            # "state_dict": state_dict,
             "dtype": dtype,
             "gpt_dir": model_args.model_path,
             "tensor_cache_path": model_args.weight_cache_path(dtype),
@@ -89,6 +64,7 @@ class TestFactory:
 
         # Extract dimensions from config (works for any model size)
         num_experts = getattr(config, "num_local_experts", 128)
+        print(f"num_experts: {num_experts}")
         hidden_size = getattr(config, "hidden_size", 2048)
         intermediate_size = getattr(config, "intermediate_size", 5632)
         num_attention_heads = getattr(config, "num_attention_heads", 32)
@@ -134,86 +110,29 @@ class TestFactory:
         }
 
 
-# Universal Reference Classes (no more duplication across files!)
-class ReferenceExperts(nn.Module):
-    """Unified reference experts - replaces duplicated classes"""
-
-    def __init__(self, config):
-        super().__init__()
-        self.intermediate_size = config.intermediate_size
-        self.num_experts = config.num_local_experts
-        self.hidden_size = config.hidden_size
-        self.expert_dim = self.intermediate_size
-        self.gate_up_proj = nn.Parameter(torch.randn(self.num_experts, self.hidden_size, 2 * self.expert_dim))
-        self.gate_up_proj_bias = nn.Parameter(torch.randn(self.num_experts, 2 * self.expert_dim))
-        self.down_proj = nn.Parameter(torch.randn((self.num_experts, self.expert_dim, self.hidden_size)))
-        self.down_proj_bias = nn.Parameter(torch.randn(self.num_experts, self.hidden_size))
-        self.alpha = 1.702
-        self.limit = 7.0
-
-    def forward(self, hidden_states, routing_weights):
-        batch_size = hidden_states.shape[0]
-        hidden_states = hidden_states.reshape(-1, self.hidden_size)
-        num_experts = routing_weights.shape[1]
-
-        hidden_states = hidden_states.repeat(num_experts, 1).view(num_experts, -1, self.hidden_size)
-        gate_up = torch.bmm(hidden_states, self.gate_up_proj) + self.gate_up_proj_bias[..., None, :]
-        gate, up = gate_up[..., ::2], gate_up[..., 1::2]
-        gate = gate.clamp(max=self.limit)
-        up = up.clamp(-self.limit, self.limit)
-        glu = gate * torch.sigmoid(gate * self.alpha)
-        next_states = torch.bmm(((up + 1) * glu), self.down_proj) + self.down_proj_bias[..., None, :]
-
-        next_states = next_states.view(num_experts, batch_size, -1, self.hidden_size)
-        routing_weights = routing_weights.permute(1, 0)[..., None, None]
-        final_hidden_states = (next_states * routing_weights).sum(dim=0)
-        return final_hidden_states.view(batch_size, -1, self.hidden_size)
-
-
-class ReferenceTopKRouter(nn.Module):
-    """Unified reference router - replaces duplicated classes"""
-
-    def __init__(self, config):
-        super().__init__()
-        self.top_k = config.num_experts_per_tok
-        self.num_experts = config.num_local_experts
-        self.hidden_dim = config.hidden_size
-        self.weight = nn.Parameter(torch.randn(self.num_experts, self.hidden_dim))
-        self.bias = nn.Parameter(torch.randn(self.num_experts))
-
-    def forward(self, hidden_states):
-        batch_size, seq_len = hidden_states.shape[:2]
-        hidden_states = hidden_states.view(-1, self.hidden_dim)
-        router_logits = F.linear(hidden_states, self.weight, self.bias)
-        routing_weights, selected_experts = torch.topk(router_logits, self.top_k, dim=-1)
-        routing_weights = F.softmax(routing_weights.float(), dim=-1).to(hidden_states.dtype)
-
-        # Convert to dense format
-        final_routing_weights = torch.zeros_like(router_logits).scatter(-1, selected_experts, routing_weights)
-        return final_routing_weights.view(batch_size, seq_len, -1), selected_experts
-
-
-class ReferenceRMSNorm(nn.Module):
-    """Unified reference norm - replaces duplicated classes"""
-
-    def __init__(self, hidden_size, eps=1e-6):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.variance_epsilon = eps
-
-    def forward(self, hidden_states):
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return (self.weight * hidden_states).to(input_dtype)
+# Use real reference implementations from models.demos.gpt_oss.reference.modeling_gpt_oss
 
 
 # Universal Test Parametrization Decorators (no more copy-paste!)
 def parametrize_mesh(shapes=["1x8"]):
-    """Universal mesh parametrization"""
+    """Universal mesh parametrization with FABRIC_1D_RING"""
     mesh_params = [pytest.param(TestFactory.MESH_SHAPES[s], id=f"{s}_grid") for s in shapes]
     return pytest.mark.parametrize("mesh_device", mesh_params, indirect=True)
+
+
+def parametrize_mesh_with_fabric(shapes=["1x8"]):
+    """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
+    # Always use 4x8 base mesh like original working tests
+    mesh_params = [pytest.param((4, 8), id="4x8_base")]
+    fabric_params = [pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="fabric_1d_ring")]
+
+    # Return a single decorator that combines both parametrizations
+    def decorator(func):
+        func = pytest.mark.parametrize("mesh_device", mesh_params, indirect=True)(func)
+        func = pytest.mark.parametrize("device_params", fabric_params, indirect=True)(func)
+        return func
+
+    return decorator
 
 
 def parametrize_batch_seq(configs=None):
@@ -227,17 +146,20 @@ def parametrize_weights(use_real=False):
     return pytest.mark.parametrize("use_real_weights", [use_real], ids=["real" if use_real else "random"])
 
 
-def parametrize_fabric():
-    """Universal fabric parametrization"""
-    return pytest.mark.parametrize(
-        "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
-    )
-
-
 # Test helper functions
 def compare_tensors(tt_tensor, torch_tensor, mesh_device, pcc_threshold=0.99):
-    """Universal tensor comparison"""
+    """Universal tensor comparison - handles both TT tensors and already-converted torch tensors"""
     from models.utility_functions import comp_pcc
 
-    tt_torch = ttnn.to_torch(tt_tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device))
+    # Check if tt_tensor is already a torch tensor
+    if isinstance(tt_tensor, torch.Tensor):
+        # Already converted, use directly
+        tt_torch = tt_tensor
+    else:
+        # Convert TT tensor to torch
+        mesh_shape = mesh_device.shape
+        tt_torch = ttnn.to_torch(
+            tt_tensor, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(-2, -1))
+        )
+
     return comp_pcc(torch_tensor, tt_torch, pcc_threshold)
