@@ -958,8 +958,6 @@ void ReadMeshDeviceProfilerResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    log_info(tt::LogMetal, "ReadMeshDeviceProfilerResults {}", state);
-
     if (getDeviceProfilerState()) {
         TT_ASSERT(mesh_device.is_initialized());
 
