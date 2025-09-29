@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -37,14 +39,12 @@ def run_test_FalconCausalLM_end_to_end(
     model_config,
     num_loops,
     tt_cache_path,
-    model_location_generator,
 ):
     profiler.clear()
-    model_name = model_location_generator(model_version, model_subdir="Falcon")
 
     profiler.start("hugging_face_model_setup")
     hugging_face_reference_model = FalconForCausalLM.from_pretrained(
-        model_name, low_cpu_mem_usage=True, num_hidden_layers=num_layers
+        model_version, local_files_only=os.getenv("CI") == "true", low_cpu_mem_usage=True, num_hidden_layers=num_layers
     )
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
@@ -529,5 +529,4 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         model_config,
         1,
         tt_cache_path,
-        model_location_generator,
     )

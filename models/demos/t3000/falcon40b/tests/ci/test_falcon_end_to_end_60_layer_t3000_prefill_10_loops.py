@@ -138,5 +138,4 @@ def test_FalconCausalLM_prefill_end_to_end_t3000_ci_loops_10(
         model_config,
         num_loops,
         tt_cache_path,
-        model_location_generator,
     )

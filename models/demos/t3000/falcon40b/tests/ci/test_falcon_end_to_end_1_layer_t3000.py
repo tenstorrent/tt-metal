@@ -70,7 +70,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     request,
     data_type,
     memcfg,
-    model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
 ):
@@ -112,5 +111,4 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
         model_config,
         1,
         tt_cache_path,
-        model_location_generator,
     )
