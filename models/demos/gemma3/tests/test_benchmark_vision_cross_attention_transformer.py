@@ -21,6 +21,8 @@ NR_FORWARD_ITERATIONS = 15
 THRESHOLD_PERCENT = 0.1
 TEST_FORWARD_INFERENCE_ONLY = True
 
+DEBUG_SAVE_AND_PRINT = True
+
 
 class BenchmarkProfilerWrapper:
     def __init__(self, device):
@@ -113,8 +115,7 @@ def test_perf_gemma_vision(
         average_squared_above = sum([p**2 for p in values_above]) / len(values_above)
         measurements_summarised[key + "_threshold"] = average_squared_above ** (0.5)
 
-    DEBUG_save_and_print = True
-    if DEBUG_save_and_print:
+    if DEBUG_SAVE_AND_PRINT:
         for key, val in measurements.items():
             mean = measurements_summarised[key]
             std = (sum([(i - mean) ** 2 for i in val]) / len(val)) ** (0.5)
