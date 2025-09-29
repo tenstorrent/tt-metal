@@ -33,41 +33,41 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Define model configurations with their arch, model-group, and timeout mappings
+          # Define model configurations with their arch, model-group, timeout, and command mappings
           ALL_MODEL_CONFIGS='{
-            "falcon7b": {"model-group": "llm_javelin", "timeout": 20, "archs": ["wormhole_b0"]},
-            "mamba": {"model-group": "llm_javelin", "timeout": 20, "archs": ["wormhole_b0"]},
-            "functional_unet": {"model-group": "cnn_javelin", "timeout": 10, "archs": ["wormhole_b0", "blackhole"]},
-            "stable_diffusion": {"model-group": "cnn_javelin", "timeout": 10, "archs": ["wormhole_b0", "blackhole"]},
-            "convnet_mnist": {"model-group": "other", "timeout": 5, "archs": ["wormhole_b0"], "special_archs": {"blackhole": "other_mlperf_required"}},
-            "bert_tiny": {"model-group": "other", "timeout": 5, "archs": ["wormhole_b0"]},
-            "squeezebert": {"model-group": "other", "timeout": 5, "archs": ["wormhole_b0"]},
-            "roberta": {"model-group": "other", "timeout": 5, "archs": ["wormhole_b0"]},
-            "sentence_bert": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "resnet50": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov11": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov11m": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "bert_tiny_wormhole": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov4": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov7": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "distilbert": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "segformer": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "metal_BERT_large_11": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov8s_world": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov8s": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov6l": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "mobilenetv2": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "vgg_unet": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov9c": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "vanilla_unet": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov8x": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "swin_v2": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "swin_s": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov5x": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "vovnet": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "yolov12x": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "ufld_v2": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]},
-            "efficientnetb0": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"]}
+            "falcon7b": {"model-group": "llm_javelin", "timeout": 20, "archs": ["wormhole_b0"], "commands": "pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "mamba": {"model-group": "llm_javelin", "timeout": 20, "archs": ["wormhole_b0"], "commands": "pytest -n auto models/demos/wormhole/mamba/tests -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "functional_unet": {"model-group": "cnn_javelin", "timeout": 10, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal --timeout=480", "action": "single-card-perf-test"},
+            "stable_diffusion": {"model-group": "cnn_javelin", "timeout": 10, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/{{ARCH_PATH}}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480", "action": "docker-run"},
+            "convnet_mnist": {"model-group": "other", "timeout": 5, "archs": ["wormhole_b0"], "special_archs": {"blackhole": "other_mlperf_required"}, "commands": "pytest -n auto models/demos/convnet_mnist/tests/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "bert_tiny": {"model-group": "other", "timeout": 5, "archs": ["wormhole_b0"], "commands": "pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "squeezebert": {"model-group": "other", "timeout": 5, "archs": ["wormhole_b0"], "commands": "pytest -n auto models/demos/squeezebert/tests/test_performance.py -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "roberta": {"model-group": "other", "timeout": 5, "archs": ["wormhole_b0"], "commands": "pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "sentence_bert": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/sentence_bert/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "resnet50": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/{{ARCH_PATH}}/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov11": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov11/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov11m": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov11m/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "bert_tiny_wormhole": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov4": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov4/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov7": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov7/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "distilbert": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "segformer": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/segformer/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "metal_BERT_large_11": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/metal_BERT_large_11/tests/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov8s_world": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov8s_world/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov8s": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov8s/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov6l": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov6l/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "mobilenetv2": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/mobilenetv2/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "vgg_unet": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/vgg_unet/tests/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov9c": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov9c/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "vanilla_unet": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/vanilla_unet/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov8x": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov8x/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "swin_v2": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/experimental/swin_v2/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "swin_s": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/experimental/swin_s/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov5x": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov5x/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "vovnet": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/experimental/vovnet/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "yolov12x": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov12x/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "ufld_v2": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/ufld_v2/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"},
+            "efficientnetb0": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal", "action": "single-card-perf-test"}
           }'
 
           # Architecture-specific configuration mapping
@@ -121,6 +121,8 @@ jobs:
             model_config=$(jq ".\"$model\"" <<< "$ALL_MODEL_CONFIGS")
             model_group=$(jq -r '."model-group"' <<< "$model_config")
             timeout=$(jq -r '.timeout' <<< "$model_config")
+            commands=$(jq -r '.commands' <<< "$model_config")
+            action=$(jq -r '.action' <<< "$model_config")
             archs=$(jq -r '.archs[]' <<< "$model_config")
 
             for arch in $archs; do
@@ -143,6 +145,16 @@ jobs:
                 fi
               fi
 
+              # Process arch-specific command substitutions
+              processed_commands="$commands"
+              if [[ "$processed_commands" == *"{{ARCH_PATH}}"* ]]; then
+                if [ "$arch" = "blackhole" ]; then
+                  processed_commands="${processed_commands//\{\{ARCH_PATH\}\}/blackhole}"
+                else
+                  processed_commands="${processed_commands//\{\{ARCH_PATH\}\}/wormhole}"
+                fi
+              fi
+
               matrix_entry=$(jq -n \
                 --arg model "$model" \
                 --arg name "$name" \
@@ -151,6 +163,8 @@ jobs:
                 --arg arch "$arch" \
                 --argjson runs_on "$final_runs_on" \
                 --arg machine_type "$final_machine_type" \
+                --arg commands "$processed_commands" \
+                --arg action "$action" \
                 '{
                   "model": $model,
                   "name": $name,
@@ -158,7 +172,9 @@ jobs:
                   "timeout": $timeout,
                   "arch": $arch,
                   "runs-on": $runs_on,
-                  "machine-type": $machine_type
+                  "machine-type": $machine_type,
+                  "commands": $commands,
+                  "action": $action
                 }')
 
               MATRIX_ENTRIES=$(jq --argjson entry "$matrix_entry" '. + [$entry]' <<< "$MATRIX_ENTRIES")
@@ -215,215 +231,24 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
-      - name: Run falcon7b model_perf test
+      - name: Run ${{ matrix.test-info.model }} model_perf test (single-card)
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
+        if: ${{ !cancelled() && matrix.test-info.action == 'single-card-perf-test' }}
         with:
-          commands: pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'falcon7b' }}
-      - name: Run mamba model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/wormhole/mamba/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'mamba' }}
-      - name: Run functional_unet model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal --timeout=480
-        if: ${{ !cancelled() && matrix.test-info.model == 'functional_unet' }}
-      - name: Run stable_diffusion model_perf test
+          commands: ${{ matrix.test-info.commands }}
+
+      - name: Run ${{ matrix.test-info.model }} model_perf test (docker)
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/docker-run
+        if: ${{ !cancelled() && matrix.test-info.action == 'docker-run' }}
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: ${{ env.DOCKER_OPTS }}
           install_wheel: true
-          run_args: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
-        if: ${{ !cancelled() && matrix.test-info.model == 'stable_diffusion' }}
-      - name: Run covnet_mnist model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/convnet_mnist/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'convnet_mnist' }}
-      - name: Run bert_tiny model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'bert_tiny' }}
-      - name: Run squeezebert model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/squeezebert/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'squeezebert' }}
-      - name: Run roberta model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'roberta' }}
-      # issue: https://github.com/tenstorrent/tt-metal/issues/27745
-      # - name: Run yolov10x model_perf test
-      #   timeout-minutes: ${{ matrix.test-info.timeout }}
-      #   uses: ./.github/actions/single-card-perf-test
-      #   with:
-      #     commands: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
-      #  if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
-      - name: Run sentence_bert model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/sentence_bert/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'sentence_bert' }}
-      - name: Run resnet50 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'resnet50' }}
-      - name: Run yolov11 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov11/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov11' }}
-      - name: Run yolov11m model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov11m/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov11m' }}
-      - name: Run bert_tiny_wormhole model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'bert_tiny_wormhole' }}
-      - name: Run yolov4 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov4/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov4' }}
-      - name: Run yolov7 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov7/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov7' }}
-      - name: Run distilbert model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'distilbert' }}
-      - name: Run segformer model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/segformer/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'segformer' }}
-      - name: Run metal_BERT_large_11 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/metal_BERT_large_11/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'metal_BERT_large_11' }}
-      - name: Run yolov8s_world model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov8s_world/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov8s_world' }}
-      - name: Run yolov8s model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov8s/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov8s' }}
-      - name: Run yolov6l model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov6l/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov6l' }}
-      - name: Run mobilenetv2 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/mobilenetv2/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'mobilenetv2' }}
-      - name: Run vgg_unet model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/vgg_unet/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'vgg_unet' }}
-      - name: Run yolov9c model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov9c/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov9c' }}
-      - name: Run vanilla_unet model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/vanilla_unet/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'vanilla_unet' }}
-      - name: Run yolov8x model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov8x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov8x' }}
-      - name: Run swin_v2 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/experimental/swin_v2/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'swin_v2' }}
-      - name: Run swin_s model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/experimental/swin_s/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'swin_s' }}
-      - name: Run yolov5x model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov5x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov5x' }}
-      - name: Run vovnet model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/experimental/vovnet/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'vovnet' }}
-      - name: Run yolov12x model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/yolov12x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'yolov12x' }}
-      - name: Run ufld_v2 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/ufld_v2/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'ufld_v2' }}
-      - name: Run efficientnetb0 model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model == 'efficientnetb0' }}
+          run_args: ${{ matrix.test-info.commands }}
+
       - name: Merge all the generated reports
         timeout-minutes: 10
         uses: ./.github/actions/docker-run
@@ -432,7 +257,8 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: ${{ env.DOCKER_OPTS }}
           run_args: |
-            # Merge all the generated reports
+            # Merge all the generated reports with unique filename
+            export PERF_REPORT_FILENAME=Models_Perf_${{ matrix.test-info.model }}_${{ matrix.test-info.arch }}_$(date +%Y_%m_%d).csv
             env python3 models/perf/merge_perf_results.py CHECK
         if: ${{ !cancelled() }}
 
@@ -446,7 +272,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ls -hal
-          export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
+          export PERF_REPORT_FILENAME=Models_Perf_${{ matrix.test-info.model }}_${{ matrix.test-info.arch }}_$(date +%Y_%m_%d).csv
           ls -hal $PERF_REPORT_FILENAME
           echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       - name: Upload perf report

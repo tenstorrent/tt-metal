@@ -384,7 +384,7 @@ jobs:
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${{ matrix.test-info.name }}
+          name: device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.model }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${{ matrix.test-info.name }}
           path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
