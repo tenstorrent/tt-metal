@@ -237,7 +237,6 @@ def test_point_to_point_optional_intermediate(mesh_device):
 
     torch_intermediate = torch.zeros(tuple(spec.shape), dtype=torch.bfloat16)
     tt_intermediate = ttnn.from_torch(torch_intermediate, spec=spec, device=mesh_device)
-    print("CREATED INTERMEDIATE")
     sent_tensor = ttnn.point_to_point(
         input_tensor, coord1, coord0, ttnn.Topology.Linear, optional_intermediate_tensor=tt_intermediate
     )
