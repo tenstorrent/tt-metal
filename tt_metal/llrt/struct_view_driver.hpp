@@ -132,7 +132,6 @@ private:
     byte_type* base_;
 };
 
-// NOLINTBEGIN(bugprone-crtp-constructor-accessibility)
 template <typename Struct>
 class StructBuffer {
 public:
@@ -164,7 +163,6 @@ protected:
     StructInfo info_;
     std::unique_ptr<std::byte[]> storage_;
 };
-// NOLINTEND(bugprone-crtp-constructor-accessibility)
 
 namespace stream_suppliments {
 

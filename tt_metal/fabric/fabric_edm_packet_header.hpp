@@ -157,10 +157,6 @@ static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 byte
 // TODO: wrap this in a debug version that holds type info so we can assert for field/command/
 template <typename Derived>
 struct PacketHeaderBase {
-private:
-    PacketHeaderBase() = default;
-
-public:
     NocCommandFields command_fields;  // size = 16B due to uint64_t alignment
     uint16_t payload_size_bytes;
     // TODO: trim this down noc_send_type 2 bits (4 values):
@@ -431,7 +427,6 @@ public:
     }
 
     void set_src_ch_id(uint8_t ch_id) volatile { this->src_ch_id = ch_id; }
-    friend Derived;
 };
 
 struct PacketHeader : public PacketHeaderBase<PacketHeader> {
