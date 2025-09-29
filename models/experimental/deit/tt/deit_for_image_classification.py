@@ -42,7 +42,6 @@ class TtDeiTForImageClassification(nn.Module):
             TtLinear(config.hidden_size, config.num_labels, self.weight, self.bias) if config.num_labels > 0 else None
         )
 
-
         # Initialize weights and apply final processing
 
     def forward(
