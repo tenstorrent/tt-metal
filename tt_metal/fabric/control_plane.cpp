@@ -879,7 +879,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
     this->print_routing_tables();
 }
 
-// order ethernet channels using virtual coordinates
+// order ethernet channels using noc0 coordinates
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
         for (auto& [_, eth_chans] : eth_chans_by_dir) {
@@ -887,9 +887,9 @@ void ControlPlane::order_ethernet_channels() {
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
 
             std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
-                auto virt_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::VIRTUAL);
-                auto virt_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::VIRTUAL);
-                return virt_coords_a.x < virt_coords_b.x;
+                auto noc0_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::NOC0);
+                auto noc0_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::NOC0);
+                return noc0_coords_a.x < noc0_coords_b.x;
             });
         }
     }
