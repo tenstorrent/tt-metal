@@ -54,9 +54,9 @@ void kernel_main() {
 #if defined(COMPILE_FOR_IDLE_ERISC)
             // TODO: IDLE_ETH to support target device id mode
             //       https://github.com/tenstorrent/tt-metal/issues/29453
-            routing_success = fabric_set_unicast_route<true, false>(distance_in_hops, actual_packet_header);
+            routing_success = fabric_set_unicast_route<false>(actual_packet_header, distance_in_hops);
 #else
-            routing_success = fabric_set_unicast_route(dst_fabric_dev_id, actual_packet_header);
+            routing_success = fabric_set_unicast_route(actual_packet_header, dst_fabric_dev_id);
 #endif
             if (distance_in_hops != 0) {
                 // For 1D fabric, use LowLatencyPacketHeader with distance in hops
