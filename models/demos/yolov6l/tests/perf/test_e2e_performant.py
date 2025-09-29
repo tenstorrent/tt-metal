@@ -28,6 +28,7 @@ def run_yolov6_inference(
     weight_dtype,
     resolution,
     model_location_generator,
+    expected_inference_throughput,
 ):
     disable_persistent_kernel_cache()
 
@@ -78,6 +79,9 @@ def run_yolov6_inference(
         comments="",
         inference_time_cpu=0.0,
     )
+    assert (
+        round(batch_size / inference_time) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time)} fps"
 
 
 @run_for_wormhole_b0()
@@ -96,6 +100,12 @@ def run_yolov6_inference(
         (640, 640),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        103 if ttnn.get_num_devices() < 2 else 94,
+    ],
+)
 def test_perf_yolov6l(
     device,
     batch_size_per_device,
@@ -103,6 +113,7 @@ def test_perf_yolov6l(
     weight_dtype,
     resolution,
     model_location_generator,
+    expected_inference_throughput,
 ):
     run_yolov6_inference(
         device,
@@ -111,6 +122,7 @@ def test_perf_yolov6l(
         weight_dtype,
         resolution,
         model_location_generator=model_location_generator,
+        expected_inference_throughput=expected_inference_throughput,
     )
 
 
@@ -130,6 +142,12 @@ def test_perf_yolov6l(
         (640, 640),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        181,
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_perf_yolov6l_dp(
@@ -139,7 +157,11 @@ def test_perf_yolov6l_dp(
     weight_dtype,
     resolution,
     model_location_generator,
+    expected_inference_throughput,
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
     run_yolov6_inference(
         mesh_device,
         batch_size_per_device,
@@ -147,4 +169,5 @@ def test_perf_yolov6l_dp(
         weight_dtype,
         resolution,
         model_location_generator=model_location_generator,
+        expected_inference_throughput=expected_inference_throughput,
     )
