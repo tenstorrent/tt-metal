@@ -324,6 +324,9 @@ Result conv2d_DRAM(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
+    if (!conv_config.weights_dtype.has_value()) {
+        conv_config.weights_dtype = weight_tensor.dtype();
+    }
     Conv2dSliceConfig dram_slice_config = determine_conv2d_slice_config(
         dram_slice_config_,
         ConvDRAMParamters{

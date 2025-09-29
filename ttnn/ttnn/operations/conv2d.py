@@ -18,7 +18,6 @@ Conv2dL1Full = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.L1Full
 Conv2dL1FullSliceConfig = Conv2dSliceConfig(slice_type=Conv2dL1Full)
 
 
-
 def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     """
     Returns the output dimension of a convolution operation.
