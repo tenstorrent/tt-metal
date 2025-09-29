@@ -922,14 +922,15 @@ async function run() {
         const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
         const ids = arr.map(o => (o && o.id) ? `<@${o.id}>` : '').filter(Boolean);
         return ids.length ? ids.join(' ') : '';
-      };
+      }; // create a function that takes in an array of owners and returns a string of owner mentions (as slack IDs)
 
+      // create a list of all the failing workflows with their owner information for slack messaging
       const failingItems = [];
       for (const [name, runs] of filteredGrouped.entries()) {
         const mainRuns = runs
           .filter(r => r.head_branch === 'main')
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        if (!mainRuns[0] || mainRuns[0].conclusion === 'success') continue;
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); //iterate through the runs and sort them by date within the window
+        if (!mainRuns[0] || mainRuns[0].conclusion === 'success') continue; // if the latest run on main is not failing, continue
         // Try to attach owners from the first failing run's label via snippets; fallback to job name
         // Use the latest failing run for snippet-based owner detection
         const latestFail = mainRuns.find(r => r.conclusion !== 'success');
