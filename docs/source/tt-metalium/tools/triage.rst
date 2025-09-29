@@ -11,7 +11,7 @@ analysis scripts that process data supplied by the data provider scripts.
 Running
 -------
 
-To run tt-triage, execute the ``tools/triage/tt-triage.py`` script using Python 3.10 or newer.
+To run tt-triage, execute the ``tools/tt-triage.py`` script using Python 3.10 or newer.
 
 Example use with tt-metal:
 

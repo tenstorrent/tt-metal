@@ -4,7 +4,7 @@
 
 # Running tt-triage
 
-You can run `tt-triage` by executing `tools/triage/tt-triage.py`.
+You can run `tt-triage` by executing `tools/tt-triage.py`.
 
 # Script discovery
 
@@ -144,4 +144,4 @@ if __name__ == "__main__":
     run_script()
 ```
 
-If you don't want to execute your script directly, you can still do so by running: `tools/triage/tt-triage.py --run=your_script`. You can append more `--run=<selected_script>` arguments to run multiple
+If you don't want to execute your script directly, you can still do so by running: `tools/tt-triage.py --run=your_script`. You can append more `--run=<selected_script>` arguments to run multiple
