@@ -1801,13 +1801,13 @@ void py_module(py::module& module) {
         ttnn::acos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|acos|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
         ttnn::asin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|asin|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
         module,
         ttnn::atan,

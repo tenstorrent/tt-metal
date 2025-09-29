@@ -133,6 +133,12 @@ inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint3
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
 }
 
+inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_t noc, uint32_t id_mask) {
+    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CLEAR_OUTSTANDING_REQ_CNT;
+    volatile uint32_t* ptr = (volatile uint32_t*)offset;
+    *ptr = id_mask;
+}
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
@@ -584,7 +590,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
 // transaction at the same time. If one port on the receipient has no back-pressure then the transaction will hang
 // because there is no mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate
 // inline writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
-template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -593,7 +599,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t customized_src_addr = 0) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);

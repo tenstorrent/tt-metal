@@ -328,6 +328,7 @@ void set_go_signal_noc_data() {
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
     DPRINT << "dispatch_s : start" << ENDL();
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
@@ -384,4 +385,5 @@ void kernel_main() {
     noc_async_full_barrier();
 #endif
     DPRINT << "dispatch_s : done" << ENDL();
+    set_l1_data_cache<false>();
 }
