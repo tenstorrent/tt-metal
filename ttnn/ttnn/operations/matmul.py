@@ -113,7 +113,7 @@ def _golden_function(
         output_tensor = _get_golden_activation_function(program_config_activation)(output_tensor)
 
     # Then do the composite op activation function if it is requested as well
-    if activation == "gelu" or activation == "gelu_approx":
+    if activation in ("gelu", "gelu_approx"):
         output_tensor = torch.nn.functional.gelu(output_tensor)
     elif activation == "relu":
         output_tensor = torch.nn.functional.relu(output_tensor)
