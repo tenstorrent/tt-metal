@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import sys
-
 
 def try_setup_ttml_so():
+    import os
+    import sys
+
     TT_METAL_HOME = os.environ["TT_METAL_HOME"]
     TT_TRAIN_BUILD_HOME = f"{TT_METAL_HOME}/tt-train/build/sources/ttml"
     TT_METAL_BUILD_HOME = f"{TT_METAL_HOME}/build/tt-train/sources/ttml"
