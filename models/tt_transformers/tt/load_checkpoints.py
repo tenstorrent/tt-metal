@@ -149,7 +149,7 @@ def map_vision_hf_to_meta_keys(loaded_weights, head_dim):
         "post_layernorm.bias": "ln_post.bias",
         "weight": "_linear.weight",
         "bias": "_linear.bias",
-        "weight": "positional_embedding",  # pos_emb
+        "weight": "positional_embedding",  # pos_emb # --> WTF???? 2 linije iznad je drugo
         "visual.embeddings.patch_embedding.weight": "visual.embeddings.patch_embedding._linear.weight",
         "visual.embeddings.patch_embedding.bias": "visual.embeddings.patch_embedding._linear.bias",
         "visual.embeddings.position_embedding.weight": "visual.embeddings.position_embedding.positional_embedding",

@@ -1,14 +1,14 @@
 {
     "N300": {
-        "total_run": 37.562164,
-        "total_run_threshold": 37.562164,
-        "model_load_and_initialization": 7.254927,
-        "model_load_and_initialization_threshold": 7.254927,
-        "postprocessing_and_transfer": 0.078377,
-        "postprocessing_and_transfer_threshold": 0.078377,
-        "model_forward_compile": 22.827518,
-        "model_forward_compile_threshold": 22.827518,
-        "model_forward_inference": 0.5285616428571428,
-        "model_forward_inference_threshold": 0.5333241298770166
+        "total_run": 37.369667,
+        "total_run_threshold": 37.369667,
+        "model_load_and_initialization": 7.233699,
+        "model_load_and_initialization_threshold": 7.233699,
+        "postprocessing_and_transfer": 0.078302,
+        "postprocessing_and_transfer_threshold": 0.078302,
+        "model_forward_compile": 22.678904,
+        "model_forward_compile_threshold": 22.678904,
+        "model_forward_inference": 0.5269520714285714,
+        "model_forward_inference_threshold": 0.5319827780067408
     }
 }

@@ -58,7 +58,7 @@ def test_perf_gemma_vision(
     os_mesh_device = os.environ["MESH_DEVICE"]
     if os_mesh_device in ["N150", "N300"]:
         os.environ["HF_MODEL"] = "google/gemma-3-4b-it"
-    elif os_mesh_device == "T3k":
+    elif os_mesh_device == "T3K":
         os.environ["HF_MODEL"] = "google/gemma-3-27b-it"
     else:
         assert False, "Unknown model"

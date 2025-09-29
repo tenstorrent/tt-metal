@@ -85,14 +85,163 @@ def convert_hf_to_meta(state_dict, head_dim):
     return state_dict
 
 
+"""
+stojko - this below is the old function
+"""
+# def convert_vision_hf_to_meta(state_dict, head_dim):
+#     state_dict = split_hf_keys(state_dict)
+#     # state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+#     state_dict = map_vision_hf_to_meta_keys(state_dict, head_dim)
+#     return state_dict
+
+
 def convert_vision_hf_to_meta(state_dict, head_dim):
     state_dict = split_hf_keys(state_dict)
     # state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
-    state_dict = map_vision_hf_to_meta_keys(state_dict, head_dim)
-    return state_dict
+
+    old = map_vision_hf_to_meta_keys(state_dict, head_dim)
+    # new = smart_map_vision_hf_to_meta_keys(state_dict, head_dim)
+    newest = smartest(state_dict, head_dim)
+
+    temp = set()
+    temp
+    for i, key in enumerate(state_dict.keys()):
+        old_element, new_element = compare(key, smartest, head_dim=head_dim, tensor=state_dict[key])
+        temp.add(list(old_element.keys())[0])
+
+    for k, v in newest.items():
+        assert (newest[k] == old[k]).all()
+
+    print()
+
+    # tmp_big_test(old=old, new=new)
+
+    return newest
+
+
+def smartest(state_dict, head_dim):
+    vision_state_dict = dict()
+    text_state_dict = dict()
+    other_state_dict = dict()
+
+    for k, v in state_dict.items():
+        if k.startswith("model.vision_tower"):
+            selected_dict = vision_state_dict
+        elif k.startswith("model.language_model"):
+            selected_dict = text_state_dict
+        else:
+            selected_dict = other_state_dict
+
+        selected_dict[k] = v
+
+    text_state_dict = convert_hf_qkv_to_meta_format(text_state_dict, head_dim)
+    text_state_dict = map_hf_to_meta_keys(text_state_dict)
+
+    vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
+
+    return {**vision_state_dict, **text_state_dict, **other_state_dict}
+
+
+def tmp_big_test(old, new):
+    # big test
+    # print(f'{len(old&new)=} {len(new)=} {len(old)=}')
+
+    assert old.keys() == new.keys()
+    for key in old.keys():
+        assert (old[key] == new[key]).all()
+
+
+def smart_map_vision_hf_to_meta_keys(loaded_weights, head_dim):
+    """
+    Map Hugging Face checkpoint keys to Meta checkpoint keys.
+    You can use this to support other models by adding more mappings.
+    See replace_keys for more details on the format of replacements.
+    """
+    replacements = [
+        # vision MLP
+        ("fc1", "c_fc"),
+        ("fc2", "c_proj"),
+        ("q_proj", "wq"),
+        ("k_proj", "wk"),
+        ("v_proj", "wv"),
+        ("out_proj", "wo"),
+        ("o_proj", "wo"),
+        ("^weight", "_linear.weight"),  # undefined TODO
+        ("^bias", "_linear.bias"),
+        # ("^model.", ""),
+        ("^language_model", ""),
+        ("patch_embedding", "patch_embedding._linear"),
+        ("visual.embeddings.position_embedding.weight", "visual.embeddings.position_embedding.positional_embedding"),
+        (
+            "^model.vision_tower.vision_model.embeddings.position_embedding.weight",
+            "model.vision_tower.vision_model.embeddings.position_embedding.positional_embedding",
+        ),
+        ("^model.language_model.", ""),
+        ("layer_norm1", "ln_1"),
+        ("layer_norm2", "ln_2"),
+        ("post_attention_layernorm", "ffn_norm"),
+        ("post_layernorm", "ln_post"),
+        ("attention_norm", "input_layernorm"),
+        ("input_layernorm", "attention_norm"),
+        ("mlp.gate_proj", "feed_forward.w1"),
+        ("mlp.down_proj", "feed_forward.w2"),
+        ("mlp.up_proj", "feed_forward.w3"),
+        ("mlp.up_proj", "feed_forward.w3"),
+    ]
+
+    loaded_weights = attention_vs_attn_replacement(loaded_weights)
+
+    permuted_weights = convert_hf_qkv_to_meta_format(loaded_weights, head_dim)
+
+    # !TODO enable
+    # permuted_weights = map_hf_to_meta_keys(loaded_weights)
+
+    return replace_keys(permuted_weights, replacements)
+
+
+def attention_vs_attn_replacement(state_dict):
+    ret = dict()
+
+    for key in state_dict.keys():
+        if key.startswith("model.vision_tower.vision_model"):
+            new_key = key.replace("self_attn", "attn")
+        elif key.startswith("model.language_model"):
+            new_key = key.replace("self_attn", "attention")
+        else:
+            new_key = key
+
+        ret[new_key] = state_dict[key]
+
+    return ret
+
+
+def compare(inp, smart_fn, head_dim, tensor):  # temp
+    old = dict()
+    old[inp] = tensor
+    old = map_vision_hf_to_meta_keys(old, head_dim)
+
+    new = dict()
+    new[inp] = tensor
+    new = smart_fn(new, head_dim)
+
+    if list(old.keys())[0] != list(new.keys())[0]:
+        print("input=", inp)
+        print("old  =", list(old.keys())[0])
+        print("new  =", list(new.keys())[0])
+        print()
+        print()
+    return old, new
+
+
+"""
+for i in range(10000):
+    a, b = compare(list(state_dict.keys())[i], smart_map_vision_hf_to_meta_keys)
+    assert a == b, i
+"""
 
 
 def map_hf_to_meta_keys(loaded_weights):
+    assert False
     hf_to_meta = {
         # Top level mappings
         "model.embed_tokens.weight": "tok_embeddings.weight",
@@ -406,23 +555,42 @@ def map_vision_hf_to_meta_keys(loaded_weights, head_dim):
     for key, tensor in loaded_weights.items():
         if key in hf_to_meta:
             remapped[hf_to_meta[key]] = tensor
+            new_key = hf_to_meta[key]
         elif "model.vision_tower.vision_model.encoder.layers." in key:
             parts = key.split(".")
             layer_num = parts[5]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
             template_key = "model.vision_tower.vision_model.encoder.layers.{layer}." + ".".join(parts[6:])
             if template_key in hf_to_meta:
                 remapped[hf_to_meta[template_key].format(layer=layer_num)] = tensor
+                new_key = hf_to_meta[template_key].format(layer=layer_num)
         else:
             remapped[key] = tensor
+            new_key = key
+
+        if new_key == "output.weight" or new_key == "tok_embeddings.weight":
+            print("kkkkkkk")
 
     # Remove language_model keys
     non_text_weights = {k: v for k, v in remapped.items() if not k.startswith("model.language_model.")}
-    text_weights = {
-        k: v for k, v in loaded_weights.items() if k.startswith("model.language_model.") or k.startswith("lm_head.")
-    }
+    if len({"output.weight", "tok_embeddings.weight"} & set(non_text_weights.keys())) > 0:
+        print("ddddd")
+
+    text_weights = {k: v for k, v in loaded_weights.items() if k.startswith("model.language_model.")}
+
+    if len({"output.weight", "tok_embeddings.weight"} & set(text_weights.keys())) > 0:
+        print("ccccc")
+
     text_weights = convert_hf_qkv_to_meta_format(text_weights, head_dim)
+
+    if len({"output.weight", "tok_embeddings.weight"} & set(text_weights.keys())) > 0:
+        print("bbbb")
+
     # remapped_text = map_hf_to_meta_keys(text_weights, prefix="model.language_model.")
     remapped_text = map_hf_to_meta_keys(text_weights)
+
+    if len({"output.weight"} & set(remapped_text.keys())) > 0:
+        print("aaaa")
+
     return {**non_text_weights, **remapped_text}
 
 
@@ -571,7 +739,36 @@ def replace_keys(state_dict, replacements):
     return state_dict
 
 
-def map_hf_to_meta_keys(loaded_weights):
+def map_hf_to_meta_keys_vision_only(state_dict):
+    """
+    Map Hugging Face checkpoint keys to Meta checkpoint keys.
+    You can use this to support other models by adding more mappings.
+    See replace_keys for more details on the format of replacements.
+    """
+    replacements = [
+        ("self_attn", "attn"),
+        ("q_proj", "wq"),
+        ("k_proj", "wk"),
+        ("v_proj", "wv"),
+        ("o_proj", "wo"),
+        ("out_proj", "wo"),
+        ("q_norm", "q_norm"),
+        ("k_norm", "k_norm"),
+        ("fc1", "c_fc"),
+        ("fc2", "c_proj"),
+        ("layer_norm1", "ln_1"),
+        ("layer_norm2", "ln_2"),
+        ("post_layernorm", "ln_post"),
+        ("embeddings.patch_embedding._linear", "embeddings.patch_embedding"),
+        ("embeddings.patch_embedding", "embeddings.patch_embedding._linear"),
+        # ("embeddings.position_embedding.positional_embedding.weight", "embeddings.position_embedding.positional_embedding"),
+        ("embeddings.position_embedding.weight", "embeddings.position_embedding.positional_embedding"),
+    ]
+
+    return replace_keys(state_dict, replacements)
+
+
+def map_hf_to_meta_keys(state_dict):
     """
     Map Hugging Face checkpoint keys to Meta checkpoint keys.
     You can use this to support other models by adding more mappings.
@@ -597,7 +794,7 @@ def map_hf_to_meta_keys(loaded_weights):
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
     ]
-    return replace_keys(loaded_weights, replacements)
+    return replace_keys(state_dict, replacements)
 
 
 def convert_vision_meta_to_hf(state_dict, head_dim):
