@@ -23,6 +23,7 @@ def run_yolov9c_inference(
     model_task,
     act_dtype=ttnn.bfloat8_b,
     weight_dtype=ttnn.bfloat8_b,
+    expected_inference_throughput=None,
 ):
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
 
@@ -57,6 +58,9 @@ def run_yolov9c_inference(
     logger.info(
         f"ttnn_yolov9 {model_task} - batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size / inference_time_avg)}"
     )
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
 
 
 @run_for_wormhole_b0()
@@ -74,18 +78,20 @@ def run_yolov9c_inference(
         ),
     ],
 )
-def test_e2e_performant(
-    model_location_generator,
-    device,
-    batch_size,
-    resolution,
-):
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        82 if ttnn.get_num_devices() < 2 else 72,
+    ],
+)
+def test_e2e_performant(model_location_generator, device, batch_size, resolution, expected_inference_throughput):
     run_yolov9c_inference(
         model_location_generator,
         device,
         batch_size,
         resolution,
         model_task="detect",
+        expected_inference_throughput=expected_inference_throughput,
     )
 
 
@@ -104,18 +110,25 @@ def test_e2e_performant(
         ),
     ],
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        142,
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 def test_e2e_performant_dp(
-    model_location_generator,
-    mesh_device,
-    batch_size,
-    resolution,
+    model_location_generator, mesh_device, batch_size, resolution, expected_inference_throughput
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
     run_yolov9c_inference(
         model_location_generator,
         mesh_device,
         batch_size,
         resolution,
         model_task="detect",
+        expected_inference_throughput=expected_inference_throughput,
     )
