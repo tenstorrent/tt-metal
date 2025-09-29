@@ -390,6 +390,15 @@ def test_all_broadcast_trace(
             None,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        (
+            4,
+            [1, 1, 32, 32768],
+            (32, 1024),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])
