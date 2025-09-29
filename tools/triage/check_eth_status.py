@@ -5,7 +5,7 @@
 
 """
 Usage:
-    scripts/debugging_scripts/check_eth_status.py
+    check_eth_status.py
 
 Description:
     Check status on the ethernet cores

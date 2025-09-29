@@ -5,7 +5,7 @@
 
 """
 Usage:
-    scripts/debugging_scripts/check_noc_status.py
+    check_noc_status.py
 
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
