@@ -600,7 +600,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
         return;
     }
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
     DeviceLocalBufferConfig per_device_buffer_config{
@@ -660,7 +660,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
         return;
     }
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
     DeviceLocalBufferConfig per_device_buffer_config{
