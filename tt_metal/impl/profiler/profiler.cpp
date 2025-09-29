@@ -1109,12 +1109,6 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
         core_control_buffers[virtual_core] = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device_id, virtual_core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
     }
-    // log_info(
-    //     tt::LogMetal,
-    //     "Read global trace count from control buffer for core {}, {}: {}",
-    //     virtual_core.x,
-    //     virtual_core.y,
-    //     core_control_buffers[virtual_core][kernel_profiler::GLOBAL_TRACE_COUNT]);
 }
 
 void DeviceProfiler::readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
@@ -1435,11 +1429,6 @@ void DeviceProfiler::readDeviceMarkerData(
         }
     }
 
-    // log_info(tt::LogMetal, "trace_ids size: {}", trace_ids.size());
-    // for (const auto& trace_id : trace_ids) {
-    //     log_info(tt::LogMetal, "trace_id: {}", trace_id);
-    // }
-
     const auto& [new_marker_it, new_marker_inserted] = device_markers.emplace(
         run_host_id,
         trace_id,
@@ -1459,11 +1448,7 @@ void DeviceProfiler::readDeviceMarkerData(
         marker_details.marker_name_keyword_flags,
         meta_data);
 
-    log_info(tt::LogMetal, "New marker:");
-    new_marker_it->print();
-
     if (!new_marker_inserted) {
-        log_info(tt::LogMetal, "New marker not inserted");
         return;
     }
 
@@ -1503,9 +1488,6 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
         auto next_device_marker_it = std::next(device_marker_it);
 
-        log_info(tt::LogMetal, "Processing marker");
-        marker.print();
-
         if (isMarkerAZoneEndpoint(marker)) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() &&
                 marker.risc == tracy::RiscType::CORE_AGG) {
@@ -1541,12 +1523,8 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             current_dispatch_meta_data.cmd_subtype = "";
 
             if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
-                log_info(tt::LogMetal, "Start marker found");
-                marker.print();
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
-                log_info(tt::LogMetal, "End marker found");
-                marker.print();
                 TT_FATAL(
                     !start_marker_stack.empty(),
                     "End marker {} found without a corresponding start marker",
@@ -1705,14 +1683,14 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
     if (!is_mid_run_dump) {
         for (auto& [core, _] : this->device_markers_per_core_risc_map) {
-            // this->thread_pool->enqueue([this, core]() {
-            for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
-                processDeviceMarkerData(device_markers);
-            }
-            // });
+            this->thread_pool->enqueue([this, core]() {
+                for (auto& [risc_num, device_markers] : this->device_markers_per_core_risc_map[core]) {
+                    processDeviceMarkerData(device_markers);
+                }
+            });
         }
 
-        // this->thread_pool->wait();
+        this->thread_pool->wait();
     }
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
