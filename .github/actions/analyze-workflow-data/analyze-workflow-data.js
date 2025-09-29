@@ -4,8 +4,6 @@ const github = require('@actions/github');
 const DEFAULT_OWNER = 'tenstorrent';
 const DEFAULT_REPO = 'tt-metal';
 const DEFAULT_RUN_ID = 18082047199;
-const DEFAULT_WORKFLOW_NAME = 'Galaxy unit tests';
-const DEFAULT_CHECK_NAMES = ['Galaxy Fabric tests', 'Galaxy unit tests', 'galaxy-unit-tests'];
 
 async function run() {
   try {
@@ -22,8 +20,13 @@ async function run() {
 
     const owner = ownerInput || github.context.repo?.owner || DEFAULT_OWNER;
     const repo = repoInput || github.context.repo?.repo || DEFAULT_REPO;
-    const workflowName = workflowNameInput || DEFAULT_WORKFLOW_NAME;
-    const runId = runIdInput ? Number(runIdInput) : await resolveRunId(token, owner, repo, workflowName, DEFAULT_RUN_ID);
+    const workflowNameCandidate = workflowNameInput || DEFAULT_WORKFLOW_NAME;
+    const shouldResolveRunId = !runIdInput && workflowNameCandidate;
+    const runId = runIdInput
+      ? Number(runIdInput)
+      : shouldResolveRunId
+        ? await resolveRunId(token, owner, repo, workflowNameCandidate, DEFAULT_RUN_ID)
+        : DEFAULT_RUN_ID;
 
     if (!runId) {
       throw new Error('No run-id available. Provide the run-id input or ensure the workflow has previous runs.');
@@ -52,11 +55,13 @@ async function run() {
       return;
     }
 
-    const defaultChecks = checkName ? [checkName] : DEFAULT_CHECK_NAMES;
-    const filteredRuns = checkRuns.filter(run => defaultChecks.some(name => (run.name || '').toLowerCase().includes(name.toLowerCase())));
+    const checkFilters = checkName ? [checkName] : DEFAULT_CHECK_NAMES;
+    const filteredRuns = Array.isArray(checkFilters) && checkFilters.length > 0
+      ? checkRuns.filter(run => checkFilters.some(name => (run.name || '').toLowerCase().includes(name.toLowerCase())))
+      : checkRuns;
 
     if (filteredRuns.length === 0) {
-      core.info(`No check runs matched filter(s) "${defaultChecks.join(', ')}". Available: ${checkRuns.map(r => r.name).join(', ')}`);
+      core.info(`No check runs matched filter(s) "${checkFilters.join(', ')}". Available: ${checkRuns.map(r => r.name).join(', ')}`);
       core.info('To target a different workflow run, pass run-id and/or check-name inputs to this action.');
       core.setOutput('annotations', '[]');
       return;
@@ -137,6 +142,9 @@ async function fetchAnnotations(octokit, owner, repo, checkRunId, budget) {
 }
 
 async function resolveRunId(token, owner, repo, workflowName, fallbackRunId) {
+  if (!workflowName) {
+    return fallbackRunId;
+  }
   try {
     const octokit = github.getOctokit(token);
     const workflows = await octokit.rest.actions.listRepoWorkflows({ owner, repo, per_page: 100 });
