@@ -295,6 +295,7 @@ def test_all_gather_failing_shapes(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
+    pytest.skip("Skipping until issue #29238 is resolved")
     if (2 == num_devices) and (all_gather_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires more than 2 devices")
     if (bh_2d_mesh_device.shape[0] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
