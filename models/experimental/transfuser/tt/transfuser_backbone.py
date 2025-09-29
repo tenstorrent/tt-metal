@@ -3,6 +3,8 @@
 
 import ttnn
 from models.experimental.transfuser.tt.utils import TTConv2D
+from models.experimental.transfuser.tt.bottleneck import RegNetBottleneck
+from typing import List
 
 
 class TtTransfuserBackbone:
@@ -47,6 +49,63 @@ class TtTransfuserBackbone:
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
         )
+        # Layer1 for both encoders
+        self.image_layer1 = self._make_layer(
+            parameters=parameters.image_encoder.features.layer1,
+            planes=72,
+            blocks=2,  # b1 and b2
+            stride=2,
+            groups=3,  # conv2
+            model_config=model_config,
+        )
+
+        self.lidar_layer1 = self._make_layer(
+            parameters=parameters.lidar_encoder._model.layer1,
+            planes=72,
+            blocks=2,
+            stride=2,
+            groups=3,
+            model_config=model_config,
+        )
+
+    def _make_layer(
+        self,
+        parameters,
+        planes: int,
+        blocks: int,
+        stride: int,
+        groups: int = 1,
+        model_config=None,
+    ) -> List[RegNetBottleneck]:
+        layers = []
+
+        # First block (may have downsample)
+        downsample = stride != 1 or self.inplanes != planes
+        layers.append(
+            RegNetBottleneck(
+                parameters=parameters["b1"],
+                model_config=model_config,
+                stride=stride,
+                downsample=downsample,
+                groups=groups,
+            )
+        )
+        self.inplanes = planes
+
+        # Remaining blocks
+        for block_num in range(1, blocks):
+            block_name = f"b{block_num + 1}"
+            layers.append(
+                RegNetBottleneck(
+                    parameters=parameters[block_name],
+                    model_config=model_config,
+                    stride=1,
+                    downsample=False,
+                    groups=groups,
+                )
+            )
+
+        return layers
 
     def normalize_imagenet_ttnn(self, x):
         """Normalize input images according to ImageNet standards using TTNN operations."""
@@ -91,5 +150,12 @@ class TtTransfuserBackbone:
         # Process lidar input
         lidar_x = ttnn.permute(lidar_x, (0, 2, 3, 1))
         lidar_out, lidar_shape = self.lidar_conv1(device, lidar_x, lidar_x.shape)
+
+        # Process layer1 blocks
+        for block in self.image_layer1:
+            image_out = block(image_out, device)
+
+        for block in self.lidar_layer1:
+            lidar_out = block(lidar_out, device)
 
         return image_out, lidar_out

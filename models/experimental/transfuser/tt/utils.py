@@ -64,7 +64,8 @@ class TTConv2D:
 
         self.kernel_fidelity = kernel_fidelity
         self.weights = parameters["weight"]
-        self.bias = parameters["bias"]
+        # self.bias = parameters["bias"]
+        self.bias = parameters["bias"] if "bias" in parameters else None
 
         self.deallocate_activation = deallocate_activation
         self.reallocate_halo_output = reallocate_halo_output
