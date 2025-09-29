@@ -261,7 +261,7 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
         dummy_torch_input, dummy_ttnn_input = create_yolov11_input_tensors(
             device, batch=1, input_channels=3, input_height=320, input_width=320, is_sub_module=False
         )
-        
+        ttnn.deallocate(dummy_ttnn_input)
         # Create TTNN model parameters and model
         ttnn_model_parameters = create_yolov11_model_parameters(torch_model, dummy_torch_input, device=device)
         ttnn_model = ttnn_yolov11.TtnnYoloV11(device, ttnn_model_parameters)
@@ -425,11 +425,11 @@ if __name__ == "__main__":
     # Test images - use existing demo images
     test_images = [
         "./models/demos/yolov11m/tests/satellite_images/P0006.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
-        "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
-        "./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
-        "./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
+        # "./models/demos/yolov11m/tests/satellite_images/P0009.jpg", 
+        # "./models/demos/yolov11m/tests/satellite_images/P0015.jpg",
+        # "./models/demos/yolov11m/tests/satellite_images/P0014.jpg", 
+        # "./models/demos/yolov11m/tests/satellite_images/P0016.jpg",
+        # "./models/demos/yolov11m/tests/satellite_images/P0017.jpg",
     ]
 
     #pytorch_results = pytorch_obb_with_real_images(test_images)
