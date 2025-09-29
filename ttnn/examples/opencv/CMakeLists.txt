@@ -9,9 +9,10 @@ find_package(OpenCV REQUIRED)
 
 target_link_libraries(
     ttnn_example_opencv
-    PUBLIC
+    PRIVATE
         TTNN::TTNN
-        ${OpenCV_LIBS}
+        opencv_core
+        opencv_imgcodecs
 )
 target_include_directories(ttnn_example_opencv PRIVATE ${OpenCV_INCLUDE_DIRS})
 #target_link_libraries(ttnn_example_opencv PUBLIC TTNN::TTNN)
