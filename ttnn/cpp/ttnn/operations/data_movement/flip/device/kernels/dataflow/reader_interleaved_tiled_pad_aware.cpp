@@ -11,14 +11,14 @@ inline uint32_t calc_src_tile_index(
     uint32_t src_multi_dim[rank];
     uint32_t dst_multi_dim[rank];
 
-    // 1. Convert output tile linear index to multi-dimensional index
+    // 1. Calculate output tile multi-dimensional index based on linear index
     for (uint32_t i = 0; i < rank; ++i) {
         uint32_t dim = rank - 1 - i;
         dst_multi_dim[dim] = remaining % tiled_shape[dim];
         remaining /= tiled_shape[dim];
     }
 
-    // 2. Based on 1) compute multi-dimensional index for the source tile
+    // 2. Calculate multi-dimensional index for the source tile
     for (uint32_t i = 0; i < rank; ++i) {
         if (dims_to_flip[i]) {
             src_multi_dim[i] = tiled_shape[i] - dst_multi_dim[i] - 1;
@@ -44,6 +44,32 @@ inline uint32_t calc_src_tile_index(
     }
     return src_tile_id;
 }
+
+/*
+    ╔═══════════════╦═══════════════╦═══════════════╗
+    ║               ║               ║               ║
+    ║     ┌─────────║─────┬─────────║─────┬─────────║─────┐
+    ║     |         ║     │         ║     |         ║     |
+    ║     |    1    ║  1  │    2    ║  1  |    2    ║     |
+    ║     |         ║     │         ║     |         ║     |
+    ╠═════┼═════════╬═════┼═════════╬═════┼═════════╣     |
+    ║     |    1    ║  1  │    2    ║  1  |    2    ║     |
+    ║     ├─────────║─────┼─────────║─────┼─────────║─────┤
+    ║     |         ║     |         ║     |         ║     │
+    ║     |    2    ║  3  |    4    ║  3  |    4    ║     │
+    ║     |         ║     |         ║     |         ║     │
+    ╠═════┼═════════╬═════┼═════════╬═════┼═════════╣     │
+    ║     |    1    ║  1  |    2    ║  1  |    2    ║     │
+    ║     ├─────────║─────┼─────────║─────┼─────────║─────┤
+    ║     |         ║     |         ║     |         ║     |
+    ║     |    2    ║  3  |    4    ║  3  |    4    ║     |
+    ║     |         ║     |         ║     |         ║     |
+    ╚═════┼═════════╩═════┼═════════╩═════┼═════════╝     |
+          |               |               |               |
+          └───────────────┴───────────────┴───────────────┘
+
+*/
+
 
 void kernel_main() {
     // Compile time arguments
@@ -89,8 +115,41 @@ void kernel_main() {
         uint32_t l1_buf_addr = get_write_ptr(cb_id);
         uint32_t save_addr = l1_buf_addr;  // save base address for debug print
 
+        // calculate the main src_tile_id as in generic kernel
         uint32_t src_tile_id = calc_src_tile_index(tile_id, RANK, dims_to_flip, tiled_shape, tile_strides);
-        uint64_t tile_base_addr = get_noc_addr(src_tile_id, s0, 0);
+
+        // get multi-dim tile index in order to know if it's the edge or a corner tile
+
+
+        // based on padding we have to read from number of adjacent tiles
+        if (PAD_X != 0 && PAD_Y != 0) {
+            num_tiles_to_read = 4;
+        } else if (PAD_X == 0 && PAD_Y != 0) {
+            num_tiles_to_read = 2;
+        } else if (PAD_X !=0 && PAD_Y == 0) {
+            num_tiles_to_read = 2;
+        }
+
+        uint32_t tiles_to_read[num_tiles_to_read];
+        tiles_to_read[0] = src_tile_id;
+
+
+
+        // in pad aware kernel have to read from multiple tiles
+        if (PAD_X != 0 && PAD_Y != 0) {
+            tiles_to_read[1] = src_tile_id - 1;
+            tiles_to_read[2] = src_tile_id - num_tiles_per_row;
+            tiles_to_read[3] = src_tile_id - num_tiles_per_row - 1;
+        } else if (PAD_X == 0 && PAD_Y != 0) {
+            tiles_to_read[1] = src_tile_id - num_tiles_per_row; // tile above the main tile
+        } else if (PAD_X !=0 && PAD_Y == 0) {
+            tiles_to_read[1] = src_tile_id - 1; // tile to the left of the main tile
+        }
+
+        uint64_t tile_base_addr[num_tiles_to_read];
+        for (uint32_t i = 0; i < num_tiles_to_read; ++i) {
+            tile_base_addr[i] = get_noc_addr(src_tile_id, s0, 0);
+        }
 
         // Face reading order depends on type of flip we performing
         static const uint32_t order_array[4][NUM_FACES] = {
@@ -99,6 +158,10 @@ void kernel_main() {
             {2, 3, 0, 1},  // Vertical flip
             {3, 2, 1, 0}   // Both flips
         };
+
+        // synthethize the 32x32 tile
+        
+        // synthethize the 16x16 face
 
         // Select the appropriate face order based on flip flags
         uint32_t order_index = (is_horizontal_flip ? 1 : 0) + (is_vertical_flip ? 2 : 0);
