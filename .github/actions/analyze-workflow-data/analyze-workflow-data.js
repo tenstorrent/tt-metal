@@ -4,7 +4,8 @@ const github = require('@actions/github');
 const DEFAULT_OWNER = 'tenstorrent';
 const DEFAULT_REPO = 'tt-metal';
 const DEFAULT_RUN_ID = 18101502836;
-const DEFAULT_CHECK_NAMES = ['Galaxy Fabric tests'];
+const DEFAULT_WORKFLOW_NAME = 'Galaxy unit tests';
+const DEFAULT_CHECK_NAMES = ['Galaxy Fabric tests', 'Galaxy unit tests', 'galaxy-unit-tests'];
 
 async function run() {
   try {
@@ -16,14 +17,16 @@ async function run() {
     const repoInput = core.getInput('repo');
     const runIdInput = core.getInput('run-id');
     const checkName = core.getInput('check-name');
+    const workflowNameInput = core.getInput('workflow-name');
     const maxAnnotations = parseInt(core.getInput('max-annotations') || '50', 10);
 
     const owner = ownerInput || github.context.repo?.owner || DEFAULT_OWNER;
     const repo = repoInput || github.context.repo?.repo || DEFAULT_REPO;
-    const runId = runIdInput ? Number(runIdInput) : (github.context.runId || DEFAULT_RUN_ID);
+    const workflowName = workflowNameInput || DEFAULT_WORKFLOW_NAME;
+    const runId = runIdInput ? Number(runIdInput) : await resolveRunId(token, owner, repo, workflowName, DEFAULT_RUN_ID);
 
     if (!runId) {
-      throw new Error('No run-id available. Provide the run-id input or run within a workflow context.');
+      throw new Error('No run-id available. Provide the run-id input or ensure the workflow has previous runs.');
     }
 
     const octokit = github.getOctokit(token);
@@ -54,6 +57,7 @@ async function run() {
 
     if (filteredRuns.length === 0) {
       core.info(`No check runs matched filter(s) "${defaultChecks.join(', ')}". Available: ${checkRuns.map(r => r.name).join(', ')}`);
+      core.info('To target a different workflow run, pass run-id and/or check-name inputs to this action.');
       core.setOutput('annotations', '[]');
       return;
     }
@@ -75,6 +79,7 @@ async function run() {
         });
       }
       core.endGroup();
+      core.info(`Collected ${annotations.length} annotation(s) for ${checkRun.name}.`);
 
       collected.push({
         checkRun: checkRun.name,
@@ -88,6 +93,7 @@ async function run() {
     }
 
     core.setOutput('annotations', JSON.stringify(collected));
+    core.info(`Total annotations collected: ${collected.flatMap(entry => entry.annotations).length}`);
   } catch (error) {
     core.setFailed(error.message);
   }
@@ -116,6 +122,31 @@ async function fetchAnnotations(octokit, owner, repo, checkRunId, budget) {
   }
 
   return collected.slice(0, max);
+}
+
+async function resolveRunId(token, owner, repo, workflowName, fallbackRunId) {
+  try {
+    const octokit = github.getOctokit(token);
+    const workflows = await octokit.rest.actions.listRepoWorkflows({ owner, repo, per_page: 100 });
+    const workflow = workflows.data.workflows.find(w => w.name === workflowName);
+    if (!workflow) {
+      core.info(`Workflow "${workflowName}" not found; falling back to ${fallbackRunId}.`);
+      return fallbackRunId;
+    }
+
+    const runs = await octokit.rest.actions.listWorkflowRuns({ owner, repo, workflow_id: workflow.id, status: 'completed', per_page: 20 });
+    const failingRun = runs.data.workflow_runs.find(r => r.conclusion && r.conclusion !== 'success');
+    if (failingRun) {
+      core.info(`Resolved failing run ${failingRun.id} for workflow "${workflowName}".`);
+      return failingRun.id;
+    }
+
+    core.info(`No failing runs found for "${workflowName}"; using fallback ${fallbackRunId}.`);
+    return fallbackRunId;
+  } catch (e) {
+    core.warning(`Failed to resolve run id for workflow ${workflowName}: ${e.message}`);
+    return fallbackRunId;
+  }
 }
 
 if (require.main === module) {
