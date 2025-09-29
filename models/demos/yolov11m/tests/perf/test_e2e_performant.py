@@ -22,6 +22,7 @@ def run_yolov11_inference(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
 ):
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
 
@@ -55,6 +56,10 @@ def run_yolov11_inference(
         f"Model: ttnn_yolov11 - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size / inference_time_avg)}"
     )
 
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+
 
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
@@ -73,6 +78,12 @@ def run_yolov11_inference(
     [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        87 if ttnn.get_num_devices() < 2 else 79,
+    ],
+)
 def test_e2e_performant(
     device,
     batch_size_per_device,
@@ -80,6 +91,7 @@ def test_e2e_performant(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
     reset_seeds,
 ):
     run_yolov11_inference(
@@ -89,6 +101,7 @@ def test_e2e_performant(
         weight_dtype,
         resolution=resolution,
         model_location_generator=model_location_generator,
+        expected_inference_throughput=expected_inference_throughput,
     )
 
 
@@ -109,6 +122,12 @@ def test_e2e_performant(
     [{"l1_small_size": YOLOV11_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
     indirect=True,
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        154,
+    ],
+)
 def test_e2e_performant_dp(
     mesh_device,
     batch_size_per_device,
@@ -116,8 +135,12 @@ def test_e2e_performant_dp(
     weight_dtype,
     model_location_generator,
     resolution,
+    expected_inference_throughput,
     reset_seeds,
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
     run_yolov11_inference(
         mesh_device,
         batch_size_per_device,
@@ -125,4 +148,5 @@ def test_e2e_performant_dp(
         weight_dtype,
         model_location_generator,
         resolution,
+        expected_inference_throughput=expected_inference_throughput,
     )
