@@ -37,9 +37,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     Tensor& matmul_output_tensor,
 
     /* All Gather Params */
-    MeshCoordinate& target_device_coord,
-    std::optional<MeshCoordinate>& forward_coord,
-    std::optional<MeshCoordinate>& backward_coord,
+    const MeshCoordinate& target_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     const uint32_t dim,
     const uint32_t num_links,
     const uint32_t ring_size,
