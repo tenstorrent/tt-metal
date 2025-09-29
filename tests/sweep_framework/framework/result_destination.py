@@ -184,6 +184,8 @@ class PostgresResultDestination(ResultDestination):
             TestStatus.FAIL_CRASH_HANG: "fail_crash_hang",
             TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
             TestStatus.NOT_RUN: "skipped",
+            TestStatus.XFAIL: "xfail",  # Expected failure
+            TestStatus.XPASS: "xpass",  # Unexpected pass
         }
         return status_mapping.get(test_status, "error")
 
@@ -321,6 +323,8 @@ class FileResultDestination(ResultDestination):
                         RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
                         RunnerStatus.FAIL_WATCHER: "fail_watcher",
                         RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+                        RunnerStatus.XFAIL: "xfail",  # Expected failure
+                        RunnerStatus.XPASS: "xpass",  # Unexpected pass
                     }
                     return TestStatus(mapping.get(value, "error"))
             except Exception:
