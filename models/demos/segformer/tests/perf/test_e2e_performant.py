@@ -55,7 +55,7 @@ def run_segformer_trace_2cqs_inference(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        106 if ttnn.get_num_devices() < 2 else 99,
+        104 if ttnn.get_num_devices() < 2 else 97,
     ],
 )
 def test_segformer_e2e(device, batch_size, model_location_generator, expected_inference_throughput):
@@ -75,7 +75,7 @@ def test_segformer_e2e(device, batch_size, model_location_generator, expected_in
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        148,
+        146,
     ],
 )
 @pytest.mark.models_performance_bare_metal

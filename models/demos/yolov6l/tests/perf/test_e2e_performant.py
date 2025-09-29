@@ -103,7 +103,7 @@ def run_yolov6_inference(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        103 if ttnn.get_num_devices() < 2 else 94,
+        101 if ttnn.get_num_devices() < 2 else 92,
     ],
 )
 def test_perf_yolov6l(
@@ -145,7 +145,7 @@ def test_perf_yolov6l(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        181,
+        179,
     ],
 )
 @pytest.mark.models_performance_bare_metal

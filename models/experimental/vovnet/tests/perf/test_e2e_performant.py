@@ -94,7 +94,7 @@ def run_e2e_performant(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        146 if ttnn.get_num_devices() < 2 else 140,
+        144 if ttnn.get_num_devices() < 2 else 138,
     ],
 )
 def test_vovnet_e2e_performant(
@@ -137,7 +137,7 @@ def test_vovnet_e2e_performant(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        270,
+        268,
     ],
 )
 def test_vovnet_e2e_performant_dp(

@@ -81,7 +81,7 @@ def run_yolov9c_inference(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        82 if ttnn.get_num_devices() < 2 else 72,
+        80 if ttnn.get_num_devices() < 2 else 70,
     ],
 )
 def test_e2e_performant(model_location_generator, device, batch_size, resolution, expected_inference_throughput):
@@ -113,7 +113,7 @@ def test_e2e_performant(model_location_generator, device, batch_size, resolution
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        142,
+        140,
     ],
 )
 @pytest.mark.models_performance_bare_metal

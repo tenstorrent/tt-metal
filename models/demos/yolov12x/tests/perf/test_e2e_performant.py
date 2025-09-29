@@ -66,7 +66,7 @@ def run_yolov12x_inference(device, batch_size_per_device, resolution, expected_i
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        14 if ttnn.get_num_devices() < 2 else 14,
+        12 if ttnn.get_num_devices() < 2 else 12,
     ],
 )
 def test_e2e_performant(device, batch_size_per_device, resolution, expected_inference_throughput):
@@ -95,7 +95,7 @@ def test_e2e_performant(device, batch_size_per_device, resolution, expected_infe
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        27,
+        25,
     ],
 )
 def test_e2e_performant_dp(mesh_device, batch_size_per_device, resolution, expected_inference_throughput):

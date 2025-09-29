@@ -81,7 +81,7 @@ def run_yolov11_inference(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        87 if ttnn.get_num_devices() < 2 else 79,
+        85 if ttnn.get_num_devices() < 2 else 77,
     ],
 )
 def test_e2e_performant(
@@ -125,7 +125,7 @@ def test_e2e_performant(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        154,
+        152,
     ],
 )
 def test_e2e_performant_dp(

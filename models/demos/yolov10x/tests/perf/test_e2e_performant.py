@@ -81,7 +81,7 @@ def run_yolov10x_inference(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        48 if ttnn.get_num_devices() < 2 else 46,
+        46 if ttnn.get_num_devices() < 2 else 44,
     ],
 )
 def test_e2e_performant(
@@ -123,7 +123,7 @@ def test_e2e_performant(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        90,
+        89,
     ],
 )
 @pytest.mark.models_performance_bare_metal

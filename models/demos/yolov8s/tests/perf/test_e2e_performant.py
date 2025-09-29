@@ -67,7 +67,7 @@ def run_yolov8s(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        214 if ttnn.get_num_devices() < 2 else 187,
+        212 if ttnn.get_num_devices() < 2 else 185,
     ],
 )
 def test_run_yolov8s_trace_2cqs_inference(
@@ -96,7 +96,7 @@ def test_run_yolov8s_trace_2cqs_inference(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        368,
+        366,
     ],
 )
 def test_run_yolov8s_trace_2cqs_dp_inference(

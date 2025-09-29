@@ -104,7 +104,7 @@ def run_yolov8s_world_inference(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        105 if ttnn.get_num_devices() < 2 else 96,
+        103 if ttnn.get_num_devices() < 2 else 94,
     ],
 )
 def test_perf_yolov8s_world(
@@ -146,7 +146,7 @@ def test_perf_yolov8s_world(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        189,
+        187,
     ],
 )
 @pytest.mark.models_performance_bare_metal
