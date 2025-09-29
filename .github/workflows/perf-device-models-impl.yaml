@@ -351,8 +351,7 @@ jobs:
       - name: Run performance tests
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         env:
-          HF_HUB_CACHE: ${{ matrix.test-info.arch != 'blackhole' && '/mnt/MLPerf/huggingface/hub' || '' }}
-          SDXL_DATASET_PATH: ${{ contains(matrix.test-info.commands, 'stable_diffusion') && '/mnt/MLPerf/ttnn/datasets/COCO_val2014_headshots' || '' }}
+          HF_HUB_CACHE: ${{ !matrix.test-info.civ2-compatible && '/mnt/MLPerf/huggingface/hub' || '' }}
         with:
           device_perf_model_name: ${{ matrix.test-info.device_perf_model_name }}
           commands: ${{ matrix.test-info.commands }}
