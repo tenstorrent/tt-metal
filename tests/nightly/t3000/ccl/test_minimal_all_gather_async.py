@@ -97,29 +97,17 @@ def run_all_gather_impl(
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
     if use_persistent_buffers:
-        if enable_trace:
-            persistent_output_buffers = [
-                ttnn.from_torch(
-                    torch.zeros(ag_output_shape),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ag_input_dtype,
-                    memory_config=mem_config_ag,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                )
-            ]
-        else:
-            persistent_output_buffers = [
-                ttnn.from_torch(
-                    torch.zeros(ag_output_shape),
-                    device=mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ag_input_dtype,
-                    memory_config=mem_config_ag,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                )
-                for _ in range(num_iters)
-            ]
+        persistent_output_buffers = [
+            ttnn.from_torch(
+                torch.zeros(ag_output_shape),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ag_input_dtype,
+                memory_config=mem_config_ag,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            for _ in range(num_iters)
+        ]
     else:
         persistent_output_buffers = []
 
@@ -176,7 +164,7 @@ def run_all_gather_impl(
         (tt_all_gather_out_tensor, input_tensor) = run_op_wrapped(0)
         tt_ag_out = ttnn.from_device(tt_all_gather_out_tensor)
         tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        if use_persistent_buffers:
+        if not use_persistent_buffers:
             tt_all_gather_out_tensor.deallocate()
         tt_all_gather_out_tensor_list.append(tt_ag_out)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -193,17 +181,19 @@ def run_all_gather_impl(
         signpost("start")
         for i in range(num_iters):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            if use_persistent_buffers:
+            if not use_persistent_buffers:
                 tt_all_gather_out_tensor.deallocate()
         logger.info(f"Done executing trace")
         signpost("stop")
+        ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
     else:
         for i in range(num_iters):
             (tt_all_gather_out_tensor, input_tensor) = run_op_wrapped(i)
             input_tensor.deallocate()
             tt_ag_out = ttnn.from_device(tt_all_gather_out_tensor)
             tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-            tt_all_gather_out_tensor.deallocate()
+            if not use_persistent_buffers:
+                tt_all_gather_out_tensor.deallocate()
             tt_all_gather_out_tensor_list.append(tt_ag_out)
 
             logger.info(f"Waiting for op")
@@ -213,7 +203,7 @@ def run_all_gather_impl(
             logger.info(f"Done iteration {i}")
 
     if not skip_check:
-        num_iters_check = 0 if enable_trace else num_iters
+        num_iters_check = 1 if enable_trace else num_iters
         for i in range(num_iters_check):
             tt_ag_out = tt_all_gather_out_tensor_list[i]
             torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
