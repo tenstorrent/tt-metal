@@ -14,7 +14,15 @@ from models.demos.ufld_v2.common import UFLD_V2_L1_SMALL_SIZE
 from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
 
 
-def run_ufldv2_e2e(device, batch_size_per_device, model_location_generator, height=320, width=800, channels=3):
+def run_ufldv2_e2e(
+    device,
+    batch_size_per_device,
+    model_location_generator,
+    height=320,
+    width=800,
+    channels=3,
+    expected_inference_throughput=None,
+):
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
     input_shape = (batch_size, channels, height, width)
@@ -39,6 +47,10 @@ def run_ufldv2_e2e(device, batch_size_per_device, model_location_generator, heig
         f"ttnn_ufldv2_320x800_batch_size_{batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round((batch_size_per_device * num_devices)/inference_time_avg)}"
     )
 
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
@@ -50,8 +62,16 @@ def run_ufldv2_e2e(device, batch_size_per_device, model_location_generator, heig
     "batch_size",
     ((1),),
 )
-def test_ufldv2_e2e_performant(device, batch_size, model_location_generator):
-    run_ufldv2_e2e(device, batch_size, model_location_generator)
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        366 if ttnn.get_num_devices() < 2 else 319,
+    ],
+)
+def test_ufldv2_e2e_performant(device, batch_size, model_location_generator, expected_inference_throughput):
+    run_ufldv2_e2e(
+        device, batch_size, model_location_generator, expected_inference_throughput=expected_inference_throughput
+    )
 
 
 @run_for_wormhole_b0()
@@ -64,7 +84,22 @@ def test_ufldv2_e2e_performant(device, batch_size, model_location_generator):
     "batch_size_per_device",
     ((1),),
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        632,
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-def test_ufldv2_e2e_performant_dp(mesh_device, batch_size_per_device, model_location_generator):
-    run_ufldv2_e2e(mesh_device, batch_size_per_device, model_location_generator)
+def test_ufldv2_e2e_performant_dp(
+    mesh_device, batch_size_per_device, model_location_generator, expected_inference_throughput
+):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+    run_ufldv2_e2e(
+        mesh_device,
+        batch_size_per_device,
+        model_location_generator,
+        expected_inference_throughput=expected_inference_throughput,
+    )
