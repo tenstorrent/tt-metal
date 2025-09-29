@@ -5,13 +5,6 @@
 import ttnn
 from models.demos.segformer.tt.common import Conv
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtSegformerOverlapPatchEmbeddings:
     """Construct the overlapping patch embeddings."""
@@ -26,8 +19,6 @@ class TtSegformerOverlapPatchEmbeddings:
         pixel_values: ttnn.Tensor,
         parameters,
     ):
-        if use_signpost:
-            signpost(header="TtSegformerOverlapPatchEmbeddings")
         embeddings, input_height, input_width = self.proj(device, pixel_values)
         embeddings = ttnn.to_memory_config(embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
 

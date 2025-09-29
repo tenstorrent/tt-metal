@@ -6,13 +6,6 @@ import ttnn
 from models.demos.segformer.tt.ttnn_segformer_efficient_selfattention import TtSegformerEfficientSelfAttention
 from models.demos.segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtSegformerAttention:
     def __init__(self, hidden_size, num_attention_heads, parameters, sequence_reduction_ratio):
@@ -28,8 +21,6 @@ class TtSegformerAttention:
     def __call__(
         self, device, hidden_states: ttnn.Tensor, height: int, width: int, parameters, output_attentions=False
     ):
-        if use_signpost:
-            signpost(header="TtSegformerAttention")
         self_outputs = self.self(device, hidden_states, height, width, parameters.self, output_attentions)
         attention_output = self.output(device, self_outputs[0], parameters.output)
         outputs = (attention_output,) + self_outputs[1:]

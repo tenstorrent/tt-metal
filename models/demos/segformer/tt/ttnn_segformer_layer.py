@@ -6,13 +6,6 @@ import ttnn
 from models.demos.segformer.tt.ttnn_segformer_attention import TtSegformerAttention
 from models.demos.segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 class TtSegformerLayer:
     def __init__(self, hidden_size, num_attention_heads, sequence_reduction_ratio, parameters, mlp_ratio):
@@ -29,8 +22,6 @@ class TtSegformerLayer:
     def __call__(
         self, device, hidden_states: ttnn.Tensor, height: int, width: int, parameters, output_attentions=False
     ):
-        if use_signpost:
-            signpost(header="TtSegformerLayer")
         self_attention_outputs = self.attention(
             device,
             ttnn.layer_norm(
