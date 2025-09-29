@@ -91,7 +91,7 @@ void py_module(nb::module_& m) {
     {
         auto py_dropout = static_cast<nb::module_>(m.attr("dropout"));
         py_dropout.def(
-            "droput",
+            "dropout",
             &ttml::ops::dropout,
             nb::arg("tensor"),
             nb::arg("probability"),

@@ -112,10 +112,8 @@ all_test_cases = [
     (default_tensor_data, np.int32, None, _ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.int32, None, _ttml.Layout.TILE),
     (default_tensor_data, np.int32, _ttml.autograd.DataType.BFLOAT16, None),
-    (default_tensor_data, np.int32, _ttml.autograd.DataType.BFLOAT16, None),
     (default_tensor_data, np.int32, _ttml.autograd.DataType.BFLOAT16, _ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.int32, _ttml.autograd.DataType.BFLOAT16, _ttml.Layout.TILE),
-    (default_tensor_data, np.int32, _ttml.autograd.DataType.BFLOAT4_B, None),
     (default_tensor_data, np.int32, _ttml.autograd.DataType.BFLOAT4_B, None),
     (default_tensor_data, np.int32, _ttml.autograd.DataType.BFLOAT4_B, _ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.int32, _ttml.autograd.DataType.BFLOAT4_B, _ttml.Layout.TILE),
@@ -176,10 +174,8 @@ def cases_except(cases, *cases_to_skip):
 """cases which violate format conversion rules codified in C++ nanobind python bindings"""
 unsupported_format_cases = [
     (default_tensor_data, np.float32, _ttml.autograd.DataType.BFLOAT4_B, None),
-    (default_tensor_data, np.float32, _ttml.autograd.DataType.BFLOAT4_B, None),
     (default_tensor_data, np.float32, _ttml.autograd.DataType.BFLOAT4_B, _ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.float32, _ttml.autograd.DataType.BFLOAT4_B, _ttml.Layout.TILE),
-    (default_tensor_data, np.float32, _ttml.autograd.DataType.BFLOAT8_B, None),
     (default_tensor_data, np.float32, _ttml.autograd.DataType.BFLOAT8_B, None),
     (default_tensor_data, np.float32, _ttml.autograd.DataType.BFLOAT8_B, _ttml.Layout.ROW_MAJOR),
     (default_tensor_data, np.float32, _ttml.autograd.DataType.BFLOAT8_B, _ttml.Layout.TILE),
