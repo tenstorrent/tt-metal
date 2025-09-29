@@ -58,26 +58,36 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // z = (bias + x * factor * N_m; where:
     // factor = 0x00b8aa3b (computed through log(e))
     // bias = 0x3f800000
+    //
+    // Fundamentally, this computes exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
+    // - z_i = trunc(x / ln2) (integer part)
+    // - z_f = x/ln2 - trunc(x/ln2) (fractional part)
     sfpi::vInt z = _float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
-    sfpi::vInt zii = exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent
-    sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));    // Extract mantissa
+    sfpi::vInt exponential_part =
+        exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent ( = 2**(integer part of val/ln2))
+    sfpi::vInt fractional_part =
+        sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part that )
 
-    // Polynomial coefficients for approximation of exp on [1; 2]
+    // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 1]
+    // This uses a 2nd degree polynomial adjustment of the fractional part
     constexpr float POLY_D1 = 0.40196114e-7f;
     constexpr int POLY_D2 = 0xf94ee7;
     constexpr int POLY_D3 = 0x560e;
 
+    // Compute polynomial through Horner's method
     sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
-    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + zif, 0);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + zif, 0);
+    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + fractional_part, 0);
+    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + fractional_part, 0);
     d2 = d1 * d2;
 
-    zif = _float_to_int32_exp21f_(d2 * d3);
+    // Compute 2**(adjusted fractional part) through float -> int conversion
+    fractional_part = _float_to_int32_exp21f_(d2 * d3);
 
-    // Restore exponent
-    zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), zii));  // restore exponent
+    // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
+    exponential_part = sfpi::reinterpret<sfpi::vInt>(
+        sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(fractional_part), exponential_part));  // restore exponent
 
-    y = sfpi::reinterpret<sfpi::vFloat>(zii);
+    y = sfpi::reinterpret<sfpi::vFloat>(exponential_part);
 
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
