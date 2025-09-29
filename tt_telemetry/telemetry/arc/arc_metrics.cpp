@@ -3,108 +3,120 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /*
- * ARC telemetry is described in the ISA documentation:
- * https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/ARCTile/Telemetry.md
+ * ARC telemetry metrics using FirmwareInfoProvider for direct access to telemetry data.
+ *
+ * TODO:
+ * -----
+ * - How to handle cases where an ARC telemetry value is not returned by FirmwareInfoProvider?
+ *   For now, we set it to 0. But maybe we want to stop updating it at all and retain the old
+ *   stale value instead?
  */
 
 #include <tt_stl/assert.hpp>
- #include <telemetry/arc/arc_metrics.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <telemetry/arc/arc_metrics.hpp>
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
 
 #include <chrono>
 
 /**************************************************************************************************
- Metric Creation
+| Metric Creation
 **************************************************************************************************/
 
-// Creates ARC telemetry metrics for MMIO-capable chips with contiguous IDs and returns the next
-// free ID value
+// Creates ARC telemetry metrics for MMIO-capable chips using FirmwareInfoProvider
 void create_arc_metrics(
     std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
-    for (const auto& [chip_identifier, reader] : create_arc_telemetry_readers_for_mmio_chips(cluster)) {
-        bool_metrics.push_back(std::make_unique<ARCTelemetryAvailableMetric>(reader));
+    tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 
-        // Create UInt metrics with appropriate masks and units
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-            reader, tt::umd::TelemetryTag::AICLK, "AIClock", 0xffff, MetricUnit::MEGAHERTZ));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-            reader, tt::umd::TelemetryTag::AXICLK, "AXIClock", 0xffffffff, MetricUnit::MEGAHERTZ));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-            reader, tt::umd::TelemetryTag::ARCCLK, "ARCClock", 0xffffffff, MetricUnit::MEGAHERTZ));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-            reader, tt::umd::TelemetryTag::FAN_SPEED, "FanSpeed", 0xffffffff, MetricUnit::REVOLUTIONS_PER_MINUTE));
-        uint_metrics.push_back(
-            std::make_unique<ARCUintMetric>(reader, tt::umd::TelemetryTag::TDP, "TDP", 0xffff, MetricUnit::WATTS));
-        uint_metrics.push_back(
-            std::make_unique<ARCUintMetric>(reader, tt::umd::TelemetryTag::TDC, "TDC", 0xffff, MetricUnit::AMPERES));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(
-            reader, tt::umd::TelemetryTag::VCORE, "VCore", 0xffffffff, MetricUnit::MILLIVOLTS));
+    // Get all chips using get_ethernet_endpoints_by_chip
+    auto ethernet_endpoints_by_chip = get_ethernet_endpoints_by_chip(cluster);
 
-        // Create Double metrics with appropriate masks, scale factors, and units
-        // For ASIC temperature, check architecture to determine mask and scale factor
-        uint32_t asic_temp_mask;
-        double asic_temp_scale;
-        if (reader->get_arch() == tt::ARCH::BLACKHOLE) {
-            asic_temp_mask = 0xffffffff;
-            asic_temp_scale = 1.0 / 65536.0;
-        } else {
-            asic_temp_mask = 0xffff;
-            asic_temp_scale = 1.0 / 16.0;
+    // Iterate through all chips and create ARC metrics for MMIO-capable ones
+    for (const auto& [chip_identifier, endpoints] : ethernet_endpoints_by_chip) {
+        tt::umd::chip_id_t chip_id = chip_identifier.id;
+
+        // Check if this chip has MMIO capability (is a local chip)
+        if (cluster_descriptor->is_chip_mmio_capable(chip_id)) {
+            tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
+            if (device) {
+                // Get FirmwareInfoProvider from the device
+                auto firmware_provider = device->get_firmware_info_provider();
+                if (firmware_provider) {
+                    // Create UInt metrics using FirmwareInfoProvider methods
+                    uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "AIClock",
+                        [firmware_provider]() { return firmware_provider->get_aiclk(); },
+                        MetricUnit::MEGAHERTZ));
+
+                    uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "AXIClock",
+                        [firmware_provider]() { return firmware_provider->get_axiclk(); },
+                        MetricUnit::MEGAHERTZ));
+
+                    uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "ARCClock",
+                        [firmware_provider]() { return firmware_provider->get_arcclk(); },
+                        MetricUnit::MEGAHERTZ));
+
+                    uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "FanSpeed",
+                        [firmware_provider]() { return firmware_provider->get_fan_speed(); },
+                        MetricUnit::REVOLUTIONS_PER_MINUTE));
+
+                    uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "TDP",
+                        [firmware_provider]() { return firmware_provider->get_tdp(); },
+                        MetricUnit::WATTS));
+
+                    uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "TDC",
+                        [firmware_provider]() { return firmware_provider->get_tdc(); },
+                        MetricUnit::AMPERES));
+
+                    uint_metrics.push_back(std::make_unique<ARCUintMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "VCore",
+                        [firmware_provider]() { return firmware_provider->get_vcore(); },
+                        MetricUnit::MILLIVOLTS));
+
+                    // Create Double metrics using FirmwareInfoProvider methods
+                    double_metrics.push_back(std::make_unique<ARCDoubleMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "ASICTemperature",
+                        [firmware_provider]() {
+                            return std::optional<double>(firmware_provider->get_asic_temperature());
+                        },
+                        MetricUnit::CELSIUS));
+
+                    double_metrics.push_back(std::make_unique<ARCDoubleMetric>(
+                        chip_identifier,
+                        firmware_provider,
+                        "BoardTemperature",
+                        [firmware_provider]() { return firmware_provider->get_board_temperature(); },
+                        MetricUnit::CELSIUS));
+                }
+            }
         }
-        double_metrics.push_back(std::make_unique<ARCDoubleMetric>(
-            reader,
-            tt::umd::TelemetryTag::ASIC_TEMPERATURE,
-            "ASICTemperature",
-            asic_temp_mask,
-            asic_temp_scale,
-            MetricUnit::CELSIUS,
-            ARCDoubleMetric::Signedness::SIGNED));
-        double_metrics.push_back(std::make_unique<ARCDoubleMetric>(
-            reader,
-            tt::umd::TelemetryTag::BOARD_TEMPERATURE,
-            "BoardTemperature",
-            0xffffffff,
-            1.0 / 65536.0,
-            MetricUnit::CELSIUS,
-            ARCDoubleMetric::Signedness::SIGNED));
     }
-    log_info(tt::LogAlways, "Created ARC metrics");
-}
-
-/**************************************************************************************************
-| ARCTelemetryAvailableMetric Class
-**************************************************************************************************/
-
-ARCTelemetryAvailableMetric::ARCTelemetryAvailableMetric(std::shared_ptr<ARCTelemetryReader> reader) :
-    BoolMetric(MetricUnit::UNITLESS), reader_(reader) {
-    TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
-    value_ = false;
-}
-
-const std::vector<std::string> ARCTelemetryAvailableMetric::telemetry_path() const {
-    // Start with the chip identifier path
-    std::vector<std::string> path = reader_->id.telemetry_path();
-
-    // Add the metric name
-    path.push_back("ARCTelemetryAvailable");
-
-    return path;
-}
-
-void ARCTelemetryAvailableMetric::update(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    bool new_value = reader_->is_valid();
-
-    // Update the metric value and timestamp
-    bool old_value = value_;
-    changed_since_transmission_ = new_value != old_value;
-    value_ = new_value;
-    timestamp_ =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    log_info(tt::LogAlways, "Created ARC metrics using FirmwareInfoProvider");
 }
 
 /**************************************************************************************************
@@ -112,19 +124,23 @@ void ARCTelemetryAvailableMetric::update(
 **************************************************************************************************/
 
 ARCUintMetric::ARCUintMetric(
-    std::shared_ptr<ARCTelemetryReader> reader,
-    tt::umd::TelemetryTag tag,
+    ChipIdentifier chip_id,
+    tt::umd::FirmwareInfoProvider* firmware_provider,
     const std::string& metric_name,
-    uint32_t mask,
+    std::function<std::optional<uint32_t>()> getter_func,
     MetricUnit units) :
-    UIntMetric(units), reader_(reader), tag_(tag), metric_name_(metric_name), mask_(mask) {
-    TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
+    UIntMetric(units),
+    chip_id_(chip_id),
+    firmware_provider_(firmware_provider),
+    metric_name_(metric_name),
+    getter_func_(getter_func) {
+    TT_ASSERT(firmware_provider_ != nullptr, "FirmwareInfoProvider cannot be null");
     value_ = 0;
 }
 
 const std::vector<std::string> ARCUintMetric::telemetry_path() const {
     // Start with the chip identifier path
-    std::vector<std::string> path = reader_->id.telemetry_path();
+    std::vector<std::string> path = chip_id_.telemetry_path();
 
     // Add the metric name
     path.push_back(metric_name_);
@@ -134,18 +150,11 @@ const std::vector<std::string> ARCUintMetric::telemetry_path() const {
 
 void ARCUintMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    // Don't attempt to read if telemetry reader is invalid
-    if (!reader_->is_valid()) {
-        return;
-    }
-
-    // Read the telemetry value using common telemetry tag
-    uint32_t raw_value = reader_->read_value(tag_);
-
-    // Apply mask to get the final value
-    uint64_t new_value = static_cast<uint64_t>(raw_value & mask_);
+    // Get the value using the getter function
+    auto optional_value = getter_func_();
 
     // Update the metric value and timestamp
+    uint64_t new_value = optional_value.value_or(0);
     uint64_t old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
@@ -159,30 +168,23 @@ void ARCUintMetric::update(
 **************************************************************************************************/
 
 ARCDoubleMetric::ARCDoubleMetric(
-    std::shared_ptr<ARCTelemetryReader> reader,
-    tt::umd::TelemetryTag tag,
+    ChipIdentifier chip_id,
+    tt::umd::FirmwareInfoProvider* firmware_provider,
     const std::string& metric_name,
-    uint32_t mask,
-    double scale_factor,
-    MetricUnit units,
-    Signedness signedness) :
+    std::function<std::optional<double>()> getter_func,
+    MetricUnit units) :
     DoubleMetric(units),
-    reader_(reader),
-    tag_(tag),
+    chip_id_(chip_id),
+    firmware_provider_(firmware_provider),
     metric_name_(metric_name),
-    mask_(mask),
-    scale_factor_(scale_factor),
-    signedness_(signedness) {
-    TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
-    TT_FATAL(
-        signedness == Signedness::UNSIGNED || signedness == Signedness::SIGNED,
-        "Signedness must be either UNSIGNED or SIGNED");
+    getter_func_(getter_func) {
+    TT_ASSERT(firmware_provider_ != nullptr, "FirmwareInfoProvider cannot be null");
     value_ = 0.0;
 }
 
 const std::vector<std::string> ARCDoubleMetric::telemetry_path() const {
     // Start with the chip identifier path
-    std::vector<std::string> path = reader_->id.telemetry_path();
+    std::vector<std::string> path = chip_id_.telemetry_path();
 
     // Add the metric name
     path.push_back(metric_name_);
@@ -192,29 +194,11 @@ const std::vector<std::string> ARCDoubleMetric::telemetry_path() const {
 
 void ARCDoubleMetric::update(
     const std::unique_ptr<tt::umd::Cluster>& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
-    // Don't attempt to read if telemetry reader is invalid
-    if (!reader_->is_valid()) {
-        return;
-    }
-
-    // Read the telemetry value using common telemetry tag
-    uint32_t raw_value = reader_->read_value(tag_);
-
-    // Apply mask to get the final raw value
-    uint32_t masked_value = raw_value & mask_;
-
-    // Convert to double and apply scale factor
-    double new_value;
-    if (signedness_ == Signedness::SIGNED) {
-        // For signed values, cast to int32_t first to handle sign extension
-        int32_t signed_value = static_cast<int32_t>(masked_value);
-        new_value = static_cast<double>(signed_value) * scale_factor_;
-    } else {
-        // For unsigned values, cast directly to double
-        new_value = static_cast<double>(masked_value) * scale_factor_;
-    }
+    // Get the value using the getter function
+    auto optional_value = getter_func_();
 
     // Update the metric value and timestamp
+    double new_value = optional_value.value_or(0.0);
     double old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
