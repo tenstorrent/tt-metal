@@ -103,18 +103,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     std::pair<std::string, std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
     // TODO don't cast T to float when precision needs to be preserved
-    const T param0_raw = params[0];
-    float param0 = static_cast<float>(params[0]);
+    float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
-            if (input_dtype == DataType::INT32) {
-                op_init_and_name = {
-                    "fill_tile_init();",
-                    fmt::format(
-                        "fill_tile_int({}, {}u);", idst, std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
-            } else if (input_dtype == DataType::UINT32) {
-                op_init_and_name = {
-                    "fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0_raw)};
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
                 op_init_and_name = {
@@ -278,25 +271,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("sub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::ADD_UNARY_SFPU:
-            TT_FATAL(
-                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32) {
-                op_init_and_name = {
-                    "binop_with_scalar_tile_init();",
-                    fmt::format(
-                        "add_unary_tile_int32({}, {}u);",
-                        idst,
-                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
-            } else if (input_dtype == DataType::UINT32) {
-                op_init_and_name = {
-                    "binop_with_scalar_tile_init();",
-                    // TODO: Use uint32_t tile API here once implemented
-                    fmt::format("add_unary_tile_int32({}, {}u);", idst, (uint)param0_raw)};
-            } else {
-                op_init_and_name = {
-                    "binop_with_scalar_tile_init();",
-                    fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
-            }
+            op_init_and_name = {
+                "binop_with_scalar_tile_init();",
+                fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::MUL_UNARY_SFPU:
             op_init_and_name = {
