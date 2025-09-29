@@ -64,7 +64,8 @@ def move_to_device(object, device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_for_semantic_segmentation(device, model_location_generator, min_channels=8):
+def test_segformer_for_semantic_segmentation(device, model_location_generator):
+    min_channels = 8
     processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     image = Image.open(requests.get(url, stream=True).raw)
@@ -96,33 +97,13 @@ def test_segformer_for_semantic_segmentation(device, model_location_generator, m
 
     ttnn_model = TtSegformerForSemanticSegmentation(config, parameters)
 
-    sharded_input_enabled = 0
+    sharded_input_enabled = 1
 
     if not sharded_input_enabled:
-        # torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
         ttnn_input_tensor = ttnn.from_torch(
-            inputs.pixel_values,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            device=device,
-            layout=ttnn.TILE_LAYOUT,
+            inputs.pixel_values, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, device=device
         )
     else:
-        # torch_input_tensor_permuted = torch.permute(inputs.pixel_values, (0, 2, 3, 1))
-        # N, H, W, C = torch_input_tensor_permuted.shape
-        # shard_grid = ttnn.CoreRangeSet(
-        #     {
-        #         ttnn.CoreRange(
-        #             ttnn.CoreCoord(0, 0),
-        #             ttnn.CoreCoord(7, 7),
-        #         ),
-        #     }
-        # )
-        # n_cores = 64
-        # shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
-        # input_mem_config = ttnn.MemoryConfig(
-        #     ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        # )
         n, c, h, w = inputs.pixel_values.shape
         if c < min_channels:
             c = min_channels
@@ -140,7 +121,6 @@ def test_segformer_for_semantic_segmentation(device, model_location_generator, m
             device=device,
             memory_config=input_mem_config,
         )
-        # ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, [n, c, h, w], [0, 0, 0, 0], 0)
 
     ttnn_output = ttnn_model(
         device,

@@ -49,18 +49,19 @@ class TtSegformerModel:
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        print("input is", pixel_values.shape, pixel_values.dtype, pixel_values.layout)
         N, C, H, W = pixel_values.shape
         if C < min_channels:
             channel_padding_needed = min_channels - C
             nchw = ttnn.pad(pixel_values, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+            padded = True
         else:
             nchw = pixel_values
+            padded = False
         nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
-        ttnn.deallocate(nchw)
+        if padded:
+            ttnn.deallocate(nchw)
         ttnn.deallocate(pixel_values)
         nhwc = ttnn.reallocate(nhwc)
-        print("input is", nhwc.shape, nhwc.dtype, nhwc.layout)
         encoder_outputs = self.encoder(
             device,
             nhwc,

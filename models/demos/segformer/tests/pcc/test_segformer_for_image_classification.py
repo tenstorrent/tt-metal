@@ -59,35 +59,15 @@ def test_segformer_image_classificaton(device, model_location_generator):
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
     inputs = image_processor(image, return_tensors="pt")
     torch_input_tensor = inputs.pixel_values
-    # torch_input_tensor_permuted = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    # CONV2D_MIN_CHANNEL_SIZE = 8
-    # # adjust padding if necessary
-    # if ttnn_input_tensor.shape[1] < CONV2D_MIN_CHANNEL_SIZE:
-    #     padded_shape = [
-    #         ttnn_input_tensor.shape[0],
-    #         CONV2D_MIN_CHANNEL_SIZE,
-    #         ttnn_input_tensor.shape[2],
-    #         ttnn_input_tensor.shape[3],
-    #     ]
-    #     ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0, 0, 0, 0], 0)
-    # elif ttnn_input_tensor.shape[1] > CONV2D_MIN_CHANNEL_SIZE and ttnn_input_tensor.shape[1] % 32 != 0:
-    #     padded_shape = [
-    #         ttnn_input_tensor.shape[0],
-    #         (ttnn_input_tensor.shape[3] + 31) // 32 * 32,
-    #         ttnn_input_tensor.shape[2],
-    #         ttnn_input_tensor.shape[3],
-    #     ]
-    #     ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0, 0, 0, 0], 0)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     config = load_config("configs/segformer_img_classification_config.json")
     reference_model = SegformerForImageClassificationReference(config)
-    target_prefix = f""
     reference_model = load_torch_model(
         reference_model, f"", module="image_classification", model_location_generator=model_location_generator
     )

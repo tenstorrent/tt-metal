@@ -17,21 +17,16 @@ def run_segformer_trace_2cqs_inference(
     device, device_batch_size, model_location_generator, channels=3, resolution=(512, 512)
 ):
     segformer_trace_2cq = SegformerTrace2CQ()
-    init_time = time.time()
     segformer_trace_2cq.initialize_segformer_trace_2cqs_inference(device, model_location_generator, device_batch_size)
-    print("Init time:", time.time() - init_time, "seconds")
     batch_size = device_batch_size * device.get_num_devices()
     input_shape = (batch_size, channels, resolution[0], resolution[1])
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    print("input shape is", torch_input_tensor.shape)
     inference_iter_count = 10
     t0 = time.time()
     for iter in range(0, inference_iter_count):
         _ = segformer_trace_2cq.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
-    _ = ttnn.to_torch(_, mesh_composer=segformer_trace_2cq.test_infra.output_mesh_composer)
-    print("kmrwmfw", _.shape)
     segformer_trace_2cq.release_segformer_trace_2cqs_inference()
     inference_time_avg = round((t1 - t0) / inference_iter_count, 6)
     logger.info(
