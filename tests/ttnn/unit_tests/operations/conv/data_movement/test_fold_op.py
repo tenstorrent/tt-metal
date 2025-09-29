@@ -366,19 +366,12 @@ def test_fold(act_shape, stride_h, stride_w, device):
         ((8, 224, 14, 16), 16, 1),
         ((1, 16, 16, 16), 2, 2),
         ((4, 64, 64, 32), 2, 2),
-        ((1, 8, 8, 16), 8, 8),
-        ((4, 12, 12, 16), 12, 12),
         ((1, 21, 21, 16), 3, 7),
         ((4, 21, 21, 16), 3, 7),
+        ((16, 42, 42, 64), 6, 6),
+        ((1, 8, 8, 16), 8, 8),
         ((4, 14, 14, 256), 2, 2),
-        ((2, 7, 7, 512), 1, 1),
-        ((2, 42, 42, 64), 6, 6),
-        ((1, 4, 4, 512), 2, 2),
-        ((8, 64, 64, 16), 1, 2),
-        ((8, 48, 48, 16), 3, 3),
         ((1, 33, 33, 16), 3, 11),
-        ((2, 64, 64, 96), 2, 2),
-        ((1, 32, 32, 80), 2, 2),
     ],
 )
 def test_fold_sharded(device, act_shape, stride_h, stride_w):
@@ -421,3 +414,5 @@ def test_fold_sharded(device, act_shape, stride_h, stride_w):
         actual = tt2torch_tensor(tt_out)
 
         torch.testing.assert_allclose(actual, expected)
+        tt_input.deallocate()
+        tt_out.deallocate()

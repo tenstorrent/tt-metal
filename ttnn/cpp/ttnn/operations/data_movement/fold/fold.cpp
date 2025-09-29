@@ -296,7 +296,7 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
         uint32_t total_height = input_shape[0] * input_shape[1] * input_shape[2];
 
         uint32_t num_cores = max_cores;
-        while (num_cores > 0 && (total_height / stride_h / stride_w) % num_cores != 0) {
+        while (num_cores > 0 && (total_height / pixels_per_compute_row) % num_cores != 0) {
             num_cores--;
         }
 
