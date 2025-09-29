@@ -65,46 +65,26 @@ Fold::MultiCore::cached_program_t fold_multi_core(
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
         all_cores,
         ReaderDataMovementConfig({cb_src0_index, cb_dst0_index}, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
+    std::vector<uint32_t> runtime_args = {
+        pixel_size,
+        aligned_pixel_size,
+        aligned_dst_pixel_size,
+        num_pixels,
+        num_dst_pixels,
+        stride_w * aligned_pixel_size,
+        width * aligned_pixel_size,
+        stride_h,
+        stride_w,
+        num_dst_rows,
+        width / stride_w,
+        pixels_per_dst_row * aligned_pixel_size,
+        true,
+    };
     // Reader run-time args
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
-        all_cores,
-        {
-            pixel_size,
-            aligned_pixel_size,
-            aligned_dst_pixel_size,
-            num_pixels,
-            num_dst_pixels,
-            stride_w * aligned_pixel_size,
-            width * aligned_pixel_size,
-            stride_h,
-            stride_w,
-            num_dst_rows,
-            width / stride_w,
-            pixels_per_dst_row * aligned_pixel_size,
-            true,
-        });
+    SetRuntimeArgs(program, reader_kernel_id, all_cores, runtime_args);
+    runtime_args[12] = false;
     // Writer run-time args
-    SetRuntimeArgs(
-        program,
-        writer_kernel_id,
-        all_cores,
-        {
-            pixel_size,
-            aligned_pixel_size,
-            aligned_dst_pixel_size,
-            num_pixels,
-            num_dst_pixels,
-            stride_w * aligned_pixel_size,
-            width * aligned_pixel_size,
-            stride_h,
-            stride_w,
-            num_dst_rows,
-            width / stride_w,
-            pixels_per_dst_row * aligned_pixel_size,
-            false,
-        });
+    SetRuntimeArgs(program, writer_kernel_id, all_cores, runtime_args);
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0}};
 }
@@ -122,76 +102,17 @@ void Fold::MultiCore::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& stride_h = cached_program.shared_variables.stride_h;
-    auto& stride_w = cached_program.shared_variables.stride_w;
     auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& cb_dst0 = cached_program.shared_variables.cb_dst0;
 
     auto& program = cached_program.program;
     auto& input_tensor = tensor_args.input_tensor;
 
-    auto shard_shape = input_tensor.shard_spec()->shape;
-    auto all_cores = input_tensor.shard_spec()->grid;
-
-    uint32_t pixel_size = shard_shape[1] * input_tensor.element_size();
-    uint32_t num_pixels = shard_shape[0];
-    uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
-
-    uint32_t width = input_tensor.padded_shape()[2];
-    uint32_t chunk_size = stride_w * pixel_size;
-    uint32_t dst_pixel_size = stride_h * chunk_size;
-    uint32_t num_dst_rows = num_pixels / (width * stride_h);
-    uint32_t pixels_per_dst_row = stride_h * width;
-
-    uint32_t aligned_pixel_size = round_up_to_mul32(pixel_size);
-    uint32_t aligned_dst_pixel_size = round_up_to_mul32(dst_pixel_size);
-
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, cb_dst0, *dst_buffer);
-
-    SetRuntimeArgs(
-        program,
-        reader_kernel_id,
-        all_cores,
-        {
-            pixel_size,
-            aligned_pixel_size,
-            aligned_dst_pixel_size,
-            num_pixels,
-            num_dst_pixels,
-            stride_w * aligned_pixel_size,
-            width * aligned_pixel_size,
-            stride_h,
-            stride_w,
-            num_dst_rows,
-            width / stride_w,
-            pixels_per_dst_row * aligned_pixel_size,
-            true,
-        });
-    SetRuntimeArgs(
-        program,
-        writer_kernel_id,
-        all_cores,
-        {
-            pixel_size,
-            aligned_pixel_size,
-            aligned_dst_pixel_size,
-            num_pixels,
-            num_dst_pixels,
-            stride_w * aligned_pixel_size,
-            width * aligned_pixel_size,
-            stride_h,
-            stride_w,
-            num_dst_rows,
-            width / stride_w,
-            pixels_per_dst_row * aligned_pixel_size,
-            false,
-        });
 }
 
 }  // namespace ttnn::operations::data_movement
