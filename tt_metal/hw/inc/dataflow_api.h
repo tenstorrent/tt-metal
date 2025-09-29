@@ -713,7 +713,7 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
  * Refer to \a noc_async_write for more details.
  */
 // clang-format on
-template <bool enable_noc_tracing = true>
+template <bool enable_noc_tracing = true, bool posted = false>
 FORCE_INLINE void noc_async_write_one_packet(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr,
@@ -739,7 +739,8 @@ FORCE_INLINE void noc_async_write_one_packet(
         false /* mcast */,
         false /* linked */,
         1 /* num_dests */,
-        true /* multicast_path_reserve */);
+        true /* multicast_path_reserve */,
+        posted);
 }
 
 // clang-format off
@@ -764,7 +765,7 @@ FORCE_INLINE void noc_async_write_one_packet(
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes           | uint32_t | Any uint32_t number              | False    |
  */
 // clang-format on
-template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true>
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true, bool posted = false>
 inline void noc_async_write(
     uint32_t src_local_l1_addr,
     uint64_t dst_noc_addr,
@@ -776,12 +777,12 @@ inline void noc_async_write(
     }
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet<false>(src_local_l1_addr, dst_noc_addr, size, noc, vc);
+        noc_async_write_one_packet<false, posted>(src_local_l1_addr, dst_noc_addr, size, noc, vc);
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, vc, false, false, 1, true);
+            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, vc, false, false, 1, true, posted);
         WAYPOINT("NAWD");
     }
 }
@@ -1133,7 +1134,7 @@ FORCE_INLINE void noc_async_read_page(
  * | AddrGen (template parameter) | Address generator class              | typename  | Any AddrGen class in \a dataflow_api_addrgen.h | True     |
  */
 // clang-format on
-template <typename AddrGen, bool enable_noc_tracing = true>
+template <typename AddrGen, bool enable_noc_tracing = true, bool posted = false>
 FORCE_INLINE void noc_async_write_page(
     const uint32_t id,
     const AddrGen& addrgen,
@@ -1154,7 +1155,7 @@ FORCE_INLINE void noc_async_write_page(
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ID(NocEventType::WRITE_, id, addrgen, size ? size : page_size, NOC_UNICAST_WRITE_VC);
     }
-    noc_async_write<NOC_MAX_BURST_SIZE + 1, false>(
+    noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
 }
 
@@ -1319,13 +1320,13 @@ FORCE_INLINE void noc_async_read_shard(
  * | noc                        | Which NOC to use for the transaction             | uint8_t        | 0 or 1                                                   | False    |
  */
 // clang-format on
-template <typename DSpec>
+template <typename DSpec, bool posted = false>
 FORCE_INLINE void noc_async_write_shard(
     const uint32_t shard_id, const TensorAccessor<DSpec>& s, std::uint32_t src_local_l1_addr, uint8_t noc = noc_index) {
     auto shard_volume = s.dspec().shard_volume();
     RECORD_NOC_EVENT_WITH_ADDR(
         NocEventType::WRITE_, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, NOC_UNICAST_WRITE_VC);
-    noc_async_write<NOC_MAX_BURST_SIZE + 1, false>(
+    noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
 }
 
