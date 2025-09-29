@@ -75,6 +75,18 @@ class GraphTracerUtils:
             + "}"
         )
 
+        # Fix quoted arrays: "argX": "[{...}]" -> "argX": [{...}]
+        result = re.sub(r'("arg\d+"\s*:\s*)"(\[.*?\])"', r"\1\2", result)
+        preresult = result
+        # Convert nullopt arrays to simple values: [<nullopt>] -> "<nullopt>"
+        result = re.sub(r"(\[\s*)<nullopt>(\s*\])", r'"<nullopt>"', result)
+        # Convert unsupported type arrays to objects: [ unsupported type , std::reference... ] -> {"unsupported type": "std::reference..."}
+        result = re.sub(r"\[\s*unsupported\s+type\s*,\s*([^]]+)\s*\]", r'{"unsupported type": "\1"}', result)
+        # Convert unsupported type arrays to objects: "argX": [ unsupported type , std::reference... ] -> "argX": {"unsupported type": "std::reference..."}
+        result = re.sub(
+            r'("arg\d+"\s*:\s*)\[\s*unsupported type\s*,\s*([^]]+?)\s*\]', r'\1{"unsupported type": "\2"}', result
+        )
+
         try:
             json_obj = json.loads(result)
             return json_obj
