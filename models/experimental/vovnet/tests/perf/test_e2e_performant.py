@@ -71,8 +71,8 @@ def run_e2e_performant(
     )
 
     assert (
-        round(batch_size / inference_time_avg) >= expected_inference_throughput
-    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+        round(total_batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(total_batch_size/inference_time_avg)} fps"
 
 
 @pytest.mark.parametrize(
