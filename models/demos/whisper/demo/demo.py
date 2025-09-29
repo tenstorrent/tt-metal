@@ -619,8 +619,13 @@ def test_demo_for_conditional_generation(
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device
     )
-    threshold = 0.00
-    high_tol_percentage = 1.40  # default is 1.15, prefill not scaling linearly for galaxy
+
+    metrics_dictionary = {
+        1: {"prefill_t/s/u": 3.7, "decode_t/s/u": 51.1},
+        2: {"prefill_t/s/u": 3.7, "decode_t/s/u": 51.1},
+        8: {"prefill_t/s/u": 3.5, "decode_t/s/u": 42.1},
+        32: {"prefill_t/s/u": 2.8, "decode_t/s/u": 37.1},
+    }
     if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
@@ -628,21 +633,17 @@ def test_demo_for_conditional_generation(
             else:
                 expected_perf_metrics = {"prefill_t/s/u": 8.40, "decode_t/s/u": 94.0}
         else:  # wormhole_b0
-            expected_perf_metrics = {"prefill_t/s/u": 3.17, "decode_t/s/u": 41.1}
+            expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
         expected_perf_metrics["prefill_t/s"] = expected_perf_metrics["prefill_t/s/u"] * total_batch
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
-        if mesh_device.get_num_devices() == 32:
-            threshold = 0.10  # 10% tolerance for 32 devices due to variability
-        for key in expected_perf_metrics:
-            expected_perf_metrics[key] *= 1 - threshold
         measurements = {
             "prefill_t/s": (1 / ttft) * total_batch,
             "prefill_t/s/u": (1 / ttft),
             "decode_t/s": decode_throughput * total_batch,
             "decode_t/s/u": decode_throughput,
         }
-        verify_perf(measurements, expected_perf_metrics, high_tol_percentage=high_tol_percentage)
+        verify_perf(measurements, expected_perf_metrics)
 
 
 @pytest.mark.parametrize(
