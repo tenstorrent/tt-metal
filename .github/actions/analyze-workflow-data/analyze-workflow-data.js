@@ -39,6 +39,14 @@ async function run() {
       throw new Error('Workflow run does not expose head_sha; cannot list check runs.');
     }
 
+    const { data: jobsResponse } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId, per_page: 100 });
+    const failingJobIds = new Set(
+      (jobsResponse.jobs || [])
+        .filter(job => isJobFailure(job.conclusion))
+        .map(job => String(job.id))
+    );
+    core.info(`Failing job IDs: ${failingJobIds.size > 0 ? Array.from(failingJobIds).join(', ') : 'none'}`);
+
     const { data: checksResponse } = await octokit.rest.checks.listForRef({ owner, repo, ref: headSha, per_page: 100 });
     const checkRuns = Array.isArray(checksResponse.check_runs) ? checksResponse.check_runs : [];
 
@@ -51,13 +59,20 @@ async function run() {
     const checkFilters = checkName
       ? checkName.split(',').map(s => s.trim()).filter(Boolean)
       : [];
-    const filteredRuns = checkFilters.length > 0
-      ? checkRuns.filter(run => checkFilters.some(name => (run.name || '').toLowerCase().includes(name.toLowerCase())))
-      : checkRuns;
+
+    let filteredRuns = checkRuns;
+    if (failingJobIds.size > 0) {
+      filteredRuns = filteredRuns.filter(run => {
+        const jobId = extractJobId(run.details_url || run.html_url);
+        return jobId && failingJobIds.has(jobId);
+      });
+    }
+    if (checkFilters.length > 0) {
+      filteredRuns = filteredRuns.filter(run => checkFilters.some(name => (run.name || '').toLowerCase().includes(name.toLowerCase())));
+    }
 
     if (filteredRuns.length === 0) {
-      core.info(`No check runs matched filter(s) "${checkFilters.join(', ')}". Available: ${checkRuns.map(r => r.name).join(', ')}`);
-      core.info('To target a different workflow run, pass run-id and/or check-name inputs to this action.');
+      core.info('No matching check runs found after applying failure/job filters.');
       core.setOutput('annotations', '[]');
       return;
     }
@@ -204,6 +219,18 @@ function stripBacktrace(text) {
   const idx = lower.indexOf('backtrace:');
   const truncated = idx !== -1 ? text.slice(0, idx) : text;
   return truncated.trim();
+}
+
+function extractJobId(url) {
+  if (!url) return null;
+  const match = url.match(/\/jobs\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+function isJobFailure(conclusion) {
+  if (!conclusion) return false;
+  const lowered = conclusion.toLowerCase();
+  return ['failure', 'cancelled', 'timed_out', 'action_required'].includes(lowered);
 }
 
 if (require.main === module) {
