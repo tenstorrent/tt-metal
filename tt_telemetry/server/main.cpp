@@ -26,6 +26,78 @@
 #include <telemetry/telemetry_collector.hpp>
 #include <server/web_server.hpp>
 #include <server/collection_endpoint.hpp>
+#include <utils/hex.hpp>
+
+/**************************************************************************************************
+ FSD Test
+**************************************************************************************************/
+
+#include <google/protobuf/text_format.h>
+#include "protobuf/factory_system_descriptor.pb.h"
+
+#include <tt-metalium/distributed_context.hpp>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
+
+static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_fsd(const std::string& fsd_filename) {
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
+    std::ifstream fsd_file(fsd_filename);
+    if (!fsd_file.is_open()) {
+        throw std::runtime_error("Failed to open FSD file: " + fsd_filename);
+    }
+
+    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
+    fsd_file.close();
+
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd)) {
+        throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
+    }
+
+    return fsd;
+}
+
+static void process_fsd(const std::string& fsd_filename) {
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(fsd_filename);
+
+    std::cout << "Hosts:" << std::endl;
+    std::cout << "------" << std::endl;
+    for (const auto& host : fsd.hosts()) {
+        std::cout << "  " << host.hostname() << ": hall=" << host.hall() << ", aisle=" << host.aisle()
+                  << ", rack=" << host.rack() << ", shelf_u=" << host.shelf_u()
+                  << ", motherboard=" << host.motherboard() << std::endl;
+    }
+
+    std::cout << std::endl;
+    std::cout << "Board Types:" << std::endl;
+    std::cout << "------------" << std::endl;
+    for (const auto& location_type : fsd.board_types().board_locations()) {
+        std::cout << "  host_id=" << location_type.host_id() << ", tray_id=" << location_type.tray_id()
+                  << ", board_type=" << location_type.board_type() << std::endl;
+    }
+
+    std::cout << std::endl;
+    std::cout << "Ethernet Connections:" << std::endl;
+    std::cout << "---------------------" << std::endl;
+    for (const auto& connection : fsd.eth_connections().connection()) {
+        const auto& a = connection.endpoint_a();
+        const auto& b = connection.endpoint_b();
+        std::cout << "      [host_id=" << a.host_id() << ", tray_id=" << a.tray_id()
+                  << ", asic_location=" << a.asic_location() << ", chan_id=" << a.chan_id() << "]" << std::endl
+                  << "  --> [host_id=" << b.host_id() << ", tray_id=" << b.tray_id()
+                  << ", asic_location=" << b.asic_location() << ", chan_id=" << b.chan_id() << "]" << std::endl;
+    }
+
+    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
+    auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    auto rtoptions = tt::llrt::RunTimeOptions();
+    auto psd = tt::tt_metal::PhysicalSystemDescriptor(cluster, distributed_context, rtoptions);
+
+    std::cout << std::endl;
+    for (auto [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
+        std::cout << hex(*asic_id) << ": unique_id=" << hex(*asic_descriptor.unique_id)
+                  << ", asic_location=" << *asic_descriptor.asic_location << ", tray_id=" << asic_descriptor.tray_id
+                  << std::endl;
+    }
+}
 
 /**************************************************************************************************
  Utility Functions
@@ -167,6 +239,7 @@ int main(int argc, char* argv[]) {
         "print-link-health",
         "Print link health to terminal at startup",
         cxxopts::value<bool>()->default_value("false"))(
+        "fsd", "Factory system descriptor file in .textproto file", cxxopts::value<std::string>())(
         "p,port", "Port for the web server", cxxopts::value<int>()->default_value("8080"))(
         "collector-port",
         "Port for collection endpoint when in collector mode (default). Aggregators connect to this.",
@@ -187,6 +260,12 @@ int main(int argc, char* argv[]) {
 
     if (result.count("help")) {
         std::cout << options.help() << std::endl;
+        return 0;
+    }
+
+    // TODO: just for now, parse FSD
+    if (result.count("fsd")) {
+        process_fsd(result["fsd"].as<std::string>());
         return 0;
     }
 

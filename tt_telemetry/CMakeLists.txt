@@ -84,6 +84,7 @@ target_include_directories(
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 target_link_libraries(
     tt_telemetry_server
@@ -94,4 +95,6 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
+        TT::ScaleoutTools # Add scaleout tools for protobuf headers
+        protobuf::libprotobuf # Add protobuf library for compatibility
 )
