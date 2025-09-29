@@ -84,7 +84,7 @@ SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 Enqueue the program as a mesh workload (non-blocking), then wait for completion.
 
 ```cpp
-distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
 distributed::Finish(cq);
 ```

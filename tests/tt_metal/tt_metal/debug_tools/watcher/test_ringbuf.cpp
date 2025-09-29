@@ -47,7 +47,7 @@ void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::AddProgramToMeshWorkload(workload, {}, device_range);
+    workload.add_program(device_range, {});
     auto& program = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 

@@ -40,8 +40,6 @@ constexpr static std::uint32_t DPRINT_BUFFER_SIZE = 204;  // per thread
     DPRINT_PREFIX(INT64)        \
     DPRINT_PREFIX(FLOAT32)      \
     DPRINT_PREFIX(CHAR)         \
-    DPRINT_PREFIX(RAISE)        \
-    DPRINT_PREFIX(WAIT)         \
     DPRINT_PREFIX(BFLOAT16)     \
     DPRINT_PREFIX(SETPRECISION) \
     DPRINT_PREFIX(FIXED)        \
