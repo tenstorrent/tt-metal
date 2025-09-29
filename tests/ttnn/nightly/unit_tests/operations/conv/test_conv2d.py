@@ -279,7 +279,7 @@ def run_conv(
     if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
-    if requires_device_placement and not use_dram_slicing:
+    if not use_dram_slicing:
         slice_config = ttnn.Conv2dL1FullSliceConfig
 
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
@@ -2998,7 +2998,8 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
+@pytest.mark.parametrize("use_dram_slicing", [True, False])
+def test_silu_auto_shard_mm_conv(device, torch_tensor_map, use_dram_slicing):
     batch_size = 1
     in_channels = 64
     out_channels = 64
@@ -3026,6 +3027,7 @@ def test_silu_auto_shard_mm_conv(device, torch_tensor_map):
         padding,
         None,
         auto_shard=True,
+        use_dram_slicing=use_dram_slicing,
         activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
     )
 
