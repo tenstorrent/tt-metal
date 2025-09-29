@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include <vector>
 #include <optional>
 #include <climits>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <memory>
 namespace tt::tt_metal {
 

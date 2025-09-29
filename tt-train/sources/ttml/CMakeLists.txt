@@ -136,6 +136,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp

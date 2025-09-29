@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -79,7 +79,7 @@ def test_sdxl_unet_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_decode_perf_device():
-    expected_device_perf_cycles_per_iteration = 956_401_895
+    expected_device_perf_cycles_per_iteration = 954_689_017
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_decode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -104,7 +104,7 @@ def test_sdxl_vae_decode_perf_device():
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_vae_encode_perf_device():
-    expected_device_perf_cycles_per_iteration = 504_636_286
+    expected_device_perf_cycles_per_iteration = 502_563_162
     command = f"pytest models/experimental/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_autoencoder_kl.py::test_vae -k 'test_encode'"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

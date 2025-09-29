@@ -24,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -154,10 +154,8 @@ create_program(
     }
 
     std::vector<uint32_t> reader_ss_cta;
-    // order: in0 then in1
-    // use placeholder buffer pointers for compile args; runtime addresses remain unchanged
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_ss_cta);
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_ss_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_ss_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_ss_cta);
     auto mm_reader_kernel_in0_sender_in1_sender = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_sender_in1_sender.cpp",
@@ -168,8 +166,8 @@ create_program(
             .compile_args = reader_ss_cta});
 
     std::vector<uint32_t> reader_sr_cta;
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_sr_cta);
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_sr_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_sr_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_sr_cta);
     auto mm_reader_kernel_in0_sender_in1_receiver = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_sender_in1_receiver.cpp",
@@ -180,8 +178,8 @@ create_program(
             .compile_args = reader_sr_cta});
 
     std::vector<uint32_t> reader_rs_cta;
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_rs_cta);
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_rs_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_rs_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_rs_cta);
     auto mm_reader_kernel_in0_receiver_in1_sender = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_receiver_in1_sender.cpp",
@@ -192,8 +190,8 @@ create_program(
             .compile_args = reader_rs_cta});
 
     std::vector<uint32_t> reader_rr_cta;
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_rr_cta);
-    tt::tt_metal::TensorAccessorArgs().append_to(reader_rr_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_rr_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(reader_rr_cta);
     auto mm_reader_kernel_in0_receiver_in1_receiver = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_matmul_tile_layout_in0_receiver_in1_receiver.cpp",
@@ -204,7 +202,7 @@ create_program(
             .compile_args = reader_rr_cta});
 
     std::vector<uint32_t> writer_cta;
-    tt::tt_metal::TensorAccessorArgs().append_to(writer_cta);
+    tt::tt_metal::TensorAccessorArgs::create_dram_interleaved().append_to(writer_cta);
     auto unary_writer_kernel_noc0 = tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_matmul_tile_layout.cpp",

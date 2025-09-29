@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
@@ -142,6 +142,18 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
         mpi_launcher = "mpirun"
 
     cmd = [mpi_launcher]
+
+    # Check if --bind-to is already specified in mpi_args
+    bind_to_already_specified = False
+    if mpi_args:
+        for i, arg in enumerate(mpi_args):
+            if arg == "--bind-to":
+                bind_to_already_specified = True
+                break
+
+    # Add --bind-to none only if not already specified
+    if not bind_to_already_specified:
+        cmd.extend(["--bind-to", "none"])
 
     if mpi_args:
         cmd.extend(mpi_args)
