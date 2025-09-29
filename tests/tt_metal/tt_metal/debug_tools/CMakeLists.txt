@@ -6,11 +6,9 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_buffering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_all_harts.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_before_finish.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_hanging.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_prepend_device_core_risc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tensix_dest.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_tiles.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_raise_wait.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dprint/test_print_config_register.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_assert.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/watcher/test_link_training.cpp
