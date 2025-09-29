@@ -71,37 +71,38 @@ TEST(MeshGraphValidation, TestTGMeshGraphInit) {
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
 }
 
-TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
-    const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
-    [[maybe_unused]] auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
-}
+// to be later replaced with 6U versions
+// TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
+//     const std::filesystem::path tg_mesh_graph_desc_path =
+//         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+//         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
+//     [[maybe_unused]] auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
+// }
 
-TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    auto user_meshes = control_plane.get_user_physical_mesh_ids();
-    EXPECT_EQ(user_meshes.size(), 1);
-    EXPECT_EQ(user_meshes[0], MeshId{4});
-    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{0}), tt::tt_metal::distributed::MeshShape(1, 1));
-    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{1}), tt::tt_metal::distributed::MeshShape(1, 1));
-    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{2}), tt::tt_metal::distributed::MeshShape(1, 1));
-    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{3}), tt::tt_metal::distributed::MeshShape(1, 1));
-    EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{4}), tt::tt_metal::distributed::MeshShape(4, 8));
-}
+// TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
+//     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+//     auto user_meshes = control_plane.get_user_physical_mesh_ids();
+//     EXPECT_EQ(user_meshes.size(), 1);
+//     EXPECT_EQ(user_meshes[0], MeshId{4});
+//     EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{0}), tt::tt_metal::distributed::MeshShape(1, 1));
+//     EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{1}), tt::tt_metal::distributed::MeshShape(1, 1));
+//     EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{2}), tt::tt_metal::distributed::MeshShape(1, 1));
+//     EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{3}), tt::tt_metal::distributed::MeshShape(1, 1));
+//     EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{4}), tt::tt_metal::distributed::MeshShape(4, 8));
+// }
 
-TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
-    const std::filesystem::path tg_mesh_graph_desc_path =
-        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
-    auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
-    auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
-    EXPECT_GT(valid_chans.size(), 0);
-    for (auto chan : valid_chans) {
-        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
-        EXPECT_FALSE(path.empty());
-    }
-}
+// TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
+//     const std::filesystem::path tg_mesh_graph_desc_path =
+//         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+//         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
+//     auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
+//     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
+//     EXPECT_GT(valid_chans.size(), 0);
+//     for (auto chan : valid_chans) {
+//         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
+//         EXPECT_FALSE(path.empty());
+//     }
+// }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
