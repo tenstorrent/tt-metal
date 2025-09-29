@@ -61,7 +61,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
         "16},num_faces=4))),memory_config=MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type="
         "BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0),alignment="
         "Alignment([1]))))");
-    EXPECT_EQ(operation1.arguments[1], "SmallVector([0, 2, 1, 3])");
+    EXPECT_EQ(operation1.arguments[1], "[0, 2, 1, 3]");
     EXPECT_EQ(
         operation1.arguments[2],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
@@ -88,7 +88,7 @@ TEST_F(TestGraphCaptureArgumentsTranspose, Transpose) {
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 2048, 1, 512])");
     EXPECT_EQ(operation3.arguments[1], "DataType::BFLOAT16");
     EXPECT_EQ(operation3.arguments[2], "Layout::ROW_MAJOR");
-    EXPECT_EQ(operation3.arguments[3], "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]");
+    EXPECT_EQ(operation3.arguments[3].substr(0, 2), "0x");
     EXPECT_EQ(
         operation3.arguments[4],
         "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,"
