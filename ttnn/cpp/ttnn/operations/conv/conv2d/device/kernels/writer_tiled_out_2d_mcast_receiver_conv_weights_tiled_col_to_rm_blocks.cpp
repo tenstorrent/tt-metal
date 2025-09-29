@@ -45,6 +45,15 @@ void kernel_main() {
     constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
+
+    const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
+    const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
+    constexpr uint32_t act_write_offset = get_compile_time_arg_val(30);
+
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_first_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_second_semaphore_addr);
 #endif
 
     // mcast args
@@ -100,9 +109,9 @@ void kernel_main() {
 #ifdef SPLIT_READER
                 noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 reader_idx = start_reader_idx;
-                cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
-
                 if (is_sender_core) {
+                    noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
+                    noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
                     read_activation_data<
                         sliced_inner_dim,
@@ -121,8 +130,8 @@ void kernel_main() {
                         reader_idx,
                         act_l1_read_addr,
                         stride_h_bytes);
+                    noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
                 }
-                cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 #endif
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {

@@ -587,6 +587,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     uint32_t weights_mcast_receiver_semaphore_id{};
     uint32_t act_mcast_sender_semaphore_id = 0;
     uint32_t act_mcast_receiver_semaphore_id = 0;
+    uint32_t act_split_reader_sync_first_semaphore_id = 0;
+    uint32_t act_split_reader_sync_second_semaphore_id = 0;
 
     // Check if we should run BRISC kernels on cores that are not in the output grid ( when split reader is enabled and
     // the output grid is smaller than the input grid)
@@ -615,6 +617,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
         weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
         weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
+
+        if (enable_split_reader) {
+            act_split_reader_sync_first_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            act_split_reader_sync_second_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        }
     } else {
         // 1D mcast
         if (!skip_weights_mcast) {
@@ -767,7 +774,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         (uint32_t)conv_act_c_read_bytes,
         (uint32_t)window_outer,
         (uint32_t)window_inner,
-        (uint32_t)(enable_split_reader ? act_block_num_tiles_split : act_block_num_tiles),
+        (uint32_t)(enable_split_reader && height_sharded ? act_block_num_tiles_split : act_block_num_tiles),
         (uint32_t)filter_h,
         (uint32_t)filter_w,
         (uint32_t)conv_act_size_w + (pad_w),
@@ -807,7 +814,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);
     }
-
+    const tt::tt_metal::DataType conv_input_dtype = (a.dtype() == tt::tt_metal::DataType::FLOAT32)
+                                                        ? tt::tt_metal::DataType::FLOAT32
+                                                        : tt::tt_metal::DataType::BFLOAT16;
+    const tt::DataFormat conv_input_df = datatype_to_dataformat_converter(conv_input_dtype);
     if (enable_activation_reuse) {
         std::vector<uint32_t> activation_reuse_args = {
             activation_reuse_config.act_cb_num_tiles_split,
@@ -821,6 +831,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
+    } else {
+        reader_compile_time_args.insert(reader_compile_time_args.end(), 8, 0);
+    }
+    if (enable_split_reader) {
+        reader_compile_time_args.push_back(act_split_reader_sync_first_semaphore_id);
+        reader_compile_time_args.push_back(act_split_reader_sync_second_semaphore_id);
+    } else {
+        reader_compile_time_args.insert(reader_compile_time_args.end(), 2, 0);
     }
 
     if (skip_activation_mcast) {
@@ -875,7 +893,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
         (uint32_t)(bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,
+        get_cb_info_by_name(cb_info, (block_sharded) ? Conv2dCb::ACT_ROW_MAJOR_BFLOAT16 : Conv2dCb::ACT_SECOND_READER)
+            .index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).index,
         num_blocks_act_w,
@@ -907,6 +926,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             (uint32_t)stride_w,
             (uint32_t)filter_h};
 
+        if (block_sharded) {
+            split_reader_args.push_back(act_split_reader_sync_first_semaphore_id);
+            split_reader_args.push_back(act_split_reader_sync_second_semaphore_id);
+            split_reader_args.push_back(act_block_num_tiles_split * tt::tile_size(conv_input_df));
+        }
+
         if (enable_activation_reuse && height_sharded) {
             std::vector<uint32_t> activation_reuse_args = {
                 activation_reuse_config.act_cb_num_tiles_split_last,
@@ -933,7 +958,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         act_num_subblocks,
         act_block_num_tiles,
         act_subblock_num_tiles,
-        enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
+        enable_split_reader && height_sharded ? act_block_h_ntiles
+                                              : act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
         weight_num_subblocks,
         weight_block_num_tiles,
         weight_block_w_ntiles,

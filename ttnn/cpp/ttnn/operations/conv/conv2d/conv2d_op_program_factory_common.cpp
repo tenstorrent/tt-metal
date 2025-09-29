@@ -17,6 +17,7 @@
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/tensor/types.hpp"
+
 namespace ttnn::operations::conv {
 namespace conv2d {
 
@@ -237,7 +238,7 @@ std::vector<CBInfo> get_cb_info(
             .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT_TILIZED) : std::nullopt});
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_SECOND_READER,
-            .num_pages = act_block_split_num_tiles,
+            .num_pages = (sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED) ? 0 : act_block_split_num_tiles,
             .page_size = input_tile_size,
             .data_format = conv_input_df});
     }
@@ -269,12 +270,12 @@ std::vector<CBInfo> get_cb_info(
         if (sharding_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
             row_major_act_cb_num_tiles = block_config.act_block_w_ntiles * 2;
         } else if (sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
-            row_major_act_cb_num_tiles = act_block_num_tiles;
+            row_major_act_cb_num_tiles = act_block_num_tiles + act_block_split_num_tiles;
         }
 
         // If split reader is enabled, we disable overlap for ACT_ROW_MAJOR_BFLOAT16 CB for now - subject to change
-        const bool overlap_act_cb = sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && !split_reader_enabled &&
-                                    conv_input_df == output_df && !skip_act_cb_create;
+        const bool overlap_act_cb =
+            sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_ROW_MAJOR_BFLOAT16,
             .num_pages = overlap_act_cb ? 0 : row_major_act_cb_num_tiles,
@@ -607,7 +608,7 @@ bool is_split_reader_viable(
     DataType output_datatype,
     bool act_reuse_enabled) {
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        return false;
+        return true;
     }
     // If activation reuse is enabled, we always enable split_reader
     if (act_reuse_enabled) {

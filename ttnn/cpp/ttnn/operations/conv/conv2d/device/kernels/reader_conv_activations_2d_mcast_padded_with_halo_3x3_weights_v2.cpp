@@ -41,6 +41,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(25);
     constexpr uint32_t cb_l1_array = get_compile_time_arg_val(26);
 
+#ifdef SPLIT_READER
+    const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(38));
+    const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(39));
+
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_first_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_second_semaphore_addr);
+#endif
+
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act_row_major_bfloat16>();
     }
@@ -111,7 +121,9 @@ void kernel_main() {
             cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-
+#ifdef SPLIT_READER
+                noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
+#endif
                 read_activation_data<
                     sliced_inner_dim,
                     dilation_w,
@@ -129,6 +141,10 @@ void kernel_main() {
                     reader_idx,
                     act_l1_read_addr,
                     stride_h_bytes);
+#ifdef SPLIT_READER
+                noc_semaphore_wait(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
+                noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, INVALID);
+#endif
             }
             cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
 
