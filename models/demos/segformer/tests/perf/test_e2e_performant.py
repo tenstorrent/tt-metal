@@ -14,7 +14,12 @@ from models.demos.segformer.runner.performant_runner import SegformerTrace2CQ
 
 
 def run_segformer_trace_2cqs_inference(
-    device, device_batch_size, model_location_generator, channels=3, resolution=(512, 512)
+    device,
+    device_batch_size,
+    model_location_generator,
+    channels=3,
+    resolution=(512, 512),
+    expected_inference_throughput=None,
 ):
     segformer_trace_2cq = SegformerTrace2CQ()
     segformer_trace_2cq.initialize_segformer_trace_2cqs_inference(device, model_location_generator, device_batch_size)
@@ -34,6 +39,10 @@ def run_segformer_trace_2cqs_inference(
         f"ttnn_segformer_512x512_batch_size_{batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
     )
 
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
@@ -43,8 +52,16 @@ def run_segformer_trace_2cqs_inference(
     "batch_size",
     ((1),),
 )
-def test_segformer_e2e(device, batch_size, model_location_generator):
-    run_segformer_trace_2cqs_inference(device, batch_size, model_location_generator)
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        106 if ttnn.get_num_devices() < 2 else 99,
+    ],
+)
+def test_segformer_e2e(device, batch_size, model_location_generator, expected_inference_throughput):
+    run_segformer_trace_2cqs_inference(
+        device, batch_size, model_location_generator, expected_inference_throughput=expected_inference_throughput
+    )
 
 
 @run_for_wormhole_b0()
@@ -55,7 +72,20 @@ def test_segformer_e2e(device, batch_size, model_location_generator):
     "device_batch_size",
     ((1),),
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        148,
+    ],
+)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-def test_segformer_e2e_dp(mesh_device, device_batch_size, model_location_generator):
-    run_segformer_trace_2cqs_inference(mesh_device, device_batch_size, model_location_generator)
+def test_segformer_e2e_dp(mesh_device, device_batch_size, model_location_generator, expected_inference_throughput):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+    run_segformer_trace_2cqs_inference(
+        mesh_device,
+        device_batch_size,
+        model_location_generator,
+        expected_inference_throughput=expected_inference_throughput,
+    )
