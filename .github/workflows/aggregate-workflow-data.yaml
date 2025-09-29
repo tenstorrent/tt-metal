@@ -126,20 +126,6 @@ jobs:
               {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
               {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
             ]
-      - name: Upload status changes artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
-        with:
-          name: workflow-status-changes
-          path: ${{ steps.analyze.outputs.status_changes_path }}
-          retention-days: 1
-
-      - name: Post regressions to Slack
-        if: ${{ steps.analyze.outputs.regressed_workflows != '[]' || steps.analyze.outputs.alert_all_message != '' }}
-        uses: ./.github/actions/slack-report-analyze-workflow-data
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
-          regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
-          alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
 
   handle-failures:
     needs: analyze-data
