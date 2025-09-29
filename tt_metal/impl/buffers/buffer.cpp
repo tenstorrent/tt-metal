@@ -205,22 +205,6 @@ std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
         case ShardOrientation::ROW_MAJOR: os << "ShardOrientation::ROW_MAJOR"; break;
         case ShardOrientation::COL_MAJOR: os << "ShardOrientation::COL_MAJOR"; break;
     }
-    os << ", ";
-
-    // Serialize mode
-    os << "mode=";
-    switch (spec.mode) {
-        case ShardMode::PHYSICAL: os << "ShardMode::PHYSICAL"; break;
-        case ShardMode::LOGICAL: os << "ShardMode::LOGICAL"; break;
-    }
-
-    // Serialize physical_shard_shape if present
-    if (spec.physical_shard_shape.has_value()) {
-        os << ", physical_shard_shape=[" << spec.physical_shard_shape.value()[0] << ", "
-           << spec.physical_shard_shape.value()[1] << "]";
-    } else {
-        os << ", physical_shard_shape=std::nullopt";
-    }
 
     os << "}";
     return os;
