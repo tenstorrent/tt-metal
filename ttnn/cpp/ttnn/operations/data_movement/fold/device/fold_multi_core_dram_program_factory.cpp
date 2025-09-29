@@ -267,7 +267,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     uint32_t num_cores_x = compute_grid_size.x;
     uint32_t num_cores_y = compute_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
-    std::cout << "num_cores_x: " << num_cores_x << ", num_cores_y: " << num_cores_y << std::endl;
 
     log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor.padded_shape());
     log_debug(tt::LogOp, "output_tensor_shape: {}", output.padded_shape());

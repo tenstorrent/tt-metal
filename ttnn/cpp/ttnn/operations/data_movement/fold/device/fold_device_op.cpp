@@ -36,9 +36,9 @@ void validate_fold(
         auto shard_shape = input_tensor.shard_spec().value().shape;
         TT_FATAL(shard_shape[0] % (input_shape[2] * stride_h * stride_w) == 0, "Error");
         TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Fold: Expect sharded input tensor in row-major layout.");
-        // TT_FATAL(
-        //     (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
-        //     "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
+        TT_FATAL(
+            (input_shape[-1] * input_tensor.element_size()) % 16 == 0,
+            "Fold: Expect input tensor's pages to be multiples of 16 bytes.");
     } else if (is_dram_interleaved) {
         TT_FATAL(input_shape[1] % stride_h == 0, "Fold: Input height must be divisible by stride_h.");
         TT_FATAL(input_shape[2] % stride_w == 0, "Fold: Input width must be divisible by stride_w.");
@@ -71,8 +71,6 @@ Fold::spec_return_value_t Fold::compute_output_specs(
          1,
          input_shape[0] * input_shape[1] * input_shape[2] / (op_attr.stride_h * op_attr.stride_w),
          input_shape[3] * op_attr.stride_h * op_attr.stride_w});
-
-    std::cout << "Fold output shape: " << output_shape << std::endl;
 
     if (op_attr.is_sharded) {
         auto shard_spec = input_tensor.shard_spec().value();
