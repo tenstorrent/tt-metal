@@ -935,3 +935,94 @@ def test_sd_reshard(
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
     passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     assert passing, output
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
+    [
+        # Test case for 3-channel unaligned data (HEIGHT_SHARDED)
+        (
+            [1, 1, 64, 3],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (1, 0)]],
+            (64, 3),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [[(0, 0), (2, 0)]],
+            (32, 3),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            [1, 1, 64, 16],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (1, 0)]],
+            (64, 16),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            [[(0, 0), (2, 0)]],
+            (32, 16),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+def test_reshard_unaligned_channels_height_sharded(
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_shape,
+    input_shard_orientation,
+    input_sharding_scheme,
+    output_shard_grid,
+    output_shard_shape,
+    output_shard_orientation,
+    output_sharding_scheme,
+    tt_dtype,
+):
+    # Create L1 memory configs for both input and output
+    input_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(grid[0][0], grid[0][1]), ttnn.CoreCoord(grid[1][0], grid[1][1]))
+                for grid in input_shard_grid
+            }
+        ),
+        input_shard_shape,
+        input_shard_orientation,
+    )
+    print(input_shard_spec)
+    input_mem_config = ttnn.MemoryConfig(input_sharding_scheme, ttnn.BufferType.L1, input_shard_spec)
+    print(input_mem_config)
+
+    output_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(grid[0][0], grid[0][1]), ttnn.CoreCoord(grid[1][0], grid[1][1]))
+                for grid in output_shard_grid
+            }
+        ),
+        output_shard_shape,
+        output_shard_orientation,
+    )
+    print(output_shard_spec)
+    output_mem_config = ttnn.MemoryConfig(output_sharding_scheme, ttnn.BufferType.L1, output_shard_spec)
+    print(output_mem_config)
+    # Create input tensor
+    torch_tensor = random_torch_tensor(tt_dtype, input_shape)
+    input_tensor = ttnn.Tensor(torch_tensor, tt_dtype, device=device, layout=input_layout, mem_config=input_mem_config)
+
+    # Perform L1 -> L1 reshard
+    output_tensor = ttnn.reshard(input_tensor, output_mem_config)
+
+    # Convert back to torch for comparison
+    torch_tensor_after_round_trip = ttnn.to_torch(output_tensor)
+
+    assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+
+    # For unaligned channels, we expect some padding in the output
+    # The actual data should match, but there might be padding zeros
+    passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip, 0.99)
+    assert passing, f"Unaligned channel L1->L1 reshard failed: {output}"

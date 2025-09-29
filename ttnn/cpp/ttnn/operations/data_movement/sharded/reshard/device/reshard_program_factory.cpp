@@ -681,9 +681,11 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     auto cb_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     if (unaligned) {
+        uint32_t scratch_total_size = remote_units_per_shard * remote_unit_size_padded;
+        // Ensure total buffer size is aligned to page size
+        scratch_total_size = ((scratch_total_size + unit_size - 1) / unit_size) * unit_size;
         tt::tt_metal::CircularBufferConfig cb_scratch_config =
-            tt::tt_metal::CircularBufferConfig(
-                remote_units_per_shard * remote_unit_size_padded, {{cb_scratch_index, data_format}})
+            tt::tt_metal::CircularBufferConfig(scratch_total_size, {{cb_scratch_index, data_format}})
                 .set_page_size(cb_scratch_index, unit_size);
         tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scratch_config);
     }
