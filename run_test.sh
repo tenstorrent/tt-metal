@@ -62,6 +62,14 @@ for i in $(seq 1 $TOTAL_ITERATIONS); do
         echo -e "${RED}WARNING: unit_tests_dispatch failed with exit code $CMD2_STATUS${NC}"
         echo -e "${YELLOW}Check log file: $LOG_FILE${NC}"
         CMD2_FAILURES=$((CMD2_FAILURES + 1))
+        echo ""
+        echo "========================================"
+        echo -e "${RED}TEST FAILED - EXITING SCRIPT${NC}"
+        echo "========================================"
+        echo "Completed iterations: $i/$TOTAL_ITERATIONS"
+        echo "tt-smi failures: ${CMD1_FAILURES}"
+        echo "unit_tests_dispatch failures: ${CMD2_FAILURES}"
+        exit 1
     else
         echo -e "${GREEN}unit_tests_dispatch completed successfully${NC}"
     fi
