@@ -16,5 +16,5 @@
 	branch = master
 [submodule "tt_metal/third_party/tt_llk"]
 	path = tt_metal/third_party/tt_llk
-	url = https://github.com/tenstorrent/tt-llk.git
+	url = https://github.com/ngohoang34/tt-llk.git
 	branch = main
