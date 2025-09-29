@@ -17,7 +17,7 @@ class TestStatus(Enum):
     XPASS = 8  # Unexpected pass - test passed when it was expected to fail
 
 
-class VectorValidity(Enum):
+class VectorValidity(str, Enum):
     VALID = "VALID"
     INVALID = "INVALID"
 

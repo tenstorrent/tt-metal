@@ -5,16 +5,9 @@
 import ttnn
 import json
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
-
-# below imports are necessary to make evals resolvable
-from tests.sweep_framework.framework.statuses import VectorValidity, VectorStatus
-from ttnn._ttnn.tensor import (
-    DataType,
-    Layout,
-    MathFidelity,
-)  # make eval("DataType.*"/"Layout.*"/"MathFidelity.*") resolvable
-from ttnn._ttnn.types import BcastOpMath, BcastOpDim
 import torch
+
+TTNN_NAME = ttnn.__name__
 
 
 def convert_enum_values_to_strings(data):
@@ -75,15 +68,45 @@ def serialize(object, warnings=[]):
         return str(object)
 
 
+def _ttnn_type_from_name(type_name):
+    uq_type_name = type_name.split(".")[-1]
+    the_type = None
+    try:
+        the_type = getattr(ttnn, uq_type_name)
+    except AttributeError as e:
+        logger.debug(f"Hopefully not an enum {e}")
+
+    return the_type
+
+
+def _deserialize_ttnn_enum(obj_name: str):
+    uq_obj_name_parts = list(filter(lambda p: p != TTNN_NAME, obj_name.split(".")))
+    enum_type = _ttnn_type_from_name(uq_obj_name_parts[0])
+
+    if enum_type is None:
+        return None
+
+    return eval(f"enum_type.{uq_obj_name_parts[1]}")
+
+
 def deserialize(object):
-    if isinstance(object, dict):
-        type = eval(object["type"])
-        return type.from_json(object["data"])
-    else:
+    try:
+        if isinstance(object, dict):
+            type = _ttnn_type_from_name(object["type"])
+            return type.from_json(object["data"])
+
+        elif isinstance(object, str) and "." in object:
+            maybe_enum = _deserialize_ttnn_enum(object)
+            if maybe_enum is not None:
+                return maybe_enum
         try:
             return eval(object)
-        except:
+        except (SyntaxError, NameError):
             return str(object)
+
+    except Exception as e:
+        logger.exception(f"deserialize failed {e}")
+        raise
 
 
 def serialize_structured(object, warnings=[]):
@@ -109,24 +132,31 @@ def serialize_structured(object, warnings=[]):
 
 
 def deserialize_structured(object):
-    if isinstance(object, dict):
-        type = eval(object["type"])
-        data = object["data"]
-        # If data is a dict/object, convert it back to JSON string for from_json method
-        if isinstance(data, (dict, list)):
-            # Convert string enum values back to integers for from_json
-            data = convert_enum_strings_to_values(data)
-            data = json.dumps(data)
-        return type.from_json(data)
-    else:
-        # Check if the object is a string that should remain a string
-        # Common operation names that should not be evaluated
-        if isinstance(object, str) and object in ["sum", "mean", "max", "min", "std", "var"]:
-            return object
+    try:
+        if isinstance(object, dict):
+            type = eval(object["type"])
+            data = object["data"]
+            # If data is a dict/object, convert it back to JSON string for from_json method
+            if isinstance(data, (dict, list)):
+                # Convert string enum values back to integers for from_json
+                data = convert_enum_strings_to_values(data)
+                data = json.dumps(data)
+            return type.from_json(data)
+
+        elif isinstance(object, str):
+            if "." in object:
+                maybe_enum = _deserialize_ttnn_enum(object)
+                if maybe_enum is not None:
+                    return maybe_enum
+            elif object in ["sum", "mean", "max", "min", "std", "var"]:
+                return object
         try:
             return eval(object)
-        except:
+        except (SyntaxError, NameError):
             return str(object)
+    except Exception as e:
+        logger.exception(f"Deserialize structured failed {e}")
+        raise
 
 
 def convert_enum_strings_to_values(data):
