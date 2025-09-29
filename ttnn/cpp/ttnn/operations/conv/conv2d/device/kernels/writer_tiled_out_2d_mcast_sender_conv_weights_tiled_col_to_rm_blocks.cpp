@@ -163,11 +163,11 @@ void kernel_main() {
 #endif
             for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
 #ifdef SPLIT_READER
-                noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 reader_idx = start_reader_idx;
                 if (is_sender_core) {
                     noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
                     noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
+                    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
                     read_activation_data<
                         sliced_inner_dim,

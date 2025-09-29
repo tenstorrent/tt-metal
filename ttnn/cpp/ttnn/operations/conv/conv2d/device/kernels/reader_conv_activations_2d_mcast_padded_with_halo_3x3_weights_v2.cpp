@@ -104,8 +104,6 @@ void kernel_main() {
     // set_state uses just x/y from the get_noc_addr, addr is ignored
     uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
-    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
-
     constexpr uint32_t window_outer_offset = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
@@ -124,6 +122,7 @@ void kernel_main() {
 #ifdef SPLIT_READER
                 noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
 #endif
+                noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 read_activation_data<
                     sliced_inner_dim,
                     dilation_w,
