@@ -7,6 +7,8 @@ import math
 import numpy as np
 from PIL import Image
 from transformers import CLIPTokenizer, CLIPModel
+import requests
+from io import BytesIO
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
 
@@ -544,6 +546,29 @@ def convert_model_to_ttnn(state_dict):
     return state_dict
 
 
+def download_image(url):
+    """
+    Download an image from a URL and return it as a PIL Image object.
+
+    Args:
+        url (str): The URL of the image to download
+
+    Returns:
+        PIL.Image: The downloaded image
+    """
+    try:
+        response = requests.get(url, timeout=30)
+        response.raise_for_status()  # Raise an exception for bad status codes
+
+        # Convert the response content to a PIL Image
+        image = Image.open(BytesIO(response.content))
+        return image
+    except requests.RequestException as e:
+        raise Exception(f"Failed to download image from {url}: {e}")
+    except Exception as e:
+        raise Exception(f"Failed to process downloaded image: {e}")
+
+
 def preprocess_image(image, model_resolution):
     def _convert_image_to_rgb(image):
         return image.convert("RGB")
@@ -571,11 +596,11 @@ if __name__ == "__main__":
 
     clip = CLIP(state_dict)
 
-    root_dir = "/localdev/nmaurice/CLIP-tt"
-    image_path = os.path.join(root_dir, "CLIP.png")
+    # Download image from URL
+    image_url = "https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/nmaurice/clip-tutorial/media/clip_tutorial/CLIP.png"
+    image = download_image(image_url)
 
     # Preprocess image
-    image = Image.open(image_path)
     image = preprocess_image(image, 224).unsqueeze(0).to("cpu")
 
     preferred_dtype = ttnn.bfloat16
