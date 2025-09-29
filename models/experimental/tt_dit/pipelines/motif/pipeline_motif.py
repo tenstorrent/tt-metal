@@ -514,17 +514,19 @@ class StableDiffusion3Pipeline:
                 prompt_encoding_end_time = time.time()
                 logger.info("preparing timesteps...")
 
-            timesteps = torch.linspace(1, 0, num_inference_steps + 1)
+            sigmas = torch.linspace(1, 0, num_inference_steps + 1)
 
             assert num_inference_steps % 2 == 0
             s = num_inference_steps
             n = linear_quadratic_emulating_steps
-            timesteps = torch.concat(
+            sigmas = torch.concat(
                 [
                     torch.linspace(1, 0, n + 1)[: s // 2],
                     torch.linspace(0, 1, s // 2 + 1) ** 2 * (s // 2 * 1 / n - 1) - (s // 2 * 1 / n - 1),
                 ]
             )
+
+            timesteps = sigmas[:-2]
 
             logger.info("preparing latents...")
 
@@ -539,9 +541,7 @@ class StableDiffusion3Pipeline:
                 height // self._vae_scale_factor,
                 width // self._vae_scale_factor,
             ]
-            latents = self.transformers[0].patchify(
-                torch.randn(shape, dtype=torch.bfloat16).permute(0, 2, 3, 1), patch_size=self._patch_size
-            )
+            latents = self.transformers[0].patchify(torch.randn(shape, dtype=torch.bfloat16).permute(0, 2, 3, 1))
 
             tt_prompt_embeds_list = []
             tt_pooled_prompt_embeds_list = []
@@ -613,7 +613,7 @@ class StableDiffusion3Pipeline:
 
             for i, t in enumerate(tqdm.tqdm(timesteps)):
                 with timer.time_step("denoising_step") if timer else nullcontext():
-                    sigma_difference = timesteps[i + 1] - timesteps[i]
+                    sigma_difference = sigmas[i + 1] - sigmas[i]
 
                     tt_timestep_list = []
                     tt_sigma_difference_list = []
@@ -659,7 +659,7 @@ class StableDiffusion3Pipeline:
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
                 tt_latents = ttnn.experimental.all_gather_async(
-                    input_tensor=tt_latents_step_list[self.vae_submesh_idx],
+                    input_tensor=ttnn.unsqueeze(tt_latents_step_list[self.vae_submesh_idx], 0),
                     dim=1,
                     multi_device_global_semaphore=self.ccl_managers[self.vae_submesh_idx].get_ag_ping_pong_semaphore(
                         self.dit_parallel_config.sequence_parallel.mesh_axis
@@ -669,15 +669,13 @@ class StableDiffusion3Pipeline:
                     cluster_axis=self.dit_parallel_config.sequence_parallel.mesh_axis,
                     num_links=self.ccl_managers[self.vae_submesh_idx].num_links,
                 )
+                tt_latents = ttnn.squeeze(tt_latents, 0)
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
 
                 torch_latents = self.transformers[0].unpatchify(
-                    latents.permute(0, 2, 3, 1),
-                    height=height // self._vae_scale_factor,
-                    width=width // self._vae_scale_factor,
-                    patch_size=self._patch_size,
+                    latents, height=height // self._vae_scale_factor, width=width // self._vae_scale_factor
                 )
 
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
