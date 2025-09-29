@@ -176,7 +176,7 @@ def run_all_gather_impl(
         (tt_all_gather_out_tensor, input_tensor) = run_op_wrapped(0)
         tt_ag_out = ttnn.from_device(tt_all_gather_out_tensor)
         tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
-        if not use_persistent_buffers:
+        if use_persistent_buffers:
             tt_all_gather_out_tensor.deallocate()
         tt_all_gather_out_tensor_list.append(tt_ag_out)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
@@ -193,7 +193,7 @@ def run_all_gather_impl(
         signpost("start")
         for i in range(num_iters):
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            if not use_persistent_buffers:
+            if use_persistent_buffers:
                 tt_all_gather_out_tensor.deallocate()
         logger.info(f"Done executing trace")
         signpost("stop")
