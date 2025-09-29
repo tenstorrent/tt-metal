@@ -63,6 +63,7 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::Float32: return (tile_hw * 4);
         case DataFormat::Int8:
         case DataFormat::Lf8:
+        case DataFormat::Fp8_e4m3:
         case DataFormat::UInt8:
         case DataFormat::RawUInt8: return tile_hw;
         case DataFormat::UInt16:

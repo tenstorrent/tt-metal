@@ -70,6 +70,7 @@ inline std::ostream& operator<<(std::ostream& os, const DataFormat& format) {
         case DataFormat::Int8: os << "Int8"; break;
         case DataFormat::UInt8: os << "UInt8"; break;
         case DataFormat::Lf8: os << "Lf8"; break;
+        case DataFormat::Fp8_e4m3: os << "Fp8_e4m3"; break;
         case DataFormat::UInt16: os << "UInt16"; break;
         case DataFormat::UInt32: os << "UInt32"; break;
         case DataFormat::Int32: os << "Int32"; break;
@@ -97,6 +98,7 @@ constexpr static uint32_t datum_size(const DataFormat& format) {
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Int8:
         case DataFormat::Lf8:
+        case DataFormat::Fp8_e4m3:
         case DataFormat::UInt8:
         case DataFormat::RawUInt8: return 1;
         case DataFormat::UInt16:
@@ -124,6 +126,7 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Int8:
         case DataFormat::Lf8:
+        case DataFormat::Fp8_e4m3:
         case DataFormat::UInt8:
         case DataFormat::RawUInt8: return 1024;
         case DataFormat::UInt16:

@@ -146,7 +146,8 @@ constexpr static std::int32_t MUL_HEADERLESS_TILE_SIZE_AND_INDEX(uint format, ui
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((index << 4) + (index << 2));
         case ((uint8_t)DataFormat::Int8):
-        case ((uint8_t)DataFormat::Lf8): return ((index << 6));
+        case ((uint8_t)DataFormat::Lf8):
+        case ((uint8_t)DataFormat::Fp8_e4m3): return ((index << 6));
         // Keep default as Bfp8?
         default: return ((index << 6) + (index << 2));
     };

@@ -319,6 +319,12 @@ void PrintTensixRegisterData(ostringstream* stream, int setwidth, uint32_t datum
         case static_cast<std::uint8_t>(tt::DataFormat::Tf32):
             *stream << setw(setwidth) << make_float(8, 10, datum) << " ";
             break;
+        case static_cast<std::uint8_t>(tt::DataFormat::Fp8_e4m3):
+            *stream << setw(setwidth) << make_float(4, 3, datum & 0xFF) << " ";
+            *stream << setw(setwidth) << make_float(4, 3, (datum >> 8) & 0xFF) << " ";
+            *stream << setw(setwidth) << make_float(4, 3, (datum >> 16) & 0xFF) << " ";
+            *stream << setw(setwidth) << make_float(4, 3, (datum >> 24) & 0xFF) << " ";
+            break;
         case static_cast<std::uint8_t>(tt::DataFormat::Float32): {
             float value;
             memcpy(&value, &datum, sizeof(float));
