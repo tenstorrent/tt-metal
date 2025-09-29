@@ -492,6 +492,8 @@ public:
         log_info(tt::LogTest, "Initialized CSV file: {}", csv_file_path_.string());
     }
 
+    void set_yaml_filename(const std::string& yaml_filename) { yaml_filename_ = yaml_filename; }
+
     void close_devices() { fixture_->close_devices(); }
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
@@ -1253,6 +1255,10 @@ private:
     }
 
     std::string get_golden_csv_filename() {
+        // Golden csv filename has the format "golden_bandwidth_summary_<yaml_filename>_<arch_name>_<cluster_name>.csv"
+        // Strip the .yaml extension from the yaml_filename
+        // If the filename is none, stripping the string will simply return "None"
+        std::string yaml_filename_stripped = yaml_filename_.substr(0, yaml_filename_.find(".yaml"));
         auto arch_name = tt::tt_metal::hal::get_arch_name();
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
@@ -1260,7 +1266,7 @@ private:
         std::string cluster_name = std::string(enchantum::to_string(cluster_type));
         std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
 
-        std::string file_name = "golden_bandwidth_summary_" + arch_name + "_" + cluster_name + ".csv";
+        std::string file_name = "golden_bandwidth_summary_" + yaml_filename_stripped + "_" + arch_name + "_" + cluster_name + ".csv";
         return file_name;
     }
 
@@ -1508,6 +1514,7 @@ private:
     std::filesystem::path csv_summary_file_path_;
 
     // Golden CSV comparison data
+    std::string yaml_filename_;
     std::vector<GoldenCsvEntry> golden_csv_entries_;
     std::vector<ComparisonResult> comparison_results_;
     std::vector<std::string> all_failed_tests_;  // Accumulates all failed tests across test run

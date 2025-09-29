@@ -1,0 +1,55 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 4
+
+Tests:
+  - name: "LinearUnicastWrite"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+      num_links: 4
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 200000
+
+    patterns:
+      - type: all_to_all
+  
+  - name: "RingUnicastWrite"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+      num_links: 4
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 200000
+
+    patterns:
+      - type: all_to_all
+  
+  - name: "MeshUnicastWrite"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+      num_links: 4
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 4096
+      num_packets: 200000
+
+    patterns:
+      - type: all_to_all
