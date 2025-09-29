@@ -15,6 +15,7 @@ from ...models.transformers.transformer_flux1 import (
 )
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
+from ...utils import cache
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
@@ -360,8 +361,26 @@ def test_transformer(
         parallel_config=parallel_config,
         padding_config=padding_config,
     )
-    logger.info("loading state dict...")
-    tt_model.load_state_dict(torch_model.state_dict())
+
+    if cache.cache_dir_is_set():
+        cache_path = cache.get_and_create_cache_path(
+            model_name="flux.1-dev",
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            dtype="bf16",
+        )
+    else:
+        cache_path = None
+
+    if cache_path and cache.cache_dict_exists(cache_path):
+        logger.info("loading from cache...")
+        tt_model.from_cached_state_dict(cache.load_cache_dict(cache_path))
+    else:
+        logger.info("loading state dict...")
+        tt_model.load_state_dict(torch_model.state_dict())
+        if cache_path:
+            logger.info("saving to cache...")
+            cache.save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, spatial_seq_len, in_channels])
