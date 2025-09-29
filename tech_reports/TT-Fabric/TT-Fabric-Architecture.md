@@ -80,10 +80,6 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [5. Sockets over TT-Fabric](#socket_api)
 
-[6. Reliability](#reliability)
-
-[6.1. Automatic Traffic Rerouting](#rerouting)
-
 [7. Deadlock Avoidance and Mitigation](#deadlocks)
 
 [7.1. Dimension Ordered Routing](#dim_order_routing)
@@ -92,19 +88,25 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 [7.3. Fabric Virtual Channels](#fab_vcs)
 
-[7.4. Time To Live (TTL)](#ttl)
+[7.4. Limitations](#limits)
 
-[7.5. Timeout](#timeout)
+[8. TT-Fabric Roadmap](#roadmap) 
 
-[7.6. Limitations](#limits)
+[8.1. Time To Live (TTL)](#ttl)
 
-[8. TT-Fabric Model](#model)
+[8.2. Timeout](#timeout)
 
-[8.1. Serialization and Visualization](#visualization)
+[8.3. Reliability](#reliability)
 
-[8.2. Data Plane Simulator](#simulator)
+[8.3.1. Automatic Traffic Rerouting](#rerouting)
 
-[8.3. Modelling External Disruptors and Buffer Limits](#disruptors)
+[8.4. TT-Fabric Model](#model)
+
+[8.4.1. Serialization and Visualization](#visualization)
+
+[8.4.2. Data Plane Simulator](#simulator)
+
+[8.4.3. Modelling External Disruptors and Buffer Limits](#disruptors)
 
 [9. System Specification](#system_spec)
 
@@ -124,7 +126,7 @@ For questions and comments please use the [TT-Metalium Scale-Out Discord Server]
 
 # 1 Overview <a id="overview"></a>
 
-![](images/image001.png)
+![](images/Scale-upAndScale-out.png)
 
 TT-fabric is a revolutionary approach to AI infrastructure, built around the Tenstorrent Galaxy as its core component.
 
@@ -259,14 +261,14 @@ User workload on data plane encounters a temporary pause in activity. If TT-Fabr
 
 TT-Fabric allows a maximum scale out to 250,000 devices. Devices are connected in groups of meshes and we support upto 1024 meshes of 256 devices each.
 
-A mesh is a fully and uniformaly connected grid of chips. Uniform connectivity means that all devices in the mesh have the same number of ethernet connections to all of their neighbors.
+A mesh is a fully and uniformaly connected grid of chips. Uniform connectivity means that all devices in the mesh have the same number of ethernet connections to all of their neighbors. 
 
 Inter-Mesh connectivity is provided through subset of devices called exit nodes. A mesh may be connected to multiple neighboring meshes in which case there are exit nodes providing routes to different neighboring meshes.
 
 To support this topology, we need two levels of routing:
 
-* L0 or Intra-Mesh routing
-* L1 or Inter-Mesh routing
+* L0 or Intra-Mesh routing (scale-up)
+* L1 or Inter-Mesh routing (scale-out)
 
 Fabric routers have fully instantiated routing tables indexed with Device Id or Mesh Id. This means that a router can look up a route to any Device or Mesh from its routing tables.
 
@@ -274,7 +276,7 @@ An intra-mesh routing table entry is a source route to a mesh destination. This 
 
 An inter-mesh routing table entry is an exit node in the current mesh.
 
-#### 2.2.1.1 L0 Routing (Intra-Mesh) <a id="intramesh"></a>
+#### 2.2.1.1 L0 Routing (Intra-Mesh a.k.a Scale-up) <a id="intramesh"></a>
 
 When a packet’s destination is within the local mesh, the next hop is looked up from L0 routing table and packet is forwarded over specified ethernet port.
 
@@ -333,7 +335,7 @@ The following table shows how a packet sent by source Device 0 gets routed to de
   </tr>
 </table>
 
-#### 2.2.1.2 L1 Routing (Inter-Mesh) <a id="intermesh"></a>
+#### 2.2.1.2 L1 Routing (Inter-Mesh a.k.a Scale-out) <a id="intermesh"></a>
 
 When a packet is not addressed to local mesh, the next hop is looked up from L1 routing table and packet is forwarded over specified ethernet port.
 
@@ -726,17 +728,17 @@ The fabric router that a worker connects to depends on the target fabric node th
               ◀═══▶│ETHERNET│         │  │     └──┴──┴──┴──┴──┴──┴──┴──┘ │  │  ┆ ║ ║   ┆   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │          │ETHERNET│◀═══▶
                    └────────┘═▶═╗     │  └───────────────────────────────┘  │  ┆ ║ ║   ┆   │  └───────────────────────────────┘  │      ╔═◀═└────────┘
                                 ║     ├─────────────────────────────────────┤  ┆ ╚═══╗ ┆   ├─────────────────────────────────────┤      ║
-                                ║     │               RECEIVER CHANNEL (1)  │  ┆   ║ ║ ┆   │  RECEIVER CHANNEL (1)               │      ║  
-                                ║     │  ┌───────────────────────────────┐  │  ┆   ║ ║ ┆   │  ┌───────────────────────────────┐  │      ║  
-                                ║     │  │ Receiver Channel 0 (16 slots) │  │  ┆   ║ ║ ┆   │  │ Receiver Channel 0 (16 slots) │  │      ║  
-                                ║     │  │     ┌──┬──┬──┬──┬──┬──┬──┬──┐ │  │  ┆   ║ ║ ┆   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║  
-                                ╚═══════▶┤     │15│14│ ┅│ ┅│ ┅│ 2│ 1│ 0│ ├▶══════╦═╝ ╠═══════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15│     ├◀════════╝  
+                                ║     │               RECEIVER CHANNEL (1)  │  ┆   ║ ║ ┆   │  RECEIVER CHANNEL (1)               │      ║
+                                ║     │  ┌───────────────────────────────┐  │  ┆   ║ ║ ┆   │  ┌───────────────────────────────┐  │      ║
+                                ║     │  │ Receiver Channel 0 (16 slots) │  │  ┆   ║ ║ ┆   │  │ Receiver Channel 0 (16 slots) │  │      ║
+                                ║     │  │     ┌──┬──┬──┬──┬──┬──┬──┬──┐ │  │  ┆   ║ ║ ┆   │  │ ┌──┬──┬──┬──┬──┬──┬──┬──┐     │  │      ║
+                                ╚═══════▶┤     │15│14│ ┅│ ┅│ ┅│ 2│ 1│ 0│ ├▶══════╦═╝ ╠═══════◀┤ │ 0│ 1│ 2│ ┅│ ┅│ ┅│14│15│     ├◀════════╝
                                       │  │     └──┴──┴──┴──┴──┴──┴──┴──┘ │  │  ┆ ║   ║ ┆   │  │ └──┴──┴──┴──┴──┴──┴──┴──┘     │  │
                                       │  └───────────────────────────────┘  │  └┄║┄┄┄║┄┘   │  └───────────────────────────────┘  │
                                       └─────────────────────────────────────┘    ║   ║     └─────────────────────────────────────┘
                                                                                  ║   ║
                                                                                  ▼   ▼
-                                                                          To Local Destinations 
+                                                                          To Local Destinations
                                                                           in current device
 ```
 
@@ -832,18 +834,7 @@ Point to API Header
 We have implemented sockets as send and receive operatoins that use tt-fabric asynchronous write APIs to implement flowcontroled data transfer between a sender and receiver.
 TODO: Add more information on send/receive operations.
 
-# 6 Reliability <a id="reliability"></a>
-## 6.1 Automatic Traffic Rerouting <a id="rerouting"></a>
 
-TT-Fabric supports device meshes that can scale up to hundreds of thousands of devices. On such a large scale, the probability of some ethernet links going down is non-negligible. An interconnect that does not implement link redundancy and is not able to work around some broken ethernet links will face frequent work interruptions and require a lot of system management calls. We intend to build redundancy into TT-Fabric network stack such that if some ethernet links on a fabric node go down, fabric can automatically reroute blocked traffic over an available ethernet link. If there is at least 1 available link in the same direction as the broken link, TT-Fabric's redundancy implementation will be completely transparent to workloads running on the system. End user applications may notice a temporary pause and lower data rates but should not otherwise require any intervention. TT-Fabric will also notify Control Plane of the rerouting status so that appropriate action may be taken on the system management front to service the broken ethernet links. User workload will be able to reach its next checkpoint without network interruption at degraded data rates. At that point Control plane can update routing tables to take out broken links from routing network. System maintenance can also be performed to fix ethernet link issues before resuming user work.
-
-To support redundancy, each fabric router has an Ethernet Fallback Channel (EFC) that is brought into service by other fabric routers in a node when their dedicated ethernet links become unreliable or completely dysfunctional. EFC can be shared by multiple routers when multiple ethernet links lose connection. EFC is not virtualized and operates at Layer 2. When routers push data into EFC, special layer 2 headers are appended to traffic so that impacted fabric router’s native FVCs can be reliably connected to their receiver channels on either side of the broken ethernet links.
-
-Fabric routers exchange credits with each for traffic flow control rather than the EFC so that EFC is available for all reroute traffic. Any FVC back pressure is kept within the fabric router buffers and does not propagate to EFC layer buffers.
-
-The following diagram shows how traffic gets rerouted when Eth A link becomes inactive. Broken arrows show all the rerouted FVC traffic in both directions.
-
-![](images/image013.png)
 
 # 7 Deadlock Avoidance and Mitigation <a id="deadlocks"></a>
 
@@ -888,7 +879,15 @@ Edge disjoint routing uses different entry/exit nodes on network edges for traff
 
 As stated earlier, FVCs guarantee independent progress of traffic relative to other FVCs. Traffic that is expected to contend for network or endpoint resources can be routed via unique FVCs so that one traffic stream does not get stuck behind other traffic that is stalled due to a stalled endpoint.
 
-## 7.4 Time To Live (TTL) <a id="ttl"></a>
+## 7.4 Limitations <a id="limits"></a>
+
+TT-Fabric does not support end-to-end transmissions in case of dropped packets. The current fallback is to notify Control Plane and rely on host software managed mitigation. TT-Fabric can notify data senders of the dropped packets by sending a negative acknowledgement. Data retransmission is left to the TT-Fabric user’s discretion.
+
+# 8 TT-Fabric Roadmap <a id="roadmap"></a>
+
+The items below are on the TT-Fabric roadmap.
+
+## 8.1 Time To Live (TTL) <a id="ttl"></a>
 
 TT-Fabric may encounter packets that keep on circling the network and are not terminating. This can occur if the routing tables are misconfigured or corrupted. Such traffic can keep on living in the network forever and keep burning network resources. To avoid such patterns of traffic, TT-Fabric packets have a TTL parameter. On traffic initiating end or router, TTL is initialized to a conservative value that covers longest hop count any packet could encounter in TT-Fabric. At every network hop, fabric router decrements TTL by 1. Under normal conditions, a packet will reach its destination before TTL becomes 0 (expires). If for any reason a router sees a fabric packet with TTL parameter of 0, the packet is marked as expired, dropped, and drained from fabric. TT-Fabric also notifies Control Plane of the event.
 
@@ -914,19 +913,28 @@ With a TTL of 10 the packet hops are shown in the table below. As the packet loo
 | 7 | 1 |
 | 11 | 0  Fabric Router at Device 11 drops the packet with expired TTL |
 
-## 7.5 Timeout <a id="timeout"></a>
+## 8.2 Timeout <a id="timeout"></a>
 
 Timeouts are TT-Fabric's last line of defense against deadlocks. Timeout is a detection mechanism rather than a prevention mechanism. Schemes mentioned in previous sections are meant to prevent or minimize deadlocks. If a routing deadlock slips through, TT-Fabric will detect it through timeout. If a packet head is not able to make progress through a fabric router within the specified timeout, it may indicate some deadlock due to resource contention, erroneous routing, stalled endpoint etc. Fabric router encountering routing timeout will drop the packet and drain its data from the fabric buffers. The Fabric router will also notify Control Plane of the event.
 
-## 7.6 Limitations <a id="limits"></a>
+## 8.3 Reliability <a id="reliability"></a>
+### 8.3.1 Automatic Traffic Rerouting <a id="rerouting"></a>
 
-TT-Fabric does not support end-to-end transmissions in case of dropped packets. The current fallback is to notify Control Plane and rely on host software managed mitigation. TT-Fabric can notify data senders of the dropped packets by sending a negative acknowledgement. Data retransmission is left to the TT-Fabric user’s discretion.
+TT-Fabric supports device meshes that can scale up to hundreds of thousands of devices. On such a large scale, the probability of some ethernet links going down is non-negligible. An interconnect that does not implement link redundancy and is not able to work around some broken ethernet links will face frequent work interruptions and require a lot of system management calls. We intend to build redundancy into TT-Fabric network stack such that if some ethernet links on a fabric node go down, fabric can automatically reroute blocked traffic over an available ethernet link. If there is at least 1 available link in the same direction as the broken link, TT-Fabric's redundancy implementation will be completely transparent to workloads running on the system. End user applications may notice a temporary pause and lower data rates but should not otherwise require any intervention. TT-Fabric will also notify Control Plane of the rerouting status so that appropriate action may be taken on the system management front to service the broken ethernet links. User workload will be able to reach its next checkpoint without network interruption at degraded data rates. At that point Control plane can update routing tables to take out broken links from routing network. System maintenance can also be performed to fix ethernet link issues before resuming user work.
 
-# 8 TT-Fabric Model <a id="model"></a>
+To support redundancy, each fabric router has an Ethernet Fallback Channel (EFC) that is brought into service by other fabric routers in a node when their dedicated ethernet links become unreliable or completely dysfunctional. EFC can be shared by multiple routers when multiple ethernet links lose connection. EFC is not virtualized and operates at Layer 2. When routers push data into EFC, special layer 2 headers are appended to traffic so that impacted fabric router’s native FVCs can be reliably connected to their receiver channels on either side of the broken ethernet links.
+
+Fabric routers exchange credits with each for traffic flow control rather than the EFC so that EFC is available for all reroute traffic. Any FVC back pressure is kept within the fabric router buffers and does not propagate to EFC layer buffers.
+
+The following diagram shows how traffic gets rerouted when Eth A link becomes inactive. Broken arrows show all the rerouted FVC traffic in both directions.
+
+![](images/image013.png)
+
+## 8.4 TT-Fabric Model <a id="model"></a>
 
 TT-Fabric Model is a software functional model of all components of the Fabric. The purpose of the Fabric Model is to fully simulate the ethernet traffic in the Fabric. It will provide a ground truth for the state of any configuration of the Fabric, to help with debug and rerouting decisions. The Fabric Model will include a new piece of software to emulate the physical data plane, but otherwise shares the software components of the TT-Control Plane and Fabric Router.
 
-## 8.1 Serialization and Visualization <a id="visualization"></a>
+### 8.4.1 Serialization and Visualization <a id="visualization"></a>
 
 TT-Fabric Model will serialize these components of the Fabric:
 
@@ -939,7 +947,7 @@ TT-Fabric Model will serialize these components of the Fabric:
 * Packet traffic across data plane
   + We should be able to download traffic serialization from software simulator to run on hardware, and vice versa.
 
-## 8.2 Data Plane Simulator <a id="simulator"></a>
+### 8.4.2 Data Plane Simulator <a id="simulator"></a>
 
 The data plane simulator will model all paths ethernet packets may take across the hardware, except for NOC activity between a device and the Fabric. Key components:
 
@@ -950,7 +958,7 @@ The data plane simulator will model all paths ethernet packets may take across t
 * Directed single threaded testing for buffer limits and rerouting
 * Random testing with multi-threading. One thread per device to simulate requests to the Fabric and one thread for external disruptors.
 
-## 8.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
+### 8.4.3 Modelling External Disruptors and Buffer Limits <a id="disruptors"></a>
 
 TT-Fabric Model will have hooks to simulate failed links, to trigger and verify rerouting in the control plane. It will also have SW APIs to simulate back-pressured buffers and VCs, to detect possible deadlock scenarios.
 
