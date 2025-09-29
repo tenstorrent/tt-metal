@@ -286,7 +286,7 @@ jobs:
               # Handle SDXL extra for stable_diffusion on wormhole_b0
               if [[ "$processed_commands" == *"{{SDXL_EXTRA}}"* ]]; then
                 if [ "$arch" = "wormhole_b0" ]; then
-                  processed_commands="${processed_commands//\{\{SDXL_EXTRA\}\}/\npytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal}"
+                  processed_commands="${processed_commands//\{\{SDXL_EXTRA\}\}/$'\n'pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal}"
                 else
                   processed_commands="${processed_commands//\{\{SDXL_EXTRA\}\}/}"
                 fi
