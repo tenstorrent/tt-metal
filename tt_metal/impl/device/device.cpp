@@ -59,6 +59,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
