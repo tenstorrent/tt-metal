@@ -5,10 +5,23 @@ import os
 import sys
 
 
-def setup_ttml_so():
-    sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
-    sys.path.append(f'{os.environ["TT_METAL_HOME"]}/build/tt-train/sources/ttml')
+def try_setup_ttml_so():
+    TT_METAL_HOME = os.environ["TT_METAL_HOME"]
+    TT_TRAIN_BUILD_HOME = f"{TT_METAL_HOME}/tt-train/build/sources/ttml"
+    TT_METAL_BUILD_HOME = f"{TT_METAL_HOME}/build/tt-train/sources/ttml"
+    paths = (TT_TRAIN_BUILD_HOME, TT_METAL_BUILD_HOME)
+
+    for path in paths:
+        try:
+            sys.path.append(path)
+            import _ttml
+
+            return True
+        except ModuleNotFoundError:
+            pass
+
+    print(f"_ttml .so file not found in {paths}")
 
 
-setup_ttml_so()
-from _ttml import *
+if try_setup_ttml_so():
+    from _ttml import *
