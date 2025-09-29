@@ -40,12 +40,11 @@ async function run() {
     }
 
     const { data: jobsResponse } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId, per_page: 100 });
-    const failingJobIds = new Set(
-      (jobsResponse.jobs || [])
-        .filter(job => isJobFailure(job.conclusion))
-        .map(job => String(job.id))
-    );
+    const failingJobs = (jobsResponse.jobs || []).filter(job => isJobFailure(job.conclusion));
+    const failingJobIds = new Set(failingJobs.map(job => String(job.id)));
+    const failingJobNames = new Set(failingJobs.map(job => (job.name || '').toLowerCase()));
     core.info(`Failing job IDs: ${failingJobIds.size > 0 ? Array.from(failingJobIds).join(', ') : 'none'}`);
+    core.info(`Failing job names: ${failingJobNames.size > 0 ? Array.from(failingJobNames).join(' | ') : 'none'}`);
 
     const { data: checksResponse } = await octokit.rest.checks.listForRef({ owner, repo, ref: headSha, per_page: 100 });
     const checkRuns = Array.isArray(checksResponse.check_runs) ? checksResponse.check_runs : [];
@@ -61,20 +60,26 @@ async function run() {
       : [];
 
     let filteredRuns = checkRuns;
-    if (failingJobIds.size > 0) {
-      filteredRuns = filteredRuns.filter(run => {
+    if (failingJobNames.size > 0) {
+      const before = filteredRuns.length;
+      filteredRuns = filteredRuns.filter(run => failingJobNames.has((run.name || '').toLowerCase()));
+      core.info(`Matched ${filteredRuns.length} check run(s) out of ${before} using failing job names.`);
+    }
+    if (filteredRuns.length === 0 && failingJobIds.size > 0) {
+      // Some old runs may only expose job IDs in URLs; attempt a secondary match.
+      filteredRuns = checkRuns.filter(run => {
         const jobId = extractJobId(run.details_url || run.html_url);
         return jobId && failingJobIds.has(jobId);
       });
+      core.info(`Matched ${filteredRuns.length} check run(s) after secondary job-id filter.`);
     }
     if (checkFilters.length > 0) {
       filteredRuns = filteredRuns.filter(run => checkFilters.some(name => (run.name || '').toLowerCase().includes(name.toLowerCase())));
     }
 
     if (filteredRuns.length === 0) {
-      core.info('No matching check runs found after applying failure/job filters.');
-      core.setOutput('annotations', '[]');
-      return;
+      core.info('No matching check runs found after applying failure/job filters. Falling back to all check runs for this run.');
+      filteredRuns = checkRuns;
     }
 
     const collected = [];
