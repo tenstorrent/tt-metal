@@ -50,7 +50,6 @@ void py_module(py::module& module) {
         "execute_trace",
         [](MeshDevice* device, MeshTraceId trace_id, std::optional<QueueId> cq_id, bool blocking) {
             ttnn::operations::trace::execute_trace(device, trace_id, cq_id, blocking);
-            return;
         },
         py::arg("mesh_device"),
         py::arg("trace_id"),
