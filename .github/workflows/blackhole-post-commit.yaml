@@ -242,7 +242,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
