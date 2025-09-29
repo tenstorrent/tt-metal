@@ -13,6 +13,7 @@
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/distributed/socket_manager.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
@@ -20,6 +21,7 @@
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
+#include "models/distributed/pipeline_parallel_llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "ops/binary_ops.hpp"
@@ -88,6 +90,8 @@ uint64_t get_number_of_parameters(Model &model, bool tp) {
 }
 
 using ttml::autograd::TensorPtr;
+using SocketManager = ttml::core::distributed::SocketManager;
+using SocketType = ttml::core::distributed::SocketType;
 
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
 // tokens, targets, masks
@@ -286,6 +290,7 @@ struct TrainingConfig {
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
     SocketType socket_type = SocketType::MPI;
+    std::optional<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig> pipeline_parallel_config;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -333,6 +338,13 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
             config.socket_type = SocketType::FABRIC;
         } else {
             throw std::runtime_error("Unknown socket type: " + socket_type_str);
+        }
+
+        ttml::autograd::ctx().initialize_socket_manager(config.socket_type);
+
+        if (auto pipeline_parallel_config = multihost_config["pipeline_parallel_config"]) {
+            config.pipeline_parallel_config =
+                ttml::models::distributed::pipeline_parallel_llama::read_config(pipeline_parallel_config);
         }
     }
     return config;
@@ -385,6 +397,54 @@ const std::unordered_map<
     std::string,
     std::function<std::unique_ptr<ttml::schedulers::LRSchedulerBase>(ttml::optimizers::OptimizerBase *, size_t)>>
     schedulers = {{"identity", create_idendity_scheduler}, {"warmup_linear", create_warmup_with_linear_scheduler}};
+
+namespace {
+
+inline bool is_pipeline_parallel_enabled(const TrainingConfig &config) {
+    return config.pipeline_parallel_config.has_value();
+}
+
+inline int get_mpi_rank_or_zero() {
+    auto &ctx = ttml::autograd::ctx();
+    auto distributed_ctx = ctx.get_distributed_context();
+    return distributed_ctx ? *distributed_ctx->rank() : 0;
+}
+
+inline bool is_three_tier_training(const TrainingConfig &config) {
+    return config.enable_mpi && !is_pipeline_parallel_enabled(config);
+}
+
+inline bool is_last_pipeline_stage(const TrainingConfig &config) {
+    if (!is_pipeline_parallel_enabled(config)) {
+        return true;
+    }
+    return static_cast<unsigned>(get_mpi_rank_or_zero()) == (config.num_mh_workers - 1U);
+}
+
+inline bool pipeline_needs_to_call_loss(const TrainingConfig &config) {
+    return !is_pipeline_parallel_enabled(config) || is_last_pipeline_stage(config);
+}
+
+inline void pipeline_transfer_targets_if_needed(const TrainingConfig &config, const TensorPtr &target) {
+    if (!is_pipeline_parallel_enabled(config)) {
+        return;
+    }
+    if (config.num_mh_workers <= 1U) {
+        return;
+    }
+    auto &ctx = ttml::autograd::ctx();
+    auto distributed_ctx = ctx.get_distributed_context();
+    int rank = *distributed_ctx->rank();
+    auto &socket_manager = ctx.get_socket_manager();
+    if (rank == 0) {
+        socket_manager.send(
+            target->get_value(), distributed_ctx, ttml::core::distributed::Rank(config.num_mh_workers - 1));
+    } else if (static_cast<unsigned>(rank + 1U) == config.num_mh_workers) {
+        target->set_value(socket_manager.recv(target->get_value(), distributed_ctx, ttml::core::distributed::Rank(0)));
+    }
+}
+
+}  // namespace
 
 int main(int argc, char **argv) {
     auto start_timer = std::chrono::high_resolution_clock::now();
@@ -667,9 +727,12 @@ int main(int argc, char **argv) {
         config.transformer_config);
 
     Model model = std::visit(
-        [&device_config](auto &&arg) -> Model {
+        [&device_config, &config](auto &&arg) -> Model {
             if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::llama::LlamaConfig>) {
-                if (device_config.enable_tp) {
+                if (config.pipeline_parallel_config) {
+                    return ttml::models::distributed::pipeline_parallel_llama::create(
+                        arg, *config.pipeline_parallel_config, device_config.enable_tp);
+                } else if (device_config.enable_tp) {
                     return ttml::models::distributed::llama::create(arg);
                 } else {
                     return ttml::models::llama::create(arg);
@@ -740,7 +803,7 @@ int main(int argc, char **argv) {
 
     if (config.use_no_op) {
         fmt::print("WARNING: Using NoOp optimizer - parameters will NOT be updated.\n");
-    } else if (!config.enable_mpi) {
+    } else if (!is_three_tier_training(config)) {
         fmt::print("AdamW configuration:\n");
         fmt::print("    Learning rate: {}\n", adamw_params.lr);
         fmt::print("    Weight decay: {}\n", adamw_params.weight_decay);
@@ -752,7 +815,7 @@ int main(int argc, char **argv) {
     fmt::print("Number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
 
     auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
-        if (config.enable_mpi) {
+        if (is_three_tier_training(config)) {
             return std::make_unique<RemoteOptimizer>(
                 get_model_parameters(model), config.num_mh_workers, config.socket_type);
         } else if (config.use_no_op) {
@@ -767,7 +830,7 @@ int main(int argc, char **argv) {
     auto optimizer = select_optimizer();
     auto scheduler = schedule_func(optimizer.get(), config.max_steps);
 
-    if (config.enable_mpi) {
+    if (is_three_tier_training(config)) {
         auto *optimizer_ptr = dynamic_cast<RemoteOptimizer *>(optimizer.get());
         if (!optimizer_ptr) {
             throw std::runtime_error("Optimizer is not RemoteOptimizer");
@@ -827,28 +890,39 @@ int main(int argc, char **argv) {
 
     bool is_everything_compiled = false;
 
+    const bool needs_to_call_loss = pipeline_needs_to_call_loss(config);
+
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
             ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
+
+            // TODO(rfurko): add mask sending, once mask becomes non-constant
+            pipeline_transfer_targets_if_needed(config, target);
 
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
             }
             auto output = run_model(model, features, masks);
-            auto loss = ttml::ops::cross_entropy_loss(output, target);
-            loss = gradient_accumulator_helper.scale(loss);
-            float loss_float = get_loss_value(loss);
-            ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
+            float loss_float = 0.0F;
+            if (needs_to_call_loss) {
+                auto loss = ttml::ops::cross_entropy_loss(output, target);
+                loss = gradient_accumulator_helper.scale(loss);
+                loss_float = get_loss_value(loss);
+                ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
 
-            if (device_config.enable_tp) {
-                auto ones_grad = ttnn::ones_like(loss->get_value());
-                ones_grad = ttnn::multiply(
-                    ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
-                loss->set_grad(ones_grad);
+                if (device_config.enable_tp) {
+                    auto ones_grad = ttnn::ones_like(loss->get_value());
+                    ones_grad = ttnn::multiply(
+                        ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
+                    loss->set_grad(ones_grad);
+                }
+
+                loss->backward();
+            } else {
+                output->backward();
             }
 
-            loss->backward();
             ttml::autograd::ctx().reset_graph();
 
             auto samples = features->get_value().logical_shape()[0];
@@ -857,7 +931,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (device_config.enable_ddp && !config.enable_mpi) {
+                if (device_config.enable_ddp && !is_three_tier_training(config)) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
@@ -870,13 +944,15 @@ int main(int argc, char **argv) {
                 optimizer->step();
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
-                if (config.enable_mpi) {
-                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
+                if (needs_to_call_loss) {
+                    if (config.enable_mpi) {
+                        fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
+                    }
+                    fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 }
-                fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
 
-                if (enable_wandb && global_step % 10 == 0) {
+                if (enable_wandb && global_step % 10 == 0 && needs_to_call_loss) {
                     wandbcpp::log(
                         {{"Step", (int)global_step},
                          {"Samples", (int)get_samples_count(global_step)},
@@ -907,10 +983,12 @@ int main(int argc, char **argv) {
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            fmt::print(
-                "Full step time {} ms, cache entries: {}\n",
-                (double)duration / 1000,
-                device->num_program_cache_entries());
+            if (needs_to_call_loss) {
+                fmt::print(
+                    "Full step time {} ms, cache entries: {}\n",
+                    (double)duration / 1000,
+                    device->num_program_cache_entries());
+            }
         }
         if (optimizer->get_steps() >= config.max_steps) {
             break;

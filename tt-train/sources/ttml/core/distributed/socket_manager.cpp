@@ -4,7 +4,7 @@
 
 #include "socket_manager.hpp"
 
-#include "tt-metalium/mesh_socket.hpp"
+#include "autograd/auto_context.hpp"
 
 namespace {
 
@@ -43,27 +43,23 @@ void _generate_fabric_socket_config(
 
 }  // namespace
 
+namespace ttml::core::distributed {
+
 SocketManager::SocketManager(SocketType type) : m_type(type) {
 }
 
-void SocketManager::send(
-    const ttnn::Tensor& tensor,
-    std::shared_ptr<ttml::core::distributed::DistributedContext> distributed_ctx,
-    ttml::core::distributed::Rank rank) {
+void SocketManager::send(const ttnn::Tensor& tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank) {
     auto socket = get_socket(rank, distributed_ctx);
     socket->send(tensor);
 }
 
-void SocketManager::recv(
-    ttnn::Tensor& tensor,
-    std::shared_ptr<ttml::core::distributed::DistributedContext> distributed_ctx,
-    ttml::core::distributed::Rank rank) {
+ttnn::Tensor SocketManager::recv(ttnn::Tensor tensor, std::shared_ptr<DistributedContext> distributed_ctx, Rank rank) {
     auto socket = get_socket(rank, distributed_ctx);
     socket->recv(tensor);
+    return tensor;
 }
 
-ISocket* SocketManager::get_socket(
-    ttml::core::distributed::Rank rank, std::shared_ptr<ttml::core::distributed::DistributedContext> distributed_ctx) {
+ISocket* SocketManager::get_socket(Rank rank, std::shared_ptr<DistributedContext> distributed_ctx) {
     for (const auto& socket : m_sockets) {
         if (socket->get_rank() == rank && socket->get_distributed_context() == distributed_ctx) {
             return socket.get();
@@ -76,8 +72,7 @@ ISocket* SocketManager::get_socket(
     return m_sockets.back().get();
 }
 
-std::unique_ptr<ISocket> SocketManager::create_socket(
-    std::shared_ptr<ttml::core::distributed::DistributedContext> distributed_ctx, ttml::core::distributed::Rank rank) {
+std::unique_ptr<ISocket> SocketManager::create_socket(std::shared_ptr<DistributedContext> distributed_ctx, Rank rank) {
     auto mesh_device = ttml::autograd::ctx().get_device_ptr();
 
     auto socket_config = tt::tt_metal::distributed::SocketConfig{};
@@ -90,3 +85,5 @@ std::unique_ptr<ISocket> SocketManager::create_socket(
     return ttnn::distributed::create_socket(
         m_type, ttnn::distributed::EndpointSocketType::BIDIRECTIONAL, mesh_device, rank, socket_config);
 }
+
+}  // namespace ttml::core::distributed
