@@ -119,7 +119,7 @@ bool reader_kernel_no_send(
             (uint32_t)eth_l1_byte_address,
         });
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     fixture->RunProgram(mesh_device, workload);
 
     auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -193,7 +193,7 @@ bool writer_kernel_no_receive(
             (uint32_t)eth_l1_byte_address,
         });
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     fixture->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> readback_vec;
@@ -294,7 +294,7 @@ bool noc_reader_and_writer_kernels(
         device->id(), eth_noc_xy, all_zeros, eth_dst_l1_address);
     distributed::WriteShard(cq, writer_dram_buffer, all_zeros, zero_coord);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     auto eth_readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(

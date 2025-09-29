@@ -139,7 +139,7 @@ int main() {
     auto mesh_workload = MeshWorkload();
     auto device_range = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results

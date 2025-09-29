@@ -448,7 +448,7 @@ See :ref:`Kernel execution and result verification in the single core matrix mul
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
 
     // Add program to mesh workload and execute
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     // Download results from DRAM buffer to host

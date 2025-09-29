@@ -399,7 +399,7 @@ Following setting the arguments, the program is added to a `MeshWorkload` and is
 
 ```c++
 MeshWorkload workload;
-AddProgramToMeshWorkload(workload, std::move(program), MeshCoordinateRange(device->shape()));
+workload.add_program(MeshCoordinateRange(device->shape()), std::move(program));
 EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 std::vector<bfloat16> c_data(n_tiles * elements_per_tile, 0.0f);
 EnqueueReadMeshBuffer(cq, c, c_data, /*blocking=*/true);
