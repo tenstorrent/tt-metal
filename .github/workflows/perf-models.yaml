@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       models-to-run:
-        description: "List of requested model groups as JSON array, for example: [\"llm_javelin\", \"cnn_javelin\", \"other\"]. Default is 'all'"
+        description: "List of requested model groups as JSON array, for example: [\"falcon7b\", \"yolov7\", \"ufld_v2\"]. Default is 'all'"
         default: "all"
         type: string
   schedule:
