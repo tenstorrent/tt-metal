@@ -154,7 +154,6 @@ ttnn::Tensor SliceOperation::invoke(
             input_tensor.device(),
             memory_config_arg.value_or(input_tensor.memory_config()));
     }
-
     auto res =
         tt::tt_metal::operation::run(
             SliceDeviceOperation{

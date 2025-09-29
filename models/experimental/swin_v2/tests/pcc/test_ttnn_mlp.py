@@ -63,7 +63,7 @@ def test_mlp(device, in_channels, hidden_channels, seq_len, i, j, reset_seeds, m
     )
 
     # Convert the model to TTNN
-    ttnn_model = TtMLP(hidden_channels, device, parameters, activation_layer=ttnn.gelu)
+    ttnn_model = TtMLP(hidden_channels, device, parameters, activation_layer="gelu")
 
     # Convert input tensor to TTNN format
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
