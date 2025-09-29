@@ -67,7 +67,14 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
  * | Function   | —    | No parameters                                    |  —   |      —      |    —     |
  */
 // clang-format on
-ALWI void reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }
+template <bool enforce_fp32_accumulation = false>
+ALWI void reduce_uninit() {
+    if constexpr (enforce_fp32_accumulation) {
+        MATH((tensix_sync()));
+        MATH((reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0)));
+    }
+    PACK((llk_pack_reduce_mask_clear()));
+}
 
 // clang-format off
 /**
