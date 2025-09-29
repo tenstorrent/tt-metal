@@ -21,7 +21,7 @@ void SliceReshardAsync::validate_with_output_tensors(
         "Unsupported input tensor layout {}.",
         input_tensors[0].layout());
 
-    TT_FATAL(input_tensors[0].is_sharded(), "Negative mask support is only available for sharded input tensors.");
+    TT_FATAL(!input_tensors[0].is_sharded(), "Slice reshard does not support sharded input tensors.");
 
     TT_FATAL(
         !(this->output_dim_shape % this->ring_size),
