@@ -253,7 +253,7 @@ run_t3000_mixtral_tests() {
   mixtral8x7=mistralai/Mixtral-8x7B-Instruct-v0.1
   tt_cache_path=$TT_CACHE_HOME/$mixtral8x7
 
-  CI=true TT_CACHE_PATH=$tt_cache_path HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout=3600 ; fail+=$?
+  CI=true TT_CACHE_PATH=$tt_cache_path HF_MODEL=$mixtral8x7 pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

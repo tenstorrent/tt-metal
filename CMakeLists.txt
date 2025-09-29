@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24...3.30)
 
+# REVERTME: force CI runs
+
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
     message(FATAL_ERROR "Missing submodules.  Run: git submodule update --init --recursive")
@@ -171,7 +173,6 @@ add_compile_options(
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
     -Wno-unused-but-set-variable
-    -Wno-unused-function
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"
