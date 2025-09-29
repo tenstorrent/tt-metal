@@ -195,7 +195,7 @@ class Generator:
         kv_cache=None,
         prompt_lens=None,
         empty_slots=None,
-        enable_trace=True,
+        enable_trace=False,
         **kwargs,
     ):
         if page_table is not None:
@@ -222,6 +222,13 @@ class Generator:
 
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
+            if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
+                enable_trace = False
+            seq_len = tokens.shape[-1]
+            use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
+            if use_chunked_prefill:
+                enable_trace = False
+
             # Extracting data for the current user
             # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
             prefill_ids = torch.cat(
@@ -245,13 +252,6 @@ class Generator:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
-
-            if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
-                enable_trace = False
-            seq_len = tokens.shape[-1]
-            use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
-            if use_chunked_prefill:
-                enable_trace = False
 
             if enable_trace:
                 logits = self._easy_trace_prefill(
