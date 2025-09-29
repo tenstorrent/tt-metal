@@ -369,7 +369,7 @@
 <div class="highlight-cpp notranslate">
 <div class="highlight"><pre><span></span><span class="c1">// tt_metal/programming_examples/custom_sfpi_smoothstep/custom_sfpi_smoothstep.cpp</span>
 <span class="c1">// Add the program to the workload for the mesh</span>
-<span class="n">distributed</span><span class="o">::</span><span class="n">AddProgramToMeshWorkload</span><span class="p">(</span><span class="n">workload</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">program</span><span class="p">),</span><span class="w"> </span><span class="n">device_range</span><span class="p">);</span>
+<span class="n">workload</span><span class="p">.</span><span class="n">add_program</span><span class="p">(</span><span class="n">device_range</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">program</span><span class="p">));</span>
 
 <span class="c1">// Enqueue the workload for execution on the mesh (non-blocking) and wait for completion</span>
 <span class="n">distributed</span><span class="o">::</span><span class="n">EnqueueMeshWorkload</span><span class="p">(</span><span class="n">cq</span><span class="p">,</span><span class="w"> </span><span class="n">workload</span><span class="p">,</span><span class="w"> </span><span class="cm">/*blocking=*/</span><span class="nb">false</span><span class="p">);</span>
