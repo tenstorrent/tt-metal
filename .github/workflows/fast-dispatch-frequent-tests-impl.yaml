@@ -35,14 +35,14 @@ jobs:
               "name": "WH N300 pgm dispatch nightly",
               "arch": "wormhole_b0",
               "runs-on": ["cloud-virtual-machine", "N300", "in-service"],
-              "run-args": "mkdir -p generated/test_reports\n./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json\n./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py pgm_bench.json",
+              "run-args": "mkdir -p generated/test_reports\\n./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json\\n./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py pgm_bench.json",
               "timeout": 15
             },
             {
               "name": "WH N300 dispatch bandwidth nightly",
               "arch": "wormhole_b0",
               "runs-on": ["cloud-virtual-machine", "N300", "in-service"],
-              "run-args": "mkdir -p generated/test_reports\n./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json\n# We shouldn't fail the job for now as this benchmark is not yet stable\n./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true",
+              "run-args": "mkdir -p generated/test_reports\\n./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json\\n# We should not fail the job for now as this benchmark is not yet stable\\n./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true",
               "timeout": 15
             }
           ]'
