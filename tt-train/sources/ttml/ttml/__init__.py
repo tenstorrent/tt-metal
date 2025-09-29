@@ -21,6 +21,7 @@ def try_setup_ttml_so():
             pass
 
     print(f"_ttml .so file not found in {paths}")
+    return False
 
 
 if try_setup_ttml_so():
