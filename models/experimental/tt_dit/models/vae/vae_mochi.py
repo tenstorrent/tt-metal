@@ -572,7 +572,7 @@ class CausalUpsampleBlock:
             x_NTHWC = vae_slice_reshard(
                 self.ccl_manager,
                 x_NTHWC,
-                cluster_axis=1,
+                cluster_axis=self.parallel_config.time_parallel.mesh_axis,
                 dim=0,
                 output_shape=padded_T,
                 output_offset=self.temporal_offset,
