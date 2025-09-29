@@ -31,20 +31,20 @@ class TimeTextProjection(Module):
         embedding_dim: int,
         pooled_projection_dim: int,
         time_embed_dim: int = 256,
-        mesh_device: ttnn.MeshDevice | None = None,
+        mesh_device: ttnn.MeshDevice,
     ) -> None:
         super().__init__()
 
         self.mesh_device = mesh_device
 
-        self.timestep_embedder = FeedForward(  # TODO: ParallelFeedForward?
+        self.timestep_embedder = FeedForward(
             dim=time_embed_dim,
             inner_dim=4 * time_embed_dim,
             dim_out=embedding_dim,
             activation_fn="silu",
             mesh_device=mesh_device,
         )
-        self.text_embedder = FeedForward(  # TODO: ParallelFeedForward?
+        self.text_embedder = FeedForward(
             dim=pooled_projection_dim,
             inner_dim=4 * pooled_projection_dim,
             dim_out=embedding_dim,
@@ -117,7 +117,7 @@ class MotifTransformer(Module):
         latents_height: int,
         latents_width: int,
         mesh_device: ttnn.MeshDevice,
-        ccl_manager: CCLManager | None,
+        ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         padding_config: PaddingConfig | None,
     ) -> None:
