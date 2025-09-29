@@ -344,7 +344,11 @@ TEST_F(MeshDispatchFixture, IdleEthDRAMLoopbackSingleCore) {
 // This test will hang on BH when both nocs use the same DRAM endpoint due to SYS-1419, hang can be reproduced by
 // increasing `num_iterations` DRAM arbiter seems to drop requests from one noc when both nocs are issuing requests to
 // the same DRAM endpoint at a fast rate.
-TEST_F(MeshDispatchFixture, TensixLoopDRAMReadSingleCoreBothProcessors) {
+// This test should be kept to facilitate getting a scandump for root-causing SYS-1419 but keep it DISABLED so it doesn't run on CI
+TEST_F(MeshDispatchFixture, DISABLED_TensixLoopDRAMReadSingleCoreBothProcessors) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "This test has hardcoded parameters for Blackhole to repro hang described in SYS-1419";
+    }
     auto mesh_device = devices_.at(0);
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
