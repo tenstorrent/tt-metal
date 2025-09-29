@@ -26,8 +26,8 @@ public:
 
 
 protected:
-    ~RingbufferCacheRandomizedTestsFixture() override = default;
     RingbufferCacheRandomizedTestsFixture() = default;
+    ~RingbufferCacheRandomizedTestsFixture() override = default; // NOLINT(cppcoreguidelines-virtual-class-destructor)
 
     std::unique_ptr<RingbufferCacheManager> rb_cache_;
 
