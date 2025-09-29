@@ -8,7 +8,8 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.ccl import tt_all_reduce
+
+# from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 class LMHead(LightweightModule):
@@ -135,6 +136,12 @@ class LMHead(LightweightModule):
     def forward(self, x: ttnn.Tensor):
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
+            # breakpoint()
+            # print(f"LMHead x: {x.shape} {x.memory_config()}, weight: {weight.shape} {weight.memory_config()}")
+            # print(f"LMHead program_config: {pc}, dtype: {self.args.lm_head_dtype if hasattr(self.args, 'lm_head_dtype') else ttnn.bfloat8_b}")
+            # print(f"LMHead compute_kernel_config: {self.compute_kernel_config}")
+            # print(f"LMHead memory_config: {ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG}")
+            # self.compute_kernel_config.throttle_level = ttnn.ThrottleLevel(5)
             output = ttnn.linear(
                 x,
                 weight,
@@ -149,23 +156,23 @@ class LMHead(LightweightModule):
                 )
             )
 
-        # Concatenate the outputs
-        output = ttnn.concat(
-            outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
-        )
+        # # Concatenate the outputs
+        # output = ttnn.concat(
+        #     outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+        # )
 
-        output = tt_all_reduce(
-            output,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=1,
-            dim=3 if self.args.is_galaxy else 0,
-            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-            num_all_gather_links=self.args.num_all_gather_links,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=self.args.ccl_dtype,
-            sharded=False,
-            use_composite=True,
-        )
+        # output = tt_all_reduce(
+        #     output,
+        #     self.mesh_device,
+        #     self.tt_ccl,
+        #     cluster_axis=1,
+        #     dim=3 if self.args.is_galaxy else 0,
+        #     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+        #     num_all_gather_links=self.args.num_all_gather_links,
+        #     memory_config=ttnn.L1_MEMORY_CONFIG,
+        #     dtype=self.args.ccl_dtype,
+        #     sharded=False,
+        #     use_composite=True,
+        # )
 
-        return output
+        return outputs

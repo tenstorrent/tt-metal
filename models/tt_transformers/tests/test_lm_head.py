@@ -7,9 +7,10 @@ import os
 import pytest
 import torch
 from loguru import logger
+from tqdm import tqdm
 
 import ttnn
-from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.ccl import TT_CCL, tt_all_reduce
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -51,6 +52,7 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_lm_head()
     reference_model.load_state_dict(partial_state_dict)
+    reference_model.to(torch.float32)
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = LMHead(
@@ -78,7 +80,29 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     )
 
     logger.info("Run LM_Head")
-    tt_output = tt_model(tt_input)
+    num_iterations = 100000
+    for i in tqdm(range(num_iterations)):
+        tt_output = tt_model(tt_input)
+
+    # Concatenate the outputs
+    tt_output = ttnn.concat(
+        tt_output, dim=-1, memory_config=model_args.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+    )
+
+    tt_output = tt_all_reduce(
+        tt_output,
+        model_args.mesh_device,
+        tt_ccl,
+        cluster_axis=1,
+        dim=0,
+        num_reduce_scatter_links=model_args.num_reduce_scatter_links,
+        num_all_gather_links=model_args.num_all_gather_links,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        dtype=model_args.ccl_dtype,
+        sharded=False,
+        use_composite=True,
+    )
+
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
