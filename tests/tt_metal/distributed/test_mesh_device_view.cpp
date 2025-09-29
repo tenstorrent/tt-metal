@@ -196,7 +196,7 @@ TEST_F(MeshDeviceView2x4Test, ViewGetDevicesInRange) {
     EXPECT_THAT(devices, SizeIs(4));
 
     // Get 1x4 row
-    MeshCoordinateRange row_range(MeshCoordinate{0, 0}, MeshCoordinate(1, 4));
+    MeshCoordinateRange row_range(MeshCoordinate{0, 0}, MeshCoordinate(1, 3));
     auto row_devices = view.get_devices(row_range);
     EXPECT_THAT(row_devices, SizeIs(4));
 }
