@@ -5,6 +5,8 @@
 #include "all_reduce_async.hpp"
 
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/device/all_gather_command_processor_async_op.hpp"
 #include "device/all_reduce_async_op.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -67,6 +69,14 @@ Tensor local_sum(
         input_tensor = ttnn::to_layout(gathered_tensor, Layout::TILE);
     }
 
+    bool do_typecast = false;
+    // moreh_sum does not support bfloat8_b
+    if (input_tensor.dtype() == DataType::BFLOAT8_B) {
+        // cast up to bfloat16 prior to sum
+        do_typecast = true;
+        input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+    }
+
     auto sum_tensor = ttnn::moreh_sum(
         input_tensor,
         reduce_dim,
@@ -75,6 +85,10 @@ Tensor local_sum(
         memory_config,
         /* device kernel config */ std::nullopt);
 
+    if (do_typecast) {
+        // cast back down to bfloat8_b
+        sum_tensor = ttnn::typecast(sum_tensor, DataType::BFLOAT8_B);
+    }
     if (is_rm) {
         return ttnn::to_layout(sum_tensor, Layout::ROW_MAJOR);
     }
@@ -93,6 +107,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    bool input_is_sharded = input_tensor.memory_config().is_sharded();
     uint32_t dim = finding_scatter_dim(
         input_tensor.padded_shape(),
         input_tensor.layout(),
@@ -102,7 +117,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     auto initial_shape = input_tensor.padded_shape();
     // force RS+AG by using dim 3 after padding
     // temporary before adding support for RS dim 2
-    if (dim == 2 && input_tensor.layout() == Layout::TILE) {
+    if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
         dim = 3;
         uint32_t multiple = input_tensor.tensor_spec().tile().get_tile_shape()[1] * num_devices;
         uint32_t next_aligned_tile = tt::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
@@ -144,25 +159,37 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         return ttnn::reshape(sum_tensor, initial_shape);
     }
     // Reduce scatter + all gather
+    bool change_mem_config = false;
+    // when input is sharded, shard specs are not compatible with the intermediate tensor shapes of the composite ops
+    // convert to interleaved in this case
+    if (input_is_sharded) {
+        change_mem_config = true;
+    }
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
+    auto interleaved_tensor = padded_tensor;
+    if (change_mem_config) {
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
+    }
+    padded_tensor.deallocate();
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-        padded_tensor,
+        interleaved_tensor,
         std::nullopt,
         dim,
         rs_global_semaphores,
         barrier_semaphores[0],
         num_preferred_links.value_or(1),
-        out_memory_config,
+        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         std::nullopt,
         topology,
         worker_subdevice_id_opt);
-    padded_tensor.deallocate();
+    interleaved_tensor.deallocate();
     auto gathered = ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
         dim,
         ag_global_semaphores,
         num_preferred_links.value_or(1),
-        out_memory_config,
+        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         topology,
         worker_subdevice_id_opt,
         false,
@@ -172,10 +199,12 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     // slice to inital shape if needed using slice
     if (gathered.padded_shape() != initial_shape) {
         ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> ends = {
-            initial_shape[0] - 1, initial_shape[1] - 1, initial_shape[2] - 1, initial_shape[3] - 1};
+        ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         gathered = ttnn::slice(gathered, begins, ends, step);
+    }
+    if (change_mem_config) {
+        gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
     }
     return gathered;
 }
@@ -193,6 +222,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt) {
     MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
+    bool input_is_sharded = input_tensor.memory_config().is_sharded();
     const auto& mesh_view = mesh_device.get_view();
     std::vector<IDevice*> devices =
         (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
@@ -201,7 +231,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     auto initial_shape = input_tensor.padded_shape();
     // force RS+AG by using dim 3 after padding
     // temporary before adding support for RS dim 2
-    if (dim == 2 && input_tensor.layout() == Layout::TILE) {
+    if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
         dim = 3;
         uint32_t multiple = input_tensor.tensor_spec().tile().get_tile_shape()[1] * devices.size();
         uint32_t next_aligned_tile = tt::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
@@ -242,20 +272,30 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         return ttnn::reshape(sum_tensor, initial_shape);
     }
     // Reduce scatter + all gather
+    bool change_mem_config = false;
+    if (input_is_sharded) {
+        change_mem_config = true;
+    }
     bool use_llama_sharded = composite_common::use_all_gather_async_llama_sharded(padded_tensor, out_memory_config);
+    auto interleaved_tensor = padded_tensor;
+    if (change_mem_config) {
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        interleaved_tensor = ttnn::sharded_to_interleaved(padded_tensor, working_memory_config, std::nullopt);
+    }
+    padded_tensor.deallocate();
     ttnn::Tensor scattered_tensor = ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
-        padded_tensor,
+        interleaved_tensor,
         std::nullopt,
         dim,
         rs_global_semaphores,
         barrier_semaphores[0],
         num_preferred_links.value_or(1),
-        out_memory_config,
+        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         std::nullopt,
         topology,
         worker_subdevice_id_opt,
         cluster_axis);
-    padded_tensor.deallocate();
+    interleaved_tensor.deallocate();
     auto gathered = ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
         dim,
@@ -264,7 +304,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         topology,
         ag_global_semaphores,
         std::nullopt,
-        out_memory_config,
+        change_mem_config ? std::nullopt : std::optional<MemoryConfig>(out_memory_config),
         num_preferred_links.value_or(1),
         worker_subdevice_id_opt,
         false,
@@ -277,6 +317,9 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         gathered = ttnn::slice(gathered, begins, ends, step);
+    }
+    if (change_mem_config) {
+        gathered = ttnn::to_memory_config(gathered, out_memory_config, std::nullopt);
     }
     return gathered;
 }
