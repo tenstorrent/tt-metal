@@ -6,7 +6,8 @@ import pytest
 import os
 import sys
 
-sys.path.append(f'{os.environ["TT_METAL_HOME"]}/build/tt-train/sources/ttml')
+sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/build/sources/ttml')
+# sys.path.append(f'{os.environ["TT_METAL_HOME"]}/build/tt-train/sources/ttml')
 import _ttml  # noqa: E402
 
 
