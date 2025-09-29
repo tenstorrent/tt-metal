@@ -1371,7 +1371,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
             tt::tt_metal::SetRuntimeArgs(program, secondary, eth_core, secondary_kernel_args);
 
             distributed::MeshWorkload workload;
-            distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+            workload.add_program(device_range, std::move(program));
             distributed::EnqueueMeshWorkload(cq, workload, false);
         }
 
