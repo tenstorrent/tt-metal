@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, NamedTuple
 
 import ttnn
 
+from ..utils import tensor
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
@@ -216,28 +217,15 @@ class Parameter:
         layout: ttnn.Layout = ttnn.Layout.TILE,
         dtype: ttnn.DataType = ttnn.bfloat16,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-        mesh_placements: Collection[ttnn.PlacementReplicate | ttnn.PlacementShard] | None = None,
         mesh_mapping: Mapping[int, int] | None = None,
         to_host: bool = False,
     ) -> None:
-        assert mesh_mapping is None or mesh_placements is None, (
-            "only one of mesh_mapping and mesh_placement should be supplied"
-        )
-
-        mesh_rank = len(list(device.shape))
-
-        if mesh_placements is None:
-            mesh_placements = _mesh_placements_from_mapping(mesh_mapping or {}, mesh_rank=mesh_rank)
-        else:
-            length = len(mesh_placements)
-            assert length == mesh_rank, f"mesh_placements should have length {mesh_rank} instead of {length}"
-
         self.shape = tuple(shape)
         self.device = device
         self.layout = layout
         self.dtype = dtype
         self.memory_config = memory_config
-        self.mesh_placements = tuple(mesh_placements)
+        self.mesh_mapping = dict(mesh_mapping) if mesh_mapping else {}
         self.to_host = to_host
         self._data = None
 
@@ -247,16 +235,14 @@ class Parameter:
             msg = f"expected tensor shape {self.shape}, got {shape}"
             raise ParameterLoadingError(msg)
 
-        self._data = ttnn.from_torch(
+        self._data = tensor.from_torch(
             torch_tensor,
+            device=self.device,
             layout=self.layout,
             dtype=self.dtype,
             memory_config=self.memory_config,
-            device=None if self.to_host else self.device,
-            mesh_mapper=ttnn.create_mesh_mapper(
-                self.device,
-                ttnn.MeshMapperConfig(self.mesh_placements),
-            ),
+            mesh_mapping=self.mesh_mapping,
+            to_host=self.to_host,
         )
 
     def save(self, path: str, /) -> None:
@@ -269,17 +255,3 @@ class Parameter:
     def data(self) -> ttnn.Tensor:
         assert self._data is not None, "parameter has no data"
         return self._data
-
-
-def _mesh_placements_from_mapping(
-    mapping: Mapping[int, int], *, mesh_rank: int
-) -> list[ttnn.PlacementReplicate | ttnn.PlacementShard]:
-    placements = [ttnn.PlacementReplicate()] * mesh_rank
-
-    for k, v in mapping.items():
-        if k is None:
-            continue
-        assert k < mesh_rank, f"mesh mapping keys should be smaller than {mesh_rank}, got {k}"
-        placements[k] = ttnn.PlacementShard(v)
-
-    return placements
