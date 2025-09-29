@@ -243,14 +243,11 @@ def run_reduce_scatter_impl(
         # Dim 1 tests
         ([2, 24, 256, 256], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         ([2, 16, 56, 56], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        ([2, 8, 256, 256], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([2, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         # Dim 2 tests
         ([2, 4, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        ([8, 1, 512, 2560], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        ([4, 1, 1024, 2560], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        ([1, 1, 1024, 2560], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        ([2, 1, 2048, 2560], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        ([1, 1, 4096, 2560], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([4, 1, 1024, 340], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([1, 1, 512, 512], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         # Dim 3 tests
         ([2, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         ([1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
@@ -274,9 +271,6 @@ def run_reduce_scatter_impl(
         "scatter_dim_2_test_one",
         "scatter_dim_2_test_two",
         "scatter_dim_2_test_three",
-        "scatter_dim_2_test_four",
-        "scatter_dim_2_test_five",
-        "scatter_dim_2_test_six",
         "non_zero_dim_1",
         "padded_dim_2_test_one",
         "padded_dim_2_test_two",

@@ -18,7 +18,6 @@ void MAIN {
     constexpr bool direction = get_compile_time_arg_val(7);
 
     uint32_t arg_idx = 0;
-
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 

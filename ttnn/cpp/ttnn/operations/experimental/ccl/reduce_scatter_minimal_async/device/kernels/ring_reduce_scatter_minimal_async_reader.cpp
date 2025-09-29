@@ -24,19 +24,17 @@ constexpr uint32_t cb_intermediate_id = get_compile_time_arg_val(3);
 constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
 constexpr uint32_t page_size = get_compile_time_arg_val(6);
-constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(8);
-constexpr uint32_t input_tensor_C = get_compile_time_arg_val(9);
-constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
-constexpr uint32_t slice_B = get_compile_time_arg_val(12);
-constexpr uint32_t slice_C = get_compile_time_arg_val(13);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(14);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(15);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(16);
-constexpr bool direction = get_compile_time_arg_val(17);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(18);
-constexpr uint32_t dim = get_compile_time_arg_val(19);
+constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(9);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
+constexpr uint32_t slice_C = get_compile_time_arg_val(11);
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(12);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
+constexpr uint32_t fuse_op = get_compile_time_arg_val(14);
+constexpr bool direction = get_compile_time_arg_val(15);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(16);
+constexpr uint32_t dim = get_compile_time_arg_val(17);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -54,7 +52,7 @@ void kernel_main() {
     int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 20;
+    constexpr uint32_t ct_idx = 18;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -108,9 +106,6 @@ void kernel_main() {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
 
-    constexpr uint32_t input_batch_num_pages = batch_slice_num_pages * ring_size;
-    constexpr uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
-
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
 
@@ -138,7 +133,6 @@ void kernel_main() {
                 actual_slice_idx = slice_idx >= (int)ring_size ? (uint32_t)slice_idx - ring_size : (uint32_t)slice_idx;
             }
 
-            chunk_count = 0;
             uint32_t input_tile_id_start;
             uint32_t intermediate_tile_id_start;
             if constexpr (dim == 3) {
@@ -153,6 +147,7 @@ void kernel_main() {
             } else {
                 ASSERT(false);
             }
+            chunk_count = 0;
             for (uint32_t c = 0; c < slice_C; ++c) {
                 uint32_t input_pages_read_in_row = start_pages_read_in_row;
                 uint32_t input_row_offset = start_row_offset;
@@ -172,8 +167,8 @@ void kernel_main() {
                             input_pages_read_in_row -= slice_Wt;
                         }
                     }
-
                     tiles_read += backwards_offset;
+
                     intermediate_pages_read_in_row = input_pages_read_in_row;
                     intermediate_row_offset = input_row_offset;
                 }
@@ -184,14 +179,14 @@ void kernel_main() {
                  * after ring_size-1 steps, we've transferred all tiles
                  */
                 while (tiles_read < tiles_to_read) {
+                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+
                     if (do_reduce && (chunk_count % chunks_per_sync == 0)) {
                         noc_semaphore_wait_min(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                         sem_target++;
                     }
                     chunk_count++;
-
-                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                     uint32_t tiles_to_read_in_current_direction = 0;
                     if constexpr (direction) {
@@ -259,8 +254,8 @@ void kernel_main() {
                                 input_pages_read_in_row -= slice_Wt;
                             }
                         }
-
                         tiles_read += tiles_to_read_in_other_direction;
+
                         intermediate_pages_read_in_row = input_pages_read_in_row;
                         intermediate_row_offset = input_row_offset;
                     }

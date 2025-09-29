@@ -406,22 +406,24 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
     const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
 
-    uint32_t slice_B = input_tensor_B;
     uint32_t slice_C = input_tensor_C;
     uint32_t slice_Ht = input_tensor_Ht;
     uint32_t slice_Wt = input_tensor_Wt;
-    if (dim == 0) {
-        slice_B /= ring_size;
-    } else if (dim == 1) {
+    if (dim == 1) {
         slice_C /= ring_size;
     } else if (dim == 2) {
         slice_Ht /= ring_size;
-    } else {
+    } else if (dim == 3) {
         slice_Wt /= ring_size;
+    } else {
+        TT_FATAL(false, "reduce_scatter_minimal_async ring implementation only supports scattering on dim 1, 2, or 3");
     }
 
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / input_tensor_B;
+    const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
+    const uint32_t output_batch_num_pages = input_batch_num_pages / ring_size;
+    const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
+    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     // scatter-write currently only supports 2 distinct noc addresses
     uint32_t max_target_noc_addresses_per_packet = 2;
@@ -545,7 +547,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 uint32_t worker_id = link * num_workers_per_direction + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
-                uint32_t output_channel_num_pages = batch_slice_num_pages / (dim == 1 ? slice_C : input_tensor_C);
                 uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
                 uint32_t start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
 
@@ -554,33 +555,28 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                        topology,
-                        start_tiles_to_read * (dim == 1 ? slice_C : input_tensor_C),
-                        start_tiles_read * (dim == 1 ? slice_C : input_tensor_C),
-                        tile_granularity));
+                        topology, start_tiles_to_read * slice_C, start_tiles_read * slice_C, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 std::vector<uint32_t> sender_reader_compile_args = {
-                    ring_index,              // my_chip_id
-                    ring_size,               // ring_size
-                    input_cb_index,          // cb_input_id
-                    intermediate_cb_index,   // cb_intermediate_id
-                    reader_output_cb_index,  // cb_reader_output_id
-                    tile_granularity,        // tile_granularity
-                    page_size,               // page_size
-                    batch_slice_num_pages,   // batch_slice_num_pages
-                    input_tensor_B,          // input_tensor_B
-                    input_tensor_C,          // input_tensor_C
-                    input_tensor_Ht,         // input_tensor_Ht
-                    input_tensor_Wt,         // input_tensor_Wt
-                    slice_B,                 // slice_B
-                    slice_C,                 // slice_C
-                    slice_Ht,                // slice_Ht
-                    slice_Wt,                // slice_Wt
-                    fuse_op,                 // fused op
-                    dir,                     // direction
-                    chunks_per_sync_val,     // chunks_per_sync
-                    dim,                     // dim
+                    ring_index,               // my_chip_id
+                    ring_size,                // ring_size
+                    input_cb_index,           // cb_input_id
+                    intermediate_cb_index,    // cb_intermediate_id
+                    reader_output_cb_index,   // cb_reader_output_id
+                    tile_granularity,         // tile_granularity
+                    page_size,                // page_size
+                    input_batch_num_pages,    // input_batch_num_pages
+                    input_channel_num_pages,  // input_channel_num_pages
+                    input_tensor_B,           // input_tensor_B
+                    input_tensor_Wt,          // input_tensor_Wt
+                    slice_C,                  // slice_C
+                    slice_Ht,                 // slice_Ht
+                    slice_Wt,                 // slice_Wt
+                    fuse_op,                  // fused op
+                    dir,                      // direction
+                    chunks_per_sync_val,      // chunks_per_sync
+                    dim,                      // dim
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -635,12 +631,11 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     tile_granularity,               // packet_size_in_pages
                     page_size,                      // page_size
                     num_tiles_to_write_per_packet,  // num_tiles_to_write_per_packet
-                    batch_slice_num_pages,          // batch_slice_num_pages
+                    output_batch_num_pages,         // output_batch_num_pages
+                    input_channel_num_pages,        // input_channel_num_pages
+                    output_channel_num_pages,       // output_channel_num_pages
                     input_tensor_B,                 // input_tensor_B
-                    input_tensor_C,                 // input_tensor_C
-                    input_tensor_Ht,                // input_tensor_Ht
                     input_tensor_Wt,                // input_tensor_Wt
-                    slice_B,                        // slice_B
                     slice_C,                        // slice_C
                     slice_Ht,                       // slice_Ht
                     slice_Wt,                       // slice_Wt
@@ -717,14 +712,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 // Reduce kernel
                 auto sender_reduce_kernel_config = tt::tt_metal::ComputeConfig{};
                 sender_reduce_kernel_config.compile_args = {
-                    input_cb_index,
-                    intermediate_cb_index,
-                    compute_output_cb_index,
-                    tile_granularity,
-                    ring_size,
-                    input_tensor_B,
-                    slice_C,
-                    dir};
+                    input_cb_index,           // input_cb_id
+                    intermediate_cb_index,    // intermediate_cb
+                    compute_output_cb_index,  // output_cb
+                    tile_granularity,         // tile_granularity
+                    ring_size,                // ring_size
+                    input_tensor_B,           // input_tensor_B
+                    slice_C,                  // slice_C
+                    dir};                     // dir
 
                 auto sender_reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,

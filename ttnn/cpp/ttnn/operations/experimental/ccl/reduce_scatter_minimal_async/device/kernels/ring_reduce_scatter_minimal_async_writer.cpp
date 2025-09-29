@@ -33,36 +33,35 @@ constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
 constexpr uint32_t page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
-constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(8);
-constexpr uint32_t input_tensor_C = get_compile_time_arg_val(9);
-constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(10);
+constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(7);
+constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(8);
+constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(9);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(10);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
-constexpr uint32_t slice_B = get_compile_time_arg_val(12);
-constexpr uint32_t slice_C = get_compile_time_arg_val(13);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(14);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(15);
-constexpr bool direction = get_compile_time_arg_val(16);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(17);
-constexpr uint32_t dim = get_compile_time_arg_val(18);
+constexpr uint32_t slice_C = get_compile_time_arg_val(12);
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(13);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(14);
+constexpr bool direction = get_compile_time_arg_val(15);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(16);
+constexpr uint32_t dim = get_compile_time_arg_val(17);
 
-constexpr bool is_termination_master = get_compile_time_arg_val(19);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(20);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(21);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(24);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(26);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(27);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(28);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(29);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(30);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(31);
+constexpr bool is_termination_master = get_compile_time_arg_val(18);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(19);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(20);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(24);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(25);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(26);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(27);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(28);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(29);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(30);
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
-    ccl_routing_utils::get_line_unicast_route_info_from_args<32>();
+    ccl_routing_utils::get_line_unicast_route_info_from_args<31>();
 constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<32 + ccl_routing_utils::num_line_unicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<31 + ccl_routing_utils::num_line_unicast_args>();
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -95,7 +94,7 @@ void kernel_main() {
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx =
-        32 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
+        31 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 #ifdef INTERMEDIATE_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -224,7 +223,7 @@ void kernel_main() {
     for (uint32_t b = 0; b < input_tensor_B; b++) {
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;
 
-        uint32_t batch_slice_offset = batch_slice_num_pages * b;
+        uint32_t batch_slice_offset = output_batch_num_pages * b;
         for (uint32_t i = 0; i < ring_size; ++i) {
             uint32_t actual_slice_idx;
             if constexpr (direction) {
@@ -237,7 +236,6 @@ void kernel_main() {
             uint32_t cb_output_id = i > 0 ? cb_compute_output_id : cb_reader_output_id;
             if (i < (ring_size - 1)) {
                 chunk_count = 0;
-                constexpr uint32_t input_channel_num_pages = (batch_slice_num_pages * ring_size) / input_tensor_C;
 
                 uint32_t tile_id_start;
                 if constexpr (dim == 3) {
@@ -296,6 +294,7 @@ void kernel_main() {
                             }
                             auto noc_address0 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                 intermediate_addrgen, tile_one_id, 0);
+
                             // Will have more cases once scatter-write supports more than 2 distinct addresses
                             switch (tiles_to_put_in_current_packet) {
                                 case 2: {
@@ -387,7 +386,6 @@ void kernel_main() {
                 noc_async_writes_flushed();
             } else {
                 // Otherwise, on the last slice, write it to output buffer
-                constexpr uint32_t output_channel_num_pages = batch_slice_num_pages / slice_C;
                 uint32_t tile_id_start = batch_slice_offset;
                 for (uint32_t c = 0; c < slice_C; ++c) {
                     uint32_t tiles_read = start_tiles_read;
