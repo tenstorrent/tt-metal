@@ -383,8 +383,10 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
     // Pass 1: separate out start/end zones and noc events from markers and group by runtime id
     for (const tracy::TTDeviceMarker& marker : device_markers) {
         if (isMarkerAZoneEndpoint(marker)) {
-            if ((marker.risc == tracy::RiscType::BRISC || marker.risc == tracy::RiscType::NCRISC) &&
-                (marker.marker_name.starts_with("TRUE-KERNEL-END") || marker.marker_name.ends_with("-KERNEL"))) {
+            if (marker.marker_name != "SYNC-ZONE-SENDER" && marker.marker_name != "SYNC-ZONE-RECEIVER" &&
+                !marker.marker_name.ends_with("-FW") &&
+                (!marker.marker_name.ends_with("-KERNEL") || marker.risc == tracy::RiscType::BRISC ||
+                 marker.risc == tracy::RiscType::NCRISC)) {
                 markers_by_opname[marker.runtime_host_id].push_back(marker);
             }
         } else if (isMarkerATimestampedDatapoint(marker)) {
@@ -558,6 +560,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                         {"run_host_id", device_marker.runtime_host_id},
                         {"op_name", device_marker.op_name},
                         {"proc", enchantum::to_string(device_marker.risc)},
+                        {"src_device_id", device_marker.chip_id},
                         {"zone", device_marker.marker_name},
                         {"zone_phase", enchantum::to_string(zone_phase)},
                         {"sx", device_marker.core_x},
