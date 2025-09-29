@@ -203,6 +203,8 @@ void MetalContext::initialize(
     }
 }
 
+// IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
+// undefined behavior. Do not create threads in this function or any functions it calls.
 void MetalContext::teardown() {
     ZoneScoped;
 

@@ -898,6 +898,10 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
     if (getDeviceProfilerState()) {
+        // Device profiling data is dumped here instead of MetalContext::teardown() because MetalContext::teardown() is
+        // called as a std::atexit() function, and ProfilerStateManager::cleanup_device_profilers() cannot be safely
+        // called from a std::atexit() function because it creates new threads, which is unsafe during program
+        // termination.
         tt::tt_metal::MetalContext::instance().profiler_state_manager()->cleanup_device_profilers();
     }
 
