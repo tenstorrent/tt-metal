@@ -1,0 +1,4 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,cycles,bandwidth_GB_s,packets_per_second,tolerance_percent
+LinearUnicastWrite,CHIP_MULTICAST,NOC_UNICAST_WRITE,Linear,"[4,8]",4,4096,499996862,11.468872,2800017.573,1.0
+RingUnicastWrite,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,"[20]",4,4096,539636893,10.626405,2594337.078,1.0
+MeshUnicastWrite,CHIP_MULTICAST,NOC_UNICAST_WRITE,Mesh,"[32]",4,4096,2075308345,9.473677,2312909.314,1.0

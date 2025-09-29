@@ -53,9 +53,11 @@ int main(int argc, char** argv) {
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
+    std::string yaml_path_str = "None";
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser;
-        auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
+        yaml_path_str = yaml_path.value();
+        auto parsed_yaml = yaml_parser.parse_file(yaml_path_str);
         raw_test_configs = std::move(parsed_yaml.test_configs);
         if (parsed_yaml.allocation_policies.has_value()) {
             allocation_policies = parsed_yaml.allocation_policies.value();
