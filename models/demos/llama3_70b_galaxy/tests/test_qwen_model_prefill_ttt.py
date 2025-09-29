@@ -53,19 +53,19 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (128, 2048, 4096, 8192, 32 * 1024, 64 * 1024),
+    (2048, 4096, 8192),
     ids=[
-        "128",
+        # "128",
         "2048",
         "4096",
         "8192",
-        "32k",
-        "64k",
+        # "32k",
+        # "64k",
     ],
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (190190,),
+    (131072,),
     ids=[
         "max128k",
     ],

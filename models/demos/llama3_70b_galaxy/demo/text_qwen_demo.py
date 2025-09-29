@@ -158,7 +158,7 @@ def create_tt_qwen_model(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
+            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
         )
 
     model = TtTransformer(
@@ -230,8 +230,8 @@ def create_tt_qwen_model(
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -268,8 +268,8 @@ def create_tt_qwen_model(
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-8k-b1 - Single user, 8K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -288,8 +288,8 @@ def create_tt_qwen_model(
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-16k-b32 - 32 users, 16K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -307,8 +307,8 @@ def create_tt_qwen_model(
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-32k-b1 - Single user, 32K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -326,8 +326,8 @@ def create_tt_qwen_model(
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-64k-b1 - Single user, 64K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -345,8 +345,8 @@ def create_tt_qwen_model(
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-128k-b1 - Single user, 128K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
@@ -364,8 +364,8 @@ def create_tt_qwen_model(
             False,  # prefill-only profile
             64,  # num layers
             False,  # print_outputs
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts

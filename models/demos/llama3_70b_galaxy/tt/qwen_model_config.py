@@ -679,7 +679,7 @@ class TtQwenModelArgs(TtModelArgs):
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
-                        per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
                         fuse_batch=seq_len <= 1024,
