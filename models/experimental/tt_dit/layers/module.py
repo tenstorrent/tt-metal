@@ -13,7 +13,7 @@ from ..utils import tensor
 from ..utils.substate import pop_substate
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterable, Iterator, Mapping, MutableSequence
+    from collections.abc import Iterable, Iterator, Mapping, MutableSequence
     from typing import Any
 
     import torch
@@ -212,7 +212,7 @@ class Parameter:
     def __init__(
         self,
         *,
-        shape: Collection[int],
+        shape: Iterable[int],
         device: ttnn.MeshDevice,
         layout: ttnn.Layout = ttnn.Layout.TILE,
         dtype: ttnn.DataType = ttnn.bfloat16,
