@@ -232,159 +232,6 @@ class Transformer:
             attention_mask=None,
             prefix="",
         ):
-            # batch_size, _, hidden_size = hidden_states.shape
-            # head_size = hidden_size // self.heads
-
-            # num_cores_x = 1
-
-            # # hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
-
-            # fused_qkv_weight = ttnn.transpose(fused_qkv_weight, 0, 1)
-            # self_output_weight = ttnn.transpose(self_output_weight, 0, 1)
-
-            # fused_qkv_output = ttnn.linear(
-            #     hidden_states,
-            #     fused_qkv_weight,
-            #     bias=fused_qkv_bias,
-            #     # memory_config=ttnn.L1_MEMORY_CONFIG,
-            #     dtype=ttnn.bfloat16,
-            #     # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-            # )
-
-            # (
-            #     query,
-            #     key,
-            #     value,
-            # ) = ttnn.transformer.split_query_key_value_and_split_heads(
-            #     fused_qkv_output,
-            #     # memory_config=ttnn.L1_MEMORY_CONFIG,
-            #     num_heads=self.heads,
-            # )
-            # ttnn.deallocate(fused_qkv_output)
-
-            seq_length, batch_size, hidden_size = hidden_states.shape
-
-            self._embed_dim = hidden_size
-            self._head_dim = hidden_size // self.heads
-            self._scale = self._head_dim**-0.5
-            self._attention_dropout = 0.0  # Unused
-
-            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=True,
-                packer_l1_acc=True,
-            )
-
-            # TODO: No KV-caching for now
-            (q_weights, k_weights, v_weights) = fused_qkv_weight
-            (q_bias, k_bias, v_bias) = fused_qkv_bias
-
-            # Compute Q, K, V projections
-            q = ttnn.linear(hidden_states, q_weights, bias=q_bias, transpose_b=True)
-            k = ttnn.linear(hidden_states, k_weights, bias=k_bias, transpose_b=True)
-            v = ttnn.linear(hidden_states, v_weights, bias=v_bias, transpose_b=True)
-
-            # Reshape to [batch_size, seq_length, num_heads, head_dim]
-            q = ttnn.reshape(q, (seq_length, batch_size * self.heads, self._head_dim))
-            k = ttnn.reshape(k, (seq_length, batch_size * self.heads, self._head_dim))
-            v = ttnn.reshape(v, (seq_length, batch_size * self.heads, self._head_dim))
-
-            # Transpose to [batch_size, num_heads, seq_length, head_dim] for attention computation
-            q = ttnn.transpose(q, 0, 1)
-            k = ttnn.transpose(k, 0, 1)
-            v = ttnn.transpose(v, 0, 1)
-
-            print(f"attention_mask.shape: {attention_mask.shape}")
-
-            q = ttnn.reshape(q, [1, q.shape[0], q.shape[1], q.shape[2]])
-            k = ttnn.reshape(k, [1, k.shape[0], k.shape[1], k.shape[2]])
-            v = ttnn.reshape(v, [1, v.shape[0], v.shape[1], v.shape[2]])
-            attention_mask = ttnn.reshape(attention_mask, [1, 1, attention_mask.shape[0], attention_mask.shape[1]])
-
-            # padded_shape = ttnn.pad_to_tile_shape(attention_mask.shape)
-            # attention_mask = ttnn.pad(attention_mask, [(0, 0), (0, 0), (0, padded_shape[2]), (0, padded_shape[3])], -math.inf)
-            # q = ttnn.pad(q, [(0, 0), (0, 0), (0, q.shape[2] - padded_shape[2]), (0, q.shape[3] - padded_shape[3])], -math.inf)
-            # k = ttnn.pad(k, [(0, 0), (0, 0), (0, k.shape[2] - padded_shape[2]), (0, k.shape[3] - padded_shape[3])], -math.inf)
-            # v = ttnn.pad(v, [(0, 0), (0, 0), (0, v.shape[2] - padded_shape[2]), (0, v.shape[3] - padded_shape[3])], -math.inf)
-
-            print(f"q.shape: {q.shape}, k.shape: {k.shape}, v.shape: {v.shape}")
-            # [batch_size * num_heads, seq_length, head_dim]
-
-            # SDPA expectes
-            # q: [b x nqh x s x dh]
-            is_causal = False if attention_mask is None else True
-            context_layer = ttnn.transformer.scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                is_causal=attention_mask is not None,
-                scale=self._scale,
-            )
-
-            # # Compute attention scores with proper scaling
-            # attention_scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
-            # attention_scores = attention_scores * self._scale
-
-            # # scale = self._head_dim**-0.5
-            # # q = q * scale
-
-            # # attention_scores = ttnn.matmul(
-            # #     q,
-            # #     k,
-            # #     # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # #     dtype=ttnn.bfloat16,
-            # #     # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-            # # )
-            # ttnn.deallocate(q)
-            # ttnn.deallocate(k)
-
-            # print(f"attention_scores.shape: {attention_scores.shape}")
-
-            # attention_probs = ttnn.transformer.attention_softmax(
-            #     attention_scores, attention_mask=attention_mask, head_size=self._head_dim
-            # )
-
-            # context_layer = ttnn.matmul(
-            #     attention_probs,
-            #     v,
-            #     # memory_config=ttnn.L1_MEMORY_CONFIG,
-            #     dtype=ttnn.bfloat16,
-            #     # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-            # )
-            # ttnn.deallocate(attention_probs)
-
-            context_layer_after_concatenate_heads = ttnn.transformer.concatenate_heads(
-                context_layer,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(context_layer)
-
-            print(f"context_layer_after_concatenate_heads.shape: {context_layer_after_concatenate_heads.shape}")
-            print(f"self_output_weight.shape: {self_output_weight.shape}")
-            print(f"self_output_bias.shape: {self_output_bias.shape}")
-
-            self_output = ttnn.linear(
-                context_layer_after_concatenate_heads,
-                self_output_weight,
-                bias=self_output_bias,
-                # memory_config=ttnn.L1_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                # core_grid=ttnn.CoreGrid(y=batch_size, x=num_cores_x),
-            )
-            ttnn.deallocate(context_layer_after_concatenate_heads)
-
-            return self_output
-
-        def multi_head_attention_alt(
-            hidden_states,
-            fused_qkv_weight,
-            fused_qkv_bias,
-            self_output_weight,
-            self_output_bias,
-            attention_mask=None,
-            prefix="",
-        ):
             seq_length, batch_size, hidden_size = hidden_states.shape
 
             self._embed_dim = hidden_size
@@ -458,23 +305,9 @@ class Transformer:
             residual = x
             x = ttnn.layer_norm(x, weight=layer["ln_1_weight"], bias=layer["ln_1_bias"])
 
-            save_weight(x, "hidden_states.pt")
-
-            compare_with_reference(
-                layer["ln_1_weight"],
-                f"{self.prefix}.layers.{i}.layer_norm1_weight.pt",
-                f"{self.prefix}.layers.{i}.ln_1_weight",
-                self.accuracy_logger,
-            )
-            compare_with_reference(
-                x, f"{self.prefix}.layers.{i}.ln_1(x).pt", f"{self.prefix}.layers.{i}.ln_1", self.accuracy_logger
-            )
-
-            print(f"x.shape = {x.shape}, self.heads = {self.heads}")
-
             # Multihead attention / Self-Attention
             # This must be equal to nn.MultiheadAttention(d_model, n_head)(x, x, x, need_weights=False, attn_mask=self.attn_mask)
-            x_attn = multi_head_attention_alt(
+            x_attn = multi_head_attention(
                 x,
                 fused_qkv_weight=(layer["q_proj_weight"], layer["k_proj_weight"], layer["v_proj_weight"]),
                 fused_qkv_bias=(layer["q_proj_bias"], layer["k_proj_bias"], layer["v_proj_bias"]),
@@ -484,14 +317,7 @@ class Transformer:
                 prefix=f"{self.prefix}.layers.{i}.attn",
             )  # Vision transformer doesn't use attention mask
 
-            compare_with_reference(
-                x_attn, f"{self.prefix}.layers.{i}.sdpa(x).pt", f"{self.prefix}.layers.{i}.sdpa", self.accuracy_logger
-            )
-
             x = residual + x_attn
-            compare_with_reference(
-                x, f"{self.prefix}.layers.{i}.sdpa(x)+x.pt", f"{self.prefix}.layers.{i}.sdpa+x", self.accuracy_logger
-            )
 
             # LayerNorm
             x_post_ln_2 = ttnn.layer_norm(x, weight=layer["ln_2_weight"], bias=layer["ln_2_bias"])
@@ -504,10 +330,6 @@ class Transformer:
         for i in range(len(self.layers)):
             layer = self.layers[i]
             x = residual_attention_block(x, layer, i)
-
-            compare_with_reference(
-                x, f"{self.prefix}.layers.{i}.attn(x).pt", f"{self.prefix}.layers.{i}.attn", self.accuracy_logger
-            )
 
         return x
 
@@ -565,19 +387,7 @@ class VisionTransformer:
         )
 
     def forward(self, x):
-        # Convolution
-        # TODO: Fix argument errors:
-        # TypeError: __call__(): incompatible function arguments. The following argument types are supported:
-        # 1. (self: ttnn._ttnn.operations.conv.conv2d_t, *, input_tensor: ttnn._ttnn.tensor.Tensor, weight_tensor: ttnn._ttnn.tensor.Tensor, device: tt::tt_metal::IDevice, in_channels: int, out_channels: int, batch_size: int, input_height: int, input_width: int, kernel_size: Annotated[list[int], FixedSize(2)], stride: Annotated[list[int], FixedSize(2)] = [1, 1], padding: Union[Annotated[list[int], FixedSize(2)], Annotated[list[int], FixedSize(4)]] = [0, 0], dilation: Annotated[list[int], FixedSize(2)] = [1, 1], groups: int = 1, dtype: Optional[ttnn._ttnn.tensor.DataType] = None, bias_tensor: Optional[ttnn._ttnn.tensor.Tensor] = None, conv_config: Optional[ttnn::operations::conv::conv2d::Conv2dConfig] = None, compute_config: Optional[Union[ttnn._ttnn.operations.core.GrayskullComputeKernelConfig, ttnn._ttnn.operations.core.WormholeComputeKernelConfig]] = None, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, slice_config: Optional[ttnn::operations::conv::conv2d::Conv2dSliceConfig] = None, return_output_dim: bool = False, return_weights_and_bias: bool = False, queue_id: ttnn._ttnn.types.QueueId = QueueId(0)) -> Union[ttnn._ttnn.tensor.Tensor, tuple[ttnn._ttnn.tensor.Tensor, tuple[int, int]], tuple[ttnn._ttnn.tensor.Tensor, tuple[ttnn._ttnn.tensor.Tensor, Optional[ttnn._ttnn.tensor.Tensor]]], tuple[ttnn._ttnn.tensor.Tensor, tuple[int, int], tuple[ttnn._ttnn.tensor.Tensor, Optional[ttnn._ttnn.tensor.Tensor]]]]
-        # 2. (self: ttnn._ttnn.operations.conv.conv2d_t, *, input_tensor: ttnn._ttnn.tensor.Tensor, weight_tensor: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.multi_device.MeshDevice, in_channels: int, out_channels: int, batch_size: int, input_height: int, input_width: int, kernel_size: Annotated[list[int], FixedSize(2)], stride: Annotated[list[int], FixedSize(2)] = [1, 1], padding: Union[Annotated[list[int], FixedSize(2)], Annotated[list[int], FixedSize(4)]] = [0, 0], dilation: Annotated[list[int], FixedSize(2)] = [1, 1], groups: int = 1, dtype: Optional[ttnn._ttnn.tensor.DataType] = None, bias_tensor: Optional[ttnn._ttnn.tensor.Tensor] = None, conv_config: Optional[ttnn::operations::conv::conv2d::Conv2dConfig] = None, compute_config: Optional[Union[ttnn._ttnn.operations.core.GrayskullComputeKernelConfig, ttnn._ttnn.operations.core.WormholeComputeKernelConfig]] = None, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, slice_config: Optional[ttnn::operations::conv::conv2d::Conv2dSliceConfig] = None, return_output_dim: bool = False, return_weights_and_bias: bool = False, queue_id: ttnn._ttnn.types.QueueId = QueueId(0)) -> Union[ttnn._ttnn.tensor.Tensor, tuple[ttnn._ttnn.tensor.Tensor, tuple[int, int]], tuple[ttnn._ttnn.tensor.Tensor, tuple[ttnn._ttnn.tensor.Tensor, Optional[ttnn._ttnn.tensor.Tensor]]], tuple[ttnn._ttnn.tensor.Tensor, tuple[int, int], tuple[ttnn._ttnn.tensor.Tensor, Optional[ttnn._ttnn.tensor.Tensor]]]]
-
-        print(f"x.shape: {x.shape}, rank = {len(x.shape)}, dtype = {x.dtype}")
-        assert len(x.shape) == 4  # ttnn.conv2d requires 4D tensor
-
         (batch_size, in_channels, height, width) = x.shape
-
-        assert x.dtype == ttnn.bfloat16
-        print(f"x.shape: {x.shape}, x.dtype: {x.dtype}")
 
         # Note: ttnn.conv2d uses 'Array of Struct' shape for input tensor:
         # (N, H, W, C_in)
@@ -595,30 +405,8 @@ class VisionTransformer:
         # Change tensor layout to (N, H, W, C_in)
         x = ttnn.permute(x, [0, 2, 3, 1])  # (N, C_in, H, W) -> (N, H, W, C_in)
 
-        # Flatten image (?)
-        # x = ttnn.reshape(x, (batch_size, height, width, in_channels)) # shape = [*, width, grid ** 2]
-
         # Note: ttnn.conv2d requires row-major layout for weight tensor
-
-        # Warning: Device weights not properly prepared, pulling back to host and trying to reprocess.
-        #     => What does that mean ?
-        # Error: Out of L1 Memory ?
-        #     => Set-up 2D block sharding ?
-
-        # core_grid = ttnn.CoreGrid(x=8, y=2)
-        # memory_config = ttnn.create_sharded_memory_config(x.shape, core_grid, ttnn.ShardStrategy.BLOCK)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        print(f"x.shape: {x.shape}, rank = {len(x.shape)}, dtype = {x.dtype}")
-        print(
-            f"self.conv1_weights.shape: {self.conv1_weights.shape}, rank = {len(self.conv1_weights.shape)}, dtype = {self.conv1_weights.dtype}"
-        )
-        assert in_channels == 3
-
-        print(
-            f"batch size = {batch_size}, height = {height}, width = {width}, in_channels = {in_channels}, out_channels = {self.vision_width}"
-        )
-        print(f"self.patch_size = {self.patch_size}")
 
         old_memory_config = x.memory_config()
         out_channels = 768
