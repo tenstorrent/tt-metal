@@ -397,10 +397,12 @@ setup(
     package_dir={
         "": "ttnn",
         "tracy": "tools/tracy",
+        "triage": "tools/triage",
     },
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),
     zip_safe=False,
     long_description=readme,
     long_description_content_type="text/markdown",
+    entry_points={"console_scripts": ["tt-triage = triage.triage:main"]},
 )
