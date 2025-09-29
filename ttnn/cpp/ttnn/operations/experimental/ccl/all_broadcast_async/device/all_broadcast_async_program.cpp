@@ -93,7 +93,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     // L1 Scratch CB Creation
-    size_t MAX_PACKET_SIZE_BYTES = tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : 4 * 1088;
+    DataType dtype = input_tensor.dtype();
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t MAX_PACKET_SIZE_BYTES =
+        dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
     const size_t packet_size_bytes =
         tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : MAX_PACKET_SIZE_BYTES;
     size_t max_packet_size = packet_size_bytes;
