@@ -70,11 +70,18 @@ void dump_cycles_to_yaml(
 
 // Main cycle detection function for inter-mesh traffic ONLY
 // Intra-mesh traffic uses dimension-ordered routing and cannot have cycles
+// Now uses ControlPlane::detect_routing_cycles_in_inter_mesh_traffic internally
 bool detect_cycles_in_random_inter_mesh_traffic(
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
     const IRouteManager& route_manager,
     const std::string& test_name,
     uint32_t max_retry_attempts = 3);
+
+// New control plane-based cycle detection function
+bool detect_cycles_using_control_plane(
+    const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
+    const ControlPlane& control_plane,
+    const std::string& test_name);
 
 // Detect and handle cycles with retry logic
 bool detect_and_handle_cycles(

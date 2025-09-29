@@ -125,6 +125,13 @@ public:
     std::vector<std::pair<FabricNodeId, chan_id_t>> get_fabric_route(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, chan_id_t src_chan_id) const;
 
+    // Cycle detection for inter-mesh traffic routing paths
+    // Returns true if cycles are detected in the routing paths for the given traffic pairs
+    // Only checks inter-mesh traffic (intra-mesh uses dimension-ordered routing and is cycle-free)
+    bool detect_routing_cycles_in_inter_mesh_traffic(
+        const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs,
+        const std::string& test_name = "CycleDetection") const;
+
     // Returns the direction in which the data should be forwarded from the src to reach the dest
     std::optional<RoutingDirection> get_forwarding_direction(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;

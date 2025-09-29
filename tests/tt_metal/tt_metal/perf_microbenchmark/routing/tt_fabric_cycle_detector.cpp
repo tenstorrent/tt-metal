@@ -356,4 +356,13 @@ bool detect_and_handle_cycles(
     return detect_cycles_in_random_inter_mesh_traffic(pairs, route_manager, test_name);
 }
 
+// New control plane-based cycle detection function
+bool detect_cycles_using_control_plane(
+    const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
+    const ControlPlane& control_plane,
+    const std::string& test_name) {
+    // Delegate directly to the control plane's cycle detection method
+    return control_plane.detect_routing_cycles_in_inter_mesh_traffic(pairs, test_name);
+}
+
 }  // namespace tt::tt_fabric::fabric_tests
