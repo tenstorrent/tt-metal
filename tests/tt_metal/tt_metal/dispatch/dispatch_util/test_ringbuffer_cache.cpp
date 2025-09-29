@@ -22,9 +22,11 @@ struct CacheTestParams {
     std::pair<int, int> pgm_sizes;
 };
 class RingbufferCacheRandomizedTestsFixture : public ::testing::TestWithParam<CacheTestParams> {
+public:
+    ~RingbufferCacheRandomizedTestsFixture() override = default;
+
 protected:
     RingbufferCacheRandomizedTestsFixture() = default;
-    ~RingbufferCacheRandomizedTestsFixture() override = default;
 
     std::unique_ptr<RingbufferCacheManager> rb_cache_;
 
