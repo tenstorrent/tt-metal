@@ -12,6 +12,7 @@ from ...models.transformers.transformer_motif import MotifTransformer, convert_m
 from ...parallel.config import DiTParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...reference.motif_image import configuration_motifimage, modeling_dit
+from ...utils import cache
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
 from ...utils.substate import substate
@@ -140,7 +141,7 @@ def test_transformer_motif(
         padding_config=padding_config,
     )
 
-    logger.info("loading state dict...")
+    logger.info("loading state dict from file...")
     state_dict = torch.load(model_checkpoint_path, map_location=torch.device("cpu"), mmap=True)
     state_dict = substate(state_dict, "dit")
 
@@ -149,10 +150,23 @@ def test_transformer_motif(
     assert unexpected == ["pos_embed"]
     assert not missing
 
-    logger.info("loading state dict into TT-NN model...")
-    converted_state_dict = dict(state_dict)
-    convert_motif_transformer_state(converted_state_dict, num_layers=num_layers)
-    tt_model.load_torch_state_dict(converted_state_dict)
+    if cache.cache_dir_is_set():
+        cache_path = cache.get_and_create_cache_path(
+            model_name="motif-image-6b",
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            dtype="bf16",
+        )
+        if cache.cache_dict_exists(cache_path):
+            logger.info("loading from cache...")
+            tt_model.from_cached_state_dict(cache.load_cache_dict(cache_path))
+        else:
+            logger.info("loading state dict into TT-NN model...")
+            converted_state_dict = dict(state_dict)
+            convert_motif_transformer_state(converted_state_dict, num_layers=num_layers)
+            tt_model.load_torch_state_dict(converted_state_dict)
+            logger.info("saving to cache...")
+            cache.save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
 
     torch.manual_seed(0)
     latents = torch.randn([batch_size, in_channels, latents_height, latents_width])

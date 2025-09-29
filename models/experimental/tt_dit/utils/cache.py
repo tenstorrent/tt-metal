@@ -2,10 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import json
+import os
 
 CACHE_DICT_FILE = "cache_dict.json"
+
+
+def cache_dir_is_set() -> bool:
+    return "TT_DIT_CACHE_DIR" in os.environ
 
 
 def get_cache_path(model_name, subfolder, parallel_config, dtype="bf16"):
