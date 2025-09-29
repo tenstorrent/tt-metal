@@ -7,8 +7,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_ccl)
 set_target_properties(
     ttnn_op_experimental_ccl
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 target_sources(
@@ -91,12 +91,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_experimental_ccl PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_ccl
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_ccl PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(TARGETS ttnn_op_experimental_ccl LIBRARY COMPONENT tar)
 

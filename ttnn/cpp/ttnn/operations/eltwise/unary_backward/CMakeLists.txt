@@ -16,12 +16,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_eltwise_unary_backward PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_eltwise_unary_backward
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_eltwise_unary_backward PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

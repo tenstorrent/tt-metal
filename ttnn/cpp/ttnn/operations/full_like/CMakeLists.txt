@@ -18,12 +18,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_full_like PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_full_like
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_full_like PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

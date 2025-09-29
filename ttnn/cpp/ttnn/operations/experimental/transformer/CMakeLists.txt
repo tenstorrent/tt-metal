@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
 set_target_properties(
     ttnn_op_experimental_transformer
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -85,12 +85,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_experimental_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_transformer
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_transformer PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

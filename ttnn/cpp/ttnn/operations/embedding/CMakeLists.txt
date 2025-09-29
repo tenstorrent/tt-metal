@@ -7,8 +7,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_embedding)
 set_target_properties(
     ttnn_op_embedding
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
@@ -28,12 +28,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_embedding PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_embedding
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_embedding PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS
