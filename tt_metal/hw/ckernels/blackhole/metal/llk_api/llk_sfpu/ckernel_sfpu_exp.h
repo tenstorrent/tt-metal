@@ -50,7 +50,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     // To prevent this, we clamp -88.5 < x < 89
     // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
     sfpi::vFloat threshold_high = sfpi::vFloat(89);
-    sfpi::vFloat thresold_low = sfpi::vFloat(-88.5);
+    sfpi::vFloat threshold_low = sfpi::vFloat(-88.5);
     vec_min_max(threshold_low, val);
     vec_min_max(val, threshold_high);
 
