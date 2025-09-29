@@ -21,7 +21,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 120
+        default: 150
       run_conv_tests:
         required: false
         type: boolean
