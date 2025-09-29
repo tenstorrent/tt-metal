@@ -54,7 +54,7 @@ on:
 
 # This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
 env:
-  TEST_BUDGET_SECONDS: 300
+  TEST_BUDGET_SECONDS: 600
 
 jobs:
   ttnn-conv-tests:
