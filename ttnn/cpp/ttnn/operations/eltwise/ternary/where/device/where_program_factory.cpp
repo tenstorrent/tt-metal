@@ -17,7 +17,7 @@ void add_sharding_defines(
     std::map<std::string, std::string>& defines,
     bool predicate_sharded,
     bool value_true_sharded,
-    bool value_false_sharded = false) {
+    bool value_false_sharded) {
     defines["SRC_SHARDED_A"] = predicate_sharded ? "1" : "0";    // CB0 sharding
     defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";   // CB1 sharding
     defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";  // CB2 sharding
@@ -25,7 +25,7 @@ void add_sharding_defines(
 
 // Helper function to add broadcast defines for dataflow kernels
 void add_broadcast_defines(
-    std::map<std::string, std::string>& defines, bool pred_is_bcast, bool true_is_bcast, bool false_is_bcast = false) {
+    std::map<std::string, std::string>& defines, bool pred_is_bcast, bool true_is_bcast, bool false_is_bcast) {
     defines["SRC_BCAST_A"] = pred_is_bcast ? "1" : "0";   // Predicate tensor (CB0)
     defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // True tensor (CB1)
     defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // False tensor (CB2)
@@ -107,105 +107,74 @@ Strides calculate_strides(const TensorDimensions& dims) {
     return strides;
 }
 
-// Helper function to set up reader runtime arguments for TTS variant
-void setup_tts_reader_args(
+// Helper function to set up reader runtime arguments for TTS/TST variants
+void setup_ts_reader_args(
     std::array<uint32_t, 27>& reader_runtime_args,
     const ttnn::Tensor& predicate_tensor,
-    const ttnn::Tensor& value_true_tensor,
+    const ttnn::Tensor& tensor_operand,  // true tensor for TTS, false tensor for TST
     uint32_t num_tiles_per_core,
     uint32_t start_tile_id,
     const TensorDimensions& pred_dims,
-    const TensorDimensions& true_dims,
+    const TensorDimensions& tensor_dims,  // dimensions of the tensor operand
     const TensorDimensions& output_dims,
     const Strides& pred_strides,
-    const Strides& true_strides,
+    const Strides& tensor_strides,  // strides of the tensor operand
     uint32_t a_num_tiles,
-    uint32_t b_num_tiles,
+    uint32_t tensor_num_tiles,  // number of tiles for the tensor operand
     uint32_t c_current_shard_width,
-    WhereBroadcastType broadcast_type) {
+    WhereBroadcastType broadcast_type,
+    WhereVariant variant) {  // TTS or TST
     // Standard first 5 arguments
-    reader_runtime_args[0] = predicate_tensor.buffer()->address();   // 0: src0_addr (predicate)
-    reader_runtime_args[1] = value_true_tensor.buffer()->address();  // 1: src1_addr (true tensor)
-    reader_runtime_args[2] = 0u;                                     // 2: src2_addr (false tensor)
-    reader_runtime_args[3] = num_tiles_per_core;                     // 3: num_tiles (per core)
-    reader_runtime_args[4] = start_tile_id;                          // 4: start_id
+    reader_runtime_args[0] = predicate_tensor.buffer()->address();  // 0: src0_addr (predicate)
+    reader_runtime_args[1] = tensor_operand.buffer()->address();    // 1: src1_addr (tensor operand)
+    reader_runtime_args[2] = 0u;                                    // 2: src2_addr (scalar operand)
+    reader_runtime_args[3] = num_tiles_per_core;                    // 3: num_tiles (per core)
+    reader_runtime_args[4] = start_tile_id;                         // 4: start_id
 
     // Extended broadcast arguments
     if (broadcast_type != WhereBroadcastType::NONE) {
-        reader_runtime_args[5] = pred_strides.nD_stride;   // 5: nD_stride
-        reader_runtime_args[6] = pred_strides.d_stride;    // 6: d_stride
-        reader_runtime_args[7] = pred_strides.n_stride;    // 7: n_stride
-        reader_runtime_args[8] = pred_strides.c_stride;    // 8: c_stride
-        reader_runtime_args[9] = output_dims.D;            // 9: D
-        reader_runtime_args[10] = output_dims.N;           // 10: N
-        reader_runtime_args[11] = output_dims.C;           // 11: C
-        reader_runtime_args[12] = output_dims.Ht;          // 12: Ht
-        reader_runtime_args[13] = output_dims.Wt;          // 13: Wt
-        reader_runtime_args[14] = output_dims.ND;          // 14: cND
-        reader_runtime_args[15] = true_strides.nD_stride;  // 15: true_nD_stride
-        reader_runtime_args[16] = true_strides.d_stride;   // 16: true_d_stride
-        reader_runtime_args[17] = true_strides.n_stride;   // 17: true_n_stride
-        reader_runtime_args[18] = true_strides.c_stride;   // 18: true_c_stride
-        reader_runtime_args[19] = b_num_tiles;             // 19: true_num_tiles
+        reader_runtime_args[5] = pred_strides.nD_stride;  // 5: nD_stride
+        reader_runtime_args[6] = pred_strides.d_stride;   // 6: d_stride
+        reader_runtime_args[7] = pred_strides.n_stride;   // 7: n_stride
+        reader_runtime_args[8] = pred_strides.c_stride;   // 8: c_stride
+        reader_runtime_args[9] = output_dims.D;           // 9: D
+        reader_runtime_args[10] = output_dims.N;          // 10: N
+        reader_runtime_args[11] = output_dims.C;          // 11: C
+        reader_runtime_args[12] = output_dims.Ht;         // 12: Ht
+        reader_runtime_args[13] = output_dims.Wt;         // 13: Wt
+        reader_runtime_args[14] = output_dims.ND;         // 14: cND
 
-        // False is scalar, so no strides needed
-        reader_runtime_args[20] = 0u;                     // 20: false_nD_stride
-        reader_runtime_args[21] = 0u;                     // 21: false_d_stride
-        reader_runtime_args[22] = 0u;                     // 22: false_n_stride
-        reader_runtime_args[23] = 0u;                     // 23: false_c_stride
-        reader_runtime_args[24] = 0u;                     // 24: false_num_tiles
+        if (variant == WhereVariant::TTS) {
+            // TTS: tensor operand is true, scalar operand is false
+            reader_runtime_args[15] = tensor_strides.nD_stride;  // 15: true_nD_stride
+            reader_runtime_args[16] = tensor_strides.d_stride;   // 16: true_d_stride
+            reader_runtime_args[17] = tensor_strides.n_stride;   // 17: true_n_stride
+            reader_runtime_args[18] = tensor_strides.c_stride;   // 18: true_c_stride
+            reader_runtime_args[19] = tensor_num_tiles;          // 19: true_num_tiles
+            // False is scalar, so no strides needed
+            reader_runtime_args[20] = 0u;  // 20: false_nD_stride
+            reader_runtime_args[21] = 0u;  // 21: false_d_stride
+            reader_runtime_args[22] = 0u;  // 22: false_n_stride
+            reader_runtime_args[23] = 0u;  // 23: false_c_stride
+            reader_runtime_args[24] = 0u;  // 24: false_num_tiles
+        } else {                           // TST
+            // TST: scalar operand is true, tensor operand is false
+            // False is tensor operand
+            reader_runtime_args[15] = tensor_strides.nD_stride;  // 15: false_nD_stride
+            reader_runtime_args[16] = tensor_strides.d_stride;   // 16: false_d_stride
+            reader_runtime_args[17] = tensor_strides.n_stride;   // 17: false_n_stride
+            reader_runtime_args[18] = tensor_strides.c_stride;   // 18: false_c_stride
+            reader_runtime_args[19] = tensor_num_tiles;          // 19: false_num_tiles
+            // True is scalar, so no strides needed
+            reader_runtime_args[20] = 0u;  // 20: true_nD_stride (true is scalar)
+            reader_runtime_args[21] = 0u;  // 21: true_d_stride
+            reader_runtime_args[22] = 0u;  // 22: true_n_stride
+            reader_runtime_args[23] = 0u;  // 23: true_c_stride
+            reader_runtime_args[24] = 0u;  // 24: true_num_tiles
+        }
+
         reader_runtime_args[25] = c_current_shard_width;  // 25: dst_shard_width
         reader_runtime_args[26] = a_num_tiles;            // 26: src_num_tiles (predicate)
-    }
-}
-
-// Helper function to set up reader runtime arguments for TST variant
-void setup_tst_reader_args(
-    std::array<uint32_t, 27>& reader_runtime_args,
-    const ttnn::Tensor& predicate_tensor,
-    const ttnn::Tensor& value_false_tensor,
-    uint32_t num_tiles_per_core,
-    uint32_t start_tile_id,
-    const TensorDimensions& pred_dims,
-    const TensorDimensions& false_dims,
-    const TensorDimensions& output_dims,
-    const Strides& pred_strides,
-    const Strides& false_strides,
-    uint32_t a_num_tiles,
-    uint32_t f_num_tiles,
-    uint32_t c_current_shard_width,
-    WhereBroadcastType broadcast_type) {
-    // Standard first 5 arguments
-    reader_runtime_args[0] = predicate_tensor.buffer()->address();    // 0: src0_addr (predicate)
-    reader_runtime_args[1] = value_false_tensor.buffer()->address();  // 1: src1_addr (false tensor)
-    reader_runtime_args[2] = 0u;                                      // 2: src2_addr
-    reader_runtime_args[3] = num_tiles_per_core;                      // 3: num_tiles (per core)
-    reader_runtime_args[4] = start_tile_id;                           // 4: start_id
-
-    // Extended broadcast arguments
-    if (broadcast_type != WhereBroadcastType::NONE) {
-        reader_runtime_args[5] = pred_strides.nD_stride;    // 5: nD_stride
-        reader_runtime_args[6] = pred_strides.d_stride;     // 6: d_stride
-        reader_runtime_args[7] = pred_strides.n_stride;     // 7: n_stride
-        reader_runtime_args[8] = pred_strides.c_stride;     // 8: c_stride
-        reader_runtime_args[9] = output_dims.D;             // 9: D
-        reader_runtime_args[10] = output_dims.N;            // 10: N
-        reader_runtime_args[11] = output_dims.C;            // 11: C
-        reader_runtime_args[12] = output_dims.Ht;           // 12: Ht
-        reader_runtime_args[13] = output_dims.Wt;           // 13: Wt
-        reader_runtime_args[14] = output_dims.ND;           // 14: cND
-        reader_runtime_args[15] = false_strides.nD_stride;  // 15: false_nD_stride
-        reader_runtime_args[16] = false_strides.d_stride;   // 16: false_d_stride
-        reader_runtime_args[17] = false_strides.n_stride;   // 17: false_n_stride
-        reader_runtime_args[18] = false_strides.c_stride;   // 18: false_c_stride
-        reader_runtime_args[19] = f_num_tiles;              // 19: false_num_tiles
-        reader_runtime_args[20] = 0u;                       // 20: true_nD_stride (true is scalar)
-        reader_runtime_args[21] = 0u;                       // 21: true_d_stride
-        reader_runtime_args[22] = 0u;                       // 22: true_n_stride
-        reader_runtime_args[23] = 0u;                       // 23: true_c_stride
-        reader_runtime_args[24] = 0u;                       // 24: true_num_tiles
-        reader_runtime_args[25] = c_current_shard_width;    // 25: dst_shard_width
-        reader_runtime_args[26] = a_num_tiles;              // 26: src_num_tiles (predicate)
     }
 }
 
@@ -354,21 +323,22 @@ void set_or_update_runtime_arguments(
             }
 
             std::array<uint32_t, num_reader_args> reader_runtime_args{};
-            setup_tts_reader_args(
+            setup_ts_reader_args(
                 reader_runtime_args,
                 predicate_tensor,
-                value_true_tensor.value(),
+                value_true_tensor.value(),  // tensor operand (true for TTS)
                 num_tiles_per_core,
                 start_tile_id,
                 pred_dims,
-                true_dims,
+                true_dims,  // tensor dims (true for TTS)
                 output_dims,
                 pred_strides,
-                true_strides,
+                true_strides,  // tensor strides (true for TTS)
                 a_num_tiles,
-                b_num_tiles,
+                b_num_tiles,  // tensor num tiles (true for TTS)
                 c_current_shard_width,
-                broadcast_type);
+                broadcast_type,
+                WhereVariant::TTS);
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TST) {
             // TST: predicate (arg 0) + value_false tensor (arg 1, maps to c_1)
@@ -394,21 +364,22 @@ void set_or_update_runtime_arguments(
             }
 
             std::array<uint32_t, num_reader_args> reader_runtime_args{};
-            setup_tst_reader_args(
+            setup_ts_reader_args(
                 reader_runtime_args,
                 predicate_tensor,
-                value_false_tensor.value(),
+                value_false_tensor.value(),  // tensor operand (false for TST)
                 num_tiles_per_core,
                 start_tile_id,
                 pred_dims,
-                false_dims,
+                false_dims,  // tensor dims (false for TST)
                 output_dims,
                 pred_strides,
-                false_strides,
+                false_strides,  // tensor strides (false for TST)
                 a_num_tiles,
-                f_num_tiles,
+                f_num_tiles,  // tensor num tiles (false for TST)
                 c_current_shard_width,
-                broadcast_type);
+                broadcast_type,
+                WhereVariant::TST);
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TTT) {
             uint32_t c_start_id = 0;
