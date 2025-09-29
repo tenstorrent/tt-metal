@@ -14,6 +14,21 @@ from ...tt.rms_norm import RMSNorm
 from ...tt.topk import TopKRouter
 from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, parametrize_mesh_with_fabric
 
+
+# Helper Functions for Common Test Patterns
+def run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.99):
+    """Standard component output comparison"""
+    tt_output_tensors = ttnn.get_device_tensors(tt_output)
+
+    for i in range(len(tt_output_tensors)):
+        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
+        passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=pcc_threshold)
+        if passing:
+            return True, output
+    else:
+        return False, output
+
+
 # Core MoE Tests - Essential for any model size
 
 
@@ -22,47 +37,29 @@ from ..test_factory import TestFactory, compare_tensors, parametrize_batch_seq, 
 def test_topk_router(mesh_device, device_params, seq_len, reset_seeds):
     """Test TopK routing - essential for MoE"""
 
-    # Create submesh like original (4x8 base -> 1x2 submesh)
+    # Create submesh
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2))
 
     # Use TestFactory for clean setup
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
-
-    # Create input
     hidden_states = torch.randn(seq_len, config.hidden_size)
 
-    # Create reference model using real implementation
+    # Create reference model
     from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssTopKRouter
 
     reference_model = GptOssTopKRouter(config)
     router_scores, router_indices = reference_model(hidden_states)
 
-    # Convert to TTNN tensors
-    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-
     # Create TT model
     tt_model = TopKRouter(mesh_device, config, reference_model.state_dict())
+    tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_router_scores, tt_router_indices, tt_router_logits = tt_model(tt_hidden_states)
 
-    # Compare outputs using TestFactory utility
-    tt_router_scores_tensors = ttnn.get_device_tensors(tt_router_scores)
-    tt_router_indices_tensors = ttnn.get_device_tensors(tt_router_indices)
-    tt_router_logits_tensors = ttnn.get_device_tensors(tt_router_logits)
-
-    for i in range(len(tt_router_scores_tensors)):
-        tt_router_scores = ttnn.to_torch(tt_router_scores_tensors[i])
-        tt_router_indices = ttnn.to_torch(tt_router_indices_tensors[i])
-        tt_router_logits = ttnn.to_torch(tt_router_logits_tensors[i])
-
-        # Use TestFactory comparison utility
-        passing, output = compare_tensors(tt_router_scores, router_scores, mesh_device, pcc_threshold=0.99)
-        print(f"router_scores: {output}")
-
-        if passing:
-            break
-    else:
-        assert False, f"All device comparisons failed. Last output: {output}"
+    # Compare outputs
+    for tt_output, reference_output in zip(tt_router_scores, router_scores):
+        passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.99)
+        assert passing, f"TopK router test failed. Output: {output}"
 
 
 @parametrize_mesh_with_fabric(["1x8"])
@@ -124,21 +121,9 @@ def test_experts_adaptive(mesh_device, device_params, seq_len, reset_seeds):
     tt_model = Experts(mesh_device, config, state_dict, setup["ccl_manager"])
     tt_output = tt_model(tt_hidden_states, tt_routing_weights)
 
-    # Compare outputs using TestFactory utility
-    tt_output_tensors = ttnn.get_device_tensors(tt_output)
-
-    for i in range(len(tt_output_tensors)):
-        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
-
-        # Use TestFactory comparison utility
-        routing_type = "sparse" if use_sparse else "dense"
-        passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=0.99)
-        print(f"{routing_type}_experts_output: {output}")
-
-        if passing:
-            break
-    else:
-        assert False, f"All device comparisons failed. Last output: {output}"
+    # Compare outputs
+    passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.99)
+    assert passing, f"Experts test failed. Output: {output}"
 
 
 @parametrize_mesh_with_fabric(["1x8"])
@@ -222,19 +207,9 @@ def test_attention_core(mesh_device, device_params, batch_size, seq_len, reset_s
 
     tt_out = tt_model(tt_hidden_states, tt_mask, rope_stuff, tt_position_idx)
 
-    # Compare outputs like original
-    tt_out_tensors = ttnn.get_device_tensors(tt_out)
-    for i in range(len(tt_out_tensors)):
-        tt_out_torch = ttnn.to_torch(tt_out_tensors[i])
-
-        # Use TestFactory comparison utility
-        passed, output = compare_tensors(tt_out_torch, reference_out, mesh_device, pcc_threshold=0.99)
-        print(f"attention_output: {output}")
-
-        if passed:
-            break
-    else:
-        assert False, f"All device comparisons failed. Last output: {output}"
+    # Compare outputs
+    passing, output = run_component_comparison(tt_out, reference_out, mesh_device, pcc_threshold=0.99)
+    assert passing, f"Attention test failed. Output: {output}"
 
 
 @parametrize_mesh_with_fabric(["1x8"])
@@ -275,20 +250,9 @@ def test_rms_norm(mesh_device, device_params, seq_len, reset_seeds):
     tt_rms_norm = RMSNorm(mesh_device, config, reference_model.state_dict(), mesh_config=mesh_config)
     tt_output = tt_rms_norm(tt_input)
 
-    # Compare outputs using TestFactory utility
-    tt_output_tensors = ttnn.get_device_tensors(tt_output)
-
-    for i in range(len(tt_output_tensors)):
-        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
-
-        # Use TestFactory comparison utility
-        passing, output = compare_tensors(tt_output_torch, ref_output, mesh_device, pcc_threshold=0.99)
-        print(f"rms_norm_output: {output}")
-
-        if passing:
-            break
-    else:
-        assert False, f"All device comparisons failed. Last output: {output}"
+    # Compare outputs
+    passing, output = run_component_comparison(tt_output, ref_output, mesh_device, pcc_threshold=0.99)
+    assert passing, f"RMS norm test failed. Output: {output}"
 
 
 @parametrize_mesh_with_fabric(["1x8"])
@@ -342,17 +306,103 @@ def test_full_mlp_pipeline(mesh_device, device_params, seq_len, reset_seeds):
 
     tt_output, routing_scores = tt_mlp(tt_hidden_states)
 
-    # Compare outputs using TestFactory utility
-    tt_output_tensors = ttnn.get_device_tensors(tt_output)
+    # Compare outputs
+    passing, output = run_component_comparison(tt_output, reference_output, mesh_device, pcc_threshold=0.99)
+    assert passing, f"MLP test failed. Output: {output}"
 
-    for i in range(len(tt_output_tensors)):
-        tt_output_torch = ttnn.to_torch(tt_output_tensors[i])
 
-        # Use TestFactory comparison utility
-        passing, output = compare_tensors(tt_output_torch, reference_output, mesh_device, pcc_threshold=0.99)
-        print(f"mlp_output: {output}")
+@parametrize_mesh_with_fabric(
+    [
+        "1x8",
+    ]
+)
+@parametrize_batch_seq(
+    [
+        (1, 1),
+    ]
+)
+def test_decoder_layer_integration(mesh_device, device_params, batch_size, seq_len, reset_seeds):
+    """Test complete decoder layer - combines attention + MLP + norms"""
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 8))
 
-        if passing:
-            break
-    else:
-        assert False, f"All device comparisons failed. Last output: {output}"
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
+    config = setup["config"]
+
+    # Create reference model
+    from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssDecoderLayer
+
+    reference_layer = GptOssDecoderLayer(config, layer_idx=0)
+    reference_state = reference_layer.state_dict()
+
+    decoder_layer = DecoderLayer(
+        setup["mesh_device"],
+        config,
+        reference_state,
+        layer_idx=0,
+        ccl_manager=setup["ccl_manager"],
+        dtype=setup["dtype"],
+        tensor_cache_path=setup["tensor_cache_path"],
+        mesh_config=setup["mesh_config"],
+    )
+
+    # Create input
+    hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
+
+    # Create position IDs first
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+
+    # Create attention mask like the working attention test
+    mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
+
+    # Handle decode mode for TT model like original
+    if seq_len == 1:  # decode
+        from models.demos.gpt_oss.utils.general_utils import get_decode_mask
+
+        sliding_window = 0  # No sliding window for this test
+        mask = get_decode_mask(position_ids[0].item(), sliding_window)
+        mask = mask.repeat(1, config.num_attention_heads // setup["mesh_device"].shape[1], 1, 1).transpose(1, 2)
+
+    # Create position embeddings for reference model
+    from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssRotaryEmbedding
+
+    rope_embeddings = GptOssRotaryEmbedding(config)
+    cos, sin = rope_embeddings(hidden_states, position_ids)
+    position_embeddings = (cos, sin)
+
+    # Reference forward pass
+    with torch.no_grad():
+        reference_output = reference_layer(hidden_states, position_embeddings=position_embeddings)
+
+    # Create TTNN RoPE embeddings for decoder layer
+    tt_cos = ttnn.from_torch(
+        cos.unsqueeze(-2), device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+    tt_sin = ttnn.from_torch(
+        sin.unsqueeze(-2), device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
+
+    from models.demos.gpt_oss.tt.rope import ApplyRotaryPosEmb
+
+    apply_rope = ApplyRotaryPosEmb(config)
+    rope_stuff = (apply_rope, tt_cos, tt_sin)
+
+    # Create position index for TTNN
+    tt_position_idx = ttnn.from_torch(
+        position_ids, device=setup["mesh_device"], layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
+    )
+
+    # Create TTNN mask
+    tt_mask = ttnn.from_torch(mask, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # TTNN forward pass
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16  # setup["dtype"]
+    )
+    print(f"tt_hidden_states shape: {tt_hidden_states.shape}", "memory: ", tt_hidden_states.memory_config())
+    tt_output = decoder_layer(
+        tt_hidden_states, attention_mask=tt_mask, position_embeddings=rope_stuff, position_idx=tt_position_idx
+    )
+
+    # Compare outputs
+    passing, output = run_component_comparison(tt_output, reference_output, setup["mesh_device"], pcc_threshold=0.99)
+    assert passing, f"Decoder layer test failed. Output: {output}"
