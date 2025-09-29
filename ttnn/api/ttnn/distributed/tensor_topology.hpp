@@ -55,8 +55,12 @@ public:
 private:
     tt::tt_metal::distributed::MeshShape distribution_shape_;
     tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_;
+
     // Physical device coordinates
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords_;
 };
+
+bool operator==(const TensorTopology& lhs, const TensorTopology& rhs);
+bool operator!=(const TensorTopology& lhs, const TensorTopology& rhs);
 
 }  // namespace tt::tt_metal
