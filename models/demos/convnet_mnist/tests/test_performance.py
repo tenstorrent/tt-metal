@@ -11,11 +11,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    is_grayskull,
-)
+from models.common.utility_functions import disable_persistent_kernel_cache, is_blackhole
 from models.demos.convnet_mnist import convnet_mnist_preprocessing
 from models.demos.convnet_mnist.tt.convnet_mnist import convnet_mnist, custom_preprocessor
 from models.experimental.convnet_mnist.reference.convnet import ConvNet
@@ -24,7 +20,7 @@ from models.perf.perf_utils import prep_perf_report
 
 
 def get_expected_times(convnet_mnist):
-    return (15.0, 9.2)
+    return (15.0, 0.0040 if is_blackhole() else 0.0040)
 
 
 def model_location_generator(rel_path):
@@ -73,38 +69,42 @@ def test_convnet_mnist(
     )
     parameters = convnet_mnist_preprocessing.custom_preprocessor(parameters, device=device)
 
-    durations = []
-    for i in range(2):
-        start = time.time()
+    def run(input_tensor, device, parameters):
         ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16)
-
         ttnn_output = convnet_mnist(
             input_tensor=ttnn_input,
             device=device,
             parameters=parameters,
         )
-        output = ttnn.from_device(ttnn_output)
-        end = time.time()
-        durations.append(end - start)
-        enable_persistent_kernel_cache()
+        return ttnn.from_device(ttnn_output)
 
-    inference_and_compile_time, inference_time, *_ = durations
+    start = time.time()
+    run(input_tensor, device, parameters)
+    ttnn.synchronize_device(device)
+    inference_and_compile_time = time.time() - start
+
+    iterations = 256
+    start = time.time()
+    [run(input_tensor, device, parameters) for _ in range(iterations)]
+    ttnn.synchronize_device(device)
+    inference_time = time.time() - start
+    average_inference_time = inference_time / iterations
 
     expected_compile_time, expected_inference_time = get_expected_times("convnet_mnist")
     prep_perf_report(
         model_name="convnet_mnist",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
+        inference_time=average_inference_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments="",
         inference_time_cpu=0.0,
     )
 
-    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
-    logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
+    logger.info(f"Compile time: {round(inference_and_compile_time - average_inference_time, 1)} s")
+    logger.info(f"Average inference time: {round(average_inference_time * 1000.0, 3)} ms")
+    logger.info(f"Samples per second: {round(1 / average_inference_time * batch_size, 2)} fps")
 
 
 @pytest.mark.parametrize(

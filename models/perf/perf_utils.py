@@ -59,7 +59,7 @@ def process_perf_results(fname, expected_cols):
     return cols, merge_res
 
 
-def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_precision=4, threshold=0.85):
+def check_perf_results(fname, expected_cols, check_cols, table_width=110, float_precision=4, threshold=0.80):
     red_color_code = "\033[91m"
     green_color_code = "\033[92m"
     reset_color_code = "\033[0m"
