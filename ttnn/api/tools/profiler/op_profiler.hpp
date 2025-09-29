@@ -198,7 +198,7 @@ inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
     return callStackWasEmpty;
 }
 
-inline constexpr size_t tracy_max_message_length =
+constexpr auto tracy_max_message_length =
     static_cast<size_t>(std::numeric_limits<uint16_t>::max());  // Tracy hard limit is 64KiB including null terminator
 
 inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
