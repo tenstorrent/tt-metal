@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,12 +13,6 @@
 #include "dispatch/system_memory_manager.hpp"
 
 namespace tt::tt_metal::distributed {
-
-MeshWorkload CreateMeshWorkload() { return MeshWorkload(); }
-
-void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range) {
-    mesh_workload.add_program(device_range, std::move(program));
-}
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {

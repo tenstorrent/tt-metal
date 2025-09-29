@@ -71,7 +71,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const auto num_rows = n * num_groups;
     const auto num_inner_tiles = (num_channels / num_groups) * Ht * Wt;
 
-    const auto f_c = static_cast<float>(num_channels / num_groups);
+    const auto f_c = static_cast<float>(num_channels) / static_cast<float>(num_groups);
     const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
     const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
     auto scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * sqrt(f_c * f_ht * f_wt));
@@ -128,7 +128,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const uint32_t im7_t = 2;                                                         // Sum[x]
 
     const auto cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const auto single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const auto single_tile_size = tt::tile_size(cb_data_format);
 
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +
                            im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *

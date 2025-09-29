@@ -33,12 +33,16 @@ void RpcServerController::start(const std::string& host, uint16_t port) {
 
     should_stop = false;
     is_running = true;
+    server_start_finished = false;
     server_thread = std::thread(&RpcServerController::run_server, this);
 
     // Wait for server to start or fail
     std::unique_lock start_lock(server_start_mutex);
     server_start_cv.wait(start_lock, [this] { return this->server_start_finished.load(); });
     if (!is_running) {
+        if (server_thread.joinable()) {
+            server_thread.join();
+        }
         throw std::runtime_error(server_start_error_message);
     }
 }

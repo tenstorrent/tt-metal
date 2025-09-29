@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/device.hpp>
@@ -79,7 +78,7 @@ void matmul_multicore_reuse(
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
-    uint32_t single_tile_size = detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     // uint32_t single_tile_size = 2 * 1024;
 
     auto compute_with_storage_grid_size = mesh_device->compute_with_storage_grid_size();
@@ -335,7 +334,7 @@ void matmul_multicore_reuse(
     // Non-blocking uploads allow overlapping host setup with device transfers
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
     distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read from shard {0,0} waits for completion and populates 'output'
     distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);

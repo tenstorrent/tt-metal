@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -140,7 +139,7 @@ int main() {
     fmt::print("\n");
 
     // start/finish program and close device
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Kernel prints to console. No need to print the output here.
     //

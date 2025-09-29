@@ -6,12 +6,12 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_op.hpp"
+#include "slice_program_factory.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -876,7 +876,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -984,10 +984,10 @@ operation::ProgramWithCallbacks slice_multi_core(
     }
     switch (a.layout()) {
         case Layout::ROW_MAJOR:
-            return a.is_sharded() ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
-                                  : (has_step ? slice_rm_strided_single_core_n_dims(
-                                                    a, output, output_tensor_start, output_tensor_end, step)
-                                              : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
+            return a.is_sharded()
+                       ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
+                       : (has_step ? slice_rm_multi_core_stride(a, output, output_tensor_start, output_tensor_end, step)
+                                   : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
         case Layout::TILE: return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end);
         default: TT_ASSERT(false, "Unsupported Layout");
     }

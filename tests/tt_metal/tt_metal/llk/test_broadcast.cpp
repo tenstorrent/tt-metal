@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -37,7 +37,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -359,7 +358,7 @@ void run_single_core_broadcast(
     distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
     distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data;

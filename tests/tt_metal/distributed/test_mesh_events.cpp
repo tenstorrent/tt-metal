@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,6 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -38,7 +37,7 @@ using MeshEventsTestSuite = GenericMultiCQMeshDeviceFixture;
 TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
-    int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    int32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
@@ -74,7 +73,7 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
 
 TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
     uint32_t num_iterations = 20;
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
@@ -129,7 +128,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
     uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(
         MeshCoordinate{0, 0},
         MeshCoordinate{
@@ -143,8 +142,8 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
             mesh_device_->num_cols() - 1,
         });
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_0);
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_1);
+    mesh_workload.add_program(devices_0, std::move(*programs[0]));
+    mesh_workload.add_program(devices_1, std::move(*programs[1]));
 
     for (int iter = 0; iter < num_iters; iter++) {
         std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), iter + 2);
@@ -212,7 +211,7 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     }
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
-    int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    int32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
@@ -262,7 +261,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     auto& read_cq = mesh_device_->mesh_command_queue(1);
 
     uint32_t num_tiles = 1024;
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
     constexpr uint32_t NUM_ITERS = 500;
