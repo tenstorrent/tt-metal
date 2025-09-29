@@ -327,7 +327,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
     with device_context(test_module, output_queue) as (device, device_name):
         while True:
             try:
-                test_vector = input_queue.get(block=True, timeout=1)
+                test_vector = input_queue.get(block=True, timeout=5)
             except Empty:
                 logger.info("Test suite complete")
                 return
@@ -363,7 +363,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    child_mode = not (config.dry_run and not config.vector_id and not config.main - proc - verbose)
+    child_mode = not (config.dry_run and not config.vector_id and not config.main_proc_verbose)
     timeout_before_rejoin = 5
 
     if child_mode:
