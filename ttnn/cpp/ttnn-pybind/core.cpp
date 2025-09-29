@@ -70,22 +70,24 @@ void py_module(py::module& module) {
     module.def(
         "set_printoptions",
         [](const std::string& profile, const py::object& sci_mode, const py::object& precision) {
-            tt::tt_metal::tensor_impl::SciMode sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Default;
+            ttnn::TensorPrintProfile profile_enum =
+                enchantum::cast<ttnn::TensorPrintProfile>(profile, ttsl::ascii_caseless_comp).value();
+
+            ttnn::SciMode sci_mode_enum = ttnn::SciMode::Default;
             if (!sci_mode.is_none()) {
                 if (py::isinstance<py::bool_>(sci_mode)) {
-                    sci_mode_enum = sci_mode.cast<bool>() ? tt::tt_metal::tensor_impl::SciMode::Enable
-                                                          : tt::tt_metal::tensor_impl::SciMode::Disable;
+                    sci_mode_enum = sci_mode.cast<bool>() ? ttnn::SciMode::Enable : ttnn::SciMode::Disable;
                 } else if (py::isinstance<py::str>(sci_mode)) {
                     auto cmp = [](const auto& a, const auto& b) -> bool {
                         return ttsl::ascii_caseless_comp(std::string_view(a), std::string_view(b));
                     };
                     const std::string sci_mode_str = sci_mode.cast<std::string>();
                     if (cmp(sci_mode_str, "true")) {
-                        sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Enable;
+                        sci_mode_enum = ttnn::SciMode::Enable;
                     } else if (cmp(sci_mode_str, "false")) {
-                        sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Disable;
+                        sci_mode_enum = ttnn::SciMode::Disable;
                     } else if (cmp(sci_mode_str, "none") || cmp(sci_mode_str, "default")) {
-                        sci_mode_enum = tt::tt_metal::tensor_impl::SciMode::Default;
+                        sci_mode_enum = ttnn::SciMode::Default;
                     } else {
                         throw std::invalid_argument("sci_mode must be None, bool, or str (true, false, default)");
                     }
@@ -103,7 +105,7 @@ void py_module(py::module& module) {
                 }
             }
 
-            ttnn::set_printoptions(profile, sci_mode_enum, precision_value);
+            ttnn::set_printoptions(profile_enum, sci_mode_enum, precision_value);
         },
         py::kw_only(),
         py::arg("profile"),
