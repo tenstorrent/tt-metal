@@ -124,7 +124,7 @@ def test_motif_pipeline(
         )
 
         # Save image
-        output_filename = f"sd35_new_{image_w}_{image_h}.png"
+        output_filename = f"motif_{image_w}_{image_h}.png"
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
@@ -162,7 +162,7 @@ def test_motif_pipeline(
                 traced=traced,
             )
 
-            output_filename = f"sd35_new_{image_w}_{image_h}_{i}.png"
+            output_filename = f"motif_{image_w}_{image_h}_{i}.png"
             images[0].save(output_filename)
             logger.info(f"Image saved as {output_filename}")
 
