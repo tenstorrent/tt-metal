@@ -98,7 +98,6 @@ def run_slice_reshard_impl(
             cluster_axis=1,
             final_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i],
-            mesh_device=t3k_mesh_device,
             num_links=num_links,
             memory_config=mem_config_output,
             topology=slice_reshard_topology,
@@ -151,15 +150,7 @@ def run_slice_reshard_impl(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, input_shape, dim, layout, input_dtype, output_offset, output_shape",

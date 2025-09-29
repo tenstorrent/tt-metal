@@ -23,8 +23,6 @@
 
 namespace ttnn {
 
-using ccl::EriscDatamoverBuilder;
-
 struct SliceReshardAsync {
     std::vector<IDevice*> devices;
     const uint32_t dim;
@@ -96,42 +94,5 @@ struct SliceReshardAsync {
         const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
-
-tt::tt_metal::operation::ProgramWithCallbacks slice_reshard_async_minimal(
-    const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
-    const uint32_t dim,
-    const uint32_t output_dim_offset,
-    const uint32_t output_dim_shape,
-    const GlobalSemaphore& final_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    const uint32_t num_links,
-    ccl::Topology topology,
-    uint32_t ring_size,
-    uint32_t ring_index);
-
-namespace operations {
-namespace experimental {
-namespace ccl {
-
-Tensor slice_reshard_async(
-    const Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t output_dim_offset,
-    const uint32_t output_dim_shape,
-    const uint32_t cluster_axis,
-    const GlobalSemaphore& final_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    const MeshDevice& mesh_device,
-    const std::optional<size_t> num_preferred_links = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::ccl::Topology> topology = std::nullopt);
-
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
 
 }  // namespace ttnn

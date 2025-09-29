@@ -25,32 +25,7 @@ void bind_slice_reshard_async(pybind11::module& module, const ccl_operation_t& o
         module,
         operation,
         doc,
-        ttnn::pybind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
-               const uint32_t output_dim_offset,
-               const uint32_t output_dim_shape,
-               const uint32_t cluster_axis,
-               const GlobalSemaphore& final_semaphore,
-               const GlobalSemaphore& barrier_semaphore,
-               const MeshDevice& mesh_device,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    dim,
-                    output_dim_offset,
-                    output_dim_shape,
-                    cluster_axis,
-                    final_semaphore,
-                    barrier_semaphore,
-                    mesh_device,
-                    num_links,
-                    memory_config,
-                    topology);
-            },
+        ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
             py::arg("dim"),
             py::arg("output_dim_offset"),
@@ -58,7 +33,6 @@ void bind_slice_reshard_async(pybind11::module& module, const ccl_operation_t& o
             py::arg("cluster_axis"),
             py::arg("final_semaphore"),
             py::arg("barrier_semaphore"),
-            py::arg("mesh_device"),
             py::kw_only(),
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
@@ -73,12 +47,12 @@ void py_bind_slice_reshard_async(pybind11::module& module) {
         ttnn::experimental::slice_reshard_async,
         R"doc(
 
-        Performs a slice_resharding operation on multi-device :attr:`input_tensor` across all devices.
+        Slice a multi-device tensor, and then reshard the tensor across devices.  The slice is computed in the space of the aggregate multi-device tensor, not in each device tensor individually.  The use case for this is when the input tensor is padded, and then after various operations changes in size in the dimension it is sharded on.  This could lead to unneccessary amounts of padding, so the padding is trimmed, and the resulting slice of the aggregate input tensor is resharded across devices.
 
         Args:
             input_tensor (ttnn.Tensor): multi-device tensor.
             dim (int): Dimension to shard on.
-            output_dim_offset (int): Start of the output tensor in the shard dimension, in the context of the input tensor..
+            output_dim_offset (int): Start of the output tensor in the shard dimension, in the context of the input tensor.
             output_dim_shape (int): Shape of the output tensor in the shard dimension, before sharding.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the slice_reshard operation on.
 

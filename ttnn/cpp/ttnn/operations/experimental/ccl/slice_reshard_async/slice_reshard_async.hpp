@@ -13,14 +13,13 @@ namespace operations::experimental::ccl {
 
 struct ExecuteSliceReshardAsync {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensors,
+        const ttnn::Tensor& input_tensor,
         int32_t dim,
         uint32_t output_dim_offset,
         uint32_t output_dim_shape,
         uint32_t cluster_axis,
         const GlobalSemaphore& final_semaphore,
         const GlobalSemaphore& barrier_semaphore,
-        const MeshDevice& mesh_device,
         std::optional<size_t> num_preferred_links = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<ttnn::ccl::Topology> topology = std::nullopt);

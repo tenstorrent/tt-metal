@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "slice_reshard_async_op.hpp"
+#include "slice_reshard_async_program.hpp"
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
@@ -19,6 +20,8 @@ void SliceReshardAsync::validate_with_output_tensors(
         input_tensors[0].layout() == Layout::ROW_MAJOR,
         "Unsupported input tensor layout {}.",
         input_tensors[0].layout());
+
+    TT_FATAL(input_tensors[0].is_sharded(), "Negative mask support is only available for sharded input tensors.");
 
     TT_FATAL(
         !(this->output_dim_shape % this->ring_size),
@@ -115,91 +118,5 @@ tt::tt_metal::operation::Hash SliceReshardAsync::compute_program_hash(const std:
         input_dtype,
         input_memory_config);
 }
-
-namespace operations {
-namespace experimental {
-namespace ccl {
-
-namespace {
-Tensor slice_reshard_async_impl(
-    const Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t output_dim_offset,
-    const uint32_t output_dim_shape,
-    const uint32_t cluster_axis,
-    const GlobalSemaphore& final_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    const MeshDevice& mesh_device,
-    const std::vector<IDevice*>& devices,
-    const std::optional<size_t> num_preferred_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::ccl::Topology> topology) {
-    TT_FATAL(
-        std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "slice_reshard_async op is only supported for Fast Dispatch");
-
-    uint32_t num_devices;
-    const auto& mesh_view = mesh_device.get_view();
-    // Use the mesh dimensions to determine the ring size
-    num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
-    TT_FATAL(num_devices > 1, "slice_reshard_async op will only work for num_devices > 1, but has {}", num_devices);
-    ttnn::ccl::Topology ccl_topology = topology.value_or(ttnn::ccl::Topology::Linear);
-
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-
-    return tt::tt_metal::operation::run(
-               ttnn::SliceReshardAsync(
-                   devices,
-                   dim,
-                   output_dim_offset,
-                   output_dim_shape,
-                   cluster_axis,
-                   final_semaphore,
-                   barrier_semaphore,
-                   num_preferred_links.value_or(1),
-                   memory_config.value_or(input_tensor.memory_config()),
-                   ccl_topology,
-                   num_devices),
-               {input_tensor},
-               {},
-               {})
-        .at(0);
-}
-}  // namespace
-
-Tensor slice_reshard_async(
-    const Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t output_dim_offset,
-    const uint32_t output_dim_shape,
-    const uint32_t cluster_axis,
-    const GlobalSemaphore& final_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    const MeshDevice& mesh_device,
-    const std::optional<size_t> num_preferred_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::ccl::Topology> topology) {
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-
-    return slice_reshard_async_impl(
-        input_tensor,
-        dim,
-        output_dim_offset,
-        output_dim_shape,
-        cluster_axis,
-        final_semaphore,
-        barrier_semaphore,
-        mesh_device,
-        devices,
-        num_preferred_links,
-        memory_config,
-        topology);
-}
-
-}  // namespace ccl
-}  // namespace experimental
-}  // namespace operations
 
 }  // namespace ttnn
