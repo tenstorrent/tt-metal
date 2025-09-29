@@ -818,14 +818,14 @@ class Attention(LightweightModule):
         ttnn.deallocate(q_heads_1QSD)
 
         if chunk_start_idx is not None:
+            if attn_mask is not None:
+                raise NotImplementedError("Attn mask not supported for chunked prefill SDPA")
             attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
-                q_heads_1QSD_8b,
-                keys_BKSD,
-                values_BKSD,
-                page_table,
-                chunk_start_idx,
-                attn_mask=attn_mask,
-                is_causal=True,
+                input_tensor_q=q_heads_1QSD_8b,
+                input_tensor_k=keys_BKSD,
+                input_tensor_v=values_BKSD,
+                page_table_tensor=page_table,
+                chunk_start_idx=chunk_start_idx,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
