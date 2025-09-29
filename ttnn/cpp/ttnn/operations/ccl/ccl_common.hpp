@@ -380,7 +380,7 @@ struct InterleavedTensorWorkerSlice {
 template <class DERIVED_SLICER_T>
 class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
     public:
-    virtual ~RingReduceScatterBaseTensorSlicer() = default;
+    ~RingReduceScatterBaseTensorSlicer() override = default;
     RingReduceScatterBaseTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
