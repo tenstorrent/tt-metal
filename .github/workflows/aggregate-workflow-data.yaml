@@ -126,14 +126,3 @@ jobs:
               {"display": "Metal microbenchmarks", "wkflw_name": "metal - Run microbenchmarks"},
               {"display": "APC nightly debug run", "wkflw_name": "apc nightly debug run"}
             ]
-
-  handle-failures:
-    needs: analyze-data
-    if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Handle failed workflows
-        run: |
-          echo "The following workflows have failed:"
-          echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
-          # Add any additional failure handling steps here

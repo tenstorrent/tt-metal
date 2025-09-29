@@ -83,6 +83,7 @@ async function run() {
 
       collected.push({
         checkRun: checkRun.name,
+        htmlUrl: checkRun.html_url,
         annotations,
       });
 
@@ -92,8 +93,15 @@ async function run() {
       }
     }
 
+    const totalAnnotations = collected.flatMap(entry => entry.annotations).length;
     core.setOutput('annotations', JSON.stringify(collected));
-    core.info(`Total annotations collected: ${collected.flatMap(entry => entry.annotations).length}`);
+    core.info(`Total annotations collected: ${totalAnnotations}`);
+
+    if (totalAnnotations > 0) {
+      const markdown = buildAnnotationsMarkdown(collected);
+      core.setOutput('annotations_markdown', markdown);
+      await core.summary.addMarkdown(markdown).write();
+    }
   } catch (error) {
     core.setFailed(error.message);
   }
@@ -147,6 +155,44 @@ async function resolveRunId(token, owner, repo, workflowName, fallbackRunId) {
     core.warning(`Failed to resolve run id for workflow ${workflowName}: ${e.message}`);
     return fallbackRunId;
   }
+}
+
+function buildAnnotationsMarkdown(collected) {
+  const sections = ['# Galaxy Fabric Test Annotations'];
+  for (const entry of collected) {
+    sections.push('');
+    sections.push(`## ${entry.checkRun}`);
+    if (entry.htmlUrl) {
+      sections.push(`Run: [View check run](${entry.htmlUrl})`);
+    }
+    if (!entry.annotations || entry.annotations.length === 0) {
+      sections.push('- No annotations found.');
+      continue;
+    }
+    for (const ann of entry.annotations) {
+      const location = ann.path
+        ? `${ann.path}${ann.start_line ? `:${ann.start_line}${ann.end_line && ann.end_line !== ann.start_line ? `-${ann.end_line}` : ''}` : ''}`
+        : 'no-path';
+      const level = (ann.annotation_level || 'info').toUpperCase();
+      const title = ann.title || '(no title)';
+      sections.push(`- **[${level}]** ${title}`);
+      sections.push(`  - Location: ${location}`);
+      if (ann.message) {
+        sections.push(`  - Message:\n${formatMultiline(ann.message, '    ')}`);
+      }
+      if (ann.raw_details) {
+        sections.push(`  - Details:\n${formatMultiline(ann.raw_details, '    ')}`);
+      }
+    }
+  }
+  return sections.join('\n');
+}
+
+function formatMultiline(text, indent = '') {
+  return text
+    .split(/\r?\n/)
+    .map(line => `${indent}${line}`)
+    .join('\n');
 }
 
 if (require.main === module) {
