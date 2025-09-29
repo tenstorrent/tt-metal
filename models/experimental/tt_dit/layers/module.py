@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import ttnn
@@ -138,25 +139,27 @@ class Module:
     def load_state_dict(self, state_dict: Mapping[str, torch.Tensor]) -> None:
         self.load_torch_state_dict(state_dict)
 
-    def save(self, path_prefix: str, /) -> None:
-        if path_prefix and path_prefix[-1] not in [".", "/"]:
-            path_prefix += "/"
+    def save(self, directory: str | Path, /) -> None:
+        directory = Path(directory)
+        directory.mkdir(exist_ok=True)
 
         for name, child in self.named_children():
-            child.save(f"{path_prefix}{name}.")
+            child.save(directory / name)
 
         for name, parameter in self.named_parameters():
-            parameter.save(f"{path_prefix}{name}.tensorbin")
+            parameter.save(directory / f"{name}.tensorbin")
 
-    def load(self, path_prefix: str, /) -> None:
-        if path_prefix and path_prefix[-1] not in [".", "/"]:
-            path_prefix += "/"
+    def load(self, directory: str | Path, /) -> None:
+        directory = Path(directory)
+        if not directory.exists():
+            msg = f"directory does not exist: {directory}"
+            raise RuntimeError(msg)
 
         for name, child in self.named_children():
-            child.load(f"{path_prefix}{name}.")
+            child.load(directory / name)
 
         for name, parameter in self.named_parameters():
-            parameter.load(f"{path_prefix}{name}.tensorbin")
+            parameter.load(directory / f"{name}.tensorbin")
 
     def to_cached_state_dict(self, path_prefix: str) -> dict[str, str]:
         cache_dict = {}
@@ -245,10 +248,10 @@ class Parameter:
             to_host=self.to_host,
         )
 
-    def save(self, path: str, /) -> None:
+    def save(self, path: str | Path, /) -> None:
         ttnn.dump_tensor(path, self.data)
 
-    def load(self, path: str, /) -> None:
+    def load(self, path: str | Path, /) -> None:
         self._data = ttnn.load_tensor(path, device=None if self.to_host else self.device)
 
     @property
