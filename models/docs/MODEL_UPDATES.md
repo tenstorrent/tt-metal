@@ -22,6 +22,9 @@
 ### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
 - Added support for windowed SDPA in the vision attention module.
 
+### [Whisper](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)
+- Added support for batch data parallel on any number of devices.
+
 ## September 8, 2025
 
 ### [Gemma 3](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
