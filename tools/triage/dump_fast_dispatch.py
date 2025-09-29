@@ -145,13 +145,14 @@ def read_wait_globals(
 
 def run(args, context: Context):
     """Entry point for triage framework."""
-    run_cheks = get_run_checks(args, context)
+    run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     elfs_cache = get_elfs_cache(args, context)
     BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
-    return run_cheks.run_per_core_check(
+    return run_checks.run_per_core_check(
         lambda location, risc_name: read_wait_globals(location, risc_name, dispatcher_data, elfs_cache),
-        block_filter=BLOCK_TYPES_TO_CHECK)
+        block_filter=BLOCK_TYPES_TO_CHECK,
+    )
 
 
 if __name__ == "__main__":

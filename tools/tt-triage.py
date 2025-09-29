@@ -8,7 +8,7 @@ import os
 
 # Add the triage directory to Python path so local modules can be imported
 script_dir = os.path.dirname(os.path.abspath(__file__))
-triage_dir = os.path.join(script_dir, 'triage')
+triage_dir = os.path.join(script_dir, "triage")
 if triage_dir not in sys.path:
     sys.path.insert(0, triage_dir)
 
