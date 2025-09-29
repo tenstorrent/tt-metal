@@ -24,7 +24,7 @@ from ...models.transformers.transformer_motif import MotifTransformer, convert_m
 from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.cache import cache_dict_exists, get_and_create_cache_path
+from ...utils.cache import cache_dict_exists, get_and_create_cache_path, load_cache_dict, save_cache_dict
 from ...utils.padding import PaddingConfig
 from ...utils.substate import substate
 
@@ -294,7 +294,7 @@ class StableDiffusion3Pipeline:
 
             if use_cache:
                 cache_path = get_and_create_cache_path(
-                    model_name="stable-diffusion-3.5-large",
+                    model_name="motif-image-6b",
                     subfolder="transformer",
                     parallel_config=self.dit_parallel_config,
                     dtype="bf16",
@@ -305,10 +305,10 @@ class StableDiffusion3Pipeline:
                         f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
                     )
                     tt_transformer.load_torch_state_dict(transformer_state_dict)
-                    tt_transformer.save(cache_path)
+                    save_cache_dict(tt_transformer.to_cached_state_dict(cache_path), cache_path)
                 else:
                     logger.info(f"Loading transformer weights from cache: {cache_path}")
-                    tt_transformer.load(cache_path)
+                    tt_transformer.from_cached_state_dict(load_cache_dict(cache_path))
             else:
                 logger.info("Loading transformer weights from PyTorch state dict")
                 tt_transformer.load_torch_state_dict(transformer_state_dict)

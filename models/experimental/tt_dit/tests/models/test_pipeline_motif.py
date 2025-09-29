@@ -42,8 +42,8 @@ from ...pipelines.motif.pipeline_motif import (
 @pytest.mark.parametrize(
     "use_cache",
     [
-        # pytest.param(True, id="cache_on"),
-        pytest.param(False, id="cache_off"),
+        pytest.param(True, id="cache_on"),
+        # pytest.param(False, id="cache_off"),
     ],
 )
 @pytest.mark.parametrize(
