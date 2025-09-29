@@ -6,6 +6,7 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
+#include <core_coord.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
@@ -20,7 +21,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-
 #include "fmt/base.h"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
@@ -180,7 +180,49 @@ void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device
 std::atomic<size_t> Buffer::next_unique_id = 0;
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
-    tt::stl::reflection::operator<<(os, spec);
+    os << "ShardSpec{";
+    os << "grid=[";
+
+    // Format grid as proper JSON array of ranges
+    const auto& ranges = spec.grid.ranges();
+    for (size_t i = 0; i < ranges.size(); ++i) {
+        const auto& range = ranges[i];
+        os << "{";
+        os << "\"start\":{\"x\":" << range.start_coord.x << ",\"y\":" << range.start_coord.y << "},";
+        os << "\"end\":{\"x\":" << range.end_coord.x << ",\"y\":" << range.end_coord.y << "}";
+        os << "}";
+        if (i < ranges.size() - 1) {
+            os << ", ";
+        }
+    }
+    os << "], ";
+
+    os << "shape=[" << spec.shape[0] << ", " << spec.shape[1] << "], ";
+
+    // Serialize orientation
+    os << "orientation=";
+    switch (spec.orientation) {
+        case ShardOrientation::ROW_MAJOR: os << "ShardOrientation::ROW_MAJOR"; break;
+        case ShardOrientation::COL_MAJOR: os << "ShardOrientation::COL_MAJOR"; break;
+    }
+    os << ", ";
+
+    // Serialize mode
+    os << "mode=";
+    switch (spec.mode) {
+        case ShardMode::PHYSICAL: os << "ShardMode::PHYSICAL"; break;
+        case ShardMode::LOGICAL: os << "ShardMode::LOGICAL"; break;
+    }
+
+    // Serialize physical_shard_shape if present
+    if (spec.physical_shard_shape.has_value()) {
+        os << ", physical_shard_shape=[" << spec.physical_shard_shape.value()[0] << ", "
+           << spec.physical_shard_shape.value()[1] << "]";
+    } else {
+        os << ", physical_shard_shape=std::nullopt";
+    }
+
+    os << "}";
     return os;
 }
 
