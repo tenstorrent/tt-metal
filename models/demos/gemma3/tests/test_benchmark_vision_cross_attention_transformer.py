@@ -16,8 +16,9 @@ from models.demos.gemma3.tt.model_config import ModelArgs
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.ccl import TT_CCL
 
-NR_ITER_E2E = 7
+NR_ITER_E2E = 1
 NR_FORWARD_ITERATIONS = 15
+THRESHOLD_PERCENT = 0.1
 TEST_FORWARD_INFERENCE_ONLY = True
 
 
@@ -38,6 +39,17 @@ class BenchmarkProfilerWrapper:
         return self.profiler_backbone.get_duration(*args, **kwargs)
 
 
+def set_hf_model_env():
+    assert os.environ.get("HF_MODEL") is None, "This test will set it depending on the device being run"
+    os_mesh_device = os.environ["MESH_DEVICE"]
+    if os_mesh_device in ["N150", "N300"]:
+        os.environ["HF_MODEL"] = "google/gemma-3-4b-it"
+    elif os_mesh_device == "T3K":
+        os.environ["HF_MODEL"] = "google/gemma-3-27b-it"
+    else:
+        assert False, "Unknown model"
+
+
 # copied most of pytest parameters from https://github.com/tenstorrent/tt-metal/blob/1566d9ae155c4aba5432f874d375dfbae5d551cd/models/demos/gemma3/tests/test_vision_cross_attention_transformer.py#L30C5-L30C22
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
@@ -55,14 +67,7 @@ def test_perf_gemma_vision(
     mesh_device,
     bsz,
 ):
-    assert os.environ.get("HF_MODEL") is None, "This test will set it depending on the device being run"
-    os_mesh_device = os.environ["MESH_DEVICE"]
-    if os_mesh_device in ["N150", "N300"]:
-        os.environ["HF_MODEL"] = "google/gemma-3-4b-it"
-    elif os_mesh_device == "T3K":
-        os.environ["HF_MODEL"] = "google/gemma-3-27b-it"
-    else:
-        assert False, "Unknown model"
+    set_hf_model_env()
 
     profiler = BenchmarkProfilerWrapper(device=mesh_device)
 
@@ -133,7 +138,7 @@ def test_perf_gemma_vision(
         metric_keys_to_test = [k for k in targets.keys() if not k.endswith("_threshold")]
 
     for key in metric_keys_to_test:
-        threshold = targets[key] + 2 * (targets[key + "_threshold"] - targets[key])
+        threshold = targets[key] * (1 + THRESHOLD_PERCENT / 100)
         measured_value = measurements_summarised[key]
         assert measured_value < threshold
 

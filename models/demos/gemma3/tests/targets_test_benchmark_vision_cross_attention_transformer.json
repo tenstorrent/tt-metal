@@ -1,0 +1,39 @@
+
+{
+    "T3K": {
+        "total_run": 22.56952485714286,
+        "total_run_threshold": 130.059276,
+        "model_load_and_initialization": 16.772718714285713,
+        "model_load_and_initialization_threshold": 93.012086,
+        "postprocessing_and_transfer": 0.015955999999999998,
+        "postprocessing_and_transfer_threshold": 0.019854083618574124,
+        "model_forward_compile": 4.578898142857144,
+        "model_forward_compile_threshold": 28.635445,
+        "model_forward_inference": 0.5988920000000001,
+        "model_forward_inference_threshold": 0.875664
+    },
+    "N150": {
+        "total_run": 9.239406571428571,
+        "total_run_threshold": 40.033213,
+        "model_load_and_initialization": 3.876202714285714,
+        "model_load_and_initialization_threshold": 7.25225,
+        "postprocessing_and_transfer": 0.0021932857142857145,
+        "postprocessing_and_transfer_threshold": 0.0022599375655092775,
+        "model_forward_compile": 3.763446000000001,
+        "model_forward_compile_threshold": 21.604334,
+        "model_forward_inference": 0.7977291428571428,
+        "model_forward_inference_threshold": 0.7995028675153392
+    },
+    "N300": {
+        "total_run": 41.428161,
+        "total_run_threshold": 41.428161,
+        "model_load_and_initialization": 11.143105,
+        "model_load_and_initialization_threshold": 11.143105,
+        "postprocessing_and_transfer": 0.004317,
+        "postprocessing_and_transfer_threshold": 0.004317,
+        "model_forward_compile": 22.705544,
+        "model_forward_compile_threshold": 22.705544,
+        "model_forward_inference": 0.5401455714285713,
+        "model_forward_inference_threshold": 0.5439016562146138
+    }
+}
