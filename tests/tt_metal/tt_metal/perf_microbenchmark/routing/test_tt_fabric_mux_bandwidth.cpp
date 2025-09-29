@@ -489,7 +489,7 @@ int main(int argc, char** argv) {
 
     log_info(tt::LogTest, "Launching programs");
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
     log_info(tt::LogTest, "Waiting for workers to complete");

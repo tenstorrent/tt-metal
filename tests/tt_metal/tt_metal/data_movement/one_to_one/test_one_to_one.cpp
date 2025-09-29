@@ -135,7 +135,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneToO
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);

@@ -128,7 +128,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
     auto result_buffer = create_result_buffer(mesh_device);
     SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -177,7 +177,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
 
     SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -237,7 +237,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     auto result_buffer = create_result_buffer(mesh_device);
     SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
@@ -292,7 +292,7 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
     auto result_buffer = create_result_buffer(mesh_device);
     SetRuntimeArgs(program, writer_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(cq, workload, true);
 

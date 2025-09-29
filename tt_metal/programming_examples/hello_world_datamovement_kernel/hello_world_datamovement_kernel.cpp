@@ -55,7 +55,7 @@ int main() {
     std::cout << "Hello, Core {0, 0} on Device 0, Please start execution. I will standby for your communication."
               << std::endl;
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
     // Wait Until MeshWorkload Finishes. The program should print the following (NC and BR is Data movement core 1 and 0

@@ -178,8 +178,7 @@ int main(int argc, char** argv) {
             SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
             SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
 
-            distributed::AddProgramToMeshWorkload(
-                mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+            mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
             ////////////////////////////////////////////////////////////////////////////
             //                      Compile Application
             ////////////////////////////////////////////////////////////////////////////

@@ -238,8 +238,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
         }
     }
 
-    distributed::AddProgramToMeshWorkload(
-        mesh_workload, std::move(program), distributed::MeshCoordinateRange(cq.device()->shape()));
+    mesh_workload.add_program(distributed::MeshCoordinateRange(cq.device()->shape()), std::move(program));
 
     std::vector<uint32_t> dest_buffer_data;
     distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, packed_input, false);
