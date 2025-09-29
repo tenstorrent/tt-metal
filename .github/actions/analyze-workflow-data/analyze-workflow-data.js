@@ -100,7 +100,7 @@ async function run() {
     if (totalAnnotations > 0) {
       const markdown = buildAnnotationsMarkdown(collected);
       core.setOutput('annotations_markdown', markdown);
-      await core.summary.addMarkdown(markdown).write();
+      await core.summary.addRaw(markdown, true).write();
     }
   } catch (error) {
     core.setFailed(error.message);
