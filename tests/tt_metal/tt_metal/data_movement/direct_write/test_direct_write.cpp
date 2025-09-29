@@ -119,7 +119,7 @@ bool run_dm(
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // Launch the program - Use mesh workload approach
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0));  // Single device at (0,0)
     distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
