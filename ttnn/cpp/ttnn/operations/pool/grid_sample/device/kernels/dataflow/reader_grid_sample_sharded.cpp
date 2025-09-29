@@ -5,7 +5,7 @@
 #include <cmath>
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/height_sharded_reader_common.hpp"
+#include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_reader_common.hpp"
 #include "../grid_sample_reader_common.hpp"
 
 #define PRINT_AND_PROFILE 0
