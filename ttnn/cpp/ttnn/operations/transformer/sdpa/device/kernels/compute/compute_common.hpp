@@ -158,6 +158,110 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     cb_push_back(reduce_cb, rows);
 }
 
+template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32>
+void sub_bcast_exp_packer_relu_input_sanitize(uint32_t in1_cb, uint32_t reduce_cb) {
+    DeviceZoneScopedN("sub_exp_block_bcast_cols_inplace");
+    // Precondition: in0_cb has rows*cols produced
+    // Precondition: in1_cb has rows produced
+    // Postcondition: in0_cb has rows*cols produced
+    // Postcondition: in1_cb has rows produced
+    sub_bcast_cols_init_short(in0_cb, in1_cb);
+
+    cb_wait_front(in0_cb, rows * cols);
+    cb_wait_front(in1_cb, rows);
+    cb_reserve_back(reduce_cb, rows);
+
+    constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
+    constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
+    uint32_t in0_index = 0;
+    uint32_t out_index = 0;
+
+    /**
+     * SUB and PACK RELU to sanitize input to EXP
+     */
+    // Configure PACK to clip outputs between 0 and 88.5
+    // PACK(llk_pack_relu_config(0x42B10000 | (uint32_t)ReluType::MAX_THRESHOLD_RELU));
+    /**
+     * Threshold must be passed as BF16. Since exp_tile fuses multiplication by `scale_fp32` into
+     * exp, I've calculated threshold as `threshold / scale_fp32`, or `88.5 / (128**-.5) = 1,001.2632021602 =
+     * BF16(0x447A) This threshold value should be provided by host code, since the current value is incorrect for any
+     * other scale factor.
+     */
+    // PACK(llk_pack_relu_config(0x447A0000 | (uint32_t)ReluType::MAX_THRESHOLD_RELU));
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+                negative_tile(j);  // NOTE: Comment this if you want to estimate perf once we have `sub_row_tile`
+                in0_index++;
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile<true>(j, in0_cb, out_index);
+                out_index++;
+            }
+            tile_regs_release();
+        }
+    }
+    // PACK(llk_pack_relu_config(ReluType::NO_RELU));
+
+    /**
+     * EXP on sanitized inputs
+     *
+     * In order to estimate performance, remove the SWAP macros from ckernel_sfpu_exp.h
+     */
+    in0_index = 0;
+    out_index = 0;
+    // NOTE: The negative_tile before exp is removed because we can flip the sign of the scaling factor
+    constexpr uint32_t negative_scale_fp32 = 0x80000000 | scale_fp32;
+    exp_tile_init<true, true, negative_scale_fp32>();
+    copy_tile_to_dst_init_short(in0_cb);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; u++) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                copy_tile(in0_cb, in0_index, j);
+                // negative_tile(j); // NOTE: removed since scale sign is set
+                exp_tile<true, true>(j);
+                in0_index++;
+            }
+            tile_regs_commit();
+            PACK((llk_pack_reconfig_l1_acc(0)));
+            tile_regs_wait();
+
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                // pack_tile<true>(j, in0_cb, out_index);
+                // out_index++;
+                pack_tile(j, in0_cb);
+            }
+
+            // While we have results in DST, take advantage of L1 accumulation
+            // to reduce row x cols tiles to rows x 1 tiles.
+            if (u > 0) {
+                // If on the same row, keep accumulating
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile<true>(j, reduce_cb, i);
+                if (u == 0 && j == 0) {
+                    // If this was the first tile of a row, start accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+            }
+            tile_regs_release();
+            // PACK((llk_pack_reconfig_l1_acc(0)));
+        }
+    }
+    PACK((llk_pack_reconfig_l1_acc(0)));
+    cb_pop_front(in0_cb, rows * cols);
+    cb_reserve_back(in0_cb, rows * cols);
+    cb_push_back(in0_cb, rows * cols);
+    cb_push_back(reduce_cb, rows);
+}
+
 template <uint32_t rows, uint32_t cols>
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, bool pack_accumulate = false) {
     DeviceZoneScopedN("mul_block_bcast_cols");
