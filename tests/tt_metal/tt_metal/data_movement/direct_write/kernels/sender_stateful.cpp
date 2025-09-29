@@ -44,13 +44,13 @@ void kernel_main() {
                 // Perform writes - reuse value from state
                 for (uint32_t i = 0; i < num_writes; i++) {
                     if (use_posted_writes) {
-                        noc_inline_dw_write_with_state<false, true, true, false, false>(
+                        noc_inline_dw_write_with_state<false, true, true, false, false, true>(
                             0,  // value unused since we reuse from state
                             0,
                             write_at_cmd_buf,
                             noc_id);
                     } else {
-                        noc_inline_dw_write_with_state<false, true, false, false, false>(
+                        noc_inline_dw_write_with_state<false, true, false, false, false, true>(
                             0, 0, write_at_cmd_buf, noc_id);
                     }
                 }
@@ -70,10 +70,10 @@ void kernel_main() {
                 // Perform writes - provide new value each time
                 for (uint32_t i = 0; i < num_writes; i++) {
                     if (use_posted_writes) {
-                        noc_inline_dw_write_with_state<false, true, true, false, true>(
+                        noc_inline_dw_write_with_state<false, true, true, false, true, true>(
                             write_value_base + i, 0, write_at_cmd_buf, noc_id);
                     } else {
-                        noc_inline_dw_write_with_state<false, true, false, false, true>(
+                        noc_inline_dw_write_with_state<false, true, false, false, true, true>(
                             write_value_base + i, 0, write_at_cmd_buf, noc_id);
                     }
                 }
@@ -98,10 +98,10 @@ void kernel_main() {
                     uint32_t current_local_addr = dest_l1_addr + (i * addr_stride);
 
                     if (use_posted_writes) {
-                        noc_inline_dw_write_with_state<true, true, true, false, false>(
+                        noc_inline_dw_write_with_state<true, true, true, false, false, true>(
                             0, current_local_addr, write_at_cmd_buf, noc_id);
                     } else {
-                        noc_inline_dw_write_with_state<true, true, false, false, false>(
+                        noc_inline_dw_write_with_state<true, true, false, false, false, true>(
                             0, current_local_addr, write_at_cmd_buf, noc_id);
                     }
                 }
@@ -118,10 +118,10 @@ void kernel_main() {
                     uint32_t current_local_addr = dest_l1_addr + (i * addr_stride);
 
                     if (use_posted_writes) {
-                        noc_inline_dw_write_with_state<true, true, true, false, true>(
+                        noc_inline_dw_write_with_state<true, true, true, false, true, true>(
                             write_value_base + i, current_local_addr, write_at_cmd_buf, noc_id);
                     } else {
-                        noc_inline_dw_write_with_state<true, true, false, false, true>(
+                        noc_inline_dw_write_with_state<true, true, false, false, true, true>(
                             write_value_base + i, current_local_addr, write_at_cmd_buf, noc_id);
                     }
                 }
