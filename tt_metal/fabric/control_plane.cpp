@@ -316,6 +316,7 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 }
 
 LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
+    // TODO: Note that this will not work for Multi-mesh big-mesh systems
     // When unset, assume host rank 0.
     const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK");
     const MeshHostRankId host_rank =
