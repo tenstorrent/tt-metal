@@ -21,7 +21,7 @@
 #include "tt-metalium/lightmetal_binary.hpp"
 #include "tt-metalium/lightmetal_replay.hpp"
 #include "tt-metalium/mesh_device.hpp"
-#include <tt_stl/caseless_comparison.hpp>
+#include "tt_stl/caseless_comparison.hpp"
 
 namespace ttnn::core {
 
