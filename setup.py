@@ -238,18 +238,23 @@ class CMakeBuild(build_ext):
                 ]
 
                 # Add Tracy flags if enabled
-                if os.environ.get("CIBW_ENABLE_TRACY") == "ON":
-                    cmake_args.extend(
-                        [
-                            "-DENABLE_TRACY=ON",
-                        ]
-                    )
-                else:
-                    cmake_args.extend(
-                        [
-                            "-DENABLE_TRACY=OFF",
-                        ]
-                    )
+                # if os.environ.get("CIBW_ENABLE_TRACY") == "ON":
+                #    cmake_args.extend(
+                #        [
+                #            "-DENABLE_TRACY=ON",
+                #        ]
+                #    )
+                # else:
+                #    cmake_args.extend(
+                #        [
+                #            "-DENABLE_TRACY=OFF",
+                #        ]
+                #    )
+                cmake_args.extend(
+                    [
+                        "-DENABLE_TRACY=OFF",
+                    ]
+                )
 
                 cmake_args.extend(["-S", source_dir])
 
