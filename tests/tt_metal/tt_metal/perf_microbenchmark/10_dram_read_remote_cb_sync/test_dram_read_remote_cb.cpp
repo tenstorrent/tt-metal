@@ -336,8 +336,8 @@ create_mesh_workloads(
     std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads;
     for (auto& program : programs) {
         auto mesh_workload = tt_metal::distributed::MeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        mesh_workload.add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
         mesh_workloads.push_back(std::move(mesh_workload));
     }
 

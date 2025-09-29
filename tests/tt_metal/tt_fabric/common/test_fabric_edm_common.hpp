@@ -156,8 +156,7 @@ static void build_and_enqueue(
                 }
                 MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
-                tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                    mesh_workload, std::move(*programs[i]), device_range);
+                mesh_workload.add_program(device_range, std::move(*programs[i]));
                 tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(), mesh_workload, false);
             } else {
                 if (!enqueue_only) {
@@ -165,8 +164,7 @@ static void build_and_enqueue(
                 }
                 MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
-                tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                    mesh_workload, std::move(programs[i]), device_range);
+                mesh_workload.add_program(device_range, std::move(programs[i]));
                 tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(), mesh_workload, false);
             }
         }));

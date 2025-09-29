@@ -165,7 +165,7 @@ SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address
 We enqueue the program, finish execution, and verify the output:
 
 ```cpp
-distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::Finish(cq);
 

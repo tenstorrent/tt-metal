@@ -471,14 +471,10 @@ void run_test(
 
     tt_metal::distributed::MeshWorkload local_workload;
     tt_metal::distributed::MeshWorkload remote_workload;
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        local_workload,
-        std::move(test_resources.local_device.program),
-        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        remote_workload,
-        std::move(test_resources.remote_device.program),
-        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    local_workload.add_program(
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(test_resources.local_device.program));
+    remote_workload.add_program(
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(test_resources.remote_device.program));
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] {

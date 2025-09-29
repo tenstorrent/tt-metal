@@ -123,7 +123,7 @@ static void test_sems_across_core_types(
                 tensix_sem_init_val,
             };
             SetRuntimeArgs(program, tensix_kernel, tensix_core, tensix_rtas);
-            distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+            workload.add_program(device_range, std::move(program));
             fixture->RunProgram(mesh_device, workload);
         }
     }
@@ -153,7 +153,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
                 .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
             });
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         this->RunProgram(mesh_device, workload);
     }
 }
@@ -182,7 +182,7 @@ TEST_F(MeshDispatchFixture, TensixTestInitLocalMemory) {
 
     CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core, ComputeConfig{});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     this->RunProgram(mesh_device, workload);
 }
 
@@ -213,7 +213,7 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
             eth_core,
             tt::tt_metal::EthernetConfig{.eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER});
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         this->RunProgram(mesh_device, workload);
     }
 }
@@ -290,7 +290,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
             core_coord,
             EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = NOC::NOC_0});
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         this->RunProgram(mesh_device, workload);
 
         auto& program_ = workload.get_programs().at(device_range);
@@ -346,7 +346,7 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
             worker,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         this->RunProgram(mesh_device, workload);
     }
 }
@@ -377,7 +377,7 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
                 uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 std::vector<uint32_t> runtime_args{mask, l1_unreserved_base};
                 SetRuntimeArgs(program, kernel, core, runtime_args);
-                distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+                workload.add_program(device_range, std::move(program));
                 this->RunProgram(mesh_device, workload);
             }
         }

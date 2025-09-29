@@ -57,7 +57,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const R
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());

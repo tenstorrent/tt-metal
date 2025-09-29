@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
 
     // Setup arguments and run the program.
     SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     fmt::print("Kernel execution finished. Reading results...\n");

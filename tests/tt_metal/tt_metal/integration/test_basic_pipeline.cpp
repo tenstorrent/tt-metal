@@ -242,8 +242,7 @@ void create_and_run_row_pipeline(
                  (uint32_t)num_repetitions});
         }
     }
-    distributed::AddProgramToMeshWorkload(
-        mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
