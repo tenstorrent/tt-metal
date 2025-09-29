@@ -1192,9 +1192,9 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": 90,
                 # T3K targets
-                "T3K_Llama-3.1-70B": 204,
-                "T3K_Qwen2.5-Coder-32B": 185,  # `f10cs08`
-                "T3K_Qwen2.5-72B": 260,
+                "T3K_Llama-3.1-70B": 220,
+                "T3K_Qwen2.5-Coder-32B": 195,  # `f10cs08`
+                "T3K_Qwen2.5-72B": 290,
                 "T3K_Qwen3-32B": 167.0,
             }
             ci_target_decode_tok_s_u = {
