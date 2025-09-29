@@ -634,6 +634,7 @@ class StableDiffusion3Pipeline:
             if seed is not None:
                 torch.manual_seed(seed)
             latents = torch.randn(latents_shape, dtype=prompt_embeds.dtype)  # .permute([0, 2, 3, 1])
+            latents = self.transformers[0].patchify(latents)
 
             tt_prompt_embeds_list = []
             tt_pooled_prompt_embeds_list = []
@@ -764,6 +765,11 @@ class StableDiffusion3Pipeline:
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
+                torch_latents = self.transformers[0].unpatchify(
+                    torch_latents,
+                    width=width // self._torch_vae_scale_factor,
+                    height=height // self._torch_vae_scale_factor,
+                )
 
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
@@ -821,7 +827,7 @@ class StableDiffusion3Pipeline:
             else:
                 latent_model_input = latent
 
-            noise_pred = self.transformers[cfg_index](
+            return self.transformers[cfg_index](
                 spatial=latent_model_input,
                 prompt_embed=prompt,
                 pooled_projections=pooled_projection,
@@ -829,14 +835,6 @@ class StableDiffusion3Pipeline:
                 N=spatial_sequence_length,
                 L=prompt_sequence_length,
             )
-
-            noise_pred = _reshape_noise_pred(
-                noise_pred,
-                height=latent.shape[-3] * self.dit_parallel_config.sequence_parallel.factor,
-                width=latent.shape[-2],
-                patch_size=self.patch_size,
-            )
-            return noise_pred
 
         if traced and self._trace is None:
             print(f"Tracing...")
@@ -1216,34 +1214,3 @@ def _get_t5_prompt_embeds(
     # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
     prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
     return prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
-
-
-def _reshape_noise_pred(
-    noise_pred: ttnn.Tensor,
-    *,
-    height: int,
-    width: int,
-    patch_size: int,
-) -> ttnn.Tensor:
-    # B, H * W, P * Q * C -> B, H * P, W * Q, C
-
-    patch_count_y = height // patch_size
-    patch_count_x = width // patch_size
-
-    shape1 = (
-        noise_pred.shape[0] * patch_count_y,
-        patch_count_x,
-        patch_size,
-        -1,
-    )
-
-    shape2 = (
-        noise_pred.shape[0],
-        patch_count_y * patch_size,
-        patch_count_x * patch_size,
-        -1,
-    )
-
-    noise_pred = noise_pred.reshape(shape1)
-    noise_pred = ttnn.transpose(noise_pred, 1, 2)
-    return noise_pred.reshape(shape2)

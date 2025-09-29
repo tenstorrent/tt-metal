@@ -326,7 +326,7 @@ def test_sd35_transformer2d_model(
     # Convert inputs to TT tensors with proper sharding
     # Spatial: sharded on sequence dimension (sp_axis) and feature dimension (tp_axis)
     tt_spatial = bf16_tensor(
-        spatial_input_nhwc_tt, device=submesh_device, mesh_axis=sp_axis, shard_dim=1
+        tt_model.patchify(spatial_input_nhwc_tt), device=submesh_device, mesh_axis=sp_axis, shard_dim=1
     )  # Sharded on H
 
     # Prompt: replicated
