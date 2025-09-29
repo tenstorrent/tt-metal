@@ -105,7 +105,6 @@ __attribute__((noinline)) void init_profiler(
     defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
-    // profiler_control_buffer[GLOBAL_TRACE_COUNT] = 0;
 
     if (runCounter == 0) {
         for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
