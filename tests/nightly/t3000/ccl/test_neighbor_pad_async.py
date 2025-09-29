@@ -143,7 +143,6 @@ def run_neighbor_pad_impl(
             cluster_axis=cluster_axis,
             final_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i],
-            mesh_device=t3k_mesh_device,
             num_links=num_links,
             memory_config=mem_config_output,
             topology=neighbor_pad_topology,
@@ -200,15 +199,7 @@ def run_neighbor_pad_impl(
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (2, 4), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "input_shape, halo_shard_dim, other_shard_dim, layout, input_dtype, padding_left, padding_right, padding_mode, cluster_axis",
