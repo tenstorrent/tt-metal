@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "models/gpt2.hpp"
+#include "ops/sampling_op.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -145,9 +146,11 @@ int main(int argc, char **argv) {
         // Forward pass
         auto output = run_model(model, prompt_tensor, causal_mask_tensor);
 
+        fmt::print("{}", output->get_value().logical_shape().to_array_4D());
+
         // Sample next token
-        auto next_token_tensor = ttml::ttnn_fixed::sample(
-            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), std::nullopt);
+        auto next_token_tensor = ttml::ops::sample_op(
+            output, temperature, ttml::autograd::ctx().get_generator()(), logits_padding_mask_autograd);
 
         uint32_t predicted_token_idx =
             (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);

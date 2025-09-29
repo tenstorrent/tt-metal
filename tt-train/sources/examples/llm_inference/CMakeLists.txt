@@ -1,6 +1,6 @@
-project(gpt2s_inference)
+project(llm_inference)
 
 set(SOURCES main.cpp)
 
-add_executable(gpt2s_inference ${SOURCES})
-target_link_libraries(gpt2s_inference PRIVATE ttml)
+add_executable(llm_inference ${SOURCES})
+target_link_libraries(llm_inference PRIVATE ttml)
