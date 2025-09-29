@@ -658,7 +658,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             CoreCoord worker_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
             if (!storage_only_cores_set.contains(logical_core)) {
-                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
             }
         }
     }
@@ -668,7 +668,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
     for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
     }
 }
 
@@ -688,7 +688,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
 
             if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
                 if (!storage_only_cores_set.contains(logical_core)) {
-                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
                 }
             } else {
                 log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), device_id);
@@ -701,8 +701,10 @@ void MetalContext::assert_cores(chip_id_t device_id) {
         for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-            // Assert all cores except ERISC0, which is running base firmware.
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL & ~tt::umd::RiscType::ERISC0;
+            TensixSoftResetOptions reset_val =
+                TENSIX_ASSERT_SOFT_RESET &
+                static_cast<TensixSoftResetOptions>(
+                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
         }
     }
@@ -885,10 +887,11 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL;
+            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
             if (not is_idle_eth) {
-                // On idle eth, don't assert ERISC0, which is running base firmware.
-                reset_val &= ~tt::umd::RiscType::ERISC0;
+                reset_val =
+                    reset_val & static_cast<TensixSoftResetOptions>(
+                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             }
             if (is_idle_eth or !hal_->get_eth_fw_is_cooperative()) {
                 cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
@@ -1222,11 +1225,15 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     cluster_->l1_barrier(device_id);
 
     // Deassert worker cores
+    TensixSoftResetOptions reset_val;
     for (const auto& worker_core : not_done_cores) {
-        tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
         if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
             // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val |= tt::umd::RiscType::ERISC1;
+            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+                        static_cast<TensixSoftResetOptions>(
+                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        } else {
+            reset_val = TENSIX_DEASSERT_SOFT_RESET;
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
