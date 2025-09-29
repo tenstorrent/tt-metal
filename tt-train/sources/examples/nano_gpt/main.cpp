@@ -890,7 +890,6 @@ int main(int argc, char **argv) {
 
     bool is_everything_compiled = false;
 
-    const bool is_pipeline_parallel = is_pipeline_parallel_enabled(config);
     const bool needs_to_call_loss = pipeline_needs_to_call_loss(config);
 
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
