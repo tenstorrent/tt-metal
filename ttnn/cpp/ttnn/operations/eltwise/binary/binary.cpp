@@ -784,57 +784,28 @@ template struct BinaryOperationSfpu<BinaryOpType::LCM>;
 template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
 
-// ExecuteHypot implementations
-Tensor ExecuteHypot::invoke(
+// BinaryOperationHypot implementations
+// Simple interface following addalpha/subalpha pattern - no activations, no dtype, hardcoded use_legacy=false
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationHypot<binary_op_type>::invoke(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
-    const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    return BinaryOperationSfpu<BinaryOpType::HYPOT>::invoke(
-        input_tensor_a,
-        input_tensor_b,
-        dtype,
-        memory_config,
-        optional_output_tensor,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy);
-}
-
-Tensor ExecuteHypot::invoke(
-    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
-    return ExecuteHypot::invoke(
-        input_tensor_a, input_tensor_b, std::nullopt, memory_config, std::nullopt, {}, {}, {}, std::nullopt);
-}
-
-Tensor ExecuteHypot::invoke(
-    const Tensor& input_tensor_a,
-    float input_tensor_b,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
-    std::optional<bool> use_legacy) {
-    // Use consistent binary_ng framework path for scalar (same as tensor-tensor)
+    const std::optional<Tensor>& optional_output_tensor) {
+    // Clean interface: directly call binary_ng, no activations, use default dtype
     return detail::invoke_binary_ng(
         input_tensor_a,
         input_tensor_b,
         BinaryOpType::HYPOT,
-        dtype,
+        std::nullopt,  // use default dtype
         memory_config,
         optional_output_tensor,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy);
+        {},      // no post_activations
+        {},      // no lhs_activations
+        {},      // no rhs_activations
+        false);  // always use new binary_ng path
 }
+
+template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
 
 }  // namespace ttnn::operations::binary

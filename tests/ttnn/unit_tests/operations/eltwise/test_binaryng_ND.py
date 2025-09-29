@@ -91,12 +91,7 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
         output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, alpha, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     else:
         torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-        if ttnn_fn == ttnn.hypot:
-            output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            output_tensor = ttnn_fn(
-                input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None
-            )
+        output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if ttnn_fn == ttnn.hypot:
         from tests.ttnn.utils_for_testing import assert_with_ulp
