@@ -115,11 +115,12 @@ public:
 };
 
 class IDistributedContextManager {
-    virtual uint32_t get_randomized_master_seed() const = 0;
-    virtual void barrier() const = 0;
-
 public:
     virtual ~IDistributedContextManager() = default;
+
+private:
+    virtual uint32_t get_randomized_master_seed() const = 0;
+    virtual void barrier() const = 0;
 };
 
 }  // namespace fabric_tests
