@@ -17,8 +17,37 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig = (
 )
 
 
+def _get_golden_activation_function(activation):
+    import torch
+
+    golden_activations_map = {
+        ttnn.UnaryOpType.RELU: torch.nn.functional.relu,
+        ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
+        ttnn.UnaryOpType.MISH: torch.nn.functional.mish,
+        ttnn.UnaryOpType.SIGMOID: torch.nn.functional.sigmoid,
+        ttnn.UnaryOpType.TANH: torch.nn.functional.tanh,
+        ttnn.UnaryOpType.LOG: torch.log,
+        ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
+        ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
+        ttnn.UnaryOpType.SQRT: torch.sqrt,
+    }
+
+    if activation in golden_activations_map:
+        return golden_activations_map[activation]
+    else:
+        raise RuntimeError(f"{activation} is not supported as activation function")
+
+
 def _golden_function(
-    input_tensor_a, input_tensor_b, transpose_a=False, transpose_b=False, *, bias=None, activation=None, **kwargs
+    input_tensor_a,
+    input_tensor_b,
+    transpose_a=False,
+    transpose_b=False,
+    *,
+    bias=None,
+    activation=None,
+    program_config=None,
+    **kwargs,
 ):
     import torch
 
@@ -28,7 +57,13 @@ def _golden_function(
         input_tensor_b = input_tensor_b.transpose(-1, -2)
     output_tensor = input_tensor_a @ input_tensor_b.to(input_tensor_a.dtype)
 
-    if activation == "gelu":
+    # First check if there is a fused activation in the program config
+    if program_config is not None and hasattr(program_config, "fused_activation") and program_config.fused_activation:
+        program_config_activation = program_config.fused_activation.op_type
+        output_tensor = _get_golden_activation_function(program_config_activation)(output_tensor)
+
+    # Then do the composite op activation function if it is requested as well
+    if activation in ("gelu", "gelu_approx"):
         output_tensor = torch.nn.functional.gelu(output_tensor)
     elif activation == "relu":
         output_tensor = torch.nn.functional.relu(output_tensor)
@@ -47,7 +82,15 @@ ttnn.attach_golden_function(
 
 
 def _golden_function(
-    input_tensor_a, input_tensor_b, transpose_a=False, transpose_b=False, *, bias=None, activation=None, **kwargs
+    input_tensor_a,
+    input_tensor_b,
+    transpose_a=False,
+    transpose_b=False,
+    *,
+    bias=None,
+    program_config=None,
+    activation=None,
+    **kwargs,
 ):
     import torch
 
@@ -64,7 +107,13 @@ def _golden_function(
             bias = bias[0]
         output_tensor += bias
 
-    if activation == "gelu":
+    # First check if there is a fused activation in the program config
+    if program_config is not None and hasattr(program_config, "fused_activation") and program_config.fused_activation:
+        program_config_activation = program_config.fused_activation.op_type
+        output_tensor = _get_golden_activation_function(program_config_activation)(output_tensor)
+
+    # Then do the composite op activation function if it is requested as well
+    if activation in ("gelu", "gelu_approx"):
         output_tensor = torch.nn.functional.gelu(output_tensor)
     elif activation == "relu":
         output_tensor = torch.nn.functional.relu(output_tensor)
