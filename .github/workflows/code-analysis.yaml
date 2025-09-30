@@ -137,7 +137,7 @@ jobs:
         id: analyze
         run: |
           # Run the dedicated Python script for CODEOWNERS analysis
-          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ_GITHUB_TOKEN="${{ secrets.ORG_READ_GITHUB_TOKEN }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
+          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ="${{ secrets.ORG_READ }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
         # The script writes directly to GITHUB_OUTPUT, so we don't need to capture stdout here
 
   post-comment:
@@ -161,14 +161,14 @@ jobs:
               # Remove @org/ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
 
-              # Get team members using GitHub API (using ORG_READ_GITHUB_TOKEN for org access)
+              # Get team members using GitHub API (using ORG_READ for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API" 2>/dev/null)
 
               # Check if API call was successful (HTTP 200)
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API")
 
@@ -324,8 +324,8 @@ jobs:
                                 -H "Accept: application/vnd.github.v3+json" \
                                 "$COMMENTS_API")
 
-          # Find existing comment from this workflow (contains our marker)
-          EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r ".[] | select(.body | contains(\"CodeOwners-Workflow-Bot\")) | .id" | head -1)
+          # Find existing comment from this workflow (starts with CodeOwners Analysis or contains our marker)
+          EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r ".[] | select(.body | startswith(\"## CodeOwners\") or contains(\"CodeOwners-Workflow-Bot\")) | .id" | head -1)
 
           if [ "$CREATE_NEW" = "true" ] || [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
             # Create new comment
