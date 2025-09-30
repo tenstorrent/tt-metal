@@ -7,6 +7,7 @@ runtime
 *.log
 *.csv
 *.xlsx
+*.dmp
 *.code-workspace
 /tt-perf*
 test_hlk_args_init_gen

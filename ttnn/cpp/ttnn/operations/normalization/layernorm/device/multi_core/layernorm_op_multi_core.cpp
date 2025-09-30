@@ -83,7 +83,7 @@ bool CB_can_fit_in_L1(
     sum += in2_size;
     sum += in3_size;
     sum += im2_size;
-    return sum < l1_size * 0.95;
+    return false;
 }
 operation::ProgramWithCallbacks layernorm_multi_core(
     const Tensor& a,

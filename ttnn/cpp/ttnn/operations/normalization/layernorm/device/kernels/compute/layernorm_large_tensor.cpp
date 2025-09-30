@@ -26,7 +26,7 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
-    constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
+    constexpr bool FLOAT32_REDUCTION = true;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;
 
     constexpr uint32_t onetile = 1;
@@ -102,7 +102,7 @@ void MAIN {
 #endif
         tile_regs_commit();
         pack_tile(dst0, cb_ex);
-        reduce_uninit();
+        reduce_uninit<FLOAT32_REDUCTION>();
         tile_regs_release();
         cb_push_back(cb_ex, onetile);
         // End of
@@ -176,7 +176,7 @@ void MAIN {
             }
             cb_pop_front(cb_xmm, blk);
             cb_reserve_back(cb_ex2, onetile);
-            reduce_uninit();
+            reduce_uninit<FLOAT32_REDUCTION>();
             tile_regs_commit();
             pack_tile(dst0, cb_ex2);
             cb_push_back(cb_ex2, onetile);

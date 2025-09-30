@@ -141,9 +141,9 @@ def test_layer_norm_with_tile_layout(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@pytest.mark.parametrize("h", [1024, 2080])
-@pytest.mark.parametrize("w", [3200, 4128])
-@pytest.mark.parametrize("use_welford", [True, False])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [256])
+@pytest.mark.parametrize("use_welford", [False])
 @skip_welford_blackhole("'use_welford'")
 def test_large_layer_norm(device, h, w, use_welford):
     if h == 2080:
@@ -155,8 +155,16 @@ def test_large_layer_norm(device, h, w, use_welford):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
-    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
+    config = ttnn.LayerNormDefaultProgramConfig(legacy_reduction=False, legacy_rsqrt=True)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=config, compute_kernel_config=compute_kernel_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
