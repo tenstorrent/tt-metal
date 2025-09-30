@@ -72,19 +72,26 @@ def analyze_codeowners(changed_files_path, codeowners_path):
     for file_path in changed_files:
         matching_lines = list(co.matching_lines(file_path))
         if matching_lines:
-            print(f"Found {len(matching_lines)} matching lines for {file_path}")
-            for line_tuple in matching_lines:
-                # matching_lines returns tuples: (owners, line_number, pattern, section_name)
-                if len(line_tuple) >= 2:
-                    owners_list = line_tuple[0]  # First element is the owners list
-                    for owner_type, owner in owners_list:
-                        if owner_type in ["USERNAME", "EMAIL"]:
-                            # This is an individual - get full name
-                            full_name = get_user_full_name(owner)
-                            individual_owners.add(full_name)
-                        elif owner_type == "TEAM":
-                            # This is a team
-                            team_groups.add(owner)
+            # GitHub CODEOWNERS precedence: last matching pattern takes precedence
+            # Sort by line number (highest first) and use only the most specific match
+            sorted_matches = sorted(matching_lines, key=lambda x: x[1], reverse=True)
+            best_match = sorted_matches[0]
+
+            print(
+                f"Found {len(matching_lines)} matching lines for {file_path}, using most specific (line {best_match[1]})"
+            )
+
+            # Use only the owners from the most specific match
+            if len(best_match) >= 2:
+                owners_list = best_match[0]  # First element is the owners list
+                for owner_type, owner in owners_list:
+                    if owner_type in ["USERNAME", "EMAIL"]:
+                        # This is an individual - get full name
+                        full_name = get_user_full_name(owner)
+                        individual_owners.add(full_name)
+                    elif owner_type == "TEAM":
+                        # This is a team
+                        team_groups.add(owner)
         else:
             print(f"No matches found for {file_path}")
 
