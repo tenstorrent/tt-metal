@@ -329,7 +329,8 @@ Result conv2d_DRAM(
     if (!conv_config.weights_dtype.has_value()) {
         conv_config.weights_dtype = weight_tensor.dtype();
     }
-    Conv2dSliceConfig dram_slice_config = determine_conv2d_slice_config(
+    Conv2dSliceConfig dram_slice_config;
+    std::tie(dram_slice_config, conv_config) = determine_conv2d_slice_config(
         dram_slice_config_,
         ConvDRAMParamters{
             .in_channels = in_channels,
