@@ -98,7 +98,7 @@ bool single_core_reconfig(
     float in2_val = 0.0078125;
     uint32_t single_tile_size_fp32 = 4 * 32 * 32;        // Single 32x32 tile size for Float32
     uint32_t single_tile_size_bfp16b = 2 * 32 * 32;      // Single 32x32 tile size for Float16_b
-    uint32_t single_tile_size_bfp8b = 1 * 32 * 32 + 64;  // Single 32x32 tile size for Bfp8_b
+    uint32_t single_tile_size_bfp8b = (1 * 32 * 32) + 64;  // Single 32x32 tile size for Bfp8_b
     uint32_t single_tile_size_out0 = test_config.fp32_dest_acc_en ? single_tile_size_fp32 : single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp16b = test_config.num_tiles * single_tile_size_bfp16b;
     const size_t dram_buffer_size_bfp8b = test_config.num_tiles * single_tile_size_bfp8b;

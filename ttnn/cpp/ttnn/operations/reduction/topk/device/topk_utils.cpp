@@ -27,7 +27,7 @@ std::optional<TopKCoreConfig> find_topk_core_config(
         tt::constants::TILE_WIDTH;
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         uint32_t rem = width % split_size;
-        uint32_t num_cores = width / split_size + (rem > 0);
+        uint32_t num_cores = (width / split_size) + (rem > 0);
         uint32_t memory_cost_gather = 2 * num_cores * (value_tile_size + index_tile_size);
         uint32_t memory_cost_local = (split_size / tt::constants::TILE_WIDTH) * (value_tile_size + index_tile_size);
         uint32_t max_x = core_range.end_coord.x - core_range.start_coord.x;

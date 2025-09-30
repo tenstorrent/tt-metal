@@ -63,8 +63,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
 
     for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
         // Compute starting and ending indices of the pooling window
-        int h_start = output_stick_x * config.stride_h - config.pad_t;
-        int w_start = output_stick_y * config.stride_w - config.pad_l;
+        int h_start = (output_stick_x * config.stride_h) - config.pad_t;
+        int w_start = (output_stick_y * config.stride_w) - config.pad_l;
         // omit any ceiling mode related padding from end point calculations as these are not used in the
         // calculation of the pool area even when count_include_pad is on
         int h_end = std::min(h_start + static_cast<int>(config.kernel_h), static_cast<int>(config.in_h + config.pad_b));

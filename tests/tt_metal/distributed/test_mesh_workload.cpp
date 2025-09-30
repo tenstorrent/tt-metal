@@ -471,9 +471,9 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src0_bufs[col_idx * worker_grid_size.y + row_idx], src0_vec);
+                mesh_device_->mesh_command_queue(), src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec);
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src1_bufs[col_idx * worker_grid_size.y + row_idx], src1_vec);
+                mesh_device_->mesh_command_queue(), src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec);
         }
     }
 
@@ -489,7 +489,7 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                 ReadShard(
                     mesh_device_->mesh_command_queue(),
                     dst_vec,
-                    output_bufs[col_idx * worker_grid_size.y + row_idx],
+                    output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                     device_coord);
                 if (device_coord[1] <= num_cols_in_workload - 1) {
                     for (int i = 0; i < dst_vec.size(); i++) {
@@ -556,8 +556,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                 program,
                 reader_writer_kernel,
                 curr_core,
-                {input_buffers.at(col_idx * worker_grid_size.y + row_idx)->address(),
-                 output_buffers.at(col_idx * worker_grid_size.y + row_idx)->address(),
+                {input_buffers.at((col_idx * worker_grid_size.y) + row_idx)->address(),
+                 output_buffers.at((col_idx * worker_grid_size.y) + row_idx)->address(),
                  0, /* src_bank_id */
                  0, /* dst_bank_id */
                  add_factor,
@@ -582,7 +582,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), input_buffers[col_idx * worker_grid_size.y + row_idx], src_vec);
+                mesh_device_->mesh_command_queue(), input_buffers[(col_idx * worker_grid_size.y) + row_idx], src_vec);
         }
     }
 
@@ -603,7 +603,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                     ReadShard(
                         mesh_device_->mesh_command_queue(),
                         dst_vec,
-                        output_buffers[col_idx * worker_grid_size.y + row_idx],
+                        output_buffers[(col_idx * worker_grid_size.y) + row_idx],
                         device_coord);
                     for (int i = 0; i < dst_vec.size(); i++) {
                         float ref_val = std::pow(2, (iter % 2) + 1);

@@ -192,8 +192,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         uint32_t curr_input_height_idx = block_start_id;
         uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
         uint32_t patch_height_offset = curr_input_height_idx % stride_h;
-        uint32_t output_offset = patch_size * curr_output_height_idx * output_width +
-                                 patch_height_offset * stride_w;  // Total output height * width
+        uint32_t output_offset = (patch_size * curr_output_height_idx * output_width) +
+                                 (patch_height_offset * stride_w);  // Total output height * width
         CoreCoord core = cores[i];
         if (!full_cores.contains(core)) {
             continue;
@@ -221,7 +221,8 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         uint32_t curr_input_height_idx = block_start_id;
         uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
         uint32_t patch_height_offset = curr_input_height_idx % stride_h;
-        uint32_t output_offset = patch_size * curr_output_height_idx * output_width + patch_height_offset * stride_w;
+        uint32_t output_offset =
+            (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
         std::vector<uint32_t> reader_runtime_args = {
             src0_buffer->address(),

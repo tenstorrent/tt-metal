@@ -381,7 +381,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         uint32_t in1_block_num_tiles_per_kv_heads = in0_block_w * out_subblock_w;
         uint32_t in1_block_num_tiles = KV_HEADS * in1_block_num_tiles_per_kv_heads;
         uint32_t in1_num_blocks =
-            (Nt - 1) / out_block_w + 1;  // Rounds up to include nearest out_block_w; "padding" is handled internally
+            ((Nt - 1) / out_block_w) + 1;  // Rounds up to include nearest out_block_w; "padding" is handled internally
 
         uint32_t Nt_bytes = Nt * in1_single_tile_size;
         uint32_t out_last_subblock_w = Nt % out_block_w == 0 ? out_block_w : Nt % out_block_w;

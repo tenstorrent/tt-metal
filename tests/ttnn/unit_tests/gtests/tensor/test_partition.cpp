@@ -359,7 +359,7 @@ TEST(PartitionTest, ChunkNdimFewerChunksThanRequested) {
 
     for (size_t i = 0; i < 3; ++i) {
         for (size_t j = 0; j < 4; ++j) {
-            size_t chunk_idx = i * 4 + j;
+            size_t chunk_idx = (i * 4) + j;
             EXPECT_FLOAT_EQ(chunks[chunk_idx](0, 0), tensor(i, j));
         }
     }
@@ -594,7 +594,7 @@ TEST(PartitionTest, ConcatNdimThreeDimensions) {
     // Create 8 small tensors of shape (1, 1, 2)
     std::vector<xt::xarray<int>> expressions;
     for (int i = 0; i < 8; ++i) {
-        xt::xarray<int> tensor = {{{i * 2, i * 2 + 1}}};
+        xt::xarray<int> tensor = {{{i * 2, (i * 2) + 1}}};
         expressions.push_back(tensor);
     }
 
@@ -661,7 +661,7 @@ TEST(PartitionTest, ConcatNdimRowMajorOrder) {
     // Create 6 small tensors of shape (1, 2)
     std::vector<xt::xarray<int>> expressions;
     for (int i = 0; i < 6; ++i) {
-        xt::xarray<int> tensor = {{i * 2, i * 2 + 1}};
+        xt::xarray<int> tensor = {{i * 2, (i * 2) + 1}};
         expressions.push_back(tensor);
     }
 

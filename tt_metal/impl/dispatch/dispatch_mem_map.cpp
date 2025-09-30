@@ -75,11 +75,12 @@ uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
     // Address of the first dispatch message entry. Remaining entries are each offset by
     // get_noc_stream_reg_space_size() bytes.
     return tt::tt_metal::MetalContext::instance().hal().get_noc_overlay_start_addr() +
-           tt::tt_metal::MetalContext::instance().hal().get_noc_stream_reg_space_size() * get_dispatch_stream_index(0) +
-           tt::tt_metal::MetalContext::instance()
-                   .hal()
-                   .get_noc_stream_remote_dest_buf_space_available_update_reg_index() *
-               sizeof(uint32_t);
+           (tt::tt_metal::MetalContext::instance().hal().get_noc_stream_reg_space_size() *
+            get_dispatch_stream_index(0)) +
+           (tt::tt_metal::MetalContext::instance()
+                .hal()
+                .get_noc_stream_remote_dest_buf_space_available_update_reg_index() *
+            sizeof(uint32_t));
 }
 
 uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {

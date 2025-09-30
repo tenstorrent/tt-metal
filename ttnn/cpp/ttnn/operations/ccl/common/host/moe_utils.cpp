@@ -98,7 +98,7 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
 }
 
 uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const ttnn::MeshDeviceView& mesh_view) {
-    return mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+    return (mesh_coordinate[0] * mesh_view.num_cols()) + mesh_coordinate[1];
 }
 
 // TODO: once #27196 is fixed we can remove the is_mesh_mmio_capable check

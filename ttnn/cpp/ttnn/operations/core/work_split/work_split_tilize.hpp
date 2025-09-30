@@ -95,8 +95,8 @@ inline BlockSplitWH split_blocks_for_tilize_wh(
     const bool has_cliff_row = (full_cores_per_row < total_blocks_width);
     const uint32_t full_cores_per_col = height_tiles / single_block_size;
     const bool has_cliff_col = (full_cores_per_col < total_blocks_height);
-    const uint32_t single_block_size_cliff_row = width_tiles - full_cores_per_row * single_block_size;
-    const uint32_t single_block_size_cliff_col = height_tiles - full_cores_per_col * single_block_size;
+    const uint32_t single_block_size_cliff_row = width_tiles - (full_cores_per_row * single_block_size);
+    const uint32_t single_block_size_cliff_col = height_tiles - (full_cores_per_col * single_block_size);
     // Coordinates for assigning cores sequentially.
     uint32_t i_x = 0;
     uint32_t i_y = 0;
@@ -154,7 +154,7 @@ inline BlockSplit split_blocks_for_tilize(CoreCoord grid_size, uint32_t nblocks)
     const uint32_t nblocks_per_core_cliff = nblocks_per_core == 0 ? 0 : nblocks % nblocks_per_core;
     const uint32_t ncores_x = grid_size.x;
     const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
-    const uint32_t ncores_x_cliff = ncores - (ncores_y - 1) * ncores_x;
+    const uint32_t ncores_x_cliff = ncores - ((ncores_y - 1) * ncores_x);
 
     std::set<CoreRange> core_range, cliff_core_range;
     std::optional<CoreCoord> cliff_core;

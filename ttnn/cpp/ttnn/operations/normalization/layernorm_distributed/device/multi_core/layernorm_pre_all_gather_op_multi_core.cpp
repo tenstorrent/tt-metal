@@ -238,7 +238,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
 
             uint32_t num_tile_rows_per_core = tiles_per_core_x;
 
-            uint32_t in_tile_offset = x * Wt + y * tiles_per_core_y;
+            uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
             uint32_t out_tile_offset = x * out0_tiles;
 
             SetRuntimeArgs(

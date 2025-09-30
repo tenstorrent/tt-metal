@@ -60,8 +60,8 @@ void add_sequential_port_pairs(
     }
     uint32_t num_pairs = total_ports / 2;
     for (uint32_t i = 0; i < num_pairs; ++i) {
-        uint32_t port_a = i * 2 + 1;
-        uint32_t port_b = i * 2 + 2;
+        uint32_t port_a = (i * 2) + 1;
+        uint32_t port_b = (i * 2) + 2;
         internal_connections[port_type].push_back({PortId(port_a), PortId(port_b)});
     }
 }

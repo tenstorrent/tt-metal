@@ -150,7 +150,7 @@ std::vector<std::vector<ReadRequest>> distribute_work_evenly(
         //   packets_remaining_for_worker * packet_size - leftover_in_packet
         //
         // Because leftover_in_packet pages are already in the partial packet buffer.
-        uint32_t max_pages_for_worker = packets_remaining_for_worker * packet_size - leftover_in_packet;
+        uint32_t max_pages_for_worker = (packets_remaining_for_worker * packet_size) - leftover_in_packet;
 
         // So the chunk we read must be <= pages_left_in_bank
         // and <= max_pages_for_worker
