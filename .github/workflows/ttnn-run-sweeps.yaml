@@ -889,7 +889,12 @@ jobs:
           merge-multiple: true
       - name: Homogenize sweep results
         run: |
-          python3 tests/sweep_framework/run_collective_update.py
+          # Determine run type based on schedule or input
+          RUN_TYPE="nightly"
+          if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+            RUN_TYPE="comprehensive"
+          fi
+          python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
       - name: Upload runs
         uses: actions/upload-artifact@v4
         with:
