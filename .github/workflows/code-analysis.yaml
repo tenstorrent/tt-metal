@@ -19,19 +19,18 @@ jobs:
       - name: Send test message to Slack
         uses: slackapi/slack-github-action@v1.26.0
         with:
-          payload: |
+          channel-id: C09HT5VSXRB   # channel ID (not #name)
+          slack-message: |
             {
-              "channel": "#codeowners-ping-checking",
               "text": "${{ inputs.message }}",
               "username": "GitHub Actions Bot",
               "icon_emoji": ":robot_face:"
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_CHANNEL_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
       - name: Confirm message sent
         run: |
           echo "✅ Test message sent to Slack!"
-          echo "Channel: #codeowners-ping-checking"
+          echo "Channel ID: C09HT5VSXRB"
           echo "Message: ${{ inputs.message }}"
