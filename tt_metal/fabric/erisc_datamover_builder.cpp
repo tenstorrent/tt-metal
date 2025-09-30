@@ -1248,11 +1248,19 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     const auto remote_routing_direction =
         control_plane.get_forwarding_direction(this->peer_fabric_node_id, this->local_fabric_node_id);
-    auto remote_eth_direction =
-        control_plane.routing_direction_to_eth_direction(remote_routing_direction.value_or(RoutingDirection::E));
-    auto remote_worker_sender_channel = get_worker_connected_sender_channel(remote_eth_direction, topology);
-    auto remote_vc1_sender_channel =
-        this->dateline_connection ? remote_worker_sender_channel : get_vc1_connected_sender_channel(topology);
+
+    uint32_t remote_worker_sender_channel = 0;
+    uint32_t remote_vc1_sender_channel = 0;
+    bool skip_src_ch_id_update = false;
+    // when there is no remote router paired with current router, don't care about skip_src_ch_id_update and set it to
+    // false
+    if (remote_routing_direction.has_value()) {
+        skip_src_ch_id_update = this->has_tensix_extension;
+        auto remote_eth_direction = control_plane.routing_direction_to_eth_direction(remote_routing_direction.value());
+        remote_worker_sender_channel = get_worker_connected_sender_channel(remote_eth_direction, topology);
+        remote_vc1_sender_channel =
+            this->dateline_connection ? remote_worker_sender_channel : get_vc1_connected_sender_channel(topology);
+    }
 
     bool update_pkt_hdr_on_rx_ch = true;
     bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
@@ -1304,9 +1312,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->handshake_address,
         this->channel_buffer_size,
         vc1_has_different_downstream_dest,
-        this->has_tensix_extension,
-        remote_vc1_sender_channel,
-        remote_worker_sender_channel};
+        this->has_tensix_extension};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.skip_receiver_channel_1_connection,
@@ -1408,6 +1414,13 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Add first part of main arguments to ct_args
     ct_args.insert(ct_args.end(), main_args_part1.begin(), main_args_part1.end());
+
+    // Conditionally add remote channel info when skip_src_ch_id_update is true
+    // (these values are used to initialize src channel IDs once, rather than updating them dynamically)
+    if (skip_src_ch_id_update) {
+        ct_args.push_back(remote_vc1_sender_channel);
+        ct_args.push_back(remote_worker_sender_channel);
+    }
 
     // insert the sender channel num buffers
     ct_args.insert(
