@@ -695,9 +695,9 @@ jobs:
                                  "$USER_API" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                   if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                    SLACK_MESSAGE="$SLACK_MESSAGE $USER_NAME"
+                    SLACK_MESSAGE="$SLACK_MESSAGE @$USER_NAME"
                   else
-                    SLACK_MESSAGE="$SLACK_MESSAGE $owner"
+                    SLACK_MESSAGE="$SLACK_MESSAGE @$owner"
                   fi
                   # Add comma if not the last owner
                   if [ $((i + 1)) -lt $OWNER_COUNT ]; then
