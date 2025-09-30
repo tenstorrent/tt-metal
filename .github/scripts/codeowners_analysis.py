@@ -87,7 +87,7 @@ def analyze_codeowners(changed_files_path, codeowners_path):
     co = CodeOwners(codeowners_content)
 
     # Parse CODEOWNERS file - collect patterns and their owners
-    pattern_groups = {}  # pattern -> set of owners
+    pattern_groups = {}  # pattern -> set of (username, full_name) tuples
     team_groups = set()
 
     for file_path in changed_files:
@@ -115,9 +115,11 @@ def analyze_codeowners(changed_files_path, codeowners_path):
                         # This is a team
                         team_groups.add(owner)
                     elif owner_type in ["USERNAME", "EMAIL"]:
-                        # This is an individual - get full name and add to pattern group
+                        # This is an individual - get full name and store both username and full name
                         full_name = get_user_full_name(owner)
-                        pattern_groups[pattern].add(full_name)
+                        # Store as tuple: (username, full_name)
+                        username = owner[1:] if owner.startswith("@") else owner  # Remove @ prefix if present
+                        pattern_groups[pattern].add((username, full_name))
         else:
             print(f"No matches found for {file_path}")
 
@@ -129,8 +131,11 @@ def analyze_codeowners(changed_files_path, codeowners_path):
     pattern_groups_list = []
     for pattern, owners in pattern_groups.items():
         if owners:  # Only include patterns that have individuals
-            # Format: pattern:owner1,owner2,owner3 (owners are already full names from get_user_full_name)
-            owners_str = ",".join(sorted(owners))
+            # Format: pattern:username1|full_name1,username2|full_name2,... (username|full_name pairs)
+            owners_pairs = []
+            for username, full_name in sorted(owners, key=lambda x: x[1]):  # Sort by full name
+                owners_pairs.append(f"{username}|{full_name}")
+            owners_str = ",".join(owners_pairs)
             pattern_groups_list.append(f"{pattern}:{owners_str}")
 
     individuals_list = "|".join(pattern_groups_list) if pattern_groups_list else ""

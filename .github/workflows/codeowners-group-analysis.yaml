@@ -95,14 +95,14 @@ jobs:
               # Remove @ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@//')
 
-              # Get team members using GitHub API (using ORG_READ_GITHUB_TOKEN for org access)
+              # Get team members using GitHub API (using WILDER_PAT for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.WILDER_PAT }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API" 2>/dev/null)
 
               # Check if API call was successful (HTTP 200)
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.WILDER_PAT }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API")
 
@@ -187,7 +187,7 @@ jobs:
         id: analyze
         run: |
           # Run the dedicated Python script for CODEOWNERS analysis
-          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ_GITHUB_TOKEN="${{ secrets.ORG_READ_GITHUB_TOKEN }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
+          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" WILDER_PAT="${{ secrets.WILDER_PAT }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
         # The script writes directly to GITHUB_OUTPUT, so we don't need to capture stdout here
 
   post-comment:
@@ -270,22 +270,39 @@ jobs:
 
             # Add pattern groups with member information and approval status
             if [ -n "$INDIVIDUALS" ]; then
-              # Individuals are now grouped by pattern: "pattern:owner1,owner2|pattern2:owner3,owner4"
+              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2|pattern2:..."
               IFS='|' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
               for pattern_group in "${PATTERN_GROUPS[@]}"; do
                 # Split pattern:owners
                 pattern=$(echo "$pattern_group" | cut -d':' -f1)
                 owners=$(echo "$pattern_group" | cut -d':' -f2)
 
-                # Format owners with full names (they should already be full names from the script)
-                all_owners=$(echo "$owners" | sed 's/,/, /g')
+                # Parse owners - each is username|full_name
+                all_owners=""
+                usernames=()
+                full_names=()
+
+                IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
+                for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                  # Split username|full_name
+                  username=$(echo "$owner_pair" | cut -d'|' -f1)
+                  full_name=$(echo "$owner_pair" | cut -d'|' -f2)
+
+                  usernames+=("$username")
+                  full_names+=("$full_name")
+                  all_owners="$all_owners$full_name, "
+                done
+
+                # Remove trailing comma and space
+                all_owners=$(echo "$all_owners" | sed 's/, $//')
 
                 # Check if any owner in this pattern group has approved
                 approved_owners=""
-                IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
-                for owner in "${OWNERS_ARRAY[@]}"; do
-                  if echo "$APPROVED_REVIEWERS" | grep -q "$owner"; then
-                    approved_owners="$approved_owners$owner, "
+                for i in "${!usernames[@]}"; do
+                  username="${usernames[$i]}"
+                  full_name="${full_names[$i]}"
+                  if echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                    approved_owners="$approved_owners$full_name, "
                   fi
                 done
 
