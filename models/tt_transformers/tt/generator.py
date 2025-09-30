@@ -1584,6 +1584,14 @@ class Generator:
             num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
         else:
             num_blocks = num_blocks_in_seq(prefill_len, block_size)
+        if trace_enabled:
+            if page_table.shape[1] < num_blocks:
+                # If page table is too short, pad it with -1
+                padding = torch.ones(1, num_blocks - page_table.shape[1], dtype=torch.int32) * -1
+                page_table = torch.cat([page_table, padding], dim=1)
+            padded_page_table = torch.ones(1, page_table.shape[1], dtype=torch.int32) * -1
+            padded_page_table[0, :num_blocks] = page_table[0, :num_blocks]
+            return padded_page_table[:, :num_blocks]
         return page_table[:, :num_blocks]
 
     ## Destructor
