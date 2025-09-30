@@ -228,7 +228,7 @@ class Generator:
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
 
-            if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
+            if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096]:
                 enable_trace = False
             use_chunked_prefill = prefill_ids.shape[-1] > self.model_args[model_id].max_prefill_chunk_size
             if use_chunked_prefill:
