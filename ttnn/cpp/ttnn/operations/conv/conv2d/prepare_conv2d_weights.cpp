@@ -29,6 +29,7 @@ using namespace tt;
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 using tt::tt_metal::pack_as_bfp4_tiles;
+using tt::tt_metal::pack_as_bfp8_tiles;
 
 namespace conv2d {
 

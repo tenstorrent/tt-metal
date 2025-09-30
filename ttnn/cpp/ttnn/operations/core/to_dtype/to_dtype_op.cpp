@@ -4,6 +4,7 @@
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 
 #include <tt-metalium/bfloat4.hpp>
+#include "tt-metalium/bfloat8.hpp"
 #include "tt_stl/concepts.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -26,6 +27,9 @@ struct bfloat8_tag {};
 
 using tt::tt_metal::pack_as_bfp4_tiles;
 using tt::tt_metal::unpack_bfp4_tiles_into_float_vec;
+
+using tt::tt_metal::pack_as_bfp8_tiles;
+using tt::tt_metal::unpack_bfp8_tiles_into_float_vec;
 
 // Preprocess the storage to unpack the bfloat8/4 tiles into float32.
 tt::tt_metal::HostStorage preprocess_storage(

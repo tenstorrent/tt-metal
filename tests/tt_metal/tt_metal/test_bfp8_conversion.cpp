@@ -21,6 +21,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     bool pass = true;
