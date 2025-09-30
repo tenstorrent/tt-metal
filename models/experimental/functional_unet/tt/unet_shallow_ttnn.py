@@ -539,17 +539,7 @@ class UNet:
     def postprocess_output_tensor(self, x):
         # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
         assert x.is_sharded(), "Expected output to be sharded"
-        input_shard_spec = x.memory_config().shard_spec
-        output_shard_shape = (x.shape[-1], input_shard_spec.shape[0])
-        output_shard_spec = ttnn.ShardSpec(
-            input_shard_spec.grid,
-            output_shard_shape,
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        output_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
-        )
-        return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config, dtype=ttnn.bfloat16)
+        return ttnn.experimental.convert_to_chw(x, dtype=ttnn.bfloat16)
 
     def __call__(self, x, move_input_tensor_to_device=True, deallocate_input_activation=True):
         assert len(x.shape) == 4, f"Expected UNet input tensors to be rank 4 (was {len(x.shape)})"
