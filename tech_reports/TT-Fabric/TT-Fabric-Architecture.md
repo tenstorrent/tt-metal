@@ -192,15 +192,13 @@ Some examples of user or control plane actions based on TT-Fabric status are:
 
 ## 1.2 Some Additional Notes <a id="notes"></a>
 
-AI accelerators will be referred to as Devices for the remainder of this document. A device can be a Wormhole, Blackhole etc.
+AI accelerators are referred to as Devices for the remainder of this document. A device can be a Wormhole, Blackhole etc.
 
-Our first TT-Fabric implementation is specific to Tenstorrent hardware and is intended to be deployable on current and future generations of Tenstorrent devices. TT-fabric is a software/firmware implementation that utilizes NOC and Ethernet capabilities of devices to build a mesh wide communication network.
+TT-Fabric implementation is specific to Tenstorrent hardware and is intended to be deployable on current and future generations of Tenstorrent devices. TT-fabric is a software/firmware implementation that utilizes NOC and Ethernet capabilities of devices to build a mesh wide communication network.
 
-TT-Fabric will be deployed on a mesh of homogeneous devices. This means that a cluster will not contain a mix of different device architectures. A Wormhole cluster will contain only wormhole devices.
+TT-Fabric is deployed on a mesh of homogeneous devices. This means that a cluster cannot contain a mix of different device architectures.
 
 TT-Fabric may support third party hardware in future but is currently outside the scope of this document.
-
-Tenstorrent devices are connected via point-to-point ethernet links. While it is technically possible to have a mesh of non-homogeneous devices, we are deferring dealing with complications of connecting devices with disparate capabilities in a homogeneous fabric interconnect to a later time.
 
 # 2 TT-Fabric Network Layers <a id="fabric_layers"></a>
 
@@ -272,7 +270,9 @@ An inter-mesh routing table entry is an exit node in the current mesh.
 
 #### 2.2.1.1 L0 Routing (Intra-Mesh a.k.a Scale-up) <a id="intramesh"></a>
 
-When a packet’s destination is within the local mesh, the next hop is looked up from L0 routing table and packet is forwarded over specified ethernet port.
+When a packet’s destination is within the local mesh, the route is looked up from L0 routing table at packet source and embedded into the packet header.
+
+At every hop, a fabric router inspects the packet header source route entry to process the incoming packet.
 
 Every hop moves the packet towards the destination device in local mesh.
 
@@ -331,9 +331,13 @@ The following table shows how a packet sent by source Device 0 gets routed to de
 
 #### 2.2.1.2 L1 Routing (Inter-Mesh a.k.a Scale-out) <a id="intermesh"></a>
 
-When a packet is not addressed to local mesh, the next hop is looked up from L1 routing table and packet is forwarded over specified ethernet port.
+When a packet is not addressed to local mesh, an exit node in the direction of destination mesh is looked up from L1 routing table. The packet route to the exit node is then looked up from L0 routing table.
 
-Every hop moves the packet towards an exit node on local mesh.
+Source route in packet header is updated by packet source where the traffic originates. At every mesh crossing, the mesh entry fabric router embeds a new source route that specifies current mesh's traversal route.
+
+Once the packet reaches its destination mesh, source route set by destination mesh entry node is a path to the destination device and not an exit node.
+
+Depending on whether the packet has reached its destination mesh or not, every hop moves the packet towards destination device or an exit node in respective mesh.
 
 L1 routing table example:
 
