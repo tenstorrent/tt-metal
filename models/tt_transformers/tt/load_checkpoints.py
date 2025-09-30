@@ -379,8 +379,19 @@ def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False):
         state_dict = fuse_qkv_meta(state_dict)
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
-    state_dict = map_meta_to_hf_keys(state_dict)
-    return state_dict
+
+    old = map_meta_to_hf_keys(state_dict)
+    new = smarter_map_meta_to_hf_keys(state_dict)
+
+    new_s = set(new.keys())
+    old_s = set(old.keys())
+    print(len(old), len(new), len(old_s & new_s))
+
+    for key in old.keys():
+        if (new[key] != old[key]).any():
+            print(key)
+
+    return new
 
 
 def replace_keys(state_dict, replacements):
@@ -578,98 +589,32 @@ def map_hf_to_meta_keys(loaded_weights):
     return replace_keys(loaded_weights, replacements)
 
 
-def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
-    print("a")
-    # Define mappings at each level of the hierarchy
-    meta_to_hf_mappings = {
-        # Top level
-        "tok_embeddings.weight": "model.embed_tokens.weight",
-        "norm.weight": "model.norm.weight",
-        "output.weight": "lm_head.weight",
-        # Layer level
-        "attention_norm.weight": "input_layernorm.weight",
-        "ffn_norm.weight": "post_attention_layernorm.weight",
-        "pre_feedforward_layernorm.weight": "pre_feedforward_layernorm.weight",
-        "post_feedforward_layernorm.weight": "post_feedforward_layernorm.weight",
-        # Attention module
-        "attention.wq.weight": "self_attn.q_proj.weight",
-        "attention.wk.weight": "self_attn.k_proj.weight",
-        "attention.wv.weight": "self_attn.v_proj.weight",
-        "attention.wo.weight": "self_attn.o_proj.weight",
-        "attention.wq.bias": "self_attn.q_proj.bias",
-        "attention.wk.bias": "self_attn.k_proj.bias",
-        "attention.wv.bias": "self_attn.v_proj.bias",
-        "attention.q_norm.weight": "self_attn.q_norm.weight",
-        "attention.k_norm.weight": "self_attn.k_norm.weight",
-        "attention.wo.bias": "self_attn.o_proj.bias",
-        "attention.wqkv.weight": "self_attn.qkv_proj.weight",
-        "attention.wqkv.bias": "self_attn.qkv_proj.bias",
-        # Feed forward module
-        "feed_forward.w1.weight": "mlp.gate_proj.weight",
-        "feed_forward.w3.weight": "mlp.up_proj.weight",
-        "feed_forward.w2.weight": "mlp.down_proj.weight",
-        # Feed forward bias mappings
-        "feed_forward.w1.bias": "mlp.gate_proj.bias",
-        "feed_forward.w3.bias": "mlp.up_proj.bias",
-        "feed_forward.w2.bias": "mlp.down_proj.bias",
-        "feed_forward.w1_w3.weight": "mlp.gate_up_proj.weight",
-        # Direct mappings for when we get just the final components
-        "w1_w3.weight": "gate_up_proj.weight",
-        "w1.weight": "gate_proj.weight",
-        "w2.weight": "down_proj.weight",
-        "w3.weight": "up_proj.weight",
-        "wq.weight": "q_proj.weight",
-        "wk.weight": "k_proj.weight",
-        "wv.weight": "v_proj.weight",
-        "wo.weight": "o_proj.weight",
-        "wq.bias": "q_proj.bias",
-        "wk.bias": "k_proj.bias",
-        "wv.bias": "v_proj.bias",
-        "wo.bias": "o_proj.bias",
-        # Direct MLP bias mappings
-        "w1.bias": "gate_proj.bias",
-        "w3.bias": "up_proj.bias",
-        "w2.bias": "down_proj.bias",
-        # Fused qkv mapping
-        "wqkv.weight": "qkv_proj.weight",
-        "wqkv.bias": "qkv_proj.bias",
-        # Host embeddings
-        "emb.weight": "weight",
-    }
-
-    hf_state_dict = {}
-    for key, tensor in loaded_weights.items():
-        # Handle full model paths with layer numbers
-        if "layers." in key:
-            parts = key.split(".")
-            layer_num = parts[1]
-            remainder = ".".join(parts[2:])
-            if remainder in meta_to_hf_mappings:
-                new_key = f"model.layers.{layer_num}.{meta_to_hf_mappings[remainder]}"
-                hf_state_dict[new_key] = tensor
-            continue
-
-        # Try exact matches first
-        if key in meta_to_hf_mappings:
-            hf_state_dict[meta_to_hf_mappings[key]] = tensor
-            continue
-
-        # For submodule state dicts, try matching the end of the key
-        matched = False
-        for meta_pattern, hf_pattern in meta_to_hf_mappings.items():
-            if key.endswith("." + meta_pattern):
-                # Replace only the matching part at the end
-                prefix = key[: -len(meta_pattern)]
-                new_key = prefix + hf_pattern
-                hf_state_dict[new_key] = tensor
-                matched = True
-                break
-
-        # If no mapping found, keep the original key
-        if not matched:
-            hf_state_dict[key] = tensor
-
-    return hf_state_dict
+def map_meta_to_hf_keys(state_dict):
+    """
+    Map Hugging Face checkpoint keys to Meta checkpoint keys.
+    You can use this to support other models by adding more mappings.
+    See replace_keys for more details on the format of replacements.
+    """
+    replacements = [
+        ("attention_norm", "input_layernorm"),
+        ("ffn_norm", "post_attention_layernorm"),
+        ("attention", "self_attn"),
+        ("wq", "q_proj"),
+        ("wk", "k_proj"),
+        ("wv", "v_proj"),
+        ("wo", "o_proj"),
+        ("wqkv", "qkv_proj"),
+        ("feed_forward", "mlp"),
+        ("w1", "gate_proj"),
+        ("w2", "down_proj"),
+        ("w3", "up_proj"),
+        ("w1_w3", "gate_up_proj"),
+        ("emb.weight", "weight"),
+        ("tok_embeddings", "model.embed_tokens"),
+        ("norm", "model.norm"),
+        ("output", "lm_head"),
+    ]
+    return replace_keys(state_dict, replacements)
 
 
 def convert_meta_qkv_to_hf_format(loaded_weights, head_dim):
