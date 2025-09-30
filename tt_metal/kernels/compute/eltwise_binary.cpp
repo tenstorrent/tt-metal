@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compute_kernel_api/eltwise_binary.h"
+#include "debug/dprint_tensix.h"
 
 #include <cstdint>
 
@@ -41,9 +42,26 @@ void MAIN {
         cb_wait_front(cb_inp1, per_core_block_size);
         cb_reserve_back(cb_out0, per_core_block_size);
 
+        DPRINT_UNPACK({ DPRINT << "in addr: " << (get_local_cb_interface(cb_inp0).fifo_rd_ptr << 4) << ENDL(); })
+        volatile uint8_t* data_ptr = reinterpret_cast<uint8_t*>(get_local_cb_interface(cb_inp0).fifo_rd_ptr << 4);
+        for (int r = 0; r < 1; r++) {
+            for (int c = 0; c < 16; c++) {
+                DPRINT_UNPACK({ DPRINT << (uint32_t)data_ptr[r * 16 + c] << " "; })
+            }
+            DPRINT_UNPACK({ DPRINT << ENDL(); })
+        }
+        DPRINT_UNPACK({ DPRINT << "in addr: " << (get_local_cb_interface(cb_inp1).fifo_rd_ptr << 4) << ENDL(); })
+        volatile uint8_t* data_ptr2 = reinterpret_cast<uint8_t*>(get_local_cb_interface(cb_inp1).fifo_rd_ptr << 4);
+        for (int r = 0; r < 1; r++) {
+            for (int c = 0; c < 16; c++) {
+                DPRINT_UNPACK({ DPRINT << (uint32_t)data_ptr2[r * 16 + c] << " "; })
+            }
+            DPRINT_UNPACK({ DPRINT << ENDL(); })
+        }
+
         tile_regs_acquire();
 
-#if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
+#if defined(ACCUM_IN_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
         cb_wait_front(cb_in2, per_core_block_size);
         copy_tile_to_dst_init_short(cb_in2);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
@@ -52,7 +70,7 @@ void MAIN {
         cb_pop_front(cb_in2, per_core_block_size);
 #endif
 
-#ifdef DST_ACCUM_MODE
+#ifdef ACCUM_IN_DEST
 // The following define is needed if mul_tiles/_init is used
 #ifdef MUL_TILES_WITH_DST_ACCUM
         ELTWISE_OP_INIT(cb_inp0, cb_inp1);
@@ -76,6 +94,9 @@ void MAIN {
             SFPU_OP_CHAIN_0
 #endif
         }
+
+        dprint_tensix_dest_reg(0);
+
         tile_regs_commit();
 
         tile_regs_wait();

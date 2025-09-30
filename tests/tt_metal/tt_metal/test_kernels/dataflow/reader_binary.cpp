@@ -49,7 +49,7 @@ void kernel_main() {
     // This input populates dest with values before binary operation
     // executes, this is used to test eltwise binary with dest re-use
     // and eltwise binary with dest accumulation
-    #if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
+#if defined(ACCUM_IN_DEST) || defined(ELTWISE_DEST_REUSE_TYPE)
     uint32_t src2_addr = get_arg_val<uint32_t>(5);
     uint32_t src2_bank_id = get_arg_val<uint32_t>(6);
 

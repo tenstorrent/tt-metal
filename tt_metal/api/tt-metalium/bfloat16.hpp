@@ -38,6 +38,9 @@ public:
         return std::bit_cast<float>(uint32_data);
     }
 
+    // to_float method for consistency with fp8 types
+    constexpr float to_float() const { return static_cast<float>(*this); }
+
     // -- Comparison Operators ---
     constexpr bool operator==(bfloat16 rhs) const { return static_cast<float>(*this) == static_cast<float>(rhs); };
     constexpr std::partial_ordering operator<=>(bfloat16 rhs) noexcept {
