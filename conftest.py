@@ -1030,7 +1030,7 @@ def run_debug_script():
         )
         return
 
-    debug_script_path = os.path.join(os.getenv("TT_METAL_HOME", "."), "scripts", "debugging_scripts", "tt-triage.py")
+    debug_script_path = os.path.join(os.getenv("TT_METAL_HOME", "."), "tools", "triage", "tt-triage.py")
 
     if not os.path.exists(debug_script_path):
         logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
