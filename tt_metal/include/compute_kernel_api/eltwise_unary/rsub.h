@@ -30,14 +30,14 @@ namespace ckernel {
  */
 // clang-format on
 enum { RSUB_UNARY = 4 };
-ALWI void rsub_unary_tile(uint32_t idst, uint32_t scalar) {
+ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, RSUB_UNARY>(idst, scalar)));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_unary_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init<APPROX>())); }
+ALWI void rsub_tile_init() { MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init<APPROX>())); }
 
 // clang-format off
 /**

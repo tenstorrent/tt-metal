@@ -345,7 +345,6 @@ struct ExecuteRsub {
     static Tensor invoke(
         const Tensor& input_tensor,
         const T& input_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };

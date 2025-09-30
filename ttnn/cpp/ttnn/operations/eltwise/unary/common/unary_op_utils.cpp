@@ -266,7 +266,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
         case UnaryOpType::RSUB:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
+            if (input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
+                TT_THROW("Unsupported data type");
+            } else if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {
                     "rsub_unary_int32_tile_init();",
                     fmt::format(
@@ -275,8 +277,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                         std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
             } else {
                 op_init_and_name = {
-                    "rsub_unary_tile_init();",
-                    fmt::format("rsub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                    "rsub_tile_init();", fmt::format("rsub_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
             break;
         case UnaryOpType::RPOW:
