@@ -733,7 +733,8 @@ class TtUniAD:
     ):
         active_inst = track_instances[track_instances.obj_idxes >= 0]
         other_inst = track_instances[track_instances.obj_idxes < 0]
-
+        if isinstance(active_inst, ttnn.Tensor):
+            active_inst = ttnn.to_torch(active_inst)
         if l2g_r2 is not None and len(active_inst) > 0 and l2g_r1 is not None:
             ref_pts = active_inst.ref_pts
             velo = active_inst.pred_boxes[:, -2:]

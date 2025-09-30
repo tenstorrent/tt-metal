@@ -80,7 +80,11 @@ The test runs the Uniad reference model with Nuscenes Dataset for 81 Iterations.
 
 - To run reference demo
 ```bash
-pytest models/experimental/uniad/demo/demo.py
+pytest models/experimental/uniad/demo/demo.py::test_demo
+```
+- To run ttnn demo - WIP
+```
+pytest models/experimental/uniad/demo/demo.py::test_demo_tt
 ```
 
 TODO:
