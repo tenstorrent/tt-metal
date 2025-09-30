@@ -93,7 +93,7 @@ void validate_alignment(const TensorLayout& tensor_layout) {
 
     const auto& page_config = tensor_layout.get_page_config();
     const auto& dtype = tensor_layout.get_data_type();
-    return page_config.validate_alignment(alignment, dtype, memory_config);
+    page_config.validate_alignment(alignment, dtype, memory_config);
 }
 
 void validate_shard_spec(const TensorLayout& tensor_layout) {

@@ -16,7 +16,7 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 
 from models.experimental.gemma3_4b.tt.gemma_model import TtGemma3Model
 from models.tt_transformers.tt.generator import Generator
-from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor
@@ -272,7 +272,6 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @skip_for_blackhole("Failing on DRAM harvested P100a, see #21419")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal

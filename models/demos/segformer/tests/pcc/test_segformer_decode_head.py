@@ -9,7 +9,6 @@ import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_decode_head import SegformerDecodeHead
 from models.demos.segformer.tests.pcc.test_segformer_mlp import (
@@ -57,7 +56,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_decode_head(device, model_location_generator):
     batch_size = 1

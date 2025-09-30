@@ -133,6 +133,7 @@ void forward_data(
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
     size_t rt_args_idx = 0;
 
     auto status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(status_address);
@@ -269,4 +270,5 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::TERMINATED;
+    set_l1_data_cache<false>();
 }

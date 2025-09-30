@@ -980,10 +980,6 @@ def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
     return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
 
 
-def skip_for_grayskull(reason_str="not working for Grayskull"):
-    return pytest.mark.skipif(is_grayskull(), reason=reason_str)
-
-
 def run_for_blackhole(reason_str="only runs for Blackhole"):
     return pytest.mark.skipif(not is_blackhole(), reason=reason_str)
 

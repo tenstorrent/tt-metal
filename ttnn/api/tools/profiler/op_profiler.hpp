@@ -472,8 +472,11 @@ inline std::string op_meta_data_serialized_json(
             cached_ops.at(device_id).emplace(program_hash, short_str);
         }
 
-        std::string ser = j.dump(4);
-        return fmt::format("{}{} ->\n{}`", short_str, operation_id, ser);
+        auto msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(4));
+        if (msg.size() >= std::numeric_limits<uint16_t>::max()) {
+            msg = fmt::format("{}{} ->\n{}`", short_str, operation_id, j.dump(-1));
+        }
+        return msg;
     } else {
         auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
         runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));

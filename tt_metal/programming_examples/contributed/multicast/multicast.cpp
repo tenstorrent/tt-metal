@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
             sender_core_logical.x,
             sender_core_logical.y,
             device_id);
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
         fmt::print("Waiting until program finishes\n");
         distributed::Finish(cq);

@@ -12,8 +12,9 @@
 
 namespace tt::tt_fabric {
 
+namespace {
 // Template helper function for generating EDM kernels
-static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
+tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     tt::tt_metal::Program& program,
     const tt::tt_metal::IDevice* device,
     const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
@@ -48,6 +49,7 @@ static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
 
     return eth_sender_kernel;
 }
+}  // anonymous namespace
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
