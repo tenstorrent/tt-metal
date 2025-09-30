@@ -398,7 +398,6 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
-    std::atomic<bool> fetch_q_exit_condition{false};
     auto wait_for_fetch_q_space = [&]() {
         if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
             return;
@@ -419,7 +418,6 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
 
         // Handler for timeout
         auto fetch_on_timeout = [&]() {
-            fetch_q_exit_condition.store(true);
             TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
         };
 
