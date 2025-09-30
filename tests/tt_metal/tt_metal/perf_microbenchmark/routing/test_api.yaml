@@ -1,3 +1,4 @@
+# Not currently runnable, noted in: https://github.com/tenstorrent/tt-metal/issues/29448
 # Helpful places to look:
 # tt_fabric_test_config.hpp: Contains Enum mappers at the top which tell us what possible options are available for each field
 #   Also contains the functions that parse the YAML and convert it to the appropriate enum.

@@ -15,7 +15,9 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -254,5 +256,20 @@ struct PhysicalMeshConfig {
         // Default path to the mesh descriptor.
     }
 };
+
+// Helper functions for fetching pattern parameters
+TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config);
+
+std::string fetch_pattern_test_type(const TrafficPatternConfig& pattern, auto lambda_test_type);
+
+std::string fetch_pattern_ftype(const TrafficPatternConfig& pattern);
+
+std::string fetch_pattern_ntype(const TrafficPatternConfig& pattern);
+
+uint32_t fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_parameter);
+
+uint32_t fetch_pattern_num_packets(const TrafficPatternConfig& pattern);
+
+uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern);
 
 }  // namespace tt::tt_fabric::fabric_tests

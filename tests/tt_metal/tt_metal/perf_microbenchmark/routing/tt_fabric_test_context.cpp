@@ -237,46 +237,6 @@ void TestContext::dump_raw_telemetry_csv(const TestConfig& config) {
     log_info(tt::LogTest, "Dumped raw telemetry to: {}", raw_telemetry_path.string());
 }
 
-// Helper functions for fetching pattern parameters
-TrafficPatternConfig TestContext::fetch_first_traffic_pattern(const TestConfig& config) {
-    TT_FATAL(!config.senders.empty() && !config.senders[0].patterns.empty(),
-             "No senders or patterns found for test {}", config.name);
-    return config.senders[0].patterns[0];
-}
-
-// pattern is of type tt::tt_fabric::fabric_tests::TrafficPatternConfig
-std::string TestContext::fetch_pattern_test_type(const TrafficPatternConfig& pattern, auto lambda_test_type) {
-    const auto& test_type = lambda_test_type(pattern);
-    TT_FATAL(test_type.has_value(), "Test type not found in pattern");
-    return std::string(enchantum::to_string(test_type.value()));
-}
-
-std::string TestContext::fetch_pattern_ftype(const TrafficPatternConfig& pattern) {
-    log_debug(tt::LogTest, "Fetching ftype from pattern");
-    return fetch_pattern_test_type(pattern, [](const auto& pattern) {return pattern.ftype;});
-}
-
-std::string TestContext::fetch_pattern_ntype(const TrafficPatternConfig& pattern) {
-    log_debug(tt::LogTest, "Fetching ntype from pattern");
-    return fetch_pattern_test_type(pattern, [](const auto& pattern) {return pattern.ntype;});
-}
-
-uint32_t TestContext::fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_parameter) {
-    const auto& parameter = lambda_parameter(pattern);
-    TT_FATAL(parameter.has_value(), "Parameter not found in pattern");
-    return parameter.value();
-}
-
-uint32_t TestContext::fetch_pattern_num_packets(const TrafficPatternConfig& pattern) {
-    log_debug(tt::LogTest, "Fetching num_packets from pattern");
-    return fetch_pattern_int(pattern, [](const auto& pattern) {return pattern.num_packets;});
-}
-
-uint32_t TestContext::fetch_pattern_packet_size(const TrafficPatternConfig& pattern) {
-    log_debug(tt::LogTest, "Fetching packet size from pattern");
-    return fetch_pattern_int(pattern, [](const auto& pattern) {return pattern.size;});
-}
-
 bool TestContext::golden_entry_matches_test_result(const BandwidthResultSummary& test_result, const GoldenCsvEntry& golden_result) {
     std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
     return test_result.test_name == golden_result.test_name

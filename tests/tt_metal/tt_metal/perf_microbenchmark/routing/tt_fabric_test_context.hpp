@@ -63,6 +63,13 @@ using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
 
+// Helper functions for parsing traffic pattern parameters
+using tt::tt_fabric::fabric_tests::fetch_first_traffic_pattern;
+using tt::tt_fabric::fabric_tests::fetch_pattern_ftype;
+using tt::tt_fabric::fabric_tests::fetch_pattern_ntype;
+using tt::tt_fabric::fabric_tests::fetch_pattern_num_packets;
+using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
+
 // Access to internal API: ProgramImpl::num_kernel
 #include "impl/program/program_impl.hpp"
 
@@ -867,20 +874,6 @@ private:
         TT_FATAL(freq_mhz != 0, "Device frequency reported as 0 MHz for device {}", device_id.chip_id);
         return freq_mhz;
     }
-
-    TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config);
-
-    std::string fetch_pattern_test_type(const TrafficPatternConfig& pattern, auto lambda_test_type);
-
-    std::string fetch_pattern_ftype(const TrafficPatternConfig& pattern);
-
-    std::string fetch_pattern_ntype(const TrafficPatternConfig& pattern);
-
-    uint32_t fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_parameter);
-
-    uint32_t fetch_pattern_num_packets(const TrafficPatternConfig& pattern);
-
-    uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern);
 
     void calculate_bandwidth(const TestConfig& config) {
         log_debug(tt::LogTest, "Calculating bandwidth (GB/s) by direction:");
