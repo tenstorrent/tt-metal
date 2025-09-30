@@ -112,18 +112,53 @@ jobs:
         run: |
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
 
-          # Get changed files using GitHub API
-          FILES_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/files"
-          FILES_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                           -H "Accept: application/vnd.github.v3+json" \
-                           "$FILES_API")
+          # Get all changed files using GitHub API (handle pagination)
+          rm -f changed_files.txt
 
-          # Extract filenames and save to file
-          echo "$FILES_DATA" | jq -r '.[].filename' > changed_files.txt
+          PAGE=1
+          TOTAL_FILES=0
+          while true; do
+            FILES_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE"
+            FILES_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                             -H "Accept: application/vnd.github.v3+json" \
+                             "$FILES_API")
+
+            # Check if we got any data
+            if [ -z "$FILES_DATA" ] || [ "$FILES_DATA" = "null" ] || [ "$FILES_DATA" = "[]" ]; then
+              break
+            fi
+
+            # Extract filenames from this page and append to file
+            PAGE_FILES=$(echo "$FILES_DATA" | jq -r '.[].filename' 2>/dev/null)
+            if [ -z "$PAGE_FILES" ] || [ "$PAGE_FILES" = "null" ]; then
+              break
+            fi
+
+            # Count files in this page
+            PAGE_COUNT=$(echo "$PAGE_FILES" | wc -l)
+            TOTAL_FILES=$((TOTAL_FILES + PAGE_COUNT))
+
+            # Append to file
+            echo "$PAGE_FILES" >> changed_files.txt
+
+            PAGE=$((PAGE + 1))
+
+            # Safety check to avoid infinite loop
+            if [ $PAGE -gt 10 ]; then
+              echo "Warning: Too many pages, stopping at page $PAGE"
+              break
+            fi
+          done
+
+          # Sort, remove duplicates and empty lines
+          if [ -f changed_files.txt ]; then
+            sort changed_files.txt | uniq | sed '/^$/d' > changed_files_sorted.txt
+            mv changed_files_sorted.txt changed_files.txt
+          fi
 
           # Count files and show first few
-          FILE_COUNT=$(wc -l < changed_files.txt)
-          echo "Found $FILE_COUNT changed files"
+          FILE_COUNT=$(wc -l < changed_files.txt 2>/dev/null || echo 0)
+          echo "Found $FILE_COUNT changed files across $((PAGE-1)) pages (total from API: $TOTAL_FILES)"
           echo "First 10 files:"
           head -10 changed_files.txt
 
