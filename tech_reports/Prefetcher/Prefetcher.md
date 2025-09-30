@@ -26,11 +26,11 @@ For detailed information about sub-devices, their implementation, and APIs, see 
 
 ## Prefetcher Architecture
 
-The prefetcher implements a datamovement op that efficiently fetches data from DRAM banks to receiver cores through global circular buffers. The current usage is using prefetcher to prefetch weight tensors for Matmul operations only, it in theory should support prefetch for other ops and prefetch activations as well. The reason we only use it for Matmul is because it has the largest weight tensors and prefetch them gives the most benifit.
+The prefetcher implements a data movement op that efficiently fetches data from DRAM banks to receiver cores through global circular buffers. Currently, the prefetcher is used to prefetch weight tensors for Matmul operations only, though in theory it should support prefetching for other ops and activations as well. The reason we only use it for Matmul is because it has the largest weight tensors, and prefetching them provides the most benefit.
 
 ### API Overview and Setup Requirements
 
-The prefetcher exposes an api to the users at the TTNN level: `ttnn.dram_prefetcher(...)`
+The prefetcher exposes an API to users at the TTNN level: `ttnn.dram_prefetcher(...)`
 
 **API Interface:**
 
@@ -52,14 +52,14 @@ ttnn.dram_prefetcher(
 **Input Data Organization:**
 The op expects two types of input data:
 
-1. **Weight Tensors for One Decoder Layer**: In LLMs there are several decoder layers and within each decoder layer there are several Matmul operations that needs to be prefetched, and between different layers the Matmul tensor shapes are the same, we utilize this feature and only pass in the tensors for the first layer to reduce the number of runtime args needed to be passed in to the kernel. These tensors must be width-sharded across DRAM banks and stored in DRAM with tile layout. The prefetcher supports multiple data types (bfloat4_b, bfloat8_b, bfloat16) with different tile sizes.
+1. **Weight Tensors for One Decoder Layer**: In LLMs, there are several decoder layers, and within each decoder layer there are several Matmul operations that need to be prefetched. Between different layers, the Matmul tensor shapes are the same. We utilize this feature and only pass in the tensors for the first layer to reduce the number of runtime args needed to be passed to the kernel. These tensors must be width-sharded across DRAM banks and stored in DRAM with tile layout. The prefetcher supports multiple data types (bfloat4_b, bfloat8_b, bfloat16) with different tile sizes.
 
 2. **Address/Configuration Tensor**: A config tensor containing the DRAM buffer addresses for ALL weight tensors across ALL layers. This tensor tells the prefetcher where to find each tensor for every layer, enabling it to fetch data for layers beyond the initial pattern. The tensor is height-sharded across prefetcher cores and stored in L1 for fast access, with each prefetcher core getting the complete address map.
 
-Note: even though prefetcher is designed based on the fact each LLM has repeated decoder layers, it doesn't forbid the support of non-repeated decoder layers, or other types of layers. User just need to set num_layers=1 and then pass in all the tensors needed to prefetch.
+Note: even though the prefetcher is designed based on the fact that each LLM has repeated decoder layers, it doesn't forbid the support of non-repeated decoder layers or other types of layers. Users just need to set num_layers=1 and then pass in all the tensors needed for prefetching.
 
 **Global Circular Buffer Configuration:**
-The global circular buffer serves as the communication bridge between prefetcher and consumer kernels. It requires a sender-receiver core mapping that defines which prefetcher cores send data to which consumer cores. The global cb buffer size ideally should buffer at least two tensors to avoid any stall on the consumer side (double buffering), although due to the fact that not all tensors are of the same size, in practice need to buffer more tensors to avoid any stall.
+The global circular buffer serves as the communication bridge between prefetcher and consumer kernels. It requires a sender-receiver core mapping that defines which prefetcher cores send data to which consumer cores. The global CB buffer size ideally should buffer at least two tensors to avoid any stall on the consumer side (double buffering), although due to the fact that not all tensors are of the same size, in practice it needs to buffer more tensors to avoid any stall.
 
 ```python
 # Map each prefetcher sender core to its corresponding receiver cores
@@ -104,7 +104,7 @@ The prefetcher leverages the spatial distribution of cores across the Tenstorren
 **Core Allocation Strategy:**
 - **Prefetcher Cores (Red W)**: Dedicated worker cores spatially distributed across the chip run the prefetcher kernels. These cores are placed near the DRAM banks to minimize NoC traffic congestion.
 
-- **Matmul Cores (Purple W)**: Regular worker cores for matmul operations. Each prefetcher core issues NoC writes to the two Matmul cores on the right, placing them on the same row to reduce interference with other prefetch cores. For other device architectures we can have one prefetch serving more or less Matmul cores, to maxmize the overall compute utilization.
+- **Matmul Cores (Purple W)**: Regular worker cores for matmul operations. Each prefetcher core issues NoC writes to the two Matmul cores on the right, placing them on the same row to reduce interference with other prefetch cores. For other device architectures, we can have one prefetcher core serving more or fewer Matmul cores to maximize the overall compute utilization.
 
 - **Data Flow Path**: Data flows from DRAM banks → Prefetcher cores → Global Circular Buffers → Compute cores, with each stage operating on different physical regions of the chip.
 
@@ -113,16 +113,16 @@ The prefetcher leverages the spatial distribution of cores across the Tenstorren
 The prefetcher utilizes a reader-writer kernel architecture to efficiently stream data from DRAM to consumer cores:
 
 **1. DRAM Reader Kernel** (`reader_dram.cpp`)
-   - Fetches data from DRAM banks into local triple-buffered circular buffer
+- Fetches data from DRAM banks into local triple-buffered circular buffer
 - Each prefetcher core reads tensors from its assigned DRAM bank, processing each tensor block by block (block size and count are based on Matmul specifications)
-   - **Transaction ID Management**: Uses NoC transaction IDs to coordinate DRAM reads with the triple-buffered circular buffer. The kernel maintains `curr_block_trid` to track which transaction ID to use for each block, rotating through IDs 1→2→3→1→... to map reads to different blocks.
+- **Transaction ID Management**: Uses NoC transaction IDs to coordinate DRAM reads with the triple-buffered circular buffer. The kernel maintains `curr_block_trid` to track which transaction ID to use for each block, rotating through IDs 1→2→3→1→... to map reads to different blocks.
 
-   For detailed implementation of DRAM reading optimizations and transaction ID management, see [Saturating_DRAM_bandwidth.md](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md).
+For detailed implementation of DRAM reading optimizations and transaction ID management, see [Saturating_DRAM_bandwidth.md](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md).
 
 **2. L1 Writer Kernel** (`writer_l1.cpp`)
-   - Transfers data from local CB to global CB (remote consumers)
+- Transfers data from local CB to global CB (remote consumers)
 - Distributes each tensor block across multiple receiver cores
-- Currently only supports slicing the tensor block on width dimension; for one prefetcher core that serves multiple receiver cores, each receiver core gets a slice of the block
+- Currently only supports slicing the tensor block on the width dimension; for one prefetcher core that serves multiple receiver cores, each receiver core gets a slice of the block
 - Uses sender-side global CB operations (detailed in the next section)
 
 ## Global Circular Buffer Implementation
@@ -186,7 +186,7 @@ The `config_ptr` stored in both `RemoteSenderCBInterface` and `RemoteReceiverCBI
 
 ### 2. Dynamic Page Size Reconfiguration
 
-On the consumer side, ops are required to **inplace** a local CB on top of the remote CB for local pointer update and consume different part of the tensor. Due to the fact that each CB are required to be page-size aligned, the local CB size will not be the same as global CB, but a size that is aligned to the current page size. Ideally, consumer op will call cb_pop_front to get to the tensor block by block, and not worrying about manual pointer updates.
+On the consumer side, ops can **inplace** a local CB on top of the remote CB for local pointer updates and to consume different parts of the tensor. Due to the fact that each CB is required to be page-size aligned, the local CB size will not be the same as the global CB, but rather a size that is aligned to the current page size. Ideally, the consumer op will call cb_pop_front to access the tensor block by block without worrying about manual pointer updates.
 
 When switching between tensors with different shapes or data formats, the global CB page size must be reconfigured to the new tensor block size. This process involves page alignment operations to ensure correct wraparound behavior when consumer performs the local CB pop.
 
@@ -197,14 +197,15 @@ If tensors are stored at non-aligned locations in the circular buffer, when the 
 
 **Alignment:**
 1. **Before New Tensor**: The write pointer may be at an arbitrary location after the previous tensor
-2. **Alignment Step**: The pointer is advanced to the next page-aligned address that matches the new tensor's page size, ie, (address - global CB start address) is always the multiple of current page size.
+2. **Alignment Step**: The pointer is advanced to the next page-aligned address that matches the new tensor's page size, i.e., (address - global CB start address) is always a multiple of the current page size.
 3. **Tensor Storage**: The new tensor is stored starting at this aligned location
 4. **Wraparound**: When the buffer wraps around, the consumer's `cb_pop_front` operations will correctly land at tensor boundaries
 
 **Consumer Benefit:**
 With page alignment, the consumer (matmul core) can perform simple circular buffer operations without worrying about tensor boundaries. Each `cb_pop_front` operation moves exactly one "page" (tensor block), and wraparound automatically lands at the start of the next tensor.
 
-Note: when consumer does not rely on local CB pop, but manually update read pointer then this will not be a problem and we do not need the extra page alignment feature. This is the case for the current Matmul implementation, where the compute kernel manually updates read pointers, so the feature is not required and can be disabled. However, when trying that on the LLama-70b model, the performance regressed by 1-2 token/second, and thus this feature is kept enabled. The potential cause could be without alignment, less synchronization is needed and prefetcher runs faster, however, faster prefetcher can interfere with other ops more and caused the slow down on other ops. Further experiments need to be conducted to disable alignment feature.
+**Note:**
+when the consumer does not rely on local CB pop but manually updates the read pointer, this will not be a problem and we do not need the extra page alignment feature. This is the case for the current Matmul implementation, where the compute kernel manually updates read pointers, so the feature is not required and can be disabled. However, when trying that on the LLama-70b model, the performance regressed by 1-2 tokens/second, and thus this feature is kept enabled. The potential cause could be that without alignment, less synchronization is needed and the prefetcher runs faster; however, a faster prefetcher can interfere with other ops more and cause a slowdown in other ops. Further experiments are needed to investigate disabling the alignment feature.
 
 ### 3. Sender-Side Operations
 
@@ -303,11 +304,11 @@ After consuming data from the global CB, the receiver must signal the sender tha
 
 ## 1D Ring Matmul Integration
 
-The matmul operation serves as the consumer side of the global circular buffer, implementing a ring-based data processing pattern for efficient multi-core execution. This section will focus on the global CB implementation part and the integration with prefetcher.
+The matmul operation serves as the consumer side of the global circular buffer, implementing a ring-based data processing pattern for efficient multi-core execution. This section focuses on the global CB implementation and the integration with the prefetcher.
 
 ### Overview:
 
-Matmul cores act as **receivers** in the global CB system, consuming data streamed by the prefetcher. Here is the diagram of a ring Matmul consisting of 4 cores, each core start at a different ring index. For example, core 0 strat at ring index 0 and iterate over the weight tensor in global CB with an order 0->1->2->3, core 1 strat at ring index 1 and iterate over the weight tensor in global CB with an order 1->2->3->0.
+Matmul cores act as **receivers** in the global CB system, consuming data streamed by the prefetcher. Here is a diagram of a ring Matmul consisting of 4 cores, where each core starts at a different ring index. For example, core 0 starts at ring index 0 and iterates over the weight tensors in the global CB with an order 0→1→2→3, while core 1 starts at ring index 1 and iterates over the weight tensors in the global CB with an order 1→2→3→0.
 
 ![Matmul 1D Ring Example](images/matmul-1d-ring-example.png)
 
@@ -318,14 +319,14 @@ Matmul cores act as **receivers** in the global CB system, consuming data stream
 Since each core in the ring starts at a different block index, special synchronization is required:
 
 **Wait for Full Tensor Before Computation:**
-It is necessary to let Matmul wait for the entire tensor to arrive in global CB before performing any computations. This is because the prefetcher is not aware of the out-of-order accessing of tensor blocks, and the `pages_sent` credit is in-order for each block. Performing any computations before the full tensor arrives might cause the use of garbage data.
+It is necessary to let Matmul wait for the entire tensor to arrive in the global CB before performing any computations. This is because the prefetcher is not aware of the out-of-order accessing of tensor blocks, and the `pages_sent` credit is in-order for each block. Performing any computations before the full tensor arrives might cause the use of garbage data.
 
 **Release Full Tensor After Computation:**
-Matmul must pop out the tensor in global CB only after all the blocks are processed, as `pages_ack` is also in-order for each block, and a premature ack can invalidate the wrong block index and cause block overwritten.
+The Matmul must pop out the tensor in the global CB only after all the blocks are processed, as `pages_ack` is also in-order for each block, and a premature ack can invalidate the wrong block index and cause the block to be overwritten.
 
 #### 2. Tensor Split Detection and Handling
 
-For tensors that does not wrap around the global CB boundary, each block is allocated continuously for the tensor, and no special management are needed. For tensors that wrap around the global CB boundary, special pointer management are needed to make sure each core indexes into the global CB correclty. The matmul kernel detects and handles this automatically:
+For tensors that do not wrap around the global CB boundary, each block is allocated contiguously for the tensor, and no special management is needed. For tensors that wrap around the global CB boundary, special pointer management is needed to ensure each core indexes into the global CB correctly. The matmul kernel detects and handles this automatically:
 
 ![Matmul 1D Ring Tensor Handling](images/matmul-1d-ring-tensor-handling.png)
 
@@ -335,7 +336,7 @@ The image illustrates two critical scenarios the matmul kernel must handle:
 
 1. **Tensor Split Detected**: When the current read pointer position plus the tensor size exceeds the circular buffer boundary, a split is detected. This triggers wraparound logic to ensure correct block access.
 
-2. **Ring Index Wraparound**: In a 1D ring topology, each core start at the Nth block, where N is their ring index. When tensor splits occur, the kernel must correctly calculate both the start block index, the next block index and the wrapped read pointer address. For example, core 3 in the diagram first start at block 3, the next block will require a jump back to the base tensor address, and after processing block 1, it will require a wrap around handling to the top of the global CB.
+2. **Ring Index Wraparound**: In a 1D ring topology, each core starts at the Nth block, where N is its ring index. When tensor splits occur, the kernel must correctly calculate the start block index, the next block index, and the wrapped read pointer address. For example, core 3 in the diagram first starts at block 3; the next block will require a jump back to the base tensor address, and after processing block 1, it will require wraparound handling to the top of the global CB.
 
 ## Performance Benefits
 
@@ -366,12 +367,12 @@ This architecture enables efficient processing of large language models where we
 
 ## Future Works
 
-There are several optimizations can be adopted by prefetcher:
+There are several optimizations that can be adopted by the prefetcher:
 
-1. **Skip NoC Counter Update**: Currently we rely on updating `posted` / `non-posted` NoC counters after issuing a NoC write, and flush on the NoC transaction to make sure the current packet left L1, this can cause dozens of cycles stalling, and updating the NoC counters also cost a few cycles. One other way to workaround this issue is to use transaction IDs for the NoC writes, similar to how it is done for DRAM reads. Instead of flushing the current block, we can flush on the transaction ID for the previous block.
+1. **Skip NoC Counter Update**: Currently we rely on updating `posted` / `non-posted` NoC counters after issuing a NoC write, and flushing the NoC transaction to ensure the current packet has left L1. This can cause dozens of cycles of stalling, and updating the NoC counters also costs a few cycles. One way to work around this issue is to use transaction IDs for the NoC writes, similar to how it is done for DRAM reads. Instead of flushing the current block, we can flush on the transaction ID for the previous block.
 
 1. **Use Stream Registers**: Currently we use L1 for `pages_sent` and `pages_ack`, and accessing L1 has worse latency compared to accessing stream registers. We should be able to switch to stream registers for the send/receive credits.
 
-2. **Pause Prefetching**: Currently prefetcher will send data whenever there is space available in global CB, and this can cause NoC congestion if there are other ops using the same NoC and cause slow down. It would be benificial for some cases to pause the prefetcher from consuming the NoC bandwidth and let the other ops run faster. A scratch location in L1 or a stream register can be used for sending this signal to prefetcher from other ops, and prefetcher will enter a while loop until that signal is cleared.
+2. **Pause Prefetching**: Currently the prefetcher will send data whenever there is space available in the global CB, and this can cause NoC congestion if there are other ops using the same NoC, causing a slowdown. It would be beneficial in some cases to pause the prefetcher from consuming the NoC bandwidth and let other ops run faster. A scratch location in L1 or a stream register can be used to send this signal to the prefetcher from other ops, and the prefetcher will enter a while loop until that signal is cleared.
 
-3. **Switch Allocation Strategy**: Currently we only use the aligned allocation strategy, which introduced gaps in-between the tensors, we should allow the switch between compacted allocation and aligned allocation, as in some cases users might want to remove the gaps and handle pointer update manually.
+3. **Switch Allocation Strategy**: Currently we only use the aligned allocation strategy, which introduces gaps between the tensors. We should allow switching between compacted allocation and aligned allocation, as in some cases users might want to remove the gaps and handle pointer updates manually.
