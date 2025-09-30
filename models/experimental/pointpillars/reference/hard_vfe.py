@@ -22,7 +22,6 @@ class VFELayer(nn.Module):
         super(VFELayer, self).__init__()
         self.cat_max = cat_max
         self.max_out = max_out
-        # self.units = int(out_channels / 2)
 
         self.norm = nn.BatchNorm1d(out_channels, eps=norm_cfg["eps"], momentum=norm_cfg["momentum"])
         self.linear = nn.Linear(in_channels, out_channels, bias=False)
@@ -96,8 +95,6 @@ class HardVFE(nn.Module):
             out_filters = feat_channels[i + 1]
             if i > 0:
                 in_filters *= 2
-            # TODO: pass norm_cfg to VFE
-            # norm_name, norm_layer = build_norm_layer(norm_cfg, out_filters)
             if i == (len(feat_channels) - 2):
                 cat_max = False
                 max_out = True

@@ -26,19 +26,10 @@ def test_ttnn_point_scatter(device, model_location_generator, use_pretrained_wei
     reference_model = reference_model.pts_middle_encoder
 
     voxel_features = torch.rand(6522, 64).to(dtype=torch.float32)
-    # voxel_features = torch.load(
-    #     "models/experimental/pointpillars/inputs_weights/scatter_input_0.pt"
-    # )
 
     coors = torch.rand((6522, 4)).to(dtype=torch.int32)
-    # coors = torch.load(
-    #     "models/experimental/pointpillars/inputs_weights/scatter_input_1.pt"
-    # )
 
     batch_size = torch.tensor(1, dtype=torch.int32)
-    # batch_size = torch.load(
-    #     "models/experimental/pointpillars/inputs_weights/scatter_input_2.pt"
-    # )
 
     ttnn_voxel_features = ttnn.from_torch(voxel_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     ttnn_batch_size = ttnn.from_torch(batch_size, device=device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT)
@@ -51,6 +42,4 @@ def test_ttnn_point_scatter(device, model_location_generator, use_pretrained_wei
     ttnn_output = ttnn_model(voxel_features=ttnn_voxel_features, coors=ttnn_coors, batch_size=1)
 
     passing, pcc = assert_with_pcc(reference_output, ttnn.to_torch(ttnn_output), 0.67)
-    logger.info(
-        f"Passing: {passing}, PCC: {pcc}"
-    )  # PCC - 0.7304803835807724 for loaded input || PCC - 0.6725618478186925 for random tensors
+    logger.info(f"Passing: {passing}, PCC: {pcc}")  # PCC - 0.6725618478186925

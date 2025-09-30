@@ -28,7 +28,6 @@ class MVXFasterRCNN(nn.Module):
         img_backbone=None,
     ):
         super(MVXFasterRCNN, self).__init__()
-        # init_cfg=init_cfg, data_preprocessor=data_preprocessor, **kwargs)
 
         if pts_voxel_encoder:
             self.pts_voxel_encoder = HardVFE(
@@ -62,10 +61,6 @@ class MVXFasterRCNN(nn.Module):
                 num_outs=3,
             )
         if pts_bbox_head:
-            # pts_train_cfg = train_cfg.pts if train_cfg else None
-            # pts_bbox_head.update(train_cfg=pts_train_cfg)
-            # pts_test_cfg = test_cfg.pts if test_cfg else None
-            # pts_bbox_head.update(test_cfg=pts_test_cfg)
             self.pts_bbox_head = Anchor3DHead(
                 num_classes=10,
                 in_channels=256,
@@ -258,90 +253,6 @@ class MVXFasterRCNN(nn.Module):
         )
         return (img_feats, pts_feats)
 
-    # def loss(self, batch_inputs_dict: Dict[List, torch.Tensor],
-    #          batch_data_samples: List[Det3DDataSample],
-    #          **kwargs) -> List[Det3DDataSample]:
-    #     """
-    #     Args:
-    #         batch_inputs_dict (dict): The model input dict which include
-    #             'points' and `imgs` keys.
-
-    #             - points (list[torch.Tensor]): Point cloud of each sample.
-    #             - imgs (torch.Tensor): Tensor of batch images, has shape
-    #               (B, C, H ,W)
-    #         batch_data_samples (List[:obj:`Det3DDataSample`]): The Data
-    #             Samples. It usually includes information such as
-    #             `gt_instance_3d`, .
-
-    #     Returns:
-    #         dict[str, Tensor]: A dictionary of loss components.
-
-    #     """
-
-    #     batch_input_metas = [item.metainfo for item in batch_data_samples]
-    #     img_feats, pts_feats = self.extract_feat(batch_inputs_dict,
-    #                                              batch_input_metas)
-    #     losses = dict()
-    #     if pts_feats:
-    #         losses_pts = self.pts_bbox_head.loss(pts_feats, batch_data_samples,
-    #                                              **kwargs)
-    #         losses.update(losses_pts)
-    #     if img_feats:
-    #         losses_img = self.loss_imgs(img_feats, batch_data_samples)
-    #         losses.update(losses_img)
-    #     return losses
-
-    # def loss_imgs(self, x: List[Tensor],
-    #               batch_data_samples: List[Det3DDataSample], **kwargs):
-    #     """Forward function for image branch.
-
-    #     This function works similar to the forward function of Faster R-CNN.
-
-    #     Args:
-    #         x (list[torch.Tensor]): Image features of shape (B, C, H, W)
-    #             of multiple levels.
-    #         batch_data_samples (List[:obj:`Det3DDataSample`]): The Data
-    #             Samples. It usually includes information such as
-    #             `gt_instance_3d`, .
-
-    #     Returns:
-    #         dict: Losses of each branch.
-    #     """
-    #     losses = dict()
-    #     # RPN forward and loss
-    #     if self.with_img_rpn:
-    #         proposal_cfg = self.test_cfg.rpn
-    #         rpn_data_samples = copy.deepcopy(batch_data_samples)
-    #         # set cat_id of gt_labels to 0 in RPN
-    #         for data_sample in rpn_data_samples:
-    #             data_sample.gt_instances.labels = \
-    #                 torch.zeros_like(data_sample.gt_instances.labels)
-    #         rpn_losses, rpn_results_list = self.img_rpn_head.loss_and_predict(
-    #             x, rpn_data_samples, proposal_cfg=proposal_cfg, **kwargs)
-    #         # avoid get same name with roi_head loss
-    #         keys = rpn_losses.keys()
-    #         for key in keys:
-    #             if 'loss' in key and 'rpn' not in key:
-    #                 rpn_losses[f'rpn_{key}'] = rpn_losses.pop(key)
-    #         losses.update(rpn_losses)
-
-    #     else:
-    #         if 'proposals' in batch_data_samples[0]:
-    #             # use pre-defined proposals in InstanceData
-    #             # for the second stage
-    #             # to extract ROI features.
-    #             rpn_results_list = [
-    #                 data_sample.proposals for data_sample in batch_data_samples
-    #             ]
-    #         else:
-    #             rpn_results_list = None
-    #     # bbox head forward and loss
-    #     if self.with_img_bbox:
-    #         roi_losses = self.img_roi_head.loss(x, rpn_results_list,
-    #                                             batch_data_samples, **kwargs)
-    #         losses.update(roi_losses)
-    #     return losses
-
     def add_pred_to_datasample(
         self,
         data_samples,
@@ -447,22 +358,10 @@ class MVXFasterRCNN(nn.Module):
             - bbox_3d (:obj:`BaseInstance3DBoxes`): Prediction of bboxes,
                 contains a tensor with shape (num_instances, 7).
         """
-        # batch_input_metas = [item.metainfo for item in batch_data_samples]
         batch_input_metas = batch_data_samples  # modified and passed
         img_feats, pts_feats = self.extract_feat(batch_inputs_dict, batch_input_metas)
         if pts_feats and self.with_pts_bbox:
             outs = self.pts_bbox_head(pts_feats)
-            # results_list_3d = self.pts_bbox_head.predict(pts_feats, batch_data_samples, **kwargs)
         else:
             results_list_3d = None
         return outs
-
-        # # Post processing
-        # if img_feats and self.with_img_bbox:
-        #     # TODO check this for camera modality
-        #     results_list_2d = self.predict_imgs(img_feats, batch_data_samples, **kwargs)
-        # else:
-        #     results_list_2d = None
-
-        # detsamples = self.add_pred_to_datasample(batch_data_samples, results_list_3d, results_list_2d)
-        # return detsamples

@@ -34,7 +34,6 @@ def test_ttnn_mvx_faster_rcnn(device, model_location_generator, use_pretrained_w
     batch_data_samples_modified = torch.load(
         "models/experimental/pointpillars/inputs_weights/batch_data_samples_orig.pth", weights_only=False
     )
-
     reference_output = reference_model(
         batch_inputs_dict=batch_inputs_dict, batch_data_samples=batch_data_samples_modified
     )
@@ -73,19 +72,14 @@ def test_ttnn_mvx_faster_rcnn(device, model_location_generator, use_pretrained_w
         batch_inputs_dict=ttnn_batch_inputs_dict, batch_data_samples=ttnn_batch_data_samples_modified
     )
 
-    # reference_output_final = reference_model.pts_bbox_head.predict(reference_output, batch_data_samples_modified)
     for i in range(len(ttnn_output)):
         for j in range(len(ttnn_output[i])):
             ttnn_output[i][j] = ttnn.to_torch(ttnn_output[i][j])
             ttnn_output[i][j] = ttnn_output[i][j].permute(0, 3, 1, 2)
             ttnn_output[i][j] = ttnn_output[i][j].to(dtype=torch.float)
 
-    # ttnn_output_final = ttnn_model.pts_bbox_head.predict(ttnn_output, ttnn_batch_data_samples_modified)
-
     for i in range(len(ttnn_output)):
         for j in range(len(ttnn_output[i])):
             output_temp = ttnn_output[i][j]
-            # output_temp=ttnn.to_torch(output_temp)
-            # output_temp=output_temp.permute(0,3,1,2)
             passing, pcc = assert_with_pcc(reference_output[i][j], output_temp, 0.95)
             logger.info(f"Passing: {passing}, PCC: {pcc}")

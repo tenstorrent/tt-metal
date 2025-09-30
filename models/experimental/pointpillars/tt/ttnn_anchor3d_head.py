@@ -86,7 +86,6 @@ class TtAnchor3DHead(TtBase3DDenseHead):
             self.num_classes += 1
 
         self._init_layers()
-        # self._init_assigner_sampler()
 
         if init_cfg is None:
             self.init_cfg = dict(
@@ -95,11 +94,6 @@ class TtAnchor3DHead(TtBase3DDenseHead):
                 std=0.01,
                 override=dict(type="Normal", name="conv_cls", std=0.01, bias_prob=0.01),
             )
-
-    # def _init_assigner_sampler(self):
-    #     """Initialize the target assigner and sampler of the head."""
-    #     if self.train_cfg is None:  # This is invoked
-    #         return
 
     def _init_layers(self):
         """Initialize neural network layers of the head."""

@@ -84,7 +84,6 @@ def create_custom_preprocessor(device):
                 # As we are using torch batch_norm1d the norm weights are torch
                 parameters["vfe_layers"][index]["norm"] = {}
                 parameters["vfe_layers"][index]["norm"] = child.norm
-                # parameters["vfe_layers"][index]["norm"]["bias"] = child.norm.weight
 
                 parameters["vfe_layers"][index]["linear"] = {}
                 parameters["vfe_layers"][index]["linear"]["weight"] = preprocess_linear_weight(

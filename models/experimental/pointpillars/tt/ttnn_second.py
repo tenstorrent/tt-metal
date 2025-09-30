@@ -52,18 +52,10 @@ class TtSECOND:
 
         self.blocks = blocks
 
-        # assert not (init_cfg and pretrained), "init_cfg and pretrained cannot be setting at the same time"
-        # if isinstance(pretrained, str):
-        #     warnings.warn("DeprecationWarning: pretrained is a deprecated, " 'please use "init_cfg" instead')
-        #     self.init_cfg = dict(type="Pretrained", checkpoint=pretrained)
-        # else:
-        #     self.init_cfg = dict(type="Kaiming", layer="Conv2d")
-
     def __call__(self, x):
         outs = []
         for i in range(len(self.blocks)):
             for j in range(len(self.blocks[i])):
                 x = self.blocks[i][j](x)
-            # x = ttnn.reshape(x, (1, h, w, x.shape[-1]))  # bs=1
             outs.append(x)
         return tuple(outs)

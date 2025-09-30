@@ -73,8 +73,6 @@ class AlignedAnchor3DRangeGenerator(Anchor3DRangeGenerator):
         if len(self.custom_values) > 0:
             custom_ndim = len(self.custom_values)
             custom = ret.new_zeros([*ret.shape[:-1], custom_ndim])
-            # TODO: check the support of custom values
-            # custom[:] = self.custom_values
             ret = torch.cat([ret, custom], dim=-1)
         return ret
 
@@ -144,9 +142,6 @@ class Anchor3DHead(Base3DDenseHead):
         self.sampling = loss_cls["type"] not in ["mmdet.FocalLoss", "mmdet.GHMC"]
         if not self.use_sigmoid_cls:
             self.num_classes += 1
-        # self.loss_cls = MODELS.build(loss_cls) #Not used should check
-        # self.loss_bbox = MODELS.build(loss_bbox)  #Not used should check
-        # self.loss_dir = MODELS.build(loss_dir) #Not used should check
 
         self._init_layers()
         self._init_assigner_sampler()
@@ -163,17 +158,6 @@ class Anchor3DHead(Base3DDenseHead):
         """Initialize the target assigner and sampler of the head."""
         if self.train_cfg is None:  # This is invoked
             return
-
-        # if self.sampling:
-        #     self.bbox_sampler = TASK_UTILS.build(self.train_cfg.sampler)
-        # else:
-        #     self.bbox_sampler = PseudoSampler()
-        # if isinstance(self.train_cfg.assigner, dict):
-        #     self.bbox_assigner = TASK_UTILS.build(self.train_cfg.assigner)
-        # elif isinstance(self.train_cfg.assigner, list):
-        #     self.bbox_assigner = [
-        #         TASK_UTILS.build(res) for res in self.train_cfg.assigner
-        #     ]
 
     def _init_layers(self):
         """Initialize neural network layers of the head."""
@@ -193,47 +177,3 @@ class Anchor3DHead(Base3DDenseHead):
 
     def forward(self, x: Tuple[Tensor]) -> Tuple[List[Tensor]]:
         return multi_apply(self.forward_single, x)
-
-    # # TODO: Support augmentation test
-    # def aug_test(self,
-    #              aug_batch_feats,
-    #              aug_batch_input_metas,
-    #              rescale=False,
-    #              **kwargs):
-    #     aug_bboxes = []
-    #     # only support aug_test for one sample
-    #     for x, input_meta in zip(aug_batch_feats, aug_batch_input_metas):
-    #         outs = self.forward(x)
-    #         bbox_list = self.get_results(*outs, [input_meta], rescale=rescale)
-    #         bbox_dict = dict(
-    #             bboxes_3d=bbox_list[0].bboxes_3d,
-    #             scores_3d=bbox_list[0].scores_3d,
-    #             labels_3d=bbox_list[0].labels_3d)
-    #         aug_bboxes.append(bbox_dict)
-    #     # after merging, bboxes will be rescaled to the original image size
-    #     merged_bboxes = merge_aug_bboxes_3d(aug_bboxes, aug_batch_input_metas,
-    #                                         self.test_cfg)
-    #     return [merged_bboxes]
-
-    # def get_anchors(self,
-    #                 featmap_sizes: List[tuple],
-    #                 input_metas: List[dict],
-    #                 device: str = 'cuda') -> list:
-    #     """Get anchors according to feature map sizes.
-
-    #     Args:
-    #         featmap_sizes (list[tuple]): Multi-level feature map sizes.
-    #         input_metas (list[dict]): contain pcd and img's meta info.
-    #         device (str): device of current module.
-
-    #     Returns:
-    #         list[list[torch.Tensor]]: Anchors of each image, valid flags
-    #             of each image.
-    #     """
-    #     num_imgs = len(input_metas)
-    #     # since feature map sizes of all images are the same, we only compute
-    #     # anchors for one time
-    #     multi_level_anchors = self.prior_generator.grid_anchors(
-    #         featmap_sizes, device=device)
-    #     anchor_list = [multi_level_anchors for _ in range(num_imgs)]
-    #     return anchor_list

@@ -226,7 +226,6 @@ class Anchor3DRangeGenerator(object):
         if len(self.custom_values) > 0:
             custom_ndim = len(self.custom_values)
             custom = ret.new_zeros([*ret.shape[:-1], custom_ndim])
-            # custom[:] = self.custom_values
             ret = torch.cat([ret, custom], dim=-1)
             # [1, 200, 176, N, 2, 9] for nus dataset after permute
         return ret
@@ -779,9 +778,7 @@ class Base3DDenseHead(nn.Module, metaclass=ABCMeta):
 
     def predict(self, x: Tuple[Tensor], batch_data_samples, rescale: bool = False):
         batch_input_metas = [data_samples.metainfo for data_samples in batch_data_samples]
-        # batch_input_metas = batch_data_samples  # modified and passed the input
         outs = self(x)
-        # predictions = self.predict_by_feat(*x, batch_input_metas=batch_input_metas, rescale=rescale)
         predictions = self.predict_by_feat(*outs, batch_input_metas=batch_input_metas, rescale=rescale)
         return predictions
 

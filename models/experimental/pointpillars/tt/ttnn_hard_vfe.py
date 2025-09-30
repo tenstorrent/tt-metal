@@ -44,12 +44,6 @@ class TtVFELayer:
         x = ttnn.to_torch(x)
         x = self.norm(x)
         x = ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        # x = ttnn.from_torch(
-        #     self.norm(ttnn.to_torch(ttnn.permute(x, (0, 2, 1)))),
-        #     device=device,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     dtype=ttnn.bfloat16,
-        # )
         x = ttnn.permute(x, (0, 2, 1))
         pointwise = ttnn.relu(x)
         ttnn.deallocate(x)

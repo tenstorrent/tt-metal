@@ -414,7 +414,6 @@ class TtAnchor3DRangeGenerator(object):
         if len(self.custom_values) > 0:
             custom_ndim = len(self.custom_values)
             custom = ret.new_zeros([*ret.shape[:-1], custom_ndim])
-            # custom[:] = self.custom_values
             ret = torch.cat([ret, custom], dim=-1)
             # [1, 200, 176, N, 2, 9] for nus dataset after permute
         return ret
@@ -524,18 +523,6 @@ class TtBase3DDenseHead(nn.Module, metaclass=ABCMeta):
         rescale: bool = False,
         **kwargs,
     ):
-        # for i in range(len(cls_scores)):
-        #     cls_scores[i] = ttnn.to_torch(cls_scores[i])
-        #     cls_scores[i] = cls_scores[i].permute(0, 3, 1, 2)
-        #     cls_scores[i] = cls_scores[i].to(dtype=torch.float)
-        # for i in range(len(bbox_preds)):
-        #     bbox_preds[i] = ttnn.to_torch(bbox_preds[i])
-        #     bbox_preds[i] = bbox_preds[i].permute(0, 3, 1, 2)
-        #     bbox_preds[i] = bbox_preds[i].to(dtype=torch.float)
-        # for i in range(len(dir_cls_preds)):
-        #     dir_cls_preds[i] = ttnn.to_torch(dir_cls_preds[i])
-        #     dir_cls_preds[i] = dir_cls_preds[i].permute(0, 3, 1, 2)
-
         assert len(cls_scores) == len(bbox_preds)
         assert len(cls_scores) == len(dir_cls_preds)
         num_levels = len(cls_scores)
@@ -694,8 +681,6 @@ class TtAlignedAnchor3DRangeGenerator(TtAnchor3DRangeGenerator):
         if len(self.custom_values) > 0:
             custom_ndim = len(self.custom_values)
             custom = ret.new_zeros([*ret.shape[:-1], custom_ndim])
-            # TODO: check the support of custom values
-            # custom[:] = self.custom_values
             ret = torch.cat([ret, custom], dim=-1)
         return ret
 

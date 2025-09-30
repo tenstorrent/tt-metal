@@ -75,8 +75,6 @@ class TtMVXFasterRCNN:
 
         if pts_neck is not None:
             self.pts_neck = TtFPN(
-                # norm_cfg={"type": "BN2d", "eps": 0.001, "momentum": 0.01},
-                # act_cfg={"type": "ReLU"},
                 in_channels=[64, 128, 256],
                 out_channels=256,
                 start_level=0,
@@ -110,8 +108,6 @@ class TtMVXFasterRCNN:
                     "alpha": 0.25,
                     "loss_weight": 1.0,
                 },
-                # loss_bbox={"type": "mmdet.SmoothL1Loss", "beta": 0.1111111111111111, "loss_weight": 1.0},
-                # loss_dir={"type": "mmdet.CrossEntropyLoss", "use_sigmoid": False, "loss_weight": 0.2},
                 test_cfg={
                     "use_rotate_nms": True,
                     "nms_across_levels": False,
@@ -282,7 +278,6 @@ class TtMVXFasterRCNN:
         return results_list
 
     def __call__(self, batch_inputs_dict, batch_data_samples, **kwargs):
-        # batch_input_metas = [item.metainfo for item in batch_data_samples]
         batch_input_metas = batch_data_samples  # modified and passed
         img_feats, pts_feats = self.extract_feat(batch_inputs_dict, batch_input_metas)
 
@@ -292,11 +287,7 @@ class TtMVXFasterRCNN:
             outs = None
 
         if img_feats and self.with_img_bbox:
-            # TODO check this for camera modality
             results_list_2d = self.predict_imgs(img_feats, batch_data_samples, **kwargs)
         else:
             results_list_2d = None
-
-        # print("results_list_3d", results_list_3d)
-        # detsamples = self.add_pred_to_datasample(batch_data_samples, results_list_3d, results_list_2d)
         return outs
