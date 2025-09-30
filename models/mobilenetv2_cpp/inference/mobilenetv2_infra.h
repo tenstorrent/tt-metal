@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,31 +19,22 @@ public:
 
     MobileNetv2TestInfra(std::shared_ptr<ttnn::MeshDevice> device, int batch_size);
 
-    void setInputTensor(const ttnn::Tensor& input_tensor) {
-        input_tensor_ = std::move(input_tensor);
-    }
+    void setInputTensor(const ttnn::Tensor& input_tensor) { input_tensor_ = std::move(input_tensor); }
 
-    const ttnn::Tensor& getInputTensor() const {
-        return input_tensor_;
-    }
+    const ttnn::Tensor& getInputTensor() const { return input_tensor_; }
 
-    ttnn::Tensor getOutputTensor() const {
-        return output_tensor_;
-    }
+    ttnn::Tensor getOutputTensor() const { return output_tensor_; }
 
-    void run() {
-        output_tensor_ = (*ttnn_mobilenetv2_model_)(input_tensor_);
-    }
+    void run() { output_tensor_ = (*ttnn_mobilenetv2_model_)(input_tensor_); }
 
     OneConfResult setupL1ShardedInput(torch::Tensor torch_input_tensor = torch::Tensor());
 
-    TwoConfResult setupDramShardedInput(std::shared_ptr<ttnn::MeshDevice> device, torch::Tensor torch_input_tensor = torch::Tensor());
+    TwoConfResult setupDramShardedInput(
+        std::shared_ptr<ttnn::MeshDevice> device, torch::Tensor torch_input_tensor = torch::Tensor());
 
     void validate(std::optional<ttnn::Tensor> output_tensor = std::nullopt);
 
-    void deallocOutput() {
-        output_tensor_.deallocate(true);
-    }
+    void deallocOutput() { output_tensor_.deallocate(true); }
 
 private:
     std::shared_ptr<ttnn::MeshDevice> device_;
@@ -56,4 +47,4 @@ private:
     ttnn::Tensor output_tensor_;
 };
 
-#endif // MOBILENETV2_CPP_INFERENCE_MOBILENETV2_INFRA
+#endif  // MOBILENETV2_CPP_INFERENCE_MOBILENETV2_INFRA

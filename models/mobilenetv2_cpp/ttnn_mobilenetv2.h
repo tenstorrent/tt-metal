@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
-class TtMobileNetV2Conv2D {    
+class TtMobileNetV2Conv2D {
 public:
     TtMobileNetV2Conv2D(
         const std::vector<int>& input_params,
@@ -35,8 +35,7 @@ public:
         bool reshard_if_not_optimal = true,
         ttnn::DataType activation_dtype = ttnn::DataType::BFLOAT8_B,
         ttnn::TensorMemoryLayout shard_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-        std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt
-    );
+        std::optional<ttnn::operations::unary::UnaryWithParam> activation = std::nullopt);
 
     ttnn::Tensor operator()(const ttnn::Tensor& x, int& h, int& w);
 
@@ -77,8 +76,7 @@ public:
         int in_channels,
         int out_channels,
         int id,
-        bool block_shard = false
-    );
+        bool block_shard = false);
 
     ttnn::Tensor operator()(const ttnn::Tensor& x);
 
@@ -103,19 +101,15 @@ public:
     TtMobileNetV2(
         const std::unordered_map<std::string, ttnn::Tensor>& model_params,
         std::shared_ptr<ttnn::MeshDevice> device,
-        int batchsize
-    );
+        int batchsize);
 
-    ~TtMobileNetV2() {
-        blocks.clear();
-    }
+    ~TtMobileNetV2() { blocks.clear(); }
 
     ttnn::Tensor operator()(const ttnn::Tensor& x);
 
 private:
     std::unique_ptr<TtInvertedResidual> define_inverted_residual_block(
-        int expand_ratio, int stride, int in_channels, int out_channels, int id, bool block_shard
-    );
+        int expand_ratio, int stride, int in_channels, int out_channels, int id, bool block_shard);
 
     ttnn::Tensor process_blocks(ttnn::Tensor& tensor);
 
@@ -128,4 +122,4 @@ private:
     ttnn::Tensor l1_weight, l1_bias;
 };
 
-#endif // MOBILENETV2_CPP_TTNN_MOBILENETV2
+#endif  // MOBILENETV2_CPP_TTNN_MOBILENETV2

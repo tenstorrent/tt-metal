@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,20 +19,21 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
     const std::pair<ttnn::Tensor, ttnn::Tensor>& parameters,
     std::shared_ptr<ttnn::MeshDevice> device,
     int batch_size,
-    int groups/* = 1*/,
-    int dilation/* = 1*/,
-    bool act_block_h/* = false*/,
-    bool block_shard/* = false*/,
-    bool deallocate_activation/* = false*/,
-    ttnn::Layout output_layout/* = ttnn::Layout::TILE*/,
-    bool width_shard/* = false*/,
-    int act_blocks/* = 32*/,
-    bool enable_act_double_buffer/* = false*/,
-    bool reshard_if_not_optimal/* = false*/,
-    ttnn::DataType activation_dtype/* = ttnn::DataType::BFLOAT8_B*/,
-    ttnn::TensorMemoryLayout shard_layout/* = ttnn::TensorMemoryLayout::HEIGHT_SHARDED*/,
-    std::optional<ttnn::operations::unary::UnaryWithParam> activation/* = std::nullopt*/
-) : device_(device),
+    int groups /* = 1*/,
+    int dilation /* = 1*/,
+    bool act_block_h /* = false*/,
+    bool block_shard /* = false*/,
+    bool deallocate_activation /* = false*/,
+    ttnn::Layout output_layout /* = ttnn::Layout::TILE*/,
+    bool width_shard /* = false*/,
+    int act_blocks /* = 32*/,
+    bool enable_act_double_buffer /* = false*/,
+    bool reshard_if_not_optimal /* = false*/,
+    ttnn::DataType activation_dtype /* = ttnn::DataType::BFLOAT8_B*/,
+    ttnn::TensorMemoryLayout shard_layout /* = ttnn::TensorMemoryLayout::HEIGHT_SHARDED*/,
+    std::optional<ttnn::operations::unary::UnaryWithParam> activation /* = std::nullopt*/
+    ) :
+    device_(device),
     parameters(parameters),
     activation_dtype(activation_dtype),
     input_params(input_params),
@@ -49,7 +50,6 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
     batch_size(batch_size),
     shard_layout(shard_layout),
     activation(activation) {
-    
     if (block_shard) {
         shard_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
     }
@@ -63,7 +63,7 @@ TtMobileNetV2Conv2D::TtMobileNetV2Conv2D(
 
 ttnn::Tensor TtMobileNetV2Conv2D::operator()(const ttnn::Tensor& x, int& h, int& w) {
     int input_height, input_width;
-    const ttnn::Shape &logical_shape = x.logical_shape();
+    const ttnn::Shape& logical_shape = x.logical_shape();
     if (logical_shape[1] != 1) {
         input_height = logical_shape[1];
         input_width = logical_shape[2];
@@ -94,26 +94,27 @@ ttnn::Tensor TtMobileNetV2Conv2D::operator()(const ttnn::Tensor& x, int& h, int&
         std::nullopt,
         std::nullopt,
         /*return_output_dim=*/true,
-        /*return_weights_and_bias=*/true
-    );
+        /*return_weights_and_bias=*/true);
     std::pair<ttnn::Tensor, ttnn::Tensor> devparams(std::move(parameters));
-    std::visit(tt::stl::overloaded(
-        [&output_tensor, &h, &w, &devparams](std::tuple<ttnn::Tensor,
-                                            std::tuple<uint32_t, uint32_t>,
-                                            std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>> result) {
-            output_tensor = std::move(std::get<0>(result));
-            auto h_w = std::get<1>(result);
-            h = static_cast<int>(std::get<0>(h_w));
-            w = static_cast<int>(std::get<1>(h_w));
-            auto w_b = std::get<2>(result);
-            devparams.first = std::move(std::get<0>(w_b));
-            auto bias = std::get<1>(w_b);
-            if(bias.has_value()) devparams.second = std::move(bias.value());
-        },
-        [](auto &&) {
-            throw std::runtime_error("Conv2d result type error!");
-        }
-    ), conv2d_result);
+    std::visit(
+        tt::stl::overloaded(
+            [&output_tensor, &h, &w, &devparams](std::tuple<
+                                                 ttnn::Tensor,
+                                                 std::tuple<uint32_t, uint32_t>,
+                                                 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>>> result) {
+                output_tensor = std::move(std::get<0>(result));
+                auto h_w = std::get<1>(result);
+                h = static_cast<int>(std::get<0>(h_w));
+                w = static_cast<int>(std::get<1>(h_w));
+                auto w_b = std::get<2>(result);
+                devparams.first = std::move(std::get<0>(w_b));
+                auto bias = std::get<1>(w_b);
+                if (bias.has_value()) {
+                    devparams.second = std::move(bias.value());
+                }
+            },
+            [](auto&&) { throw std::runtime_error("Conv2d result type error!"); }),
+        conv2d_result);
     parameters = std::move(devparams);
     return output_tensor;
 }
@@ -148,8 +149,7 @@ ttnn::DeviceComputeKernelConfig TtMobileNetV2Conv2D::initialize_compute_config()
         device_->arch(),
         std::nullopt,
         MathFidelity::LoFi,
-        /*math_approx_mode=*/false
-    );
+        /*math_approx_mode=*/false);
 }
 
 TtInvertedResidual::TtInvertedResidual(
@@ -161,16 +161,16 @@ TtInvertedResidual::TtInvertedResidual(
     int in_channels,
     int out_channels,
     int id,
-    bool block_shard/* = false*/
-) : device_(device),
+    bool block_shard /* = false*/
+    ) :
+    device_(device),
     batchsize(batchsize),
     stride(stride),
     expand_ratio(expand_ratio),
     in_channels(in_channels),
     out_channels(out_channels),
     block_shard(block_shard),
-    id(id)
-{
+    id(id) {
     int hidden_dim = static_cast<int>(std::round(in_channels * expand_ratio));
     use_res_connect = (stride == 1 && in_channels == out_channels);
 
@@ -179,8 +179,7 @@ TtInvertedResidual::TtInvertedResidual(
             std::vector<int>{1, 1, 0, hidden_dim},
             std::make_pair(
                 model_params.at(fmt::format("fused_conv_{}_weight", id * 2)),
-                model_params.at(fmt::format("fused_conv_{}_bias", id * 2))
-            ),
+                model_params.at(fmt::format("fused_conv_{}_bias", id * 2))),
             device_,
             batchsize,
             /*groups=*/1,
@@ -195,16 +194,14 @@ TtInvertedResidual::TtInvertedResidual(
             /*reshard_if_not_optimal=*/true,
             /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
             /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-            /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
-        );
+            /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6));
     }
 
     conv2 = std::make_unique<TtMobileNetV2Conv2D>(
         std::vector<int>{3, stride, 1, hidden_dim},
         std::make_pair(
             model_params.at(fmt::format("fused_conv_{}_weight", id * 2 + 1)),
-            model_params.at(fmt::format("fused_conv_{}_bias", id * 2 + 1))
-        ),
+            model_params.at(fmt::format("fused_conv_{}_bias", id * 2 + 1))),
         device_,
         batchsize,
         /*groups=*/hidden_dim,
@@ -219,15 +216,12 @@ TtInvertedResidual::TtInvertedResidual(
         /*reshard_if_not_optimal=*/true,
         /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
         /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
-    );
+        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6));
 
     conv3 = std::make_unique<TtMobileNetV2Conv2D>(
         std::vector<int>{1, 1, 0, out_channels},
         std::make_pair(
-            model_params.at(fmt::format("conv_{}_weight", id)),
-            model_params.at(fmt::format("conv_{}_bias", id))
-        ),
+            model_params.at(fmt::format("conv_{}_weight", id)), model_params.at(fmt::format("conv_{}_bias", id))),
         device_,
         batchsize,
         /*groups=*/1,
@@ -238,8 +232,7 @@ TtInvertedResidual::TtInvertedResidual(
         /*output_layout=*/ttnn::Layout::TILE,
         /*width_shard=*/false,
         /*act_blocks=*/32,
-        /*enable_act_double_buffer=*/true
-    );
+        /*enable_act_double_buffer=*/true);
 }
 
 ttnn::Tensor TtInvertedResidual::operator()(const ttnn::Tensor& x) {
@@ -254,7 +247,7 @@ ttnn::Tensor TtInvertedResidual::operator()(const ttnn::Tensor& x) {
     out = (*conv3)(out, h, w);
 
     if (use_res_connect) {
-        if(identity.memory_config() != out.memory_config()) {
+        if (identity.memory_config() != out.memory_config()) {
             identity = ttnn::to_memory_config(identity, out.memory_config());
         }
         auto tmp = ttnn::add(identity, out);
@@ -268,8 +261,8 @@ ttnn::Tensor TtInvertedResidual::operator()(const ttnn::Tensor& x) {
 TtMobileNetV2::TtMobileNetV2(
     const std::unordered_map<std::string, ttnn::Tensor>& model_params,
     std::shared_ptr<ttnn::MeshDevice> device,
-    int batchsize
-) : device_(device), model_parameters(model_params), batchsize(batchsize) {
+    int batchsize) :
+    device_(device), model_parameters(model_params), batchsize(batchsize) {
     conv1 = std::make_unique<TtMobileNetV2Conv2D>(
         std::vector<int>{3, 2, 1, 32},
         std::make_pair(model_parameters.at("fused_conv_0_weight"), model_parameters.at("fused_conv_0_bias")),
@@ -287,8 +280,7 @@ TtMobileNetV2::TtMobileNetV2(
         /*reshard_if_not_optimal=*/false,
         /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
         /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
-    );
+        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6));
 
     conv2 = std::make_unique<TtMobileNetV2Conv2D>(
         std::vector<int>{3, 1, 1, 32},
@@ -307,8 +299,7 @@ TtMobileNetV2::TtMobileNetV2(
         /*reshard_if_not_optimal=*/false,
         /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
         /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
-    );
+        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6));
 
     conv3 = std::make_unique<TtMobileNetV2Conv2D>(
         std::vector<int>{1, 1, 0, 16},
@@ -323,8 +314,7 @@ TtMobileNetV2::TtMobileNetV2(
         /*output_layout=*/ttnn::Layout::TILE,
         /*width_shard=*/false,
         /*act_blocks=*/32,
-        /*enable_act_double_buffer=*/true
-    );
+        /*enable_act_double_buffer=*/true);
 
     // Define InvertedResidual blocks
     blocks.push_back(define_inverted_residual_block(6, 2, 16, 24, 1, false));
@@ -361,8 +351,7 @@ TtMobileNetV2::TtMobileNetV2(
         /*reshard_if_not_optimal=*/true,
         /*activation_dtype=*/ttnn::DataType::BFLOAT8_B,
         /*shard_layout=*/ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
-        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6)
-    );
+        /*activation=*/ttnn::operations::unary::UnaryWithParam(ttnn::operations::unary::UnaryOpType::RELU6));
 
     l1_weight = model_parameters.at("classifier_1_weight");
     l1_bias = model_parameters.at("classifier_1_bias");
@@ -387,7 +376,8 @@ ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
     }
 
     output_tensor = ttnn::global_avg_pool2d(output_tensor);
-    output_tensor = ttnn::reshape(output_tensor, tt::tt_metal::infer_dims_for_reshape(output_tensor, std::vector<int>{batchsize, -1}));
+    output_tensor = ttnn::reshape(
+        output_tensor, tt::tt_metal::infer_dims_for_reshape(output_tensor, std::vector<int>{batchsize, -1}));
 
     auto compute_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),
@@ -395,8 +385,7 @@ ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
         /*math_fidelity=*/MathFidelity::LoFi,
         /*math_approx_mode=*/true,
         /*fp32_dest_acc_en=*/false,
-        /*packer_l1_acc=*/true
-    );
+        /*packer_l1_acc=*/true);
 
     auto matmul_config = TT_matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
         .compute_with_storage_grid_size = {8, 8},
@@ -412,16 +401,12 @@ ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
         .mcast_in0 = true,
         .gather_in0 = false,
         .hop_cores = ttnn::CoreRangeSet(),
-        .num_global_cb_receivers = 1
-    };
+        .num_global_cb_receivers = 1};
 
-    auto shard_grid = ttnn::CoreRangeSet({
-        ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(7, 7))
-    });
+    auto shard_grid = ttnn::CoreRangeSet({ttnn::CoreRange(ttnn::CoreCoord(0, 0), ttnn::CoreCoord(7, 7))});
     auto shard_spec = tt::tt_metal::ShardSpec(shard_grid, {32, 32});
-    auto width_sharded_mem_config = ttnn::MemoryConfig(ttnn::TensorMemoryLayout::WIDTH_SHARDED,
-                                                        ttnn::BufferType::L1,
-                                                        shard_spec);
+    auto width_sharded_mem_config =
+        ttnn::MemoryConfig(ttnn::TensorMemoryLayout::WIDTH_SHARDED, ttnn::BufferType::L1, shard_spec);
 
     output_tensor = ttnn::to_memory_config(output_tensor, width_sharded_mem_config);
     output_tensor = ttnn::linear(
@@ -434,26 +419,15 @@ ttnn::Tensor TtMobileNetV2::operator()(const ttnn::Tensor& x) {
         /*dtype=*/std::nullopt,
         /*program_config=*/matmul_config,
         /*activation=*/std::nullopt,
-        /*compute_kernel_config=*/compute_config
-    );
+        /*compute_kernel_config=*/compute_config);
 
     return output_tensor;
 }
 
 std::unique_ptr<TtInvertedResidual> TtMobileNetV2::define_inverted_residual_block(
-    int expand_ratio, int stride, int in_channels, int out_channels, int id, bool block_shard
-) {
+    int expand_ratio, int stride, int in_channels, int out_channels, int id, bool block_shard) {
     return std::make_unique<TtInvertedResidual>(
-        model_parameters,
-        device_,
-        batchsize,
-        expand_ratio,
-        stride,
-        in_channels,
-        out_channels,
-        id,
-        block_shard
-    );
+        model_parameters, device_, batchsize, expand_ratio, stride, in_channels, out_channels, id, block_shard);
 }
 
 ttnn::Tensor TtMobileNetV2::process_blocks(ttnn::Tensor& tensor) {

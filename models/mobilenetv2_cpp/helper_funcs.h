@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,14 +18,15 @@
 
 class TtMobileNetV2;
 
-ttnn::Tensor from_torch(const at::Tensor& tensor,
-    std::optional<ttnn::DataType> dtype = std::nullopt,    
+ttnn::Tensor from_torch(
+    const at::Tensor& tensor,
+    std::optional<ttnn::DataType> dtype = std::nullopt,
     std::optional<ttnn::Layout> layout = ttnn::Layout::ROW_MAJOR);
 
 at::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output = false);
 
-std::tuple<at::Tensor, ttnn::Tensor> create_mobilenetv2_input_tensors(int batch = 1, int input_channels = 3, 
-    int input_height = 224, int input_width = 224);
+std::tuple<at::Tensor, ttnn::Tensor> create_mobilenetv2_input_tensors(
+    int batch = 1, int input_channels = 3, int input_height = 224, int input_width = 224);
 
 std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameters(
     const torch::jit::Module& model, std::shared_ptr<ttnn::MeshDevice> device);
@@ -40,6 +41,7 @@ bool isWormholeB0();
 
 torch::jit::Module loadTorchModel();
 
-std::shared_ptr<TtMobileNetV2> loadTtnnModel(std::shared_ptr<ttnn::MeshDevice> device, const torch::jit::Module& torch_model, int batch_size);
+std::shared_ptr<TtMobileNetV2> loadTtnnModel(
+    std::shared_ptr<ttnn::MeshDevice> device, const torch::jit::Module& torch_model, int batch_size);
 
-#endif // MOBILENETV2_CPP_HELPER_FUNCS
+#endif  // MOBILENETV2_CPP_HELPER_FUNCS

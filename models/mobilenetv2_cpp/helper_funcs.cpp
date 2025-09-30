@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,17 +14,15 @@
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/distributed/api.hpp"
 
-template<typename T>
-ttnn::Tensor create_concrete(torch::Tensor &contiguous_tensor, tt::tt_metal::TensorSpec &spec)
-{
+template <typename T>
+ttnn::Tensor create_concrete(torch::Tensor& contiguous_tensor, tt::tt_metal::TensorSpec& spec) {
     return ttnn::Tensor::template from_span<T>(
-            tt::stl::template Span<const T>(reinterpret_cast<T*>(contiguous_tensor.data_ptr()), contiguous_tensor.numel()),
-            spec);
+        tt::stl::template Span<const T>(reinterpret_cast<T*>(contiguous_tensor.data_ptr()), contiguous_tensor.numel()),
+        spec);
 }
 
-ttnn::Tensor from_torch(const at::Tensor& tensor,
-    std::optional<ttnn::DataType> dtype,    
-    std::optional<ttnn::Layout> layout) {
+ttnn::Tensor from_torch(
+    const at::Tensor& tensor, std::optional<ttnn::DataType> dtype, std::optional<ttnn::Layout> layout) {
     auto torch_dtype = tensor.scalar_type();
     auto torch_shape = tensor.sizes();
     ttnn::Shape logical_shape(std::vector<uint32_t>{torch_shape.begin(), torch_shape.end()});
@@ -54,7 +52,7 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
     if (data_type == ttnn::DataType::BFLOAT8_B || data_type == ttnn::DataType::BFLOAT4_B) {
         throw std::runtime_error("from_torch: bfloat8_b/bfloat4_b unsupported!");
     }
-    
+
     torch::Tensor contiguous_tensor = tensor.contiguous();
     auto maybe_convert_tensor_dtype = [&torch_dtype, &contiguous_tensor](c10::ScalarType target_py_dtype) {
         if (torch_dtype != target_py_dtype) {
@@ -62,10 +60,10 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
         }
     };
 
-    auto tensor_spec = tt::tt_metal::TensorSpec(logical_shape, 
-                                tt::tt_metal::TensorLayout(data_type, tt::tt_metal::PageConfig(layout.value_or(ttnn::Layout::ROW_MAJOR)),
-                                                            ttnn::MemoryConfig{})
-                                );
+    auto tensor_spec = tt::tt_metal::TensorSpec(
+        logical_shape,
+        tt::tt_metal::TensorLayout(
+            data_type, tt::tt_metal::PageConfig(layout.value_or(ttnn::Layout::ROW_MAJOR)), ttnn::MemoryConfig{}));
     switch (data_type) {
         case ttnn::DataType::UINT8: {
             maybe_convert_tensor_dtype(torch::kUInt8);
@@ -90,7 +88,7 @@ ttnn::Tensor from_torch(const at::Tensor& tensor,
         case ttnn::DataType::BFLOAT16: {
             maybe_convert_tensor_dtype(at::kBFloat16);
             return create_concrete<bfloat16>(contiguous_tensor, tensor_spec);
-        }        
+        }
         case ttnn::DataType::BFLOAT8_B:
         case ttnn::DataType::BFLOAT4_B: {
             maybe_convert_tensor_dtype(at::kFloat);
@@ -151,7 +149,8 @@ tt::tt_metal::HostBuffer get_host_buffer_from_tensor(const ttnn::Tensor& tt_tens
             case ttnn::DataType::BFLOAT8_B:
             case ttnn::DataType::BFLOAT4_B: {
                 const auto& tile = tensor_spec.tile();
-                tt::stl::Span<const std::uint32_t> uint32_data = tt::tt_metal::host_buffer::get_as<std::uint32_t>(buffer);
+                tt::stl::Span<const std::uint32_t> uint32_data =
+                    tt::tt_metal::host_buffer::get_as<std::uint32_t>(buffer);
                 auto float_unpacked_data = tt_dtype == ttnn::DataType::BFLOAT8_B
                                                ? unpack_bfp8_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
@@ -238,7 +237,8 @@ torch::Tensor to_torch(const ttnn::Tensor& tensor, const bool padded_output) {
         }
     }
     auto torch_tensor = torch::empty(torch_shape, torch_dtype);
-    torch_tensor.copy_(torch::from_blob(data_ptr, torch_shape, at::TensorOptions().dtype(torch_dtype).requires_grad(false)));
+    torch_tensor.copy_(
+        torch::from_blob(data_ptr, torch_shape, at::TensorOptions().dtype(torch_dtype).requires_grad(false)));
     // If the tensor is padded, we need to reshape it to the padded shape
     if (padded_output) {
         auto shape = tensor.padded_shape();
@@ -254,9 +254,8 @@ std::tuple<at::Tensor, ttnn::Tensor> create_mobilenetv2_input_tensors(
     torch::Tensor torch_input_tensor = torch::randn({batch, input_channels, input_height, input_width});
 
     torch::Tensor permuted_tensor = torch_input_tensor.permute({0, 2, 3, 1});
-    torch::Tensor reshaped_tensor = permuted_tensor.reshape({
-        1, 1, permuted_tensor.size(0) * permuted_tensor.size(1) * permuted_tensor.size(2), permuted_tensor.size(3)
-    });
+    torch::Tensor reshaped_tensor = permuted_tensor.reshape(
+        {1, 1, permuted_tensor.size(0) * permuted_tensor.size(1) * permuted_tensor.size(2), permuted_tensor.size(3)});
 
     ttnn::Tensor ttnn_input_tensor = from_torch(reshaped_tensor, ttnn::DataType::BFLOAT16, ttnn::Layout::ROW_MAJOR);
 
@@ -264,8 +263,9 @@ std::tuple<at::Tensor, ttnn::Tensor> create_mobilenetv2_input_tensors(
 }
 
 // Helper function to fold BatchNorm2d into Conv2d
-std::pair<ttnn::Tensor, ttnn::Tensor> fold_batch_norm2d_into_conv2d(const torch::jit::Module& conv, const torch::jit::Module& bn) {
-    float eps = 1e-5; // Default epsilon value for numerical stability
+std::pair<ttnn::Tensor, ttnn::Tensor> fold_batch_norm2d_into_conv2d(
+    const torch::jit::Module& conv, const torch::jit::Module& bn) {
+    float eps = 1e-5;  // Default epsilon value for numerical stability
     auto weight = conv.attr("weight").toTensor().detach();
     auto running_mean = bn.attr("running_mean").toTensor().detach();
     auto running_var = bn.attr("running_var").toTensor().detach();
@@ -282,15 +282,17 @@ std::pair<ttnn::Tensor, ttnn::Tensor> fold_batch_norm2d_into_conv2d(const torch:
     return std::make_pair(weight_ttnn, bias_ttnn);
 }
 
-ttnn::Tensor preprocess_linear_weight(const at::Tensor &weight, 
-                                    std::optional<ttnn::DataType> dtype = std::nullopt, 
-                                    ttnn::Layout layout = ttnn::Layout::TILE) {
+ttnn::Tensor preprocess_linear_weight(
+    const at::Tensor& weight,
+    std::optional<ttnn::DataType> dtype = std::nullopt,
+    ttnn::Layout layout = ttnn::Layout::TILE) {
     return from_torch(weight.transpose(0, 1).contiguous().detach(), dtype, layout);
 }
 
-ttnn::Tensor preprocess_linear_bias(const at::Tensor &bias, 
-                                    std::optional<ttnn::DataType> dtype = std::nullopt, 
-                                    ttnn::Layout layout = ttnn::Layout::TILE) {
+ttnn::Tensor preprocess_linear_bias(
+    const at::Tensor& bias,
+    std::optional<ttnn::DataType> dtype = std::nullopt,
+    ttnn::Layout layout = ttnn::Layout::TILE) {
     return from_torch(bias.reshape({1, -1}).detach(), dtype, layout);
 }
 
@@ -304,12 +306,9 @@ std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameter
     int counter = 0;
 
     for (const auto& child : model.children()) {
-        if(MODULE_NAME(child).find("Sequential") != std::string::npos)
-        {
-            for(const auto &seq_child : child.children())
-            {
-                if(MODULE_NAME(seq_child).find("Conv2dNormActivation") != std::string::npos)
-                {
+        if (MODULE_NAME(child).find("Sequential") != std::string::npos) {
+            for (const auto& seq_child : child.children()) {
+                if (MODULE_NAME(seq_child).find("Conv2dNormActivation") != std::string::npos) {
                     auto conv_itor = seq_child.children().begin();
                     auto conv = *conv_itor;
                     ++conv_itor;
@@ -318,16 +317,13 @@ std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameter
                     model_parameters[fmt::format("fused_conv_{}_weight", conv_bn_counter)] = weight_ttnn;
                     model_parameters[fmt::format("fused_conv_{}_bias", conv_bn_counter)] = bias_ttnn;
                     conv_bn_counter++;
-                }
-                else if(MODULE_NAME(seq_child).find("InvertedResidual") != std::string::npos)
-                {
+                } else if (MODULE_NAME(seq_child).find("InvertedResidual") != std::string::npos) {
                     auto invert_seq = *(seq_child.children().begin());
                     assert(MODULE_NAME(invert_seq).find("Sequential") != std::string::npos);
                     auto invert_module_list = invert_seq.children();
                     auto invert_seq_itor = invert_module_list.begin();
-                    do{
-                        if(MODULE_NAME(*invert_seq_itor).find("Conv2dNormActivation") != std::string::npos)
-                        {
+                    do {
+                        if (MODULE_NAME(*invert_seq_itor).find("Conv2dNormActivation") != std::string::npos) {
                             auto conv_itor = (*invert_seq_itor).children().begin();
                             auto conv = *conv_itor;
                             ++conv_itor;
@@ -336,16 +332,12 @@ std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameter
                             model_parameters[fmt::format("fused_conv_{}_weight", conv_bn_counter)] = weight_ttnn;
                             model_parameters[fmt::format("fused_conv_{}_bias", conv_bn_counter)] = bias_ttnn;
                             conv_bn_counter++;
-                        }
-                        else if(MODULE_NAME(*invert_seq_itor).find("Conv2d") != std::string::npos)
-                        {
+                        } else if (MODULE_NAME(*invert_seq_itor).find("Conv2d") != std::string::npos) {
                             auto conv2d = *invert_seq_itor;
                             ++invert_seq_itor;
-                            if(invert_seq_itor != invert_module_list.end())
-                            {
+                            if (invert_seq_itor != invert_module_list.end()) {
                                 auto bn = *invert_seq_itor;
-                                if(MODULE_NAME(bn).find("BatchNorm2d") != std::string::npos)
-                                {
+                                if (MODULE_NAME(bn).find("BatchNorm2d") != std::string::npos) {
                                     auto [weight_ttnn, bias_ttnn] = fold_batch_norm2d_into_conv2d(conv2d, bn);
                                     model_parameters[fmt::format("conv_{}_weight", counter)] = weight_ttnn;
                                     model_parameters[fmt::format("conv_{}_bias", counter)] = bias_ttnn;
@@ -356,16 +348,15 @@ std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameter
                             TT_THROW("Unsupported InvertedResidual Children Module {}", MODULE_NAME(*invert_seq_itor));
                         }
                         ++invert_seq_itor;
-                    }while(invert_seq_itor != invert_module_list.end());
-                }
-                else if(MODULE_NAME(seq_child).find("Linear") != std::string::npos)
-                {
-                    auto weight = preprocess_linear_weight(seq_child.attr("weight").toTensor().detach(), ttnn::DataType::FLOAT32);
-                    auto bias = preprocess_linear_bias(seq_child.attr("bias").toTensor().detach(), ttnn::DataType::FLOAT32);
+                    } while (invert_seq_itor != invert_module_list.end());
+                } else if (MODULE_NAME(seq_child).find("Linear") != std::string::npos) {
+                    auto weight =
+                        preprocess_linear_weight(seq_child.attr("weight").toTensor().detach(), ttnn::DataType::FLOAT32);
+                    auto bias =
+                        preprocess_linear_bias(seq_child.attr("bias").toTensor().detach(), ttnn::DataType::FLOAT32);
                     model_parameters["classifier_1_weight"] = weight.to_device(device.get());
                     model_parameters["classifier_1_bias"] = bias.to_device(device.get());
-                }
-                else {
+                } else {
                     TT_THROW("Unsupported Module {}", MODULE_NAME(seq_child));
                 }
             }
@@ -376,56 +367,54 @@ std::unordered_map<std::string, ttnn::Tensor> create_mobilenetv2_model_parameter
 
 // Helper function to get buffer addresses
 uint32_t get_ttbuffer_address(const ttnn::Tensor& tensor) {
-    return std::visit(tt::stl::overloaded{
-                        [](const tt::tt_metal::DeviceStorage& s) -> uint32_t {
-                            if (s.mesh_buffer) {
-                                return s.mesh_buffer->address();
-                            } else {
-                                TT_THROW("Tensor is not allocated.");
-                            }
-                        },
-                        [](auto&&) -> uint32_t {
-                            TT_THROW("HostStorage doesn't support buffer_address method");
-                            return 0;
-                        }
-                    },
-                    tensor.storage());
+    return std::visit(
+        tt::stl::overloaded{
+            [](const tt::tt_metal::DeviceStorage& s) -> uint32_t {
+                if (s.mesh_buffer) {
+                    return s.mesh_buffer->address();
+                } else {
+                    TT_THROW("Tensor is not allocated.");
+                }
+            },
+            [](auto&&) -> uint32_t {
+                TT_THROW("HostStorage doesn't support buffer_address method");
+                return 0;
+            }},
+        tensor.storage());
 }
 
-std::tuple<bool, double> comp_pcc(const torch::Tensor& golden, const torch::Tensor& calculated, const double pcc_threshold)
-{
+std::tuple<bool, double> comp_pcc(
+    const torch::Tensor& golden, const torch::Tensor& calculated, const double pcc_threshold) {
     torch::Tensor mut_calculated(calculated);
-    if(golden.dtype() != mut_calculated.dtype())
-    {
+    if (golden.dtype() != mut_calculated.dtype()) {
         mut_calculated = mut_calculated.to(golden.dtype());
     }
 
-    if(torch::all(golden.isnan()).item<bool>() && torch::all(mut_calculated.isnan()).item<bool>())
-    {
+    if (torch::all(golden.isnan()).item<bool>() && torch::all(mut_calculated.isnan()).item<bool>()) {
         return std::make_tuple(true, 1.0);
     }
 
-    if(torch::all(golden.isnan()).item<bool>() || torch::all(mut_calculated.isnan()).item<bool>())
-    {
+    if (torch::all(golden.isnan()).item<bool>() || torch::all(mut_calculated.isnan()).item<bool>()) {
         return std::make_tuple(false, 0.0);
     }
 
-    if(!torch::any(golden.to(torch::kBool)).equal(torch::any(mut_calculated.to(torch::kBool))))
-    {
+    if (!torch::any(golden.to(torch::kBool)).equal(torch::any(mut_calculated.to(torch::kBool)))) {
         return std::make_tuple(false, 0.0);
     }
 
-    auto mut_golden = golden.masked_fill(torch::logical_or(golden.isnan(), torch::logical_or(golden.isneginf(), golden.isinf())), 0.0);
-    mut_calculated = mut_calculated.masked_fill(torch::logical_or(mut_calculated.isnan(), torch::logical_or(mut_calculated.isneginf(), mut_calculated.isinf())), 0.0);
+    auto mut_golden = golden.masked_fill(
+        torch::logical_or(golden.isnan(), torch::logical_or(golden.isneginf(), golden.isinf())), 0.0);
+    mut_calculated = mut_calculated.masked_fill(
+        torch::logical_or(mut_calculated.isnan(), torch::logical_or(mut_calculated.isneginf(), mut_calculated.isinf())),
+        0.0);
 
-    if(torch::equal(mut_golden, mut_calculated))
-    {
+    if (torch::equal(mut_golden, mut_calculated)) {
         return std::make_tuple(true, 1.0);
     }
-    auto pcc = torch::stack({
-                                mut_golden.squeeze().flatten(), 
-                                mut_calculated.squeeze().flatten()  
-                            }).corrcoef().min().item<double>();
+    auto pcc = torch::stack({mut_golden.squeeze().flatten(), mut_calculated.squeeze().flatten()})
+                   .corrcoef()
+                   .min()
+                   .item<double>();
     return std::make_tuple(pcc >= pcc_threshold, pcc);
 }
 
@@ -438,11 +427,8 @@ std::string assert_with_pcc(const at::Tensor& golden, const at::Tensor& calculat
     }
 }
 
-
 // Utility functions
-uint32_t divup(uint32_t x, uint32_t y) {
-    return static_cast<uint32_t>((x + y - 1) / y);
-}
+uint32_t divup(uint32_t x, uint32_t y) { return static_cast<uint32_t>((x + y - 1) / y); }
 
 bool isWormholeB0() {
     // Hypothetical function to check if the device is Wormhole B0
@@ -452,7 +438,7 @@ bool isWormholeB0() {
 // Load Torch model
 torch::jit::Module loadTorchModel() {
     std::string model_file;
-    if(auto path = getenv("MOBILENET_FILE_PATH"); path != nullptr) {
+    if (auto path = getenv("MOBILENET_FILE_PATH"); path != nullptr) {
         model_file.assign(path);
     } else {
         const char* metal_path = getenv("TT_METAL_HOME");
@@ -465,7 +451,8 @@ torch::jit::Module loadTorchModel() {
 }
 
 // Load TTNN model
-std::shared_ptr<TtMobileNetV2> loadTtnnModel(std::shared_ptr<ttnn::MeshDevice> device, const torch::jit::Module& torch_model, int batch_size) {
+std::shared_ptr<TtMobileNetV2> loadTtnnModel(
+    std::shared_ptr<ttnn::MeshDevice> device, const torch::jit::Module& torch_model, int batch_size) {
     auto model_parameters = create_mobilenetv2_model_parameters(torch_model, device);
     auto ttnn_model = std::make_shared<TtMobileNetV2>(model_parameters, device, batch_size);
     return ttnn_model;

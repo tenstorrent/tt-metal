@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,16 +14,15 @@
 #include "util/profiler.hpp"
 
 // Function to measure time in seconds
-double measure_time(std::chrono::high_resolution_clock::time_point start, std::chrono::high_resolution_clock::time_point end) {
+double measure_time(
+    std::chrono::high_resolution_clock::time_point start, std::chrono::high_resolution_clock::time_point end) {
     return std::chrono::duration<double>(end - start).count();
 }
 
-void test_run_mobilenetv2_trace_2cqs_inference(
-    std::shared_ptr<ttnn::MeshDevice> device,
-    int batch_size
-) {
+void test_run_mobilenetv2_trace_2cqs_inference(std::shared_ptr<ttnn::MeshDevice> device, int batch_size) {
     // Prepare input tensor
-    torch::Tensor torch_input_tensor = torch::randn({batch_size, 3, 224, 224}, torch::TensorOptions().dtype(torch::kFloat32));
+    torch::Tensor torch_input_tensor =
+        torch::randn({batch_size, 3, 224, 224}, torch::TensorOptions().dtype(torch::kFloat32));
 
     int n = torch_input_tensor.size(0);
     int c = torch_input_tensor.size(1);
@@ -70,18 +69,23 @@ void test_run_mobilenetv2_trace_2cqs_inference(
 
     double fps = batch_size / inference_time_avg;
     std::cout << fmt::format(
-        "ttnn_mobilenetv2_224x224_batch_size_{}. One inference iteration time (sec): {:.6f}, FPS: {:.2f}, "
-        "inference time (sec): {:.6f}, sync output time(sec): {:.6f}",
-        batch_size, inference_time_avg, fps, inference_time, sync_output_time
-    ) << std::endl;
+                     "ttnn_mobilenetv2_224x224_batch_size_{}. One inference iteration time (sec): {:.6f}, FPS: {:.2f}, "
+                     "inference time (sec): {:.6f}, sync output time(sec): {:.6f}",
+                     batch_size,
+                     inference_time_avg,
+                     fps,
+                     inference_time,
+                     sync_output_time)
+              << std::endl;
 }
 
 int main() {
-    auto device = ttnn::MeshDevice::create_unit_mesh(0, 
-                                                    /*l1_small_size=*/24576,
-                                                    /*trace_region_size=*/6434816,
-                                                    /*num_command_queues=*/2,
-                                                    /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
+    auto device = ttnn::MeshDevice::create_unit_mesh(
+        0,
+        /*l1_small_size=*/24576,
+        /*trace_region_size=*/6434816,
+        /*num_command_queues=*/2,
+        /*dispatch_core_config=*/tt::tt_metal::DispatchCoreConfig(tt::tt_metal::DispatchCoreType::ETH));
     int batch_size = 1;
     device->enable_program_cache();
 

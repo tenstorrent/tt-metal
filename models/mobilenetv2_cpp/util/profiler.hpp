@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,19 +15,18 @@ public:
     Profiler() = default;
     ~Profiler() = default;
 
-    void start(const std::string& name) {
-        timings[name] = std::chrono::high_resolution_clock::now();
-    }
+    void start(const std::string& name) { timings[name] = std::chrono::high_resolution_clock::now(); }
 
     void stop(const std::string& name) {
         assert(timings.find(name) != timings.end());
         auto& start_time = timings[name];
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration<double>(end_time - start_time).count();
-        if(results.find(name) != results.end())
+        if (results.find(name) != results.end()) {
             results[name] += duration;
-        else
+        } else {
             results[name] = duration;
+        }
     }
 
     double get(const std::string& name) const {
@@ -43,4 +42,4 @@ private:
     std::unordered_map<std::string, double> results;
 };
 
-#endif // _UTIL_PROFILER_
+#endif  // _UTIL_PROFILER_
