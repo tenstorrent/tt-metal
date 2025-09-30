@@ -266,16 +266,27 @@ struct TestTrafficConfig {
 
 // Credit flow structures for bidirectional sender-receiver communication
 struct SenderCreditInfo {
-    uint32_t expected_receiver_count;   // How many receivers to wait for
-    uint32_t credit_reception_address;  // 4-byte L1 address for credit accumulation
+    uint32_t expected_receiver_count;        // How many receivers to wait for
+    uint32_t credit_reception_address_base;  // Base L1 address for credit chunk (mcast support)
+    uint32_t initial_credits;                // Initial credit capacity (based on receiver buffer size)
 };
 
 struct ReceiverCreditInfo {
-    FabricNodeId sender_node_id;     // Which device to send credits to
+    FabricNodeId receiver_node_id;   // Receiver's own node (credit packet source)
+    FabricNodeId sender_node_id;     // Original sender's node (credit packet destination)
     CoreCoord sender_logical_core;   // Which core to send credits to
     uint32_t sender_noc_encoding;    // NOC address for credit return (local encoding)
     uint32_t credit_return_address;  // 4-byte L1 address to write credits to
-    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;  // Routing hops for inter-chip credit return
+
+    // Credit return batching configuration (similar to initial credit capacity)
+    // Instead of returning 1 credit per packet, batch them for efficiency
+    uint32_t credit_return_batch_size;  // How many credits to accumulate before returning
+
+    // Unicast routing info for inter-chip credit return (matches fabric type)
+    // For 1D fabric: only num_hops is used
+    // For 2D fabric: all fields are used (chip IDs, mesh_id, ew_dim derived from mesh_shape)
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>>
+        hops;  // For calculating num_hops (1D) or determining route (2D)
 };
 
 struct TestTrafficSenderConfig {
@@ -464,18 +475,13 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
     // NEW: Add credit management info at the end of traffic config args
     if (!is_sync_config) {
         bool credit_management_enabled = this->parameters.enable_flow_control;
-        uint32_t credit_capacity = credit_management_enabled ? 16u : 0u;  // Default mux buffer count
-        args.push_back(credit_management_enabled ? 1u : 0u);              // credit_management_enabled
-        args.push_back(credit_capacity);                                  // credit_capacity
+        args.push_back(credit_management_enabled ? 1u : 0u);  // credit_management_enabled
 
-        // NEW: Add sender credit info (when flow control enabled)
+        // Send sender credit info only if enabled (kernel exits early if disabled)
         if (credit_management_enabled && sender_credit_info.has_value()) {
             args.push_back(sender_credit_info->expected_receiver_count);
-            args.push_back(sender_credit_info->credit_reception_address);
-        } else {
-            // Placeholder values when credit flow disabled
-            args.push_back(0u);  // expected_receiver_count
-            args.push_back(0u);  // credit_reception_address
+            args.push_back(sender_credit_info->credit_reception_address_base);
+            args.push_back(sender_credit_info->initial_credits);
         }
     }
 
@@ -552,35 +558,50 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
         default: TT_FATAL(false, "Unsupported noc send type");
     }
 
-    // NEW: Add receiver credit info (when flow control enabled)
-    if (parameters.enable_flow_control && receiver_credit_info.has_value()) {
-        args.push_back(static_cast<uint32_t>(receiver_credit_info->sender_node_id.chip_id));
-        args.push_back(static_cast<uint32_t>(*receiver_credit_info->sender_node_id.mesh_id));
-        args.push_back(receiver_credit_info->sender_logical_core.x);
-        args.push_back(receiver_credit_info->sender_logical_core.y);
-        args.push_back(receiver_credit_info->sender_noc_encoding);
-        args.push_back(receiver_credit_info->credit_return_address);
+    // NEW: Add receiver credit info presence flag and data (when flow control enabled)
+    bool has_credit_info = parameters.enable_flow_control && receiver_credit_info.has_value();
+    args.push_back(has_credit_info ? 1u : 0u);  // credit_info_present flag
 
-        // Add hop information for inter-chip credit routing (similar to sender logic)
-        if (receiver_credit_info->hops.has_value()) {
-            const auto& hops = receiver_credit_info->hops.value();
-            args.push_back(static_cast<uint32_t>(hops.size()));  // Number of hop directions
-            for (const auto& [direction, hop_count] : hops) {
-                args.push_back(static_cast<uint32_t>(direction));
-                args.push_back(hop_count);
-            }
+    if (has_credit_info) {
+        // Add chip-level unicast routing info based on fabric type
+        if (parameters.is_2D_routing_enabled) {
+            // 2D unicast: src=receiver's chip, dst=sender's chip (ChipUnicastFields2D)
+            const auto& receiver_node = receiver_credit_info->receiver_node_id;
+            const auto& sender_node = receiver_credit_info->sender_node_id;
+            const auto& mesh_shape = parameters.mesh_shape;
+            const uint32_t EW_DIM = 1;
+
+            const auto unicast_fields = ChipUnicastFields2D(
+                receiver_node.chip_id,  // src = receiver's chip (credit packet source)
+                sender_node.chip_id,    // dst = sender's chip (credit packet destination)
+                *sender_node.mesh_id,
+                mesh_shape[EW_DIM]);
+            const auto unicast_args = unicast_fields.get_args();
+            args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else {
-            args.push_back(0u);  // No hops (intra-chip or dynamic routing)
+            // 1D unicast: just num_hops (ChipUnicastFields1D)
+            uint32_t num_hops_1d = 0;
+            if (receiver_credit_info->hops.has_value()) {
+                for (const auto& [_, hops_in_dir] : receiver_credit_info->hops.value()) {
+                    if (hops_in_dir > 0) {
+                        num_hops_1d = hops_in_dir;
+                        break;
+                    }
+                }
+            }
+            const auto unicast_fields = ChipUnicastFields1D(num_hops_1d);
+            const auto unicast_args = unicast_fields.get_args();
+            args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         }
-    } else {
-        // Placeholder values when credit flow disabled
-        args.push_back(0u);  // sender_node_id.chip_id
-        args.push_back(0u);  // sender_node_id.mesh_id
-        args.push_back(0u);  // sender_logical_core.x
-        args.push_back(0u);  // sender_logical_core.y
-        args.push_back(0u);  // sender_noc_encoding
-        args.push_back(0u);  // credit_return_address
-        args.push_back(0u);  // No hops
+
+        // Add NOC-level atomic_inc fields for credit return (always NOC_UNICAST_ATOMIC_INC)
+        // Receiver batches credits before returning (configurable batch size)
+        auto atomic_inc_fields = NocUnicastAtomicIncFields(
+            receiver_credit_info->credit_return_address, receiver_credit_info->sender_noc_encoding);
+        atomic_inc_fields.set_atomic_inc_val(receiver_credit_info->credit_return_batch_size);  // Batch credits
+        // Note: atomic_inc_wrap defaults to 0 (no wrap), no need to set explicitly
+        const auto atomic_inc_args = atomic_inc_fields.get_args<true>();  // true = include noc encoding
+        args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
     }
 
     return args;

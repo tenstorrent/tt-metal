@@ -40,11 +40,15 @@ using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
 using TestTrafficReceiverConfig = tt::tt_fabric::fabric_tests::TestTrafficReceiverConfig;
+using SenderCreditInfo = tt::tt_fabric::fabric_tests::SenderCreditInfo;
+using ReceiverCreditInfo = tt::tt_fabric::fabric_tests::ReceiverCreditInfo;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
+using CommonMemoryMap = tt::tt_fabric::fabric_tests::CommonMemoryMap;
 
 using ChipSendType = tt::tt_fabric::ChipSendType;
 using NocSendType = tt::tt_fabric::NocSendType;
 using FabricNodeId = tt::tt_fabric::FabricNodeId;
+using MeshId = tt::tt_fabric::MeshId;
 using RoutingDirection = tt::tt_fabric::RoutingDirection;
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -571,6 +575,49 @@ public:
     void dump_raw_telemetry_csv(const TestConfig& config);
 
 private:
+    // Credit configuration helper
+    // Calculate both initial credits and batch size based on receiver's payload buffer capacity
+    // Returns: {initial_credits, credit_return_batch_size}
+    //
+    // SAFETY MODEL:
+    // - Receiver buffer holds N packets total
+    // - Receiver accumulates B credits before returning (batch_size)
+    // - Maximum buffer occupancy: initial_credits packets (before any credits returned)
+    // - After receiver processes B packets and returns credits, sender can send B more
+    // - Buffer then has: (initial_credits - B) + B = initial_credits packets again
+    // - Therefore: initial_credits + batch_size = N ensures no overflow
+    //
+    static std::pair<uint32_t, uint32_t> calculate_credit_config(
+        uint32_t receiver_buffer_size_bytes, uint32_t packet_size_bytes) {
+        // Calculate how many packets can fit in the receiver's buffer
+        uint32_t max_packets_in_buffer = receiver_buffer_size_bytes / packet_size_bytes;
+
+        // Ensure minimum buffer size for flow control to make sense
+        if (max_packets_in_buffer < 3) {
+            log_warning(
+                tt::LogTest,
+                "Buffer only holds {} packets - flow control may not work correctly. Consider increasing buffer size.",
+                max_packets_in_buffer);
+            return {1u, 1u};
+        }
+
+        // Calculate batch size (1/3 of buffer for balanced operation)
+        uint32_t batch_size = std::max(1u, max_packets_in_buffer / 3);
+
+        // Initial credits = buffer_capacity - batch_size
+        // This ensures: initial_credits + batch_size = buffer_capacity
+        uint32_t initial_credits = max_packets_in_buffer - batch_size;
+
+        log_debug(
+            tt::LogTest,
+            "Credit config: buffer={} packets, initial_credits={}, batch_size={}",
+            max_packets_in_buffer,
+            initial_credits,
+            batch_size);
+
+        return {initial_credits, batch_size};
+    }
+
     void reset_local_variables() {
         benchmark_mode_ = false;
         global_sync_ = false;
@@ -656,21 +703,31 @@ private:
 
         // NEW: Add credit flow info if flow control is enabled
         if (traffic_config.parameters.enable_flow_control) {
-            // Allocate unique credit address for this sender traffic config
-            uint32_t credit_addr = sender_memory_map_.allocate_credit_address();
+            // Calculate credit configuration based on receiver's payload buffer capacity
+            // This prevents sender from overrunning receiver's buffer without handshake
+            const uint32_t packet_size_bytes = traffic_config.parameters.payload_size_bytes;
+            const auto [initial_credits, credit_return_batch_size] =
+                calculate_credit_config(payload_buffer_size, packet_size_bytes);
 
-            // Sender gets the reception address and expected receiver count
+            // Allocate credit chunk for mcast: one semaphore per receiver
+            const uint32_t num_receivers = static_cast<uint32_t>(dst_node_ids.size());
+            uint32_t credit_chunk_base = sender_memory_map_.allocate_credit_chunk(num_receivers);
+
+            // Sender gets the chunk base address, receiver count, and initial credits
             sender_config.sender_credit_info = SenderCreditInfo{
-                .expected_receiver_count = static_cast<uint32_t>(dst_node_ids.size()),
-                .credit_reception_address = credit_addr};
+                .expected_receiver_count = num_receivers,
+                .credit_reception_address_base = credit_chunk_base,
+                .initial_credits = initial_credits};
 
-            // Base receiver credit info (will be customized per receiver device)
+            // Base receiver credit info (will be customized per receiver device in loop below)
             receiver_config.receiver_credit_info = ReceiverCreditInfo{
+                .receiver_node_id = FabricNodeId(MeshId{0}, 0),  // Will be set per receiver
                 .sender_node_id = traffic_config.src_node_id,
                 .sender_logical_core = src_logical_core,
                 .sender_noc_encoding = fixture_->get_worker_noc_encoding(src_logical_core),
-                .credit_return_address = credit_addr,
-                .hops = std::nullopt};  // Will be set per receiver in the loop below
+                .credit_return_address = 0,  // Will be set per receiver using chunk base + offset
+                .credit_return_batch_size = credit_return_batch_size,
+                .hops = std::nullopt};  // Will be set per receiver
         }
 
         if (fixture_->is_local_fabric_node_id(src_node_id)) {
@@ -679,6 +736,8 @@ private:
             src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
         }
 
+        // Assign per-receiver credit addresses (for mcast support)
+        uint32_t receiver_idx = 0;
         for (const auto& dst_node_id : dst_node_ids) {
             if (fixture_->is_local_fabric_node_id(dst_node_id)) {
                 const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
@@ -687,9 +746,17 @@ private:
                 // Create a copy of receiver config for this specific receiver device
                 TestTrafficReceiverConfig per_receiver_config = receiver_config;
 
-                // Calculate reverse hops for this specific receiver device (if flow control enabled)
+                // Update receiver credit info for this specific receiver device (if flow control enabled)
                 if (traffic_config.parameters.enable_flow_control &&
                     per_receiver_config.receiver_credit_info.has_value()) {
+                    // Set the receiver's own node_id (needed for credit packet source)
+                    per_receiver_config.receiver_credit_info->receiver_node_id = dst_node_id;
+
+                    // Assign unique credit return address for this receiver within the chunk
+                    uint32_t credit_chunk_base = sender_config.sender_credit_info->credit_reception_address_base;
+                    per_receiver_config.receiver_credit_info->credit_return_address =
+                        CommonMemoryMap::get_receiver_credit_address(credit_chunk_base, receiver_idx);
+
                     std::optional<std::unordered_map<RoutingDirection, uint32_t>> reverse_hops = std::nullopt;
 
                     // Calculate reverse hops from this receiver device back to the sender
@@ -705,6 +772,7 @@ private:
                 }
 
                 this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, per_receiver_config);
+                receiver_idx++;  // Increment receiver index for next address assignment
             }
         }
     }

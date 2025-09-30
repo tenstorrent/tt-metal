@@ -33,6 +33,7 @@ struct CommonMemoryMap {
     static constexpr uint32_t MUX_LOCAL_ADDRESSES_SIZE = 0x400;    // 1KB for mux local addresses
     static constexpr uint32_t CREDIT_ADDRESSES_SIZE =
         0x400;  // 1KB for credit addresses (64 traffic configs * 16 bytes)
+    static constexpr uint32_t MUX_TERMINATION_SYNC_SIZE = 64;  // Single semaphore with padding
 
     // Memory regions - still needed for individual access
     BaseMemoryRegion result_buffer;
@@ -40,6 +41,7 @@ struct CommonMemoryMap {
     BaseMemoryRegion kernel_config_buffer;
     BaseMemoryRegion mux_local_addresses;
     BaseMemoryRegion credit_addresses;
+    BaseMemoryRegion mux_termination_sync;
 
     // Explicit end address tracking (no assumptions about region order)
     uint32_t end_address;
@@ -54,12 +56,14 @@ struct CommonMemoryMap {
         kernel_config_buffer(0, 0),
         mux_local_addresses(0, 0),
         credit_addresses(0, 0),
+        mux_termination_sync(0, 0),
         end_address(0),
         current_credit_address(0) {}
 
     // Boundary-validated constructor - takes base address and highest usable address
     CommonMemoryMap(uint32_t base_address, uint32_t highest_usable_address) {
-        // Layout: [local_args_buffer][result_buffer][kernel_config_buffer][mux_local_addresses][credit_addresses]
+        // Layout:
+        // [local_args_buffer][result_buffer][kernel_config_buffer][mux_local_addresses][credit_addresses][mux_termination_sync]
         uint32_t current_addr = base_address;
 
         // Local args buffer (at top of memory)
@@ -87,6 +91,11 @@ struct CommonMemoryMap {
         current_addr += CREDIT_ADDRESSES_SIZE;
         credit_addresses = BaseMemoryRegion(credit_addresses_base, CREDIT_ADDRESSES_SIZE);
 
+        // Mux termination sync
+        uint32_t mux_termination_sync_base = current_addr;
+        current_addr += MUX_TERMINATION_SYNC_SIZE;
+        mux_termination_sync = BaseMemoryRegion(mux_termination_sync_base, MUX_TERMINATION_SYNC_SIZE);
+
         // Initialize credit address allocation state
         current_credit_address = credit_addresses_base;
 
@@ -103,7 +112,7 @@ struct CommonMemoryMap {
 
     bool is_valid() const {
         return result_buffer.is_valid() && local_args_buffer.is_valid() && kernel_config_buffer.is_valid() &&
-               mux_local_addresses.is_valid() && credit_addresses.is_valid();
+               mux_local_addresses.is_valid() && credit_addresses.is_valid() && mux_termination_sync.is_valid();
     }
 
     // Get the end address of the CommonMemoryMap allocation
@@ -111,7 +120,7 @@ struct CommonMemoryMap {
 
     // Returns common kernel arguments: [local_args_base, local_args_size, result_buffer_base, result_buffer_size,
     // kernel_config_base, kernel_config_size, mux_local_addresses_base, mux_local_addresses_size,
-    // credit_addresses_base, credit_addresses_size]
+    // mux_termination_sync_address]
     std::vector<uint32_t> get_kernel_args() const {
         return {
             local_args_buffer.start,
@@ -122,8 +131,7 @@ struct CommonMemoryMap {
             kernel_config_buffer.size,
             mux_local_addresses.start,
             mux_local_addresses.size,
-            credit_addresses.start,
-            credit_addresses.size};
+            mux_termination_sync.start};
     }
 
     // Removed get_total_size() to eliminate circular dependency - use get_end_address() instead
@@ -140,23 +148,33 @@ struct CommonMemoryMap {
     uint32_t get_mux_local_addresses_base() const { return mux_local_addresses.start; }
     uint32_t get_mux_local_addresses_size() const { return mux_local_addresses.size; }
 
-    // Credit address allocation - allocates unique 16-byte aligned addresses for traffic configs
-    uint32_t allocate_credit_address() const {
+    // Allocate credit chunk for mcast: reserves N contiguous credit addresses
+    // Returns base address of the chunk
+    uint32_t allocate_credit_chunk(uint32_t num_receivers) const {
+        uint32_t chunk_size = num_receivers * CREDIT_ADDRESS_STRIDE;
+
         TT_FATAL(
-            current_credit_address + 16 <= credit_addresses.end(),
-            "Credit address allocation exceeds available credit address space: trying to allocate at {} but limit is "
-            "{}",
-            current_credit_address + 16,
+            current_credit_address + chunk_size <= credit_addresses.end(),
+            "Credit chunk allocation exceeds available space: need {} bytes at {} but limit is {}",
+            chunk_size,
+            current_credit_address,
             credit_addresses.end());
 
-        uint32_t addr = current_credit_address;
-        current_credit_address += 16;  // 16-byte alignment for NOC efficiency
+        uint32_t chunk_base = current_credit_address;
+        current_credit_address += chunk_size;
 
-        // Initialize the credit address to 0
-        *reinterpret_cast<volatile uint32_t*>(addr) = 0;
+        // Note: Credit semaphores in the chunk will be initialized by kernel
+        // (to initial_credits value, not zero)
 
-        return addr;
+        return chunk_base;
     }
+
+    // Helper to compute individual receiver credit address from chunk
+    static uint32_t get_receiver_credit_address(uint32_t chunk_base, uint32_t receiver_idx) {
+        return chunk_base + (receiver_idx * CREDIT_ADDRESS_STRIDE);
+    }
+
+    static constexpr uint32_t CREDIT_ADDRESS_STRIDE = 16;  // 16-byte alignment per receiver
 
     // Reset credit address allocation for next test run
     void reset_credit_allocation() const { current_credit_address = credit_addresses.start; }
@@ -261,7 +279,7 @@ struct SenderMemoryMap {
     uint32_t get_kernel_config_size() const { return common.get_kernel_config_size(); }
 
     // Credit address allocation methods
-    uint32_t allocate_credit_address() const { return common.allocate_credit_address(); }
+    uint32_t allocate_credit_chunk(uint32_t num_receivers) const { return common.allocate_credit_chunk(num_receivers); }
 
     // Reset method for test cleanup
     void reset() const { common.reset_credit_allocation(); }
@@ -273,6 +291,7 @@ struct SenderMemoryMap {
 struct ReceiverMemoryMap {
     // Constants for memory region sizes
     static constexpr uint32_t ATOMIC_COUNTER_BUFFER_SIZE = 0x1000;  // 4KB
+    static constexpr uint32_t CREDIT_HEADER_BUFFER_SIZE = 0x400;    // 1KB reserved for credit headers
 
     // Encapsulated common memory map
     CommonMemoryMap common;
@@ -280,12 +299,14 @@ struct ReceiverMemoryMap {
     // Receiver-specific memory regions
     BaseMemoryRegion payload_chunks;
     BaseMemoryRegion atomic_counters;
+    BaseMemoryRegion credit_headers;  // NEW: Pre-allocated space for credit return packet headers
 
     // Store the payload chunk size for later access
     uint32_t payload_chunk_size_;
 
     // Default constructor
-    ReceiverMemoryMap() : common(), payload_chunks(0, 0), atomic_counters(0, 0), payload_chunk_size_(0) {}
+    ReceiverMemoryMap() :
+        common(), payload_chunks(0, 0), atomic_counters(0, 0), credit_headers(0, 0), payload_chunk_size_(0) {}
 
     ReceiverMemoryMap(
         uint32_t l1_unreserved_base,
@@ -298,14 +319,20 @@ struct ReceiverMemoryMap {
             l1_unreserved_base + l1_unreserved_size),  // Pass boundary for validation, not size
         payload_chunks(0, 0),                          // Will be set below
         atomic_counters(0, 0),                         // Will be set below
+        credit_headers(0, 0),                          // Will be set below
         payload_chunk_size_(payload_chunk_size) {
-        // Layout: [CommonMemoryMap regions][atomic_counters][payload_chunks]
+        // Layout: [CommonMemoryMap regions][atomic_counters][credit_headers][payload_chunks]
         uint32_t current_addr = common.get_end_address();  // Continue from where CommonMemoryMap ended
 
         // Atomic counters
         uint32_t atomic_counter_base = current_addr;
         current_addr += ATOMIC_COUNTER_BUFFER_SIZE;
         atomic_counters = BaseMemoryRegion(atomic_counter_base, ATOMIC_COUNTER_BUFFER_SIZE);
+
+        // Credit headers - reserved space for credit return packet headers
+        uint32_t credit_header_base = current_addr;
+        current_addr += CREDIT_HEADER_BUFFER_SIZE;
+        credit_headers = BaseMemoryRegion(credit_header_base, CREDIT_HEADER_BUFFER_SIZE);
 
         // Payload chunks - receivers need configurable chunk size based on number of configs
         uint32_t payload_chunk_base = current_addr;
@@ -320,9 +347,18 @@ struct ReceiverMemoryMap {
             l1_unreserved_size);
     }
 
-    bool is_valid() const { return common.is_valid() && payload_chunks.is_valid() && atomic_counters.is_valid(); }
+    bool is_valid() const {
+        return common.is_valid() && payload_chunks.is_valid() && atomic_counters.is_valid() &&
+               credit_headers.is_valid();
+    }
 
-    std::vector<uint32_t> get_memory_map_args() const { return common.get_kernel_args(); }
+    std::vector<uint32_t> get_memory_map_args() const {
+        // Returns: [common args][credit_header_base][credit_header_end]
+        auto args = common.get_kernel_args();
+        args.push_back(credit_headers.start);
+        args.push_back(credit_headers.size);
+        return args;
+    }
 
     // Convenience methods for reading results
     uint32_t get_result_buffer_address() const { return common.get_result_buffer_address(); }

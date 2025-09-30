@@ -132,10 +132,7 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
     if (pattern_yaml["mcast_start_hops"]) {
         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
     }
-    if (pattern_yaml["enable_flow_control"]) {
-        config.enable_flow_control = parse_scalar<bool>(pattern_yaml["enable_flow_control"]);
-        log_info(tt::LogTest, "Flow control enabled for pattern: {}", config.enable_flow_control.value());
-    }
+    // NOTE: enable_flow_control moved to test-level config (not per-pattern)
     return config;
 }
 

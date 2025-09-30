@@ -18,6 +18,10 @@
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
+// Maximum number of fabric connections supported per kernel (1 per direction: N, S, E, W)
+// This is used to size FabricConnectionArray storage without template proliferation
+static constexpr uint8_t MAX_NUM_FABRIC_CONNECTIONS = 4;
+
 struct LocalArgsBuffer {
     uint32_t base_address = 0;
     uint32_t buffer_size = 0;
@@ -409,20 +413,14 @@ void setup_2d_mcast_route(uint32_t packet_header_address, const ChipMulticastFie
 template <ChipSendType chip_type, bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
 struct ChipSendTypeHandler {
     static void parse_and_setup(
-        size_t& arg_idx,
-        uint32_t packet_header_address,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        WorkerToFabricEdmSender* fabric_connection_handle);
+        size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header);
 };
 
 // 1D Unicast specialization
 template <bool USE_DYNAMIC_ROUTING>
 struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTING> {
     static void parse_and_setup(
-        size_t& arg_idx,
-        uint32_t packet_header_address,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        WorkerToFabricEdmSender* fabric_connection_handle) {
+        size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields1D::build_from_args(arg_idx);
         packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_fields.num_hops));
     }
@@ -432,10 +430,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTIN
 template <bool USE_DYNAMIC_ROUTING>
 struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING> {
     static void parse_and_setup(
-        size_t& arg_idx,
-        uint32_t packet_header_address,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        WorkerToFabricEdmSender* fabric_connection_handle) {
+        size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
         if constexpr (USE_DYNAMIC_ROUTING) {
             setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, unicast_fields);
@@ -449,10 +444,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING
 template <bool USE_DYNAMIC_ROUTING>
 struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false, USE_DYNAMIC_ROUTING> {
     static void parse_and_setup(
-        size_t& arg_idx,
-        uint32_t packet_header_address,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        WorkerToFabricEdmSender* fabric_connection_handle) {
+        size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto mcast_fields = ChipMulticastFields1D::build_from_args(arg_idx);
         packet_header->to_chip_multicast(MulticastRoutingCommandHeader{
             static_cast<uint8_t>(mcast_fields.mcast_start_hops), static_cast<uint8_t>(mcast_fields.num_hops)});
@@ -463,10 +455,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, false, USE_DYNAMIC_ROUT
 template <bool USE_DYNAMIC_ROUTING>
 struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true, USE_DYNAMIC_ROUTING> {
     static void parse_and_setup(
-        size_t& arg_idx,
-        uint32_t packet_header_address,
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-        WorkerToFabricEdmSender* fabric_connection_handle) {
+        size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto mcast_fields = ChipMulticastFields2D::build_from_args(arg_idx);
         if constexpr (USE_DYNAMIC_ROUTING) {
             setup_2d_mcast_route<MeshPacketHeader>(packet_header_address, mcast_fields);
@@ -510,21 +499,188 @@ struct NocScatterWriteSenderOperations {
     static void update_header_impl(SenderKernelTrafficConfig* config);
 };
 
-// line sync for each fabric connection.
+/* ****************************************************************************
+ * FabricConnectionArray: Unified connection management for sender and receiver
+ *
+ * Provides type-erased storage for both WorkerToFabricEdmSender and
+ * WorkerToFabricMuxSender connections with runtime dispatch.
+ *
+ * Uses MAX_NUM_FABRIC_CONNECTIONS for storage to avoid template proliferation.
+ * Actual num_connections is set at runtime and bounds-checked.
+ *
+ * Used by:
+ * - SenderKernelConfig: For sending data packets
+ * - ReceiverKernelConfig: For sending credit returns
+ * *****************************************************************************/
+struct FabricConnectionArray {
+    // TODO: get the num buffers more systematically
+    static constexpr uint8_t NUM_BUFFERS = 8;
+
+    using MuxConnectionType = tt::tt_fabric::WorkerToFabricMuxSender<NUM_BUFFERS>;
+    static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(WorkerToFabricEdmSender), sizeof(MuxConnectionType));
+
+    // Type-erased storage for connections (sized for maximum)
+    alignas(std::max_align_t) std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
+    std::array<bool, MAX_NUM_FABRIC_CONNECTIONS> is_mux;
+
+    // Actual number of connections in use (set at initialization, bounds-checked in kernel)
+    uint8_t num_connections = 0;
+
+    // Accessors with proper type casting
+    FORCE_INLINE WorkerToFabricEdmSender& get_fabric_connection(uint8_t idx) {
+        return *reinterpret_cast<WorkerToFabricEdmSender*>(storage.data() + idx * MAX_CONNECTION_SIZE);
+    }
+
+    FORCE_INLINE MuxConnectionType& get_mux_connection(uint8_t idx) {
+        return *reinterpret_cast<MuxConnectionType*>(storage.data() + idx * MAX_CONNECTION_SIZE);
+    }
+
+    // Parse connections from runtime args
+    // Memory map is required for allocating local semaphore addresses for mux connections
+    template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX, typename MemoryMapType>
+    void parse_from_args(size_t& rt_args_idx, MemoryMapType& memory_map) {
+        for (uint8_t i = 0; i < num_connections; i++) {
+            // Parse connection type flag
+            is_mux[i] = get_arg_val<uint32_t>(rt_args_idx++) != 0;
+
+            if (is_mux[i]) {
+                // Initialize mux connection using placement new
+                uint8_t mux_x = get_arg_val<uint32_t>(rt_args_idx++);
+                uint8_t mux_y = get_arg_val<uint32_t>(rt_args_idx++);
+                uint8_t mux_channel_id = get_arg_val<uint32_t>(rt_args_idx++);
+                uint8_t mux_num_buffers_per_channel = get_arg_val<uint32_t>(rt_args_idx++);
+                size_t mux_channel_buffer_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
+                size_t mux_channel_base_address = get_arg_val<uint32_t>(rt_args_idx++);
+                size_t mux_connection_info_address = get_arg_val<uint32_t>(rt_args_idx++);
+                size_t mux_connection_handshake_address = get_arg_val<uint32_t>(rt_args_idx++);
+                size_t mux_flow_control_address = get_arg_val<uint32_t>(rt_args_idx++);
+                size_t mux_buffer_index_address = get_arg_val<uint32_t>(rt_args_idx++);
+
+                // Allocate local semaphore addresses for this mux connection (cursor-based)
+                const auto mux_local_addrs = memory_map.get_mux_local_addresses_for_connection();
+
+                auto conn = build_connection_to_fabric_endpoint<NUM_BUFFERS>(
+                    mux_x,
+                    mux_y,
+                    mux_channel_id,
+                    mux_num_buffers_per_channel,
+                    mux_channel_buffer_size_bytes,
+                    mux_channel_base_address,
+                    mux_connection_info_address,
+                    mux_connection_handshake_address,
+                    mux_flow_control_address,
+                    mux_buffer_index_address,
+                    mux_local_addrs.flow_control_address,
+                    mux_local_addrs.teardown_address,
+                    mux_local_addrs.buffer_index_address);
+                new (&get_mux_connection(i)) MuxConnectionType(conn);
+            } else {
+                // Initialize fabric connection using placement new
+                auto conn = WorkerToFabricEdmSender::build_from_args<core_type>(rt_args_idx);
+                new (&get_fabric_connection(i)) WorkerToFabricEdmSender(conn);
+            }
+        }
+    }
+
+    // Lifecycle management
+    FORCE_INLINE void open_all() {
+        for (uint8_t i = 0; i < num_connections; i++) {
+            if (is_mux[i]) {
+                get_mux_connection(i).open();
+            } else {
+                get_fabric_connection(i).open();
+            }
+        }
+    }
+
+    FORCE_INLINE void close_all() {
+        for (uint8_t i = 0; i < num_connections; i++) {
+            if (is_mux[i]) {
+                get_mux_connection(i).close();
+            } else {
+                get_fabric_connection(i).close();
+            }
+        }
+    }
+
+    // Unified send operations (dispatch hidden from callers)
+
+    // Wait for connection to have space
+    FORCE_INLINE void wait_for_empty_write_slot(uint8_t idx) {
+        if (is_mux[idx]) {
+            get_mux_connection(idx).wait_for_empty_write_slot();
+        } else {
+            get_fabric_connection(idx).wait_for_empty_write_slot();
+        }
+    }
+
+    // Send header only (used for credit returns)
+    FORCE_INLINE void send_header_only(uint8_t idx, uint32_t header_addr) {
+        if (is_mux[idx]) {
+            get_mux_connection(idx).send_payload_flush_non_blocking_from_address(
+                header_addr, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            get_fabric_connection(idx).send_payload_flush_non_blocking_from_address(
+                header_addr, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
+
+    // Send payload without header (used for multi-part sends)
+    FORCE_INLINE void send_payload_without_header(uint8_t idx, uint32_t payload_addr, size_t size) {
+        if (is_mux[idx]) {
+            get_mux_connection(idx).send_payload_without_header_non_blocking_from_address(payload_addr, size);
+        } else {
+            get_fabric_connection(idx).send_payload_without_header_non_blocking_from_address(payload_addr, size);
+        }
+    }
+
+    // Send header with flush (used for completing multi-part sends)
+    FORCE_INLINE void send_header_flush(uint8_t idx, uint32_t header_addr) {
+        if (is_mux[idx]) {
+            get_mux_connection(idx).send_payload_flush_non_blocking_from_address(
+                header_addr, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            get_fabric_connection(idx).send_payload_flush_non_blocking_from_address(
+                header_addr, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
+
+    // Combined: send payload + header (most common case)
+    FORCE_INLINE void send_payload_with_header(
+        uint8_t idx, uint32_t payload_addr, size_t payload_size, uint32_t header_addr) {
+        if (is_mux[idx]) {
+            auto& conn = get_mux_connection(idx);
+            if (payload_size > 0) {
+                conn.send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
+            }
+            conn.send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            auto& conn = get_fabric_connection(idx);
+            if (payload_size > 0) {
+                conn.send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
+            }
+            conn.send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
+};
+
+// Line sync for each fabric connection (used by SyncKernelConfig)
+// Uses unified connection array pattern - templated for proper typing
 struct LineSyncConfig {
     LineSyncConfig(
-        WorkerToFabricEdmSender* fabric_connection_handle,
+        FabricConnectionArray* connection_array,
+        uint8_t connection_idx,
         const uint32_t packet_header_address,
         const uint32_t line_sync_val) :
-        fabric_connection_handle(fabric_connection_handle), line_sync_val(line_sync_val) {
+        connections_(connection_array), connection_idx_(connection_idx), line_sync_val(line_sync_val) {
         packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
     }
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
     void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
-        // setup header fields. 2 rt args for 1D
+        // setup header fields. 2 rt args for 1D (connection handle not needed for header setup)
         ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
-            arg_idx, packet_header_address, packet_header, fabric_connection_handle);
+            arg_idx, packet_header_address, packet_header);
 
         // set up noc fields, 4 rt args
         auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
@@ -535,11 +691,11 @@ struct LineSyncConfig {
             NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
     }
 
+    // Expanded 2-step send using connection array
     void global_sync_start() {
-        // send packet to remote devices
-        fabric_connection_handle->wait_for_empty_write_slot();
-        fabric_connection_handle->send_payload_flush_non_blocking_from_address(
-            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+        // Send packet to remote devices using properly typed connection array
+        connections_->wait_for_empty_write_slot(connection_idx_);
+        connections_->send_header_flush(connection_idx_, (uint32_t)packet_header);
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -548,7 +704,8 @@ struct LineSyncConfig {
     }
 
 private:
-    WorkerToFabricEdmSender* fabric_connection_handle;
+    FabricConnectionArray* connections_;                   // Properly typed pointer!
+    uint8_t connection_idx_;                               // Index into the connection array
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     volatile tt_l1_ptr uint32_t* line_sync_ptr;
     uint32_t line_sync_val;
@@ -592,12 +749,173 @@ private:
     uint32_t sync_val;
 };
 
+// Credit management structures (kernel-side)
+struct SenderCreditInfo {
+    // Default constructor with dummy values (needed for array initialization)
+    SenderCreditInfo() = default;
+
+    static SenderCreditInfo build_from_args(size_t& arg_idx) { return SenderCreditInfo(arg_idx); }
+
+    uint32_t expected_receiver_count = 0;
+    uint32_t credit_reception_address_base = 0;  // Base address of credit chunk (for mcast)
+    uint32_t initial_credits = 0;
+
+private:
+    SenderCreditInfo(size_t& arg_idx) {
+        this->expected_receiver_count = get_local_arg_val<uint32_t>(arg_idx++);
+        this->credit_reception_address_base = get_local_arg_val<uint32_t>(arg_idx++);
+        this->initial_credits = get_local_arg_val<uint32_t>(arg_idx++);
+    }
+};
+
+// Helper class to manage sender-side credit consumption
+// Encapsulates all credit checking and consumption logic in one place
+// Mirrors ReceiverCreditManager pattern for consistency
+struct SenderCreditManager {
+    SenderCreditManager() = default;
+
+    // Initialize from args (called during config construction)
+    void init(size_t& arg_idx) {
+        enabled_ = get_local_arg_val<uint32_t>(arg_idx++) != 0;
+        if (!enabled_) {
+            return;
+        }
+
+        sender_credit_info_ = SenderCreditInfo::build_from_args(arg_idx);
+
+        // Store base pointer (cast once, index many times)
+        credit_semaphores_base_ptr_ =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_credit_info_.credit_reception_address_base);
+
+        // Cache base NOC address (get_noc_addr(0) encodes our own core's x,y coordinates)
+        credit_semaphores_base_noc_addr_ = get_noc_addr(0) + sender_credit_info_.credit_reception_address_base;
+
+        num_receivers_ = sender_credit_info_.expected_receiver_count;
+        initial_credits_ = sender_credit_info_.initial_credits;
+        estimated_available_credits_ = 0;  // Will be set in initialize()
+
+        ASSERT(num_receivers_ > 0);
+        ASSERT(credit_semaphores_base_ptr_ != nullptr);
+    }
+
+    // Initialize credit semaphores (called at connection open)
+    void initialize() {
+        if (!enabled_) {
+            return;
+        }
+
+        // Initialize all receiver credit semaphores to initial_credits
+        for (uint32_t i = 0; i < num_receivers_; i++) {
+            credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] = initial_credits_;
+        }
+
+        estimated_available_credits_ = initial_credits_;
+    }
+
+    // Check if credits available (non-blocking, called before send)
+    FORCE_INLINE bool has_credits_available() const {
+        if (!enabled_) {
+            return true;  // Always available when disabled
+        }
+
+        // Fast path: if we think we have credits, return true
+        if (estimated_available_credits_ > 0) {
+            return true;
+        }
+
+        // Slow path: blocked - check actual credit state across all receivers
+        return const_cast<SenderCreditManager*>(this)->update_available_credits();
+    }
+
+    // Update available credits by checking all receivers (called when blocked)
+    bool update_available_credits() {
+        if (!enabled_) {
+            return true;
+        }
+
+        invalidate_l1_cache();
+
+        // Find minimum credits across all receivers (slowest receiver determines limit)
+        uint32_t min_credits = credit_semaphores_base_ptr_[0];
+
+        for (uint32_t i = 1; i < num_receivers_; i++) {
+            uint32_t recv_credits = credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS];
+            if (recv_credits < min_credits) {
+                min_credits = recv_credits;
+            }
+        }
+
+        estimated_available_credits_ = min_credits;
+        return estimated_available_credits_ > 0;
+    }
+
+    // Consume one credit (called after successful send - decrements ALL receivers)
+    FORCE_INLINE void consume_credit() {
+        if (!enabled_) {
+            return;
+        }
+
+        ASSERT(estimated_available_credits_ > 0);
+
+        // Decrement all receivers using NOC atomic ops (they all will receive the mcast packet)
+        for (uint32_t i = 0; i < num_receivers_; i++) {
+            uint32_t offset = i * CREDIT_ADDRESS_STRIDE;
+            uint64_t credit_noc_addr = credit_semaphores_base_noc_addr_ + offset;
+            noc_semaphore_inc(credit_noc_addr, -1);
+        }
+        noc_async_atomic_barrier();
+
+        estimated_available_credits_--;
+    }
+
+    // Wait for all credits back (called at connection close)
+    void wait_for_all_credits_returned() {
+        if (!enabled_) {
+            return;
+        }
+
+        // Wait for all receivers to return to initial credit count
+        bool all_returned = false;
+        while (!all_returned) {
+            invalidate_l1_cache();
+            all_returned = true;
+
+            for (uint32_t i = 0; i < num_receivers_; i++) {
+                if (credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] < initial_credits_) {
+                    all_returned = false;
+                    break;
+                }
+            }
+        }
+    }
+
+    bool is_enabled() const { return enabled_; }
+
+private:
+    bool enabled_ = false;
+    SenderCreditInfo sender_credit_info_;
+
+    // Per-receiver credit tracking
+    volatile tt_l1_ptr uint32_t* credit_semaphores_base_ptr_ = nullptr;  // Base pointer to credit array
+    uint64_t credit_semaphores_base_noc_addr_ = 0;                       // Cached NOC address (get_noc_addr(0) + base)
+    uint32_t num_receivers_ = 0;
+    uint32_t initial_credits_ = 0;
+    uint32_t estimated_available_credits_ = 0;  // Cached minimum (updated lazily)
+
+    // Stride in words (uint32_t units), not bytes
+    // 16 bytes = 4 words
+    static constexpr uint32_t CREDIT_ADDRESS_STRIDE = 16;                                      // bytes
+    static constexpr uint32_t CREDIT_STRIDE_WORDS = CREDIT_ADDRESS_STRIDE / sizeof(uint32_t);  // 4
+};
+
 struct SenderKernelTrafficConfig {
     SenderKernelTrafficConfig(
-        WorkerToFabricEdmSender* fabric_connection_handle,
+        FabricConnectionArray* connection_array,
+        uint8_t connection_idx,
         const SenderTrafficConfigMetadata& metadata,
         const uint32_t packet_header_address) :
-        fabric_connection_handle(fabric_connection_handle),
+        connections_(connection_array),
+        connection_idx_(connection_idx),
         metadata(metadata),
         noc_send_type_(static_cast<NocSendType>(0)),
         payload_buffer_(nullptr) {
@@ -614,10 +932,10 @@ struct SenderKernelTrafficConfig {
 
         if (chip_send_type == ChipSendType::CHIP_UNICAST) {
             ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
-                arg_idx, packet_header_address, packet_header, fabric_connection_handle);
+                arg_idx, packet_header_address, packet_header);
         } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
             ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
-                arg_idx, packet_header_address, packet_header, fabric_connection_handle);
+                arg_idx, packet_header_address, packet_header);
         } else {
             ASSERT(false);
         }
@@ -665,73 +983,35 @@ struct SenderKernelTrafficConfig {
 
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
+    // Send exactly one packet per call (round-robin scheduling)
+    // Returns: true if packet was sent, false if blocked (no credits)
     template <bool BENCHMARK_MODE>
-    void send_packets() {
-        uint32_t num_packets_to_send = 1;
-        if constexpr (BENCHMARK_MODE) {
-            num_packets_to_send = metadata.num_packets;
-        }
-
-        for (uint32_t i = 0; i < num_packets_to_send; i++) {
-            fabric_connection_handle->wait_for_empty_write_slot();
-
-            if constexpr (!BENCHMARK_MODE) {
-                if (payload_size_bytes > 0 && payload_buffer_) {
-                    payload_buffer_->fill_data(metadata.seed);
-
-                    fabric_connection_handle->send_payload_without_header_non_blocking_from_address(
-                        payload_buffer_->get_physical_address(), payload_size_bytes);
-                }
-            }
-
-            fabric_connection_handle->send_payload_flush_non_blocking_from_address(
-                (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-
-            if constexpr (!BENCHMARK_MODE) {
-                // avoid race condition where we update the ptrs but fabric write is not done yet.
-                noc_async_writes_flushed();
-
-                if (payload_size_bytes > 0 && payload_buffer_) {
-                    payload_buffer_->advance();
-                    update_header_for_next_packet();
-                }
-                metadata.seed = prng_next(metadata.seed);
+    bool send_one_packet() {
+        // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
+        if constexpr (!BENCHMARK_MODE) {
+            if (!credit_manager_.has_credits_available()) {
+                return false;  // No credits available - blocked
             }
         }
 
-        num_packets_processed += num_packets_to_send;
-    }
+        // STEP 2: Wait for connection to be ready (dispatch hidden in array)
+        connections_->wait_for_empty_write_slot(connection_idx_);
 
-    // Round-robin version: always sends exactly one packet
-    template <bool BENCHMARK_MODE>
-    void send_one_packet() {
-        // NEW: Unified flow control check (works for both mux and fabric)
-        if (available_credits == 0) {
-            return;  // Can't send - only happens when credit_management_enabled=true (mux mode)
-        }
-
-        // NEW: Handle mux connections (where fabric_connection_handle is null)
-        if (fabric_connection_handle == nullptr) {
-            // TODO: Implement mux sending logic here
-            // For now, just skip mux sending until we implement the proper mux send path
-            DPRINT << "SKIP: Mux sending not yet implemented in unified config" << ENDL();
-            return;
-        }
-
-        fabric_connection_handle->wait_for_empty_write_slot();
-
+        // STEP 3: Send packet
         if constexpr (!BENCHMARK_MODE) {
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->fill_data(metadata.seed);
 
-                fabric_connection_handle->send_payload_without_header_non_blocking_from_address(
-                    payload_buffer_->get_physical_address(), payload_size_bytes);
+                // Send payload without header (dispatch hidden in array)
+                connections_->send_payload_without_header(
+                    connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
         }
 
-        fabric_connection_handle->send_payload_flush_non_blocking_from_address(
-            (uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+        // Send header with flush (dispatch hidden in array)
+        connections_->send_header_flush(connection_idx_, (uint32_t)packet_header);
 
+        // STEP 4: Update state (after successful send)
         if constexpr (!BENCHMARK_MODE) {
             // avoid race condition where we update the ptrs but fabric write is not done yet.
             noc_async_writes_flushed();
@@ -741,14 +1021,14 @@ struct SenderKernelTrafficConfig {
                 update_header_for_next_packet();
             }
             metadata.seed = prng_next(metadata.seed);
+
+            // STEP 5: Consume credit AFTER successful send (grouped with state updates)
+            credit_manager_.consume_credit();
         }
 
         num_packets_processed += 1;  // Always increment by 1
 
-        // NEW: Unified credit consumption (no-op when unlimited)
-        if (available_credits != UINT32_MAX) {
-            available_credits--;
-        }
+        return true;  // Packet sent successfully
     }
 
     void advance_dst_address() {
@@ -767,14 +1047,6 @@ struct SenderKernelTrafficConfig {
 
     bool has_wrapped() const { return payload_buffer_ ? payload_buffer_->has_wrapped() : false; }
 
-    // NEW: Credit replenishment (no-op when credit management disabled)
-    void replenish_credits(uint32_t count) {
-        if (credit_management_enabled && available_credits != UINT32_MAX) {
-            available_credits = std::min(available_credits + count, credit_capacity);
-        }
-        // No-op when credit_management_enabled=false or available_credits=UINT32_MAX (fabric mode)
-    }
-
     // Friend classes for operation implementations
     friend struct NocWriteSenderOperations;
     friend struct NocAtomicSenderOperations;
@@ -789,17 +1061,18 @@ private:
     }
 
 public:
-    WorkerToFabricEdmSender* fabric_connection_handle;
+    // Connection management (replaces fabric_connection_handle)
+    FabricConnectionArray* connections_;                   // Properly typed pointer!
+    uint8_t connection_idx_;                               // Index into the connection array
+
     SenderTrafficConfigMetadata metadata;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     uint32_t payload_size_bytes = 0;
     uint32_t num_packets_processed = 0;
     uint64_t elapsed_cycles = 0;
 
-    // NEW: Unified credit management (always present, no-op when disabled)
-    bool credit_management_enabled = false;   // Set by host args - enables/disables credit tracking
-    uint32_t available_credits = UINT32_MAX;  // Unlimited by default (fabric), limited when mux
-    uint32_t credit_capacity = 0;             // Total buffer capacity (only meaningful when enabled)
+    // Credit management (encapsulated in manager object)
+    SenderCreditManager credit_manager_;
 
 private:
     NocSendType noc_send_type_;
@@ -936,6 +1209,7 @@ struct CommonMemoryMap {
     uint32_t kernel_config_size;
     uint32_t mux_local_addresses_base;
     uint32_t mux_local_addresses_size;
+    uint32_t mux_termination_sync_address;
 
 private:
     CommonMemoryMap(size_t& arg_idx) {
@@ -951,48 +1225,134 @@ private:
         kernel_config_size = get_arg_val<uint32_t>(arg_idx++);
         mux_local_addresses_base = get_arg_val<uint32_t>(arg_idx++);
         mux_local_addresses_size = get_arg_val<uint32_t>(arg_idx++);
-
-        // CommonMemoryMap only consumes 8 arguments - SenderKernelMemoryMap handles the extra 3
+        mux_termination_sync_address = get_arg_val<uint32_t>(arg_idx++);
     }
+};
 
-public:
-    // Mux local address allocation - same as host-side for consistency
-    struct MuxLocalAddresses {
-        uint32_t flow_control_address;
-        uint32_t teardown_address;
-        uint32_t buffer_index_address;
-        uint32_t status_buffer_address;
-        uint32_t sync_address;
-    };
+/* ****************************************************************************
+ * MuxLocalAddresses: Standalone struct for mux connection local semaphores
+ *
+ * Used by both sender and receiver memory maps to allocate local L1 addresses
+ * for mux connection flow control.
+ * ****************************************************************************/
+struct MuxLocalAddresses {
+    uint32_t flow_control_address;
+    uint32_t teardown_address;
+    uint32_t buffer_index_address;
+    uint32_t status_buffer_address;
+    uint32_t sync_address;
 
-    MuxLocalAddresses get_mux_local_addresses_for_connection(uint8_t connection_idx) const {
-        constexpr uint32_t noc_address_padding_bytes = 16;  // Standard NOC alignment
-        // Derive addresses per connection from struct size (auto-adjusts if fields added/removed)
-        constexpr uint32_t num_addresses = sizeof(MuxLocalAddresses) / sizeof(uint32_t);
-        constexpr uint32_t addresses_per_connection = num_addresses * noc_address_padding_bytes;
-
-        // Allocate unique offset per connection index (safer and consistent with fabric design)
-        uint32_t connection_offset = connection_idx * addresses_per_connection;
-        uint32_t base_address = mux_local_addresses_base + connection_offset;
-
-        // Use incremental assignment instead of multiplication for clarity and maintainability
+    static MuxLocalAddresses allocate_from_base(uint32_t base_address, uint32_t address_padding_bytes) {
         uint32_t current_addr = base_address;
         uint32_t flow_control_address = current_addr;
-        current_addr += noc_address_padding_bytes;
+        current_addr += address_padding_bytes;
         uint32_t teardown_address = current_addr;
-        current_addr += noc_address_padding_bytes;
+        current_addr += address_padding_bytes;
         uint32_t buffer_index_address = current_addr;
-        current_addr += noc_address_padding_bytes;
+        current_addr += address_padding_bytes;
         uint32_t status_buffer_address = current_addr;
-        current_addr += noc_address_padding_bytes;
+        current_addr += address_padding_bytes;
         uint32_t sync_address = current_addr;
 
         return MuxLocalAddresses{
             flow_control_address, teardown_address, buffer_index_address, status_buffer_address, sync_address};
     }
+
+    // Helper to calculate total size needed for one connection
+    static constexpr uint32_t size_per_connection(uint32_t address_padding_bytes) {
+        constexpr uint32_t num_addresses = sizeof(MuxLocalAddresses) / sizeof(uint32_t);
+        return num_addresses * address_padding_bytes;
+    }
+};
+
+/* ****************************************************************************
+ * MuxTerminationManager: Template-based mux termination handler
+ *
+ * Specializations:
+ * - HAS_MUX_CONNECTIONS=false: No-op (not a mux client)
+ * - HAS_MUX_CONNECTIONS=true: Runtime master/subordinate role with NUM_MUXES template param
+ * ****************************************************************************/
+template <bool HAS_MUX_CONNECTIONS, uint8_t NUM_MUXES = 0>
+struct MuxTerminationManager;
+
+// Specialization: No mux connections
+template <uint8_t NUM_MUXES>
+struct MuxTerminationManager<false, NUM_MUXES> {
+    MuxTerminationManager(size_t& local_args_idx, uint32_t sync_address) {
+        // No args to parse
+    }
+
+    FORCE_INLINE void terminate_muxes() {
+        // No-op
+    }
+};
+
+// Specialization: Has mux connections (runtime determines master vs subordinate)
+template <uint8_t NUM_MUXES>
+struct MuxTerminationManager<true, NUM_MUXES> {
+    MuxTerminationManager(size_t& local_args_idx, uint32_t sync_address) {
+        // Arg 0: is_master
+        is_master_ = get_local_arg_val<uint32_t>(local_args_idx++) != 0;
+
+        // Arg 1: total_mux_clients
+        total_mux_clients_ = get_local_arg_val<uint32_t>(local_args_idx++);
+
+        // Arg 2: master NOC encoding
+        uint32_t master_noc_encoding = get_local_arg_val<uint32_t>(local_args_idx++);
+
+        if (is_master_) {
+            // Master: setup sync semaphore (should be cleared by host)
+            termination_sync_ptr_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_address);
+
+            // Arg 3: number of muxes to terminate
+            num_muxes_to_terminate_ = get_local_arg_val<uint32_t>(local_args_idx++);
+            ASSERT(num_muxes_to_terminate_ <= NUM_MUXES);
+
+            // Parse mux list (x, y, signal_addr triples)
+            for (uint8_t i = 0; i < num_muxes_to_terminate_; i++) {
+                mux_x_[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+                mux_y_[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+                mux_signal_addrs_[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+            }
+        } else {
+            // Subordinate: setup NOC address to master's sync semaphore
+            master_noc_addr_ = get_noc_addr_helper(master_noc_encoding, sync_address);
+        }
+    }
+
+    FORCE_INLINE void terminate_muxes() {
+        if (is_master_) {
+            // Wait for all subordinates (total_clients - 1, excluding self)
+            noc_semaphore_wait(termination_sync_ptr_, total_mux_clients_ - 1);
+
+            // Terminate all muxes in sequence
+            for (uint8_t i = 0; i < num_muxes_to_terminate_; i++) {
+                tt::tt_fabric::fabric_endpoint_terminate(mux_x_[i], mux_y_[i], mux_signal_addrs_[i]);
+            }
+        } else {
+            // Signal the master
+            noc_semaphore_inc(master_noc_addr_, 1);
+            noc_async_atomic_barrier();
+        }
+    }
+
+private:
+    bool is_master_ = false;
+    uint32_t total_mux_clients_ = 0;
+
+    // Master members:
+    volatile tt_l1_ptr uint32_t* termination_sync_ptr_ = nullptr;
+    uint8_t num_muxes_to_terminate_ = 0;
+    uint8_t mux_x_[NUM_MUXES];
+    uint8_t mux_y_[NUM_MUXES];
+    uint32_t mux_signal_addrs_[NUM_MUXES];
+
+    // Subordinate members:
+    uint64_t master_noc_addr_ = 0;
 };
 
 struct SenderKernelMemoryMap {
+    static constexpr uint32_t address_padding_bytes = 16;
     // Encapsulated common memory map
     CommonMemoryMap common;
 
@@ -1018,6 +1378,13 @@ struct SenderKernelMemoryMap {
         return addr;
     }
 
+    // Mux local address allocation (allocates from cursor, then advances it)
+    MuxLocalAddresses get_mux_local_addresses_for_connection() {
+        auto addrs = MuxLocalAddresses::allocate_from_base(curr_mux_local_address_, address_padding_bytes);
+        curr_mux_local_address_ += MuxLocalAddresses::size_per_connection(address_padding_bytes);
+        return addrs;
+    }
+
 private:
     SenderKernelMemoryMap(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
         // Use pre-parsed common memory map and parse only sender-specific args
@@ -1029,6 +1396,7 @@ private:
         // set the current addresses to the base
         curr_packet_header_address_ = packet_header_region_base_;
         curr_payload_buffer_address_ = payload_buffer_region_base_;
+        curr_mux_local_address_ = common.mux_local_addresses_base;
     }
 
     uint32_t packet_header_region_base_;
@@ -1036,6 +1404,52 @@ private:
     uint32_t highest_usable_address_;
     uint32_t curr_packet_header_address_;
     uint32_t curr_payload_buffer_address_;
+    uint32_t curr_mux_local_address_;
+};
+
+// Receiver kernel memory map - for allocating credit return packet headers and mux local addresses
+struct ReceiverKernelMemoryMap {
+    static constexpr uint32_t address_padding_bytes = 16;
+
+    // Encapsulated common memory map
+    CommonMemoryMap common;
+
+    ReceiverKernelMemoryMap() {}
+
+    static ReceiverKernelMemoryMap build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return ReceiverKernelMemoryMap(common_map, rt_args_idx);
+    }
+
+    uint32_t get_credit_header_address() {
+        uint32_t addr = curr_credit_header_address_;
+        ASSERT(addr + sizeof(PACKET_HEADER_TYPE) <= credit_header_region_end_);
+        curr_credit_header_address_ += sizeof(PACKET_HEADER_TYPE);
+        return addr;
+    }
+
+    // Mux local address allocation (allocates from cursor, then advances it)
+    MuxLocalAddresses get_mux_local_addresses_for_connection() {
+        auto addrs = MuxLocalAddresses::allocate_from_base(curr_mux_local_address_, address_padding_bytes);
+        curr_mux_local_address_ += MuxLocalAddresses::size_per_connection(address_padding_bytes);
+        return addrs;
+    }
+
+private:
+    ReceiverKernelMemoryMap(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        // Use pre-parsed common memory map and parse only receiver-specific args
+        common = common_map;
+        credit_header_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
+        credit_header_region_end_ = get_arg_val<uint32_t>(rt_args_idx++);
+
+        // Set the current address to the base
+        curr_credit_header_address_ = credit_header_region_base_;
+        curr_mux_local_address_ = common.mux_local_addresses_base;
+    }
+
+    uint32_t credit_header_region_base_;   // Start of credit header allocation region
+    uint32_t credit_header_region_end_;    // End of credit header allocation region
+    uint32_t curr_credit_header_address_;  // Current allocation pointer
+    uint32_t curr_mux_local_address_;      // Cursor for allocating mux local addresses
 };
 
 /* Layout for the run time args for sender
@@ -1047,7 +1461,6 @@ private:
 3.3. Noc send type fields
 */
 template <
-    uint8_t NUM_FABRIC_CONNECTIONS,
     uint8_t NUM_TRAFFIC_CONFIGS,
     bool IS_2D_FABRIC,
     bool USE_DYNAMIC_ROUTING,
@@ -1056,18 +1469,19 @@ template <
 struct SenderKernelConfig {
     static constexpr bool MASTER_SYNC_CORE = false;
 
-    static SenderKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
-        return SenderKernelConfig(common_map, rt_args_idx);
+    static SenderKernelConfig build_from_args(
+        const CommonMemoryMap& common_map,
+        size_t& rt_args_idx,
+        size_t& local_args_idx,
+        uint8_t num_fabric_connections) {
+        return SenderKernelConfig(common_map, rt_args_idx, local_args_idx, num_fabric_connections);
     }
 
     void open_connections() {
-        // NEW: Runtime dispatch based on connection type
-        for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-            if (is_mux_connection[i]) {
-                get_mux_connection(i).open();
-            } else {
-                get_fabric_connection(i).open();
-            }
+        connections.open_all();
+        // Initialize credit management for all traffic configs
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            traffic_config_ptrs[i]->credit_manager_.initialize();
         }
     }
 
@@ -1078,85 +1492,62 @@ struct SenderKernelConfig {
     }
 
     void close_connections() {
-        // NEW: Runtime dispatch based on connection type
-        for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-            if (is_mux_connection[i]) {
-                get_mux_connection(i).close();
-            } else {
-                get_fabric_connection(i).close();
-            }
+        // Wait for all credits to be returned before closing
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            traffic_config_ptrs[i]->credit_manager_.wait_for_all_credits_returned();
         }
+        connections.close_all();
     }
 
     SenderKernelMemoryMap memory_map;
 
-    // NEW: Unified connection storage (supports both fabric and mux connections)
-    using MuxConnectionType = tt::tt_fabric::WorkerToFabricMuxSender<16>;  // Fixed 16 buffers for now
-    static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(WorkerToFabricEdmSender), sizeof(MuxConnectionType));
-    alignas(std::max_align_t) std::array<char, NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> connection_storage;
-    std::array<bool, NUM_FABRIC_CONNECTIONS> is_mux_connection;  // Track connection types
+    // Unified connection array (replaces custom storage)
+    FabricConnectionArray connections;
 
     alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
-    alignas(SenderKernelTrafficConfig)
-        std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(SenderKernelTrafficConfig)> traffic_configs_storage;
-    std::array<SenderKernelTrafficConfig*, NUM_TRAFFIC_CONFIGS> traffic_config_ptrs;
+
+    // Typedef for the templated traffic config type
+    using TrafficConfigType = SenderKernelTrafficConfig;
+
+    alignas(
+        TrafficConfigType) std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(TrafficConfigType)> traffic_configs_storage;
+    std::array<TrafficConfigType*, NUM_TRAFFIC_CONFIGS> traffic_config_ptrs;
 
     // Helper accessors
-    // NEW: Unified connection accessors with runtime type checking
-    WorkerToFabricEdmSender& get_fabric_connection(uint8_t i) {
-        ASSERT(i < NUM_FABRIC_CONNECTIONS);
-        ASSERT(!is_mux_connection[i]);  // Ensure this is actually a fabric connection
-        return *reinterpret_cast<WorkerToFabricEdmSender*>(connection_storage.data() + i * MAX_CONNECTION_SIZE);
-    }
-
-    MuxConnectionType& get_mux_connection(uint8_t i) {
-        ASSERT(i < NUM_FABRIC_CONNECTIONS);
-        ASSERT(is_mux_connection[i]);  // Ensure this is actually a mux connection
-        return *reinterpret_cast<MuxConnectionType*>(connection_storage.data() + i * MAX_CONNECTION_SIZE);
-    }
     LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
         return *reinterpret_cast<LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>*>(
             local_sync_config_storage.data());
     }
-    SenderKernelTrafficConfig* traffic_configs(uint8_t idx) {
-        return reinterpret_cast<SenderKernelTrafficConfig*>(
-            traffic_configs_storage.data() + idx * sizeof(SenderKernelTrafficConfig));
+
+    TrafficConfigType* traffic_configs(uint8_t idx) {
+        return reinterpret_cast<TrafficConfigType*>(traffic_configs_storage.data() + idx * sizeof(TrafficConfigType));
     }
-    SenderKernelTrafficConfig* get_traffic_config(uint8_t idx) { return traffic_config_ptrs[idx]; }
+
+    // Accessor for traffic config pointers (for kernel to use)
+    const std::array<TrafficConfigType*, NUM_TRAFFIC_CONFIGS>& traffic_config_ptrs_array() const {
+        return traffic_config_ptrs;
+    }
 
     // Result buffer convenience methods
     uint32_t get_result_buffer_address() const { return memory_map.common.result_buffer_base; }
     uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
 
 private:
-    SenderKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+    SenderKernelConfig(
+        const CommonMemoryMap& common_map,
+        size_t& rt_args_idx,
+        size_t& local_args_idx,
+        uint8_t num_fabric_connections) {
         DPRINT << "SenderKernelConfig constructor started, rt_args_idx=" << (uint32_t)rt_args_idx << ENDL();
-
-        // Use separate indices for runtime args vs local args
-        size_t local_args_idx = 0;  // Start from 0 for local args
 
         // Parse memory map args from runtime args using pre-parsed common map
         this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
 
-        // NEW: Initialize unified connections with runtime type checking
-        for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
-            // Parse connection type flag from runtime args
-            bool is_mux = get_arg_val<uint32_t>(rt_args_idx++) != 0;
-            is_mux_connection[i] = is_mux;
-
-            if (is_mux) {
-                // Initialize mux connection using placement new
-                auto mux_connection = MuxConnectionType::build_from_args(rt_args_idx);
-                new (&get_mux_connection(i)) MuxConnectionType(mux_connection);
-            } else {
-                // Initialize fabric connection using placement new (existing logic)
-                auto fabric_connection =
-                    WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-                new (&get_fabric_connection(i)) WorkerToFabricEdmSender(fabric_connection);
-            }
-        }
+        // Parse all fabric connections using unified array (memory map needed for mux local addresses)
+        connections.num_connections = num_fabric_connections;
+        connections.template parse_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx, this->memory_map);
 
         // add line sync initializations here, for each fabric connection, ex, forward and backward connection, run line
         // sync for all.
@@ -1183,41 +1574,24 @@ private:
             auto metadata = SenderTrafficConfigMetadata::build_from_args(local_args_idx);
             const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
             DPRINT << "fabric_connection_idx=" << (uint32_t)fabric_connection_idx << ENDL();
-            ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
+            ASSERT(fabric_connection_idx < connections.num_connections);
 
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
 
             // Get pointer to pre-allocated storage and initialize with placement new
-            SenderKernelTrafficConfig* config_ptr = traffic_configs(i);
+            TrafficConfigType* config_ptr = traffic_configs(i);
             traffic_config_ptrs[i] = config_ptr;
 
-            // NEW: Get appropriate connection handle based on connection type
-            WorkerToFabricEdmSender* connection_handle;
-            if (is_mux_connection[fabric_connection_idx]) {
-                // For mux connections, we'll handle sending differently in the traffic config
-                // For now, pass null and handle in send methods
-                connection_handle = nullptr;  // Will be handled differently for mux
-            } else {
-                connection_handle = &get_fabric_connection(fabric_connection_idx);
-            }
-
-            new (config_ptr) SenderKernelTrafficConfig(connection_handle, metadata, packet_header_address);
+            // Initialize traffic config with connection array pointer and index
+            new (config_ptr) TrafficConfigType(&connections, fabric_connection_idx, metadata, packet_header_address);
 
             traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
                 local_args_idx, packet_header_address);
 
             traffic_config_ptrs[i]->parse_and_setup_noc_send_type(local_args_idx);
 
-            // NEW: Parse credit management info (added at end of TestTrafficSenderConfig::get_args())
-            traffic_config_ptrs[i]->credit_management_enabled = get_local_arg_val<uint32_t>(local_args_idx++) != 0;
-            traffic_config_ptrs[i]->credit_capacity = get_local_arg_val<uint32_t>(local_args_idx++);
-
-            // Set initial credit availability
-            if (traffic_config_ptrs[i]->credit_management_enabled) {
-                traffic_config_ptrs[i]->available_credits = traffic_config_ptrs[i]->credit_capacity;
-            } else {
-                traffic_config_ptrs[i]->available_credits = UINT32_MAX;  // Unlimited for fabric mode
-            }
+            // Initialize credit manager (parses credit_management_enabled + SenderCreditInfo)
+            traffic_config_ptrs[i]->credit_manager_.init(local_args_idx);
 
             // the payload buffer size here is the virtual size of the buffer, not the physical size
             // this virtual size is used to keep track of the physical buffer on the receiver side
@@ -1231,6 +1605,76 @@ private:
 
         DPRINT << "SenderKernelConfig constructor completed successfully!" << ENDL();
     };
+};
+
+// Helper class to manage credit accumulation and return
+// Encapsulates all credit batching logic in one place
+// Works with FabricConnectionArray (supports both direct and mux connections)
+struct ReceiverCreditManager {
+    // Default constructor with dummy values for credit_fields_ (needed for array initialization)
+    ReceiverCreditManager() : credit_fields_(0, 0, 0, 0) {}
+
+    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
+        ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
+            arg_idx, packet_header_address, packet_header_);
+
+        credit_fields_ = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
+        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+            credit_fields_.dst_address, credit_fields_.atomic_inc_val, credit_fields_.atomic_inc_wrap});
+    }
+
+    // Initialize with credit info and fabric connection array
+    template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
+    void init(
+        size_t& arg_idx, FabricConnectionArray* connections, uint8_t connection_idx, uint32_t credit_header_address) {
+        connections_ = connections;
+        connection_idx_ = connection_idx;
+        accumulated_credits_ = 0;
+        enabled_ = true;
+
+        packet_header_ = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(credit_header_address);
+        setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(arg_idx, credit_header_address);
+    }
+
+    // Called after each packet is processed
+    FORCE_INLINE void accumulate_and_maybe_send() {
+        if (!enabled_) {
+            return;
+        }
+
+        accumulated_credits_++;
+
+        // Send credits in batches for efficiency
+        if (accumulated_credits_ >= credit_fields_.atomic_inc_val) {
+            send_credits();
+            accumulated_credits_ = 0;
+        }
+    }
+
+    // Called at end to flush remaining credits
+    FORCE_INLINE void flush_remaining() {
+        if (enabled_ && accumulated_credits_ > 0) {
+            send_credits(accumulated_credits_);
+            accumulated_credits_ = 0;
+        }
+    }
+
+private:
+    FORCE_INLINE void send_credits() { connections_->send_header_flush(connection_idx_, (uint32_t)packet_header_); }
+
+    FORCE_INLINE void send_credits(uint32_t num_credits) {
+        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+            credit_fields_.dst_address, static_cast<uint16_t>(num_credits), credit_fields_.atomic_inc_wrap});
+        connections_->send_header_flush(connection_idx_, (uint32_t)packet_header_);
+    }
+
+    FabricConnectionArray* connections_ = nullptr;
+    uint8_t connection_idx_ = 0;
+    uint32_t accumulated_credits_ = 0;
+    bool enabled_ = false;
+    NocUnicastAtomicIncFields credit_fields_;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header_;
 };
 
 struct ReceiverTrafficConfigMetadata {
@@ -1283,11 +1727,19 @@ struct TrafficValidationConfigBase {
     void advance() {
         num_packets_processed++;
         ops.update(this);
+
+        // Automatically handle credit return after processing packet
+        if (credit_manager_ != nullptr) {
+            static_cast<ReceiverCreditManager*>(credit_manager_)->accumulate_and_maybe_send();
+        }
     }
 
     ReceiverTrafficConfigMetadata metadata;
     uint32_t num_packets_processed = 0;
     ValidationOps ops;
+
+    // Pointer to credit manager (set by ReceiverKernelConfig during initialization)
+    void* credit_manager_ = nullptr;  // Type-erased pointer to ReceiverCreditManager
 };
 
 struct AtomicIncValidationConfig : public TrafficValidationConfigBase {
@@ -1533,17 +1985,44 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
 2.1. TrafficConfigCommonFields
 2.2. Noc send type fields
 */
-template <uint8_t NUM_TRAFFIC_CONFIGS>
+template <uint8_t NUM_TRAFFIC_CONFIGS, uint8_t NUM_CREDIT_CONNECTIONS, bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
 struct ReceiverKernelConfig {
-    static ReceiverKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
-        return ReceiverKernelConfig(common_map, rt_args_idx);
+    static ReceiverKernelConfig build_from_args(
+        const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
+        return ReceiverKernelConfig(common_map, rt_args_idx, local_args_idx);
     }
 
     // Result buffer convenience methods
-    uint32_t get_result_buffer_address() const { return common_memory_map.result_buffer_base; }
-    uint32_t get_result_buffer_size() const { return common_memory_map.result_buffer_size; }
+    uint32_t get_result_buffer_address() const { return memory_map.common.result_buffer_base; }
+    uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
 
-    CommonMemoryMap common_memory_map;
+    // Traffic config accessor
+    TrafficValidationConfigBase** traffic_configs() { return traffic_configs_.data(); }
+
+    // Credit connection lifecycle methods
+    void open_credit_connections() { credit_connections.open_all(); }
+
+    void close_credit_connections() {
+        // Automatically flush any remaining credits before closing
+        flush_remaining_credits();
+        credit_connections.close_all();
+    }
+
+private:
+    // Flush any remaining accumulated credits (called automatically by close_credit_connections)
+    void flush_remaining_credits() {
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            credit_managers_[i].flush_remaining();
+        }
+    }
+
+    ReceiverKernelMemoryMap memory_map;
+    FabricConnectionArray credit_connections;
+    std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_credit_connection_map;
+
+    // Credit managers - one per traffic config
+    std::array<ReceiverCreditManager, NUM_TRAFFIC_CONFIGS> credit_managers_;
+
     alignas(TrafficValidationConfigBase) std::array<
         char,
         NUM_TRAFFIC_CONFIGS * std::max(
@@ -1551,18 +2030,26 @@ struct ReceiverKernelConfig {
                                    sizeof(AtomicIncValidationConfig),
                                    sizeof(WriteAtomicIncValidationConfig),
                                    sizeof(ScatterWriteValidationConfig)})> validation_configs_storage;
-    std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs;
+    std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs_;
 
 private:
-    ReceiverKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
-        // Receivers only use local args (no fabric connections)
-        size_t local_args_idx = 0;  // Start from 0 for local args
+    ReceiverKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
+        // Parse receiver-specific memory map (includes credit header region)
+        this->memory_map = ReceiverKernelMemoryMap::build_from_args(common_map, rt_args_idx);
 
-        // Use pre-parsed common memory map
-        this->common_memory_map = common_map;
+        // Parse credit connections from runtime args (memory map needed for mux local addresses)
+        credit_connections.num_connections = NUM_CREDIT_CONNECTIONS;
+        credit_connections.parse_from_args(rt_args_idx, this->memory_map);
+
+        // Parse traffic config to credit connection mapping
+        for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+            traffic_config_to_credit_connection_map[i] = get_arg_val<uint32_t>(rt_args_idx++);
+        }
+
+        // Parse traffic configs from local args (local_args_idx passed from caller)
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            traffic_configs[i] = nullptr;
+            traffic_configs_[i] = nullptr;
         }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
@@ -1579,20 +2066,36 @@ private:
 
             if (noc_send_type == NocSendType::NOC_UNICAST_WRITE) {
                 const auto write_fields = NocUnicastWriteFields::build_from_args<false>(local_args_idx);
-                traffic_configs[i] = new (config_storage) WriteValidationConfig(write_fields, metadata);
+                traffic_configs_[i] = new (config_storage) WriteValidationConfig(write_fields, metadata);
             } else if (noc_send_type == NocSendType::NOC_UNICAST_ATOMIC_INC) {
                 const auto atomic_inc_fields = NocUnicastAtomicIncFields::build_from_args<false>(local_args_idx);
-                traffic_configs[i] = new (config_storage) AtomicIncValidationConfig(atomic_inc_fields, metadata);
+                traffic_configs_[i] = new (config_storage) AtomicIncValidationConfig(atomic_inc_fields, metadata);
             } else if (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
                 const auto write_atomic_inc_fields =
                     NocUnicastWriteAtomicIncFields::build_from_args<false>(local_args_idx);
-                traffic_configs[i] =
+                traffic_configs_[i] =
                     new (config_storage) WriteAtomicIncValidationConfig(write_atomic_inc_fields, metadata);
             } else if (noc_send_type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
                 const auto scatter_write_fields = NocUnicastScatterWriteFields::build_from_args<false>(local_args_idx);
-                traffic_configs[i] = new (config_storage) ScatterWriteValidationConfig(scatter_write_fields, metadata);
+                traffic_configs_[i] = new (config_storage) ScatterWriteValidationConfig(scatter_write_fields, metadata);
             } else {
                 ASSERT(false);
+            }
+
+            // NEW: Parse receiver credit info using struct with fabric type
+            // First parse the presence flag, then conditionally parse the data
+            bool has_credit_info = get_local_arg_val<uint32_t>(local_args_idx++) != 0;
+
+            // Initialize credit manager for this traffic config
+            if (has_credit_info) {
+                // Allocate space for pre-built credit return header using memory map
+                const uint32_t credit_header_address = this->memory_map.get_credit_header_address();
+                const uint8_t connection_idx = traffic_config_to_credit_connection_map[i];
+                credit_managers_[i].template init<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
+                    local_args_idx, &credit_connections, connection_idx, credit_header_address);
+
+                // Link the credit manager to this traffic config so advance() can call it automatically
+                traffic_configs_[i]->credit_manager_ = &credit_managers_[i];
             }
         }
     }
@@ -1612,17 +2115,19 @@ struct SyncKernelConfig {
     }
 
     void global_sync(uint8_t sync_iter) {
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            sync_fabric_connections()[i].open();
-        }
+        // Open all sync connections
+        sync_connections.open_all();
+
+        // Send sync start packets
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             line_sync_configs()[i].global_sync_start();
         }
-        // only need one of the config to check for the acks
+
+        // Wait for acks (only need one config to check)
         line_sync_configs()[0].global_sync_finish(sync_iter);
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            sync_fabric_connections()[i].close();
-        }
+
+        // Close all sync connections
+        sync_connections.close_all();
     }
 
     void local_sync(uint8_t sync_iter) { local_sync_config().local_sync(sync_iter); }
@@ -1632,18 +2137,21 @@ struct SyncKernelConfig {
     uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
 
     SenderKernelMemoryMap memory_map;
-    alignas(WorkerToFabricEdmSender)
-        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(WorkerToFabricEdmSender)> sync_fabric_connections_storage;
-    alignas(LineSyncConfig)
-        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfig)> line_sync_configs_storage;
+
+    // Unified connection array for sync connections
+    FabricConnectionArray sync_connections;
+
+    // Typedef for line sync config type (no longer templated)
+    using LineSyncConfigType = LineSyncConfig;
+    alignas(LineSyncConfigType)
+        std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfigType)> line_sync_configs_storage;
     alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
 
     // Helper accessors
-    WorkerToFabricEdmSender* sync_fabric_connections() {
-        return reinterpret_cast<WorkerToFabricEdmSender*>(sync_fabric_connections_storage.data());
+    LineSyncConfigType* line_sync_configs() {
+        return reinterpret_cast<LineSyncConfigType*>(line_sync_configs_storage.data());
     }
-    LineSyncConfig* line_sync_configs() { return reinterpret_cast<LineSyncConfig*>(line_sync_configs_storage.data()); }
     LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>& local_sync_config() {
         return *reinterpret_cast<LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>*>(local_sync_config_storage.data());
     }
@@ -1656,18 +2164,16 @@ private:
         // Parse memory map args from runtime args using pre-parsed common map
         this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
 
-        // Initialize sync fabric connections using placement new - these use normal runtime args
-        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            auto sync_connection = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-            new (&sync_fabric_connections()[i]) WorkerToFabricEdmSender(sync_connection);
-        }
+        // Parse all sync connections using unified array (memory map needed for mux local addresses)
+        sync_connections.num_connections = NUM_SYNC_FABRIC_CONNECTIONS;
+        sync_connections.parse_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx, this->memory_map);
 
-        // Initialize line sync configurations
+        // Initialize line sync configurations with connection array
         uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
             new (&line_sync_configs()[i])
-                LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
+                LineSyncConfigType(&sync_connections, i, packet_header_address, line_sync_val);
 
             // setup packet header fields
             line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
@@ -1683,18 +2189,6 @@ private:
         local_sync_config().setup_core_coordinates(local_args_idx);
     }
 };
-
-/* **************************************************
- * NOTE: CREDIT MANAGEMENT UNIFIED INTO TRAFFIC CONFIGS
- * - Credit tracking moved to SenderKernelTrafficConfig
- * - Credit return moved to ReceiverKernelTrafficConfig
- * - Per-traffic-config approach (logical ownership)
- * - Always-present fields with no-op when disabled
- ****************************************************/
-
-// NOTE: MuxSenderKernelConfig removed - functionality integrated into base SenderKernelConfig
-
-// NOTE: MuxReceiverKernelConfig removed - functionality to be integrated into base ReceiverKernelConfig
 
 }  // namespace fabric_tests
 }  // namespace tt::tt_fabric

@@ -32,14 +32,375 @@ const std::string default_sync_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sync.cpp";
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
+using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
 
-// forward declaration
+struct ConnectionKey {
+    RoutingDirection direction;
+    uint32_t link_idx;
+
+    bool operator==(const ConnectionKey& other) const {
+        return direction == other.direction && link_idx == other.link_idx;
+    }
+
+    bool operator<(const ConnectionKey& other) const {
+        return std::tie(direction, link_idx) < std::tie(other.direction, other.link_idx);
+    }
+};
+
+// Hash function for ConnectionKey to enable unordered_map
+struct ConnectionKeyHash {
+    std::size_t operator()(const ConnectionKey& key) const {
+        return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1);
+    }
+};
+
+struct Connection {
+    std::set<CoreCoord> sender_cores;           // Dedup built-in
+    std::set<CoreCoord> receiver_cores;         // Dedup built-in
+    std::map<CoreCoord, uint32_t> channel_map;  // Core -> channel assignment
+    uint32_t connection_idx = 0;
+    bool needs_mux = false;
+};
+
+// forward declarations
 struct TestDevice;
 
 enum class TestWorkerType : uint8_t { SENDER, RECEIVER };
+
+// FabricConnectionManager: Centralized connection tracking and management
+// Handles connection registration, mux detection, channel assignment, and argument generation
+// This is a standalone utility class that can be used independently of TestDevice
+class FabricConnectionManager {
+public:
+    FabricConnectionManager() = default;
+
+    // Registration: Call from add_sender/receiver_traffic_config if enable_flow_control
+    void register_client(const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, bool is_sender) {
+        ConnectionKey key = {direction, link_idx};
+        auto& conn = connections_[key];  // Auto-creates if new
+
+        // Add to appropriate set (dedup happens automatically with std::set)
+        if (is_sender) {
+            conn.sender_cores.insert(core);
+            sender_core_to_keys_[core].insert(key);
+        } else {
+            conn.receiver_cores.insert(core);
+            receiver_core_to_keys_[core].insert(key);
+        }
+    }
+
+    // Processing: Call once at start of create_kernels()
+    // mux_cores: map from direction to the assigned mux core (passed from TestDevice)
+    // Creates mux configs for all connections that need mux
+    void process(
+        const std::unordered_map<RoutingDirection, CoreCoord>& mux_cores,
+        std::shared_ptr<IDeviceInfoProvider> device_info_provider) {
+        uint32_t connection_idx = 0;
+
+        for (auto& [key, conn] : connections_) {
+            conn.connection_idx = connection_idx++;
+            conn.needs_mux = (conn.sender_cores.size() + conn.receiver_cores.size()) > 1;
+
+            if (conn.needs_mux) {
+                assign_and_validate_channels(conn, key);
+
+                // Get mux core for this connection's direction
+                auto mux_core_it = mux_cores.find(key.direction);
+                TT_FATAL(mux_core_it != mux_cores.end(), "Mux core not found for direction {}", key.direction);
+
+                const CoreCoord& mux_core = mux_core_it->second;
+
+                // Store the connection key -> mux core mapping
+                mux_cores_[key] = mux_core;
+
+                // mux config shouldnt exist already (one config per connection/mux)
+                TT_FATAL(
+                    mux_configs_.find(mux_core) == mux_configs_.end(),
+                    "Mux config already exists for mux core {}",
+                    mux_core);
+
+                // Create and store mux config for this connection key
+                const uint8_t num_full_size_channels = conn.sender_cores.size();
+                const uint8_t num_header_only_channels = conn.receiver_cores.size();
+                const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
+                const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
+                const size_t buffer_size_bytes_full_size_channel =
+                    tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+                const size_t mux_base_l1_address = device_info_provider->get_l1_unreserved_base();
+
+                // Create the mux config
+                mux_configs_.emplace(
+                    mux_core,
+                    FabricMuxConfig(
+                        num_full_size_channels,
+                        num_header_only_channels,
+                        num_buffers_full_size_channel,
+                        num_buffers_header_only_channel,
+                        buffer_size_bytes_full_size_channel,
+                        mux_base_l1_address));
+
+                // Track all mux client cores
+                for (const auto& [client_core, _] : conn.channel_map) {
+                    all_mux_client_cores_.insert(client_core);
+                }
+            }
+        }
+
+        // Designate first mux client (in deterministic order) as global termination master
+        if (!all_mux_client_cores_.empty()) {
+            global_termination_master_ = *all_mux_client_cores_.begin();
+        }
+    }
+
+    // Access to all connections (for mux kernel creation)
+    const std::unordered_map<ConnectionKey, Connection, ConnectionKeyHash>& get_all_connections() const {
+        return connections_;
+    }
+
+    // Get all used fabric links (for telemetry/result reading)
+    // Returns map of direction -> set of link indices that have been registered
+    std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_links() const {
+        std::unordered_map<RoutingDirection, std::set<uint32_t>> result;
+        for (const auto& [key, conn] : connections_) {
+            result[key.direction].insert(key.link_idx);
+        }
+        return result;
+    }
+
+    // Get all connection keys for a specific core (fast lookup via reverse map)
+    std::vector<ConnectionKey> get_connection_keys_for_core(const CoreCoord& core, bool is_sender) const {
+        const auto& map = is_sender ? sender_core_to_keys_ : receiver_core_to_keys_;
+        auto it = map.find(core);
+        if (it != map.end()) {
+            return std::vector<ConnectionKey>(it->second.begin(), it->second.end());
+        }
+        return {};
+    }
+
+    // Select an unused link from candidates (used for connection allocation)
+    // Returns the first link_idx that is not currently registered
+    std::optional<uint32_t> select_unused_link(
+        RoutingDirection direction, const std::vector<uint32_t>& candidate_link_indices) const {
+        auto used_links = get_used_fabric_links();
+        const auto& used_link_indices = used_links.count(direction) ? used_links.at(direction) : std::set<uint32_t>{};
+
+        for (const auto& link_idx : candidate_link_indices) {
+            if (used_link_indices.count(link_idx) == 0) {
+                return link_idx;
+            }
+        }
+
+        return std::nullopt;  // All candidates are used
+    }
+
+    // Get number of fabric connections for a specific core
+    size_t get_connection_count_for_core(const CoreCoord& core, bool is_sender) const {
+        const auto& map = is_sender ? sender_core_to_keys_ : receiver_core_to_keys_;
+        auto it = map.find(core);
+        return (it != map.end()) ? it->second.size() : 0;
+    }
+
+    // Get the array index for a connection key in the core's connection list
+    uint32_t get_connection_array_index_for_key(const CoreCoord& core, bool is_sender, const ConnectionKey& key) const {
+        auto keys = get_connection_keys_for_core(core, is_sender);
+
+        for (size_t i = 0; i < keys.size(); i++) {
+            if (keys[i] == key) {
+                return i;
+            }
+        }
+
+        return UINT32_MAX;  // Not found
+    }
+
+    // Check if a core is a mux client
+    bool is_mux_client(const CoreCoord& core) const { return all_mux_client_cores_.count(core) > 0; }
+
+    // Get the number of muxes to terminate (for compile-time arg)
+    uint32_t get_num_muxes_to_terminate() const { return static_cast<uint32_t>(mux_configs_.size()); }
+
+    // Generate mux termination local args for a core
+    // Returns empty vector if core is not a mux client
+    std::vector<uint32_t> generate_mux_termination_local_args_for_core(
+        const CoreCoord& core, std::shared_ptr<IDeviceInfoProvider> device_info_provider) const {
+        // Not a mux client? Return empty vector
+        if (!is_mux_client(core)) {
+            return {};
+        }
+
+        std::vector<uint32_t> args;
+
+        // Determine if this core is the master
+        bool is_master = (core == global_termination_master_);
+
+        // Arg 0: is_master (1 or 0)
+        args.push_back(is_master ? 1u : 0u);
+
+        // Arg 1: total mux clients
+        args.push_back(static_cast<uint32_t>(all_mux_client_cores_.size()));
+
+        // Arg 2: master NOC encoding (use proper API)
+        uint32_t master_noc_encoding = device_info_provider->get_worker_noc_encoding(global_termination_master_);
+        args.push_back(master_noc_encoding);
+
+        // If master, add mux termination info
+        if (is_master) {
+            // Arg 3: number of muxes to terminate
+            args.push_back(static_cast<uint32_t>(mux_configs_.size()));
+
+            // For each mux: x, y, signal_addr (triples, not NOC encoding)
+            for (const auto& [mux_core, mux_config] : mux_configs_) {
+                auto mux_virtual_core = device_info_provider->get_virtual_core_from_logical_core(mux_core);
+                uint32_t signal_addr = mux_config.get_termination_signal_address();
+
+                args.push_back(static_cast<uint32_t>(mux_virtual_core.x));
+                args.push_back(static_cast<uint32_t>(mux_virtual_core.y));
+                args.push_back(signal_addr);
+            }
+        }
+
+        return args;
+    }
+
+    // Generate all fabric connection args for a specific core
+    // Returns rt_args to append (includes is_mux flag + connection args for each connection)
+    // Parameters are passed in from TestDevice since it has all the context
+    std::vector<uint32_t> generate_connection_args_for_core(
+        const CoreCoord& core,
+        bool is_sender,
+        std::shared_ptr<IDeviceInfoProvider> device_info_provider,
+        std::shared_ptr<IRouteManager> route_manager,
+        const FabricNodeId& fabric_node_id,
+        tt::tt_metal::Program& program_handle) const {
+        std::vector<uint32_t> rt_args;
+
+        auto keys = get_connection_keys_for_core(core, is_sender);
+
+        for (const auto& key : keys) {
+            auto conn_it = connections_.find(key);
+            if (conn_it == connections_.end()) {
+                continue;
+            }
+
+            const auto& conn = conn_it->second;
+
+            // Add connection type flag first
+            rt_args.push_back(conn.needs_mux ? 1u : 0u);
+
+            if (conn.needs_mux) {
+                // Get the channel assignment for this core
+                auto channel_it = conn.channel_map.find(core);
+                TT_FATAL(
+                    channel_it != conn.channel_map.end(),
+                    "Core {} not found in channel map for connection dir={} link={}",
+                    core,
+                    static_cast<int>(key.direction),
+                    key.link_idx);
+                uint8_t channel_id = static_cast<uint8_t>(channel_it->second);
+
+                // Get the stored mux core location for this connection
+                auto mux_core_it = mux_cores_.find(key);
+                TT_FATAL(
+                    mux_core_it != mux_cores_.end(),
+                    "Mux core not found for connection dir={} link={}",
+                    static_cast<int>(key.direction),
+                    key.link_idx);
+                const CoreCoord& mux_core = mux_core_it->second;
+
+                // Get the stored mux config using the mux core as key
+                auto mux_config_it = mux_configs_.find(mux_core);
+                TT_FATAL(
+                    mux_config_it != mux_configs_.end(),
+                    "Mux config not found for mux core {} (connection dir={} link={}, worker core={}). "
+                    "Did you call process() before creating kernels?",
+                    mux_core,
+                    static_cast<int>(key.direction),
+                    key.link_idx,
+                    core);
+
+                // Convert mux core (logical) to virtual coordinates for NOC addressing
+                const auto mux_virtual_core = device_info_provider->get_virtual_core_from_logical_core(mux_core);
+                const auto& mux_config = mux_config_it->second;
+                const auto channel_type = is_sender ? tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL
+                                                    : tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
+
+                // kernel will allocate 3 local semaphores
+                std::vector<uint32_t> mux_rt_args = {
+                    mux_virtual_core.x,
+                    mux_virtual_core.y,
+                    channel_id,
+                    mux_config.get_num_buffers(channel_type),
+                    static_cast<uint32_t>(mux_config.get_buffer_size_bytes(channel_type)),
+                    static_cast<uint32_t>(mux_config.get_channel_base_address(channel_type, channel_id)),
+                    static_cast<uint32_t>(mux_config.get_connection_info_address(channel_type, channel_id)),
+                    static_cast<uint32_t>(mux_config.get_connection_handshake_address(channel_type, channel_id)),
+                    static_cast<uint32_t>(mux_config.get_flow_control_address(channel_type, channel_id)),
+                    static_cast<uint32_t>(mux_config.get_buffer_index_address(channel_type, channel_id))};
+                rt_args.insert(rt_args.end(), mux_rt_args.begin(), mux_rt_args.end());
+            } else {
+                // Generate fabric connection args directly using passed parameters
+                const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
+                append_fabric_connection_rt_args(
+                    fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
+            }
+        }
+
+        return rt_args;
+    }
+
+private:
+    std::unordered_map<ConnectionKey, Connection, ConnectionKeyHash> connections_;
+    std::unordered_map<CoreCoord, std::set<ConnectionKey>> sender_core_to_keys_;
+    std::unordered_map<CoreCoord, std::set<ConnectionKey>> receiver_core_to_keys_;
+
+    // Mux state (populated during process())
+    // One mux per connection key (each fabric link has its own mux)
+    std::unordered_map<ConnectionKey, CoreCoord, ConnectionKeyHash> mux_cores_;  // connection key -> mux core location
+    std::unordered_map<CoreCoord, FabricMuxConfig> mux_configs_;  // mux core -> mux config (1:1 with mux_cores_)
+
+    // Mux termination state (populated during process())
+    std::set<CoreCoord> all_mux_client_cores_;  // All cores that use mux connections
+    CoreCoord global_termination_master_;       // First mux client (in deterministic order)
+
+    static constexpr uint32_t MAX_FULL_SIZE_CHANNELS = 16;    // Based on mux L1 limits
+    static constexpr uint32_t MAX_HEADER_ONLY_CHANNELS = 16;  // Based on mux L1 limits
+    static constexpr uint32_t BUFFERS_PER_CHANNEL = 8;
+
+    void assign_and_validate_channels(Connection& conn, const ConnectionKey& key) {
+        uint32_t next_full_size = 0;
+        uint32_t next_header_only = 0;
+
+        // Assign full-size channels to senders
+        for (const auto& core : conn.sender_cores) {
+            conn.channel_map[core] = next_full_size++;
+        }
+
+        // Assign header-only channels to receivers
+        for (const auto& core : conn.receiver_cores) {
+            conn.channel_map[core] = next_header_only++;
+        }
+
+        // Validate inline
+        TT_FATAL(
+            next_full_size <= MAX_FULL_SIZE_CHANNELS,
+            "Exceeded full-size channel limit: {} senders for connection direction={} link={} (max={})",
+            next_full_size,
+            static_cast<int>(key.direction),
+            key.link_idx,
+            MAX_FULL_SIZE_CHANNELS);
+
+        TT_FATAL(
+            next_header_only <= MAX_HEADER_ONLY_CHANNELS,
+            "Exceeded header-only channel limit: {} receivers for connection direction={} link={} (max={})",
+            next_header_only,
+            static_cast<int>(key.direction),
+            key.link_idx,
+            MAX_HEADER_ONLY_CHANNELS);
+    }
+};
 
 struct TestWorker {
 public:
@@ -71,9 +432,6 @@ public:
     void connect_to_fabric_router();
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    // Forward declare ConnectionKey from FabricConnectionManager
-    using ConnectionKey = TestDevice::FabricConnectionManager::ConnectionKey;
-
     // Method to access traffic configurations for traffic analysis
     const std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>>& get_configs() const { return configs_; }
 
@@ -98,7 +456,9 @@ public:
     bool validate_results(std::vector<uint32_t>& data) const override;
 
     bool is_shared_;
-    std::vector<TestTrafficReceiverConfig> configs_;
+    // stores traffic config and the optional credit connection key (if flow control enabled)
+    // Managed by TestDevice::connection_manager_
+    std::vector<std::pair<TestTrafficReceiverConfig, std::optional<ConnectionKey>>> configs_;
 };
 
 struct TestMux : TestWorker {
@@ -121,6 +481,11 @@ public:
 };
 
 struct TestDevice {
+    // Friend declarations for tight coupling with worker structs
+    friend struct TestSender;
+    friend struct TestReceiver;
+    friend struct TestMux;
+
 public:
     TestDevice(
         const MeshCoordinate& coord,
@@ -137,11 +502,7 @@ public:
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
-    // NOTE: Mux enablement is now handled per-pattern via enable_flow_control and FabricConnectionManager
-    void set_mux_cores(const std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord>& mux_cores) {
-        mux_cores_ = mux_cores;
-        log_debug(tt::LogTest, "Set {} mux cores for device {}", mux_cores_.size(), fabric_node_id_);
-    }
+    void set_mux_cores(const std::unordered_map<RoutingDirection, CoreCoord>& mux_cores) { mux_cores_ = mux_cores; }
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
@@ -162,12 +523,15 @@ public:
         return connection_manager_.get_used_fabric_links();
     }
 
+    // Connection managers: separate instances for regular and sync connections
+    // Regular: persistent connections (open for duration of test)
+    FabricConnectionManager connection_manager_;
+
+    // Sync: ephemeral connections (open/close per sync, can reuse same physical links as regular)
+    FabricConnectionManager sync_connection_manager_;
+
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
-    std::vector<uint32_t> get_fabric_connection_args(CoreCoord core, RoutingDirection direction, uint32_t link_idx);
-    std::vector<uint32_t> generate_fabric_connection_args(
-        CoreCoord core, const std::vector<std::pair<RoutingDirection, uint32_t>>& fabric_connections);
-    uint32_t calculate_initial_credits(uint32_t buffer_size_bytes, uint32_t packet_size_bytes);
     void create_sender_kernels();
     void create_receiver_kernels();
     void validate_sender_results() const;
@@ -175,223 +539,15 @@ private:
     void create_sync_kernel();
     void create_mux_kernels();
 
-    // Mux support is now handled by FabricConnectionManager
-
-    // Fabric Connection Management - simplified and streamlined
-    class FabricConnectionManager {
-    public:
-        struct ConnectionKey {
-            RoutingDirection direction;
-            uint32_t link_idx;
-
-            bool operator==(const ConnectionKey& other) const {
-                return direction == other.direction && link_idx == other.link_idx;
-            }
-
-            bool operator<(const ConnectionKey& other) const {
-                return std::tie(direction, link_idx) < std::tie(other.direction, other.link_idx);
-            }
-        };
-
-        // Hash function for ConnectionKey to enable unordered_map
-        struct ConnectionKeyHash {
-            std::size_t operator()(const ConnectionKey& key) const {
-                return std::hash<int>()(static_cast<int>(key.direction)) ^ (std::hash<uint32_t>()(key.link_idx) << 1);
-            }
-        };
-
-        // Registration: Call from add_sender/receiver_traffic_config if enable_flow_control
-        void register_client(const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, bool is_sender) {
-            ConnectionKey key = {direction, link_idx};
-            auto& conn = connections_[key];  // Auto-creates if new
-
-            // Add to appropriate set (dedup happens automatically with std::set)
-            if (is_sender) {
-                conn.sender_cores.insert(core);
-                sender_core_to_keys_[core].insert(key);
-            } else {
-                conn.receiver_cores.insert(core);
-                receiver_core_to_keys_[core].insert(key);
-            }
-        }
-
-        // Processing: Call once at start of create_kernels()
-        void process() {
-            uint32_t connection_idx = 0;
-
-            for (auto& [key, conn] : connections_) {
-                conn.connection_idx = connection_idx++;
-                conn.needs_mux = (conn.sender_cores.size() + conn.receiver_cores.size()) > 1;
-
-                if (conn.needs_mux) {
-                    assign_and_validate_channels(conn, key);
-                }
-            }
-        }
-
-        // Access to all connections (for mux kernel creation)
-        const std::unordered_map<ConnectionKey, Connection, ConnectionKeyHash>& get_all_connections() const {
-            return connections_;
-        }
-
-        // Get all used fabric links (for telemetry/result reading)
-        // Returns map of direction -> set of link indices that have been registered
-        std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_links() const {
-            std::unordered_map<RoutingDirection, std::set<uint32_t>> result;
-            for (const auto& [key, conn] : connections_) {
-                result[key.direction].insert(key.link_idx);
-            }
-            return result;
-        }
-
-        // Get all connection keys for a specific core (fast lookup via reverse map)
-        std::vector<ConnectionKey> get_connection_keys_for_core(const CoreCoord& core, bool is_sender) const {
-            const auto& map = is_sender ? sender_core_to_keys_ : receiver_core_to_keys_;
-            auto it = map.find(core);
-            if (it != map.end()) {
-                return std::vector<ConnectionKey>(it->second.begin(), it->second.end());
-            }
-            return {};
-        }
-
-        // Select an unused link from candidates (used for connection allocation)
-        // Returns the first link_idx that is not currently registered
-        std::optional<uint32_t> select_unused_link(
-            RoutingDirection direction, const std::vector<uint32_t>& candidate_link_indices) const {
-            auto used_links = get_used_fabric_links();
-            const auto& used_link_indices =
-                used_links.count(direction) ? used_links.at(direction) : std::set<uint32_t>{};
-
-            for (const auto& link_idx : candidate_link_indices) {
-                if (used_link_indices.count(link_idx) == 0) {
-                    return link_idx;
-                }
-            }
-
-            return std::nullopt;  // All candidates are used
-        }
-
-        // Get number of fabric connections for a specific core
-        size_t get_connection_count_for_core(const CoreCoord& core, bool is_sender) const {
-            const auto& map = is_sender ? sender_core_to_keys_ : receiver_core_to_keys_;
-            auto it = map.find(core);
-            return (it != map.end()) ? it->second.size() : 0;
-        }
-
-        // Get the array index for a connection key in the core's connection list
-        uint32_t get_connection_array_index_for_key(
-            const CoreCoord& core, bool is_sender, const ConnectionKey& key) const {
-            auto keys = get_connection_keys_for_core(core, is_sender);
-
-            for (size_t i = 0; i < keys.size(); i++) {
-                if (keys[i] == key) {
-                    return i;
-                }
-            }
-
-            return UINT32_MAX;  // Not found
-        }
-
-        // Generate all fabric connection args for a specific core
-        // Returns rt_args to append (includes is_mux flag + connection args for each connection)
-        std::vector<uint32_t> generate_connection_args_for_core(
-            const CoreCoord& core, bool is_sender, TestDevice* device_ptr) const {
-            std::vector<uint32_t> rt_args;
-
-            auto keys = get_connection_keys_for_core(core, is_sender);
-
-            for (const auto& key : keys) {
-                auto conn_it = connections_.find(key);
-                if (conn_it == connections_.end()) {
-                    continue;
-                }
-
-                const auto& conn = conn_it->second;
-
-                // Add connection type flag first
-                rt_args.push_back(conn.needs_mux ? 1u : 0u);
-
-                if (conn.needs_mux) {
-                    // TODO: Add proper mux connection args
-                    log_warning(
-                        tt::LogTest,
-                        "MUX connection args not yet fully implemented for core {} dir={} link={}",
-                        core,
-                        static_cast<int>(key.direction),
-                        key.link_idx);
-                    // Placeholder mux args
-                    for (int i = 0; i < 12; i++) {
-                        rt_args.push_back(0u);
-                    }
-                } else {
-                    // Generate fabric connection args
-                    auto fabric_conn_args =
-                        device_ptr->generate_fabric_connection_args(core, {{key.direction, key.link_idx}});
-                    rt_args.insert(rt_args.end(), fabric_conn_args.begin(), fabric_conn_args.end());
-                }
-            }
-
-            return rt_args;
-        }
-
-    private:
-        struct Connection {
-            std::set<CoreCoord> sender_cores;           // Dedup built-in
-            std::set<CoreCoord> receiver_cores;         // Dedup built-in
-            std::map<CoreCoord, uint32_t> channel_map;  // Core -> channel assignment
-            uint32_t connection_idx = 0;
-            bool needs_mux = false;
-        };
-
-        // Main connection storage (O(1) lookup)
-        std::unordered_map<ConnectionKey, Connection, ConnectionKeyHash> connections_;
-
-        // Reverse lookup maps: core -> set of ConnectionKeys (O(1) lookup to get all keys for a core)
-        std::unordered_map<CoreCoord, std::set<ConnectionKey>> sender_core_to_keys_;
-        std::unordered_map<CoreCoord, std::set<ConnectionKey>> receiver_core_to_keys_;
-
-        static constexpr uint32_t MAX_FULL_SIZE_CHANNELS = 16;    // Based on mux L1 limits
-        static constexpr uint32_t MAX_HEADER_ONLY_CHANNELS = 16;  // Based on mux L1 limits
-
-        void assign_and_validate_channels(Connection& conn, const ConnectionKey& key) {
-            uint32_t next_full_size = 0;
-            uint32_t next_header_only = 0;
-
-            // Assign full-size channels to senders
-            for (const auto& core : conn.sender_cores) {
-                conn.channel_map[core] = next_full_size++;
-            }
-
-            // Assign header-only channels to receivers
-            for (const auto& core : conn.receiver_cores) {
-                conn.channel_map[core] = next_header_only++;
-            }
-
-            // Validate inline
-            TT_FATAL(
-                next_full_size <= MAX_FULL_SIZE_CHANNELS,
-                "Exceeded full-size channel limit: {} senders for connection direction={} link={} (max={})",
-                next_full_size,
-                static_cast<int>(key.direction),
-                key.link_idx,
-                MAX_FULL_SIZE_CHANNELS);
-
-            TT_FATAL(
-                next_header_only <= MAX_HEADER_ONLY_CHANNELS,
-                "Exceeded header-only channel limit: {} receivers for connection direction={} link={} (max={})",
-                next_header_only,
-                static_cast<int>(key.direction),
-                key.link_idx,
-                MAX_HEADER_ONLY_CHANNELS);
-        }
-    };
-
-    // Connection managers: separate instances for regular and sync connections
-    // Regular: persistent connections (open for duration of test)
-    FabricConnectionManager connection_manager_;
-
-    // Sync: ephemeral connections (open/close per sync, can reuse same physical links as regular)
-    FabricConnectionManager sync_connection_manager_;
+    // Helper: Common connection registration logic for senders and receivers
+    // If outgoing_direction is provided, uses it directly; otherwise determines it from node IDs
+    std::optional<ConnectionKey> register_fabric_connection(
+        CoreCoord logical_core,
+        const FabricNodeId& src_node_id,
+        const FabricNodeId& dst_node_id,
+        bool is_sender,
+        FabricConnectionManager& connection_mgr,
+        std::optional<RoutingDirection> outgoing_direction = std::nullopt);
 
     MeshCoordinate coord_;
     std::shared_ptr<IDeviceInfoProvider> device_info_provider_;
@@ -480,8 +636,8 @@ inline void TestDevice::create_mux_kernels() {
             conn_info.receiver_cores.size());
 
         // Count channel types: senders use full-size channels, receivers use header-only channels
-        uint32_t full_size_channels = conn_info.sender_cores.size();
-        uint32_t header_only_channels = conn_info.receiver_cores.size();
+        const auto full_size_channels = conn_info.sender_cores.size();
+        const auto header_only_channels = conn_info.receiver_cores.size();
 
         // Create TestMux worker and add to muxes_ map (consistent with senders/receivers)
         muxes_.emplace(
@@ -554,51 +710,41 @@ inline void TestWorker::create_kernel(
 }
 
 /* ********************
- * TestSender Methods *
+ * TestDevice Helpers  *
  **********************/
-inline TestSender::TestSender(
-    CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
-    TestWorker(logical_core, test_device_ptr, kernel_src) {
-    // TODO: init mem map?
-}
 
-inline void TestSender::add_config(TestTrafficSenderConfig config) {
-    std::optional<RoutingDirection> outgoing_direction;
-    std::vector<uint32_t> outgoing_link_indices;
-    // either we will have hops specified or the dest node id
-    // With 2d unicast, we have bugs where we try to follow the input hop count but the routing tables
-    // cause the packets to fail to reach the destination properly in some cases, due to torus links
-    bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
-                               (config.parameters.is_2D_routing_enabled) &&
-                               (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
-    if (config.hops.has_value() && !is_torus_2d_unicast) {
-        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
-        outgoing_link_indices =
-            this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
-    } else {
-        const auto dst_node_id = config.dst_node_ids[0];
-        const auto src_node_id = this->test_device_ptr_->get_node_id();
-        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(src_node_id, dst_node_id);
-        TT_FATAL(
-            outgoing_direction.has_value(), "No forwarding direction found for {} from {}", dst_node_id, src_node_id);
-        outgoing_link_indices = this->test_device_ptr_->get_forwarding_link_indices_in_direction(
-            src_node_id, dst_node_id, outgoing_direction.value());
-        TT_FATAL(
-            !outgoing_link_indices.empty(),
-            "No forwarding link indices found for {} from {}",
-            dst_node_id,
-            src_node_id);
+inline std::optional<ConnectionKey> TestDevice::register_fabric_connection(
+    CoreCoord logical_core,
+    const FabricNodeId& src_node_id,
+    const FabricNodeId& dst_node_id,
+    bool is_sender,
+    FabricConnectionManager& connection_mgr,
+    std::optional<RoutingDirection> outgoing_direction) {
+    // Determine the direction: use provided direction if available, otherwise query from node IDs
+    if (!outgoing_direction.has_value()) {
+        outgoing_direction = get_forwarding_direction(src_node_id, dst_node_id);
     }
+
+    if (!outgoing_direction.has_value()) {
+        // Local communication (same chip) - no fabric connection needed
+        return std::nullopt;
+    }
+
+    // Get candidate link indices for this direction
+    std::vector<uint32_t> outgoing_link_indices =
+        get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, outgoing_direction.value());
+
+    TT_FATAL(
+        !outgoing_link_indices.empty(), "No forwarding link indices found from {} to {}", src_node_id, dst_node_id);
 
     // Two-level reuse strategy:
     // 1. First, try to reuse an existing connection that THIS core already has
-    // 2. If not found, allocate a new link from the device (which finds an unused link)
+    // 2. If not found, allocate a new link from candidates
 
     std::optional<ConnectionKey> fabric_connection_key;
 
     // Check if this core already has a connection for any of the candidate links
-    auto registered_keys = this->test_device_ptr_->connection_manager_.get_connection_keys_for_core(
-        this->logical_core_, true);  // is_sender=true
+    auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, is_sender);
 
     for (const auto& link_idx : outgoing_link_indices) {
         ConnectionKey candidate_key{outgoing_direction.value(), link_idx};
@@ -612,23 +758,75 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
 
     if (!fabric_connection_key.has_value()) {
         // No existing connection found - select an unused link from candidates
-        auto new_link_idx = this->test_device_ptr_->connection_manager_.select_unused_link(
-            outgoing_direction.value(), outgoing_link_indices);
+        auto new_link_idx = connection_mgr.select_unused_link(outgoing_direction.value(), outgoing_link_indices);
 
         TT_FATAL(
             new_link_idx.has_value(),
-            "On node {}, in direction {}, all link indices are already used. Either update allocation policy "
-            "or enable mux (flow control)",
-            this->test_device_ptr_->get_node_id(),
+            "On node {}, in direction {}, all link indices are already used. "
+            "Either update allocation policy or enable mux (flow control)",
+            get_node_id(),
             static_cast<int>(outgoing_direction.value()));
 
         fabric_connection_key = ConnectionKey{outgoing_direction.value(), new_link_idx.value()};
 
         // Register the new connection with the connection manager
-        // (Only new connections need registration; existing ones are already registered)
-        this->test_device_ptr_->connection_manager_.register_client(
-            this->logical_core_, outgoing_direction.value(), new_link_idx.value(), true);  // is_sender=true
+        connection_mgr.register_client(logical_core, outgoing_direction.value(), new_link_idx.value(), is_sender);
+
+        log_debug(
+            tt::LogTest,
+            "{} core {} registered with connection_manager: direction={}, link_idx={}",
+            is_sender ? "Sender" : "Receiver",
+            logical_core,
+            static_cast<int>(outgoing_direction.value()),
+            new_link_idx.value());
     }
+
+    return fabric_connection_key;
+}
+
+/* ********************
+ * TestSender Methods *
+ **********************/
+inline TestSender::TestSender(
+    CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+    TestWorker(logical_core, test_device_ptr, kernel_src) {
+    // TODO: init mem map?
+}
+
+inline void TestSender::add_config(TestTrafficSenderConfig config) {
+    // Determine src and dst node IDs for connection registration
+    const auto src_node_id = this->test_device_ptr_->get_node_id();
+    const auto dst_node_id = config.dst_node_ids[0];
+
+    // Special handling: For torus 2D unicast, we have bugs where we try to follow the input hop count
+    // but the routing tables cause packets to fail to reach the destination properly in some cases,
+    // due to torus links. In this case, we use node IDs instead of hops.
+    std::optional<RoutingDirection> outgoing_direction;
+    bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
+                               (config.parameters.is_2D_routing_enabled) &&
+                               (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
+
+    if (config.hops.has_value() && !is_torus_2d_unicast) {
+        // Use hops to determine direction (for static routing with explicit hops)
+        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
+    }
+    // else: let register_fabric_connection determine direction from node IDs
+
+    // Use common helper to register fabric connection
+    auto fabric_connection_key = this->test_device_ptr_->register_fabric_connection(
+        this->logical_core_,
+        src_node_id,
+        dst_node_id,
+        true,  // is_sender=true
+        this->test_device_ptr_->connection_manager_,
+        outgoing_direction);  // Pass explicit direction if we have it
+
+    TT_FATAL(
+        fabric_connection_key.has_value(),
+        "Failed to register fabric connection for sender on core {} from {} to {}",
+        this->logical_core_,
+        src_node_id,
+        dst_node_id);
 
     this->configs_.emplace_back(std::move(config), fabric_connection_key.value());
 }
@@ -726,7 +924,35 @@ inline TestReceiver::TestReceiver(
 }
 
 inline void TestReceiver::add_config(TestTrafficReceiverConfig config) {
-    this->configs_.emplace_back(std::move(config));
+    std::optional<ConnectionKey> credit_connection_key;
+
+    // Register with connection manager if flow control is enabled
+    // Receivers need fabric connections to send credits back to senders
+    if (config.parameters.enable_flow_control && config.receiver_credit_info.has_value()) {
+        const auto& credit_info = config.receiver_credit_info.value();
+
+        // Determine src and dst node IDs for credit return connection
+        const auto src_node_id = this->test_device_ptr_->get_node_id();  // Receiver is source for credits
+        const auto dst_node_id = credit_info.sender_node_id;             // Original sender is destination for credits
+
+        // Use common helper to register fabric connection for credit return
+        credit_connection_key = this->test_device_ptr_->register_fabric_connection(
+            this->logical_core_,
+            src_node_id,
+            dst_node_id,
+            false,  // is_sender=false
+            this->test_device_ptr_->connection_manager_);
+
+        // Note: credit_connection_key may be nullopt for local communication (same chip)
+        if (!credit_connection_key.has_value()) {
+            log_debug(
+                tt::LogTest,
+                "Receiver core {} has local sender - no fabric connection needed for credit return",
+                this->logical_core_);
+        }
+    }
+
+    this->configs_.emplace_back(std::move(config), credit_connection_key);
 }
 
 inline bool TestReceiver::is_shared_receiver() { return this->is_shared_; }
@@ -740,7 +966,7 @@ inline bool TestReceiver::validate_results(std::vector<uint32_t>& data) const {
     }
 
     uint32_t num_expected_packets = 0;
-    for (const auto& config : this->configs_) {
+    for (const auto& [config, credit_connection_key] : this->configs_) {
         num_expected_packets += config.parameters.num_packets;
     }
     pass &= data[TT_FABRIC_WORD_CNT_INDEX] == num_expected_packets;
@@ -819,7 +1045,7 @@ inline void TestMux::create_kernel() {
 
     // Create the mux kernel using base class method to avoid duplication
     // Pass empty local_args and addresses_to_clear since mux doesn't need them
-    this->create_kernel(
+    TestWorker::create_kernel(
         test_device_ptr_->coord_,
         mux_ct_args,
         mux_rt_args,
@@ -889,37 +1115,6 @@ inline void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical
     }
 }
 
-inline std::vector<uint32_t> TestDevice::get_fabric_connection_args(
-    CoreCoord core, RoutingDirection direction, uint32_t link_idx) {
-    std::vector<uint32_t> fabric_connection_args;
-    const auto neighbor_node_id = this->route_manager_->get_neighbor_node_id(this->fabric_node_id_, direction);
-    append_fabric_connection_rt_args(
-        this->fabric_node_id_, neighbor_node_id, link_idx, this->program_handle_, core, fabric_connection_args);
-    return fabric_connection_args;
-}
-
-inline std::vector<uint32_t> TestDevice::generate_fabric_connection_args(
-    CoreCoord core, const std::vector<std::pair<RoutingDirection, uint32_t>>& fabric_connections) {
-    std::vector<uint32_t> fabric_connection_args;
-    for (const auto& [direction, link_idx] : fabric_connections) {
-        const auto& args = get_fabric_connection_args(core, direction, link_idx);
-        fabric_connection_args.insert(fabric_connection_args.end(), args.begin(), args.end());
-    }
-    return fabric_connection_args;
-}
-
-inline uint32_t TestDevice::calculate_initial_credits(uint32_t buffer_size_bytes, uint32_t packet_size_bytes) {
-    // Calculate how many packets can fit in the buffer
-    uint32_t max_packets_in_buffer = buffer_size_bytes / packet_size_bytes;
-
-    // Use a percentage of the buffer as initial credits to avoid completely filling it
-    const float credit_ratio = 0.8f;  // Sensible default: 80% of buffer capacity
-    uint32_t initial_credits = static_cast<uint32_t>(max_packets_in_buffer * credit_ratio);
-
-    // Ensure at least 1 credit
-    return std::max(1u, initial_credits);
-}
-
 inline void TestDevice::create_sync_kernel() {
     log_debug(tt::LogTest, "creating sync kernel on node: {}", fabric_node_id_);
 
@@ -952,8 +1147,13 @@ inline void TestDevice::create_sync_kernel() {
     std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
 
     // Add sync fabric connection args via sync_connection_manager_
-    auto sync_connection_args =
-        sync_connection_manager_.generate_connection_args_for_core(sync_core, true, this);  // is_sender=true
+    auto sync_connection_args = sync_connection_manager_.generate_connection_args_for_core(
+        sync_core,
+        true,  // is_sender=true
+        device_info_provider_,
+        route_manager_,
+        fabric_node_id_,
+        program_handle_);
     rt_args.insert(rt_args.end(), sync_connection_args.begin(), sync_connection_args.end());
 
     // Local args (all the rest go to local args buffer)
@@ -967,8 +1167,8 @@ inline void TestDevice::create_sync_kernel() {
         const auto& [sync_config, connection_key] = sync_sender.global_sync_configs_[i];
 
         // Get array index for this connection key from sync_connection_manager_
-        uint32_t fabric_conn_idx = sync_connection_manager_.get_connection_array_index_for_key(
-            sync_core, true, connection_key);  // is_sender=true
+        // uint32_t fabric_conn_idx = sync_connection_manager_.get_connection_array_index_for_key(
+        //     sync_core, true, connection_key);  // is_sender=true
 
         // Add sync routing args (chip send type + routing info)
         auto sync_traffic_args = sync_config.get_args(true);
@@ -1016,9 +1216,9 @@ inline void TestDevice::create_sender_kernels() {
         TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
         TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
 
-        // NEW: Determine if any traffic configs need flow control (instead of global mux flag)
+        // Determine if any traffic configs need flow control (for logging/debugging)
         bool any_traffic_needs_flow_control = false;
-        for (const auto& config : sender.configs_) {
+        for (const auto& [config, _] : sender.configs_) {
             if (config.parameters.enable_flow_control) {
                 any_traffic_needs_flow_control = true;
                 break;
@@ -1028,7 +1228,11 @@ inline void TestDevice::create_sender_kernels() {
         // Get connection count and generate all connection args via FabricConnectionManager
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, true);  // is_sender=true
 
-        // Compile-time args
+        // Check if this core has mux connections
+        bool has_mux_connections = connection_manager_.is_mux_client(core);
+        uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
+
+        // Compile-time args (FLOW_CONTROL_ENABLED removed - now handled per-traffic-config)
         std::vector<uint32_t> ct_args = {
             is_2D_routing_enabled,
             is_dynamic_routing_enabled,
@@ -1038,15 +1242,21 @@ inline void TestDevice::create_sender_kernels() {
             (uint32_t)global_sync_,                              /* line sync enabled */
             num_local_sync_cores,                                /* num local sync cores */
             sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
-            any_traffic_needs_flow_control ? 1u : 0u             /* USE_MUX (informational only) */
+            has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
+            num_muxes_to_terminate                               /* NUM_MUXES_TO_TERMINATE */
         };
 
         // Runtime args with connection type information
         std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
 
         // Add all connection args via FabricConnectionManager
-        auto connection_args =
-            connection_manager_.generate_connection_args_for_core(core, true, this);  // is_sender=true
+        auto connection_args = connection_manager_.generate_connection_args_for_core(
+            core,
+            true,  // is_sender=true
+            device_info_provider_,
+            route_manager_,
+            fabric_node_id_,
+            program_handle_);
         rt_args.insert(rt_args.end(), connection_args.begin(), connection_args.end());
 
         // Local args for traffic configs (existing logic)
@@ -1087,6 +1297,11 @@ inline void TestDevice::create_sender_kernels() {
             local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
         }
 
+        // Add mux termination local args (empty vector if not a mux client)
+        auto mux_termination_local_args =
+            connection_manager_.generate_mux_termination_local_args_for_core(core, device_info_provider_);
+        local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
+
         // Create kernel using helper (consistent with sync and receiver kernel creation)
         sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
 
@@ -1100,13 +1315,18 @@ inline void TestDevice::create_sender_kernels() {
 
 inline void TestDevice::create_receiver_kernels() {
     // Unified receiver kernel creation - handles both fabric and mux connections based on per-pattern flow control
+
+    // Get routing flags from device_info_provider (similar to sender side)
+    const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
+    const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
+
     for (const auto& [core, receiver] : this->receivers_) {
         TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
         TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
 
         // NEW: Determine if any traffic configs need flow control (receivers need mux connections for credit return)
         bool any_traffic_needs_flow_control = false;
-        for (const auto& config : receiver.configs_) {
+        for (const auto& [config, credit_connection_key] : receiver.configs_) {
             if (config.parameters.enable_flow_control) {
                 any_traffic_needs_flow_control = true;
                 break;
@@ -1116,35 +1336,77 @@ inline void TestDevice::create_receiver_kernels() {
         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, false);  // is_sender=false
 
-        // Compile-time args
+        // Check if this core has mux connections
+        bool has_mux_connections = connection_manager_.is_mux_client(core);
+        uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
+
+        // Compile-time args (order must match receiver kernel .cpp file)
         std::vector<uint32_t> ct_args = {
-            (uint32_t)num_connections,                             /* num fabric connections (for credit return) */
-            receiver.configs_.size(),                              /* num traffic configs */
-            benchmark_mode_ ? 1u : 0u,                             /* benchmark mode */
-            receiver_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
-            any_traffic_needs_flow_control ? 1u : 0u               /* USE_MUX (flow control enabled) */
+            is_2D_routing_enabled ? 1u : 0u,                       /* IS_2D_FABRIC */
+            is_dynamic_routing_enabled ? 1u : 0u,                  /* USE_DYNAMIC_ROUTING */
+            receiver.configs_.size(),                              /* NUM_TRAFFIC_CONFIGS */
+            benchmark_mode_ ? 1u : 0u,                             /* BENCHMARK_MODE */
+            receiver_memory_map_->common.get_kernel_config_size(), /* KERNEL_CONFIG_BUFFER_SIZE */
+            any_traffic_needs_flow_control ? 1u : 0u,              /* FLOW_CONTROL_ENABLED (replaced USE_MUX) */
+            (uint32_t)num_connections,                             /* NUM_CREDIT_CONNECTIONS */
+            has_mux_connections ? 1u : 0u,                         /* HAS_MUX_CONNECTIONS */
+            num_muxes_to_terminate                                 /* NUM_MUXES_TO_TERMINATE */
         };
 
-        // Runtime args: memory map args + credit connection args (if flow control enabled)
+        // Runtime args: memory map args + credit connection args + traffic-to-connection mapping
         std::vector<uint32_t> rt_args = receiver_memory_map_->get_memory_map_args();
 
         // Add all connection args via FabricConnectionManager (for credit return)
-        auto connection_args =
-            connection_manager_.generate_connection_args_for_core(core, false, this);  // is_sender=false
+        auto connection_args = connection_manager_.generate_connection_args_for_core(
+            core,
+            false,  // is_sender=false
+            device_info_provider_,
+            route_manager_,
+            fabric_node_id_,
+            program_handle_);
         rt_args.insert(rt_args.end(), connection_args.begin(), connection_args.end());
+
+        // Build traffic config to credit connection mapping (same as sender side)
+        // Query the array index for each traffic config's connection key
+        for (const auto& [config, credit_connection_key] : receiver.configs_) {
+            uint8_t connection_idx = 0xFF;  // Invalid index by default
+
+            if (credit_connection_key.has_value()) {
+                uint32_t array_idx = connection_manager_.get_connection_array_index_for_key(
+                    core, false, credit_connection_key.value());  // is_sender=false
+
+                if (array_idx != UINT32_MAX) {
+                    connection_idx = static_cast<uint8_t>(array_idx);
+                } else {
+                    log_warning(
+                        tt::LogTest,
+                        "Could not find connection index for receiver credit return: core={}, key={{dir={}, link={}}}",
+                        core,
+                        static_cast<int>(credit_connection_key->direction),
+                        credit_connection_key->link_idx);
+                }
+            }
+
+            rt_args.push_back(connection_idx);
+        }
 
         // Local args for traffic configs
         std::vector<uint32_t> local_args;
         if (!receiver.configs_.empty()) {
-            const auto first_traffic_args = receiver.configs_[0].get_args();
+            const auto first_traffic_args = receiver.configs_[0].first.get_args();
             local_args.reserve(local_args.size() + receiver.configs_.size() * first_traffic_args.size());
             local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
             for (size_t i = 1; i < receiver.configs_.size(); ++i) {
-                const auto traffic_args = receiver.configs_[i].get_args();
+                const auto traffic_args = receiver.configs_[i].first.get_args();
                 local_args.insert(local_args.end(), traffic_args.begin(), traffic_args.end());
             }
         }
+
+        // Add mux termination local args (empty vector if not a mux client)
+        auto mux_termination_local_args =
+            connection_manager_.generate_mux_termination_local_args_for_core(core, device_info_provider_);
+        local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
         receiver.create_kernel(
             coord_, ct_args, rt_args, local_args, receiver_memory_map_->get_local_args_address(), {});
@@ -1160,8 +1422,8 @@ inline void TestDevice::create_kernels() {
     log_debug(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
 
     // Process fabric connections to determine mux requirements and assign channels
-    connection_manager_.process();
-    sync_connection_manager_.process();  // Process sync connections separately
+    connection_manager_.process(mux_cores_, device_info_provider_);
+    sync_connection_manager_.process(mux_cores_, device_info_provider_);  // Process sync connections separately
 
     // Create mux kernels for connections that need them
     this->create_mux_kernels();
@@ -1182,23 +1444,7 @@ inline void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, cons
         this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
 
-    // Register with connection manager if flow control enabled
-    if (config.parameters.enable_flow_control) {
-        // TODO: For now, register receivers with a default direction for credit return
-        // This should be refined to determine the actual direction based on sender locations
-        // For the initial implementation, we'll register with a placeholder direction
-        // The connection manager will handle multiple clients on the same connection
-
-        // Simple heuristic: register for all possible directions for now
-        // This will be optimized once we have full sender-receiver coordination
-        std::vector<RoutingDirection> possible_directions = {
-            RoutingDirection::North, RoutingDirection::South, RoutingDirection::East, RoutingDirection::West};
-
-        // For now, register with direction North, link_idx 0 as a placeholder
-        // TODO: Implement proper direction determination based on traffic patterns
-        connection_manager_.register_client(logical_core, RoutingDirection::North, 0, false);  // is_sender=false
-    }
-
+    // Connection registration is now handled inside TestReceiver::add_config()
     this->receivers_.at(logical_core).add_config(config);
 }
 
