@@ -9,13 +9,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_sfpu_isinf_isnan.h"
 #include "sfpi.h"
 
 namespace ckernel
 {
 namespace sfpu
 {
-
 inline sfpi::vInt _float_to_int32_(sfpi::vFloat in)
 {
     sfpi::vInt result;
@@ -114,6 +114,12 @@ inline void _calculate_floor_()
             v_endif;
         }
 
+        v_if (sfpi::vConst0 == _calculate_isfinite_<APPROXIMATION_MODE>(v))
+        {
+            result = v;
+        }
+        v_endif;
+
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
@@ -205,6 +211,12 @@ inline void _calculate_trunc_()
         v_if (in < 0)
         {
             result = 0 - result;
+        }
+        v_endif;
+
+        v_if (sfpi::vConst0 == _calculate_isfinite_<APPROXIMATION_MODE>(in))
+        {
+            result = in;
         }
         v_endif;
 
