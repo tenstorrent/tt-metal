@@ -688,8 +688,19 @@ jobs:
               for i in "${!SELECTED_ARRAY[@]}"; do
                 owner="${SELECTED_ARRAY[$i]}"
                 if [ -n "$owner" ]; then
-                  # Use Slack mention format - some usernames match Slack usernames
-                  SLACK_MESSAGE="$SLACK_MESSAGE <@$owner>"
+                  # Get user full name for Slack @ mentions
+                  USER_API="https://api.github.com/users/$owner"
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "$USER_API" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+
+                  # Use @Full Name format that Slack recognizes
+                  if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                    SLACK_MESSAGE="$SLACK_MESSAGE @$USER_NAME"
+                  else
+                    SLACK_MESSAGE="$SLACK_MESSAGE @$owner"
+                  fi
                   # Add comma if not the last owner
                   if [ $((i + 1)) -lt $OWNER_COUNT ]; then
                     SLACK_MESSAGE="$SLACK_MESSAGE,"
