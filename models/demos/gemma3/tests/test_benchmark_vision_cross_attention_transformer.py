@@ -46,11 +46,7 @@ class BenchmarkProfilerWrapper:
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 @pytest.mark.parametrize("bsz", [1])
@@ -112,7 +108,7 @@ def test_perf_gemma_vision(
 
     targets = load_targets(
         "models/demos/gemma3/tests/targets_test_benchmark_vision_cross_attention_transformer.json",
-        os.environ.get("MESH_DEVICE"),
+        device_type=get_device_name(mesh_device),
     )
 
     if TEST_FORWARD_INFERENCE_ONLY:
@@ -217,3 +213,18 @@ def load_targets(filename, device_type):
     dict_targets = targets[device_type]
 
     return dict_targets
+
+
+def get_device_name(mesh_device):
+    total = 1
+    for i in mesh_device.shape:
+        total *= i
+
+    if total == 1:
+        return "N150"
+    elif total == 2:
+        return "N300"
+    elif total == 8:
+        return "T3K"
+    else:
+        assert False
