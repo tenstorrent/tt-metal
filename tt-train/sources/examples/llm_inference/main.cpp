@@ -146,8 +146,6 @@ int main(int argc, char **argv) {
         // Forward pass
         auto output = run_model(model, prompt_tensor, causal_mask_tensor);
 
-        fmt::print("{}", output->get_value().logical_shape().to_array_4D());
-
         // Sample next token
         auto next_token_tensor = ttml::ops::sample_op(
             output, temperature, ttml::autograd::ctx().get_generator()(), logits_padding_mask_autograd);
