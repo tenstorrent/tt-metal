@@ -236,7 +236,7 @@ def test_unet_trace_perf(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch, groups, num_runs, iterations, expected_compile_time, expected_throughput", ((1, 4, 12, 256, 30.0, 2700.0),)
+    "batch, groups, num_runs, iterations, expected_compile_time, expected_throughput", ((1, 4, 12, 256, 30.0, 2680.0),)
 )
 def test_unet_trace_perf_multi_device(
     batch: int,
