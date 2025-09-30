@@ -241,16 +241,11 @@ jobs:
             done
           fi
 
-          if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
-            COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
-          else
-            COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:"
-
-            # Collect pending and approved groups separately
-            PENDING_GROUPS=""
-            APPROVED_GROUPS=""
-            PENDING_COUNT=0
-            APPROVED_COUNT=0
+          # Collect pending and approved groups separately
+          PENDING_GROUPS=""
+          APPROVED_GROUPS=""
+          PENDING_COUNT=0
+          APPROVED_COUNT=0
 
             # Display teams with member information and approval status
             if [ -n "$TEAMS" ]; then
@@ -400,10 +395,11 @@ jobs:
             fi
 
             # Combine pending groups first, then approved groups
-            COMMENT="$COMMENT$PENDING_GROUPS$APPROVED_GROUPS"
-
-            COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient."
-          fi
+            if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
+              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
+            else
+              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:$PENDING_GROUPS$APPROVED_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
+            fi
 
           # Get existing comments to find if we should edit or create new
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
