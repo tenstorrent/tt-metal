@@ -7,6 +7,11 @@ on:
         description: 'Branch name to analyze (e.g., feature-branch-name)'
         required: true
         type: string
+      create-new-comment:
+        description: 'Create a new comment instead of editing existing one'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -136,6 +141,7 @@ jobs:
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
+          CREATE_NEW="${{ github.event.inputs.create-new-comment }}"
 
           if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
             COMMENT="## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
@@ -152,30 +158,63 @@ jobs:
               done
             fi
 
-            # Add individuals with approval status
+            # Add pattern groups with approval status
             if [ -n "$INDIVIDUALS" ]; then
-              IFS=',' read -ra INDIVIDUAL_ARRAY <<< "$INDIVIDUALS"
-              for individual in "${INDIVIDUAL_ARRAY[@]}"; do
-                # Check if this individual has approved
-                if echo "$APPROVED_REVIEWERS" | grep -q "$individual"; then
-                  COMMENT="$COMMENT\n- ✅ **$individual** (Individual) - Approved"
+              # Individuals are now grouped by pattern: "pattern:owner1,owner2|pattern2:owner3,owner4"
+              IFS='|' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+              for pattern_group in "${PATTERN_GROUPS[@]}"; do
+                # Split pattern:owners
+                pattern=$(echo "$pattern_group" | cut -d':' -f1)
+                owners=$(echo "$pattern_group" | cut -d':' -f2)
+
+                # Check if any owner in this pattern group has approved
+                approved=false
+                IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
+                for owner in "${OWNERS_ARRAY[@]}"; do
+                  if echo "$APPROVED_REVIEWERS" | grep -q "$owner"; then
+                    approved=true
+                    break
+                  fi
+                done
+
+                if [ "$approved" = true ]; then
+                  COMMENT="$COMMENT\n- ✅ **$pattern** (Group) - Approved"
                 else
-                  COMMENT="$COMMENT\n- ⏳ **$individual** (Individual) - Pending"
+                  COMMENT="$COMMENT\n- ⏳ **$pattern** (Group) - Pending"
                 fi
               done
             fi
 
-            COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient."
+            COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient.\n\n<!-- CodeOwners-Workflow-Bot -->"
           fi
 
-          # Post comment to PR
-          COMMENT_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+          # Get existing comments to find if we should edit or create new
+          COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+          EXISTING_COMMENTS=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                                -H "Accept: application/vnd.github.v3+json" \
+                                "$COMMENTS_API")
 
-          curl -s -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Content-Type: application/json" \
-            -d "{\"body\": \"$COMMENT\"}" \
-            "$COMMENT_API"
+          # Find existing comment from this workflow (contains our marker)
+          EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r ".[] | select(.body | contains(\"CodeOwners-Workflow-Bot\")) | .id" | head -1)
 
-          echo "Posted comment to PR #$PR_NUMBER"
+          if [ "$CREATE_NEW" = "true" ] || [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
+            # Create new comment
+            echo "Creating new comment..."
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": \"$COMMENT\"}" \
+              "$COMMENTS_API"
+          else
+            # Edit existing comment
+            echo "Updating existing comment (ID: $EXISTING_COMMENT_ID)..."
+            curl -s -X PATCH \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": \"$COMMENT\"}" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID"
+          fi
+
+          echo "Comment updated for PR #$PR_NUMBER"
