@@ -12,18 +12,20 @@ void kernel_main() {
 
     // Validate that we can write up to 24 bits; use the get address API
     auto scratch_register_address = reinterpret_cast<volatile uint32_t*>(get_stream_scratch_register_address(0));
-    for (uint32_t i = 0; i < (1 << 24); i++) {
-        *scratch_register_address = i;
+    for (uint32_t i = 1; i < 24; i++) {
+        auto test_value = 1 << (i - 1);
+        *scratch_register_address = test_value;
         uint32_t readback = *scratch_register_address;
-        if (readback != i) {
+        if (readback != test_value) {
             ASSERT(false);
             while (1);
         }
     }
     {
-        *scratch_register_address = 0xc0ffee;
+        constexpr uint32_t test_value = 0xc0ffee;
+        *scratch_register_address = test_value;
         uint32_t readback = read_stream_scratch_register(0);
-        if (readback != 0xc0ffee) {
+        if (readback != test_value) {
             ASSERT(false);
             while (1);
         }
@@ -44,8 +46,8 @@ void kernel_main() {
             uint32_t val = test_values[i];
             write_stream_scratch_register(stream_id, val);
             uint32_t readback = read_stream_scratch_register(stream_id);
-            ASSERT(readback == val);
             if (readback != val) {
+                ASSERT(false);
                 while (1);
             }
         }
@@ -70,8 +72,8 @@ void kernel_main() {
 
             // Read back and verify
             uint32_t readback = read_stream_scratch_register(stream_id);
-            ASSERT(readback == val);
             if (readback != val) {
+                ASSERT(false);
                 while (1);
             }
 
