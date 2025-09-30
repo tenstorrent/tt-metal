@@ -244,11 +244,13 @@ jobs:
           if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
             COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
           else
-            COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Group Information:"
+            COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:"
 
             # Collect pending and approved groups separately
             PENDING_GROUPS=""
             APPROVED_GROUPS=""
+            PENDING_COUNT=0
+            APPROVED_COUNT=0
 
             # Display teams with member information and approval status
             if [ -n "$TEAMS" ]; then
@@ -336,8 +338,10 @@ jobs:
                   # Remove trailing comma and space
                   approved_members=$(echo "$approved_members" | sed 's/, $//')
                   APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members"
+                  APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
                   PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**"
+                  PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
               done
             fi
@@ -387,8 +391,10 @@ jobs:
                   # Remove trailing comma and space
                   approved_owners=$(echo "$approved_owners" | sed 's/, $//')
                   APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners"
+                  APPROVED_COUNT=$((APPROVED_COUNT + 1))
                 else
                   PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**"
+                  PENDING_COUNT=$((PENDING_COUNT + 1))
                 fi
               done
             fi
@@ -443,11 +449,10 @@ jobs:
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
-          # Collect pending owners ONLY from groups that are still pending approval
-          TEAM_OWNERS=""
-          INDIVIDUAL_OWNERS=""
+          # Collect 2 owners from EACH pending group (teams and individual patterns)
+          SELECTED_OWNERS=""
 
-          # Collect from teams - but only if the team is still pending (no members have approved)
+          # Process pending teams - select up to 2 owners from each pending team
           if [ -n "$TEAMS" ]; then
             IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
             for team in "${TEAM_ARRAY[@]}"; do
@@ -470,13 +475,35 @@ jobs:
                       fi
                     done
 
-                    # Only add team members to ping list if team has NO approval yet
+                    # Only select owners from pending teams
                     if [ "$team_has_approval" = false ]; then
+                      # Collect unapproved members for this team
+                      TEAM_UNAPPROVED=""
                       for member in "${MEMBERS_ARRAY[@]}"; do
                         if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                          TEAM_OWNERS="$TEAM_OWNERS$member,"
+                          TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
                         fi
                       done
+                      TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | sed 's/,$//')
+
+                      # Select up to 2 owners from this pending team
+                      if [ -n "$TEAM_UNAPPROVED" ]; then
+                        IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
+                        TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
+
+                        if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
+                          # Only 1 member
+                          SELECTED_OWNERS="$SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
+                        elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
+                          # Select 2 random members
+                          RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                          RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                          while [ $RAND2 -eq $RAND1 ]; do
+                            RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                          done
+                          SELECTED_OWNERS="$SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
+                        fi
+                      fi
                     fi
                   fi
                 fi
@@ -484,7 +511,7 @@ jobs:
             done
           fi
 
-          # Collect from individual patterns - but only if the pattern is still pending (no owners have approved)
+          # Process pending individual patterns - select up to 2 owners from each pending pattern
           if [ -n "$INDIVIDUALS" ]; then
             IFS='@@@' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
             for pattern_group in "${PATTERN_GROUPS[@]}"; do
@@ -503,130 +530,102 @@ jobs:
                 fi
               done
 
-              # Only add pattern owners to ping list if pattern has NO approval yet
+              # Only select owners from pending patterns
               if [ "$pattern_has_approval" = false ]; then
+                # Collect unapproved owners for this pattern
+                PATTERN_UNAPPROVED=""
                 for owner_pair in "${OWNERS_ARRAY[@]}"; do
                   username=$(echo "$owner_pair" | cut -d'|' -f1)
                   if ! echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
-                    INDIVIDUAL_OWNERS="$INDIVIDUAL_OWNERS$username,"
+                    PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
                   fi
                 done
+                PATTERN_UNAPPROVED=$(echo "$PATTERN_UNAPPROVED" | sed 's/,$//')
+
+                # Select up to 2 owners from this pending pattern
+                if [ -n "$PATTERN_UNAPPROVED" ]; then
+                  IFS=',' read -ra PATTERN_OWNERS_ARRAY <<< "$PATTERN_UNAPPROVED"
+                  PATTERN_OWNER_COUNT=${#PATTERN_OWNERS_ARRAY[@]}
+
+                  if [ $PATTERN_OWNER_COUNT -eq 1 ]; then
+                    # Only 1 owner
+                    SELECTED_OWNERS="$SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[0]},"
+                  elif [ $PATTERN_OWNER_COUNT -ge 2 ]; then
+                    # Select 2 random owners
+                    RAND1=$((RANDOM % PATTERN_OWNER_COUNT))
+                    RAND2=$((RANDOM % PATTERN_OWNER_COUNT))
+                    while [ $RAND2 -eq $RAND1 ]; do
+                      RAND2=$((RANDOM % PATTERN_OWNER_COUNT))
+                    done
+                    SELECTED_OWNERS="$SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[$RAND1]},${PATTERN_OWNERS_ARRAY[$RAND2]},"
+                  fi
+                fi
               fi
             done
           fi
 
-          # Clean up the lists
-          TEAM_OWNERS=$(echo "$TEAM_OWNERS" | sed 's/,$//')
-          INDIVIDUAL_OWNERS=$(echo "$INDIVIDUAL_OWNERS" | sed 's/,$//')
+          # Clean up the final list
+          SELECTED_OWNERS=$(echo "$SELECTED_OWNERS" | sed 's/,$//')
 
             # Check if we have any owners to ping
-            if [ -n "$TEAM_OWNERS" ] || [ -n "$INDIVIDUAL_OWNERS" ]; then
-              # Selection logic: select up to 2 owners FROM EACH pending group
-              SELECTED_OWNERS=""
-
-              # Process team owners - select up to 2 from each team
-              if [ -n "$TEAM_OWNERS" ]; then
-                IFS=',' read -ra TEAM_ARRAY <<< "$TEAM_OWNERS"
-                TEAM_COUNT=${#TEAM_ARRAY[@]}
-
-                if [ $TEAM_COUNT -eq 1 ]; then
-                  # Only 1 team member
-                  SELECTED_OWNERS="${TEAM_ARRAY[0]}"
-                else
-                  # Select 2 random team members
-                  RAND1=$((RANDOM % TEAM_COUNT))
-                  RAND2=$((RANDOM % TEAM_COUNT))
-                  while [ $RAND2 -eq $RAND1 ]; do
-                    RAND2=$((RANDOM % TEAM_COUNT))
-                  done
-                  SELECTED_OWNERS="${TEAM_ARRAY[$RAND1]},${TEAM_ARRAY[$RAND2]}"
-                fi
-              fi
-
-              # Process individual owners - select up to 2 from each individual pattern
-              if [ -n "$INDIVIDUAL_OWNERS" ]; then
-                IFS=',' read -ra INDIVIDUAL_ARRAY <<< "$INDIVIDUAL_OWNERS"
-                INDIVIDUAL_COUNT=${#INDIVIDUAL_ARRAY[@]}
-
-                if [ $INDIVIDUAL_COUNT -eq 1 ]; then
-                  # Only 1 individual owner
-                  if [ -n "$SELECTED_OWNERS" ]; then
-                    SELECTED_OWNERS="$SELECTED_OWNERS,${INDIVIDUAL_ARRAY[0]}"
+            if [ -n "$SELECTED_OWNERS" ]; then
+              # Get full names for selected owners and build ping message
+              PING_MESSAGE="Hi"
+              IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
+              OWNER_COUNT=${#SELECTED_ARRAY[@]}
+              for i in "${!SELECTED_ARRAY[@]}"; do
+                owner="${SELECTED_ARRAY[$i]}"
+                if [ -n "$owner" ]; then
+                  # Get user info
+                  USER_API="https://api.github.com/users/$owner"
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "$USER_API" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                    PING_MESSAGE="$PING_MESSAGE $USER_NAME [@$owner]"
                   else
-                    SELECTED_OWNERS="${INDIVIDUAL_ARRAY[0]}"
+                    PING_MESSAGE="$PING_MESSAGE [@$owner]"
                   fi
-                else
-                  # Select 2 random individual owners
-                  RAND1=$((RANDOM % INDIVIDUAL_COUNT))
-                  RAND2=$((RANDOM % INDIVIDUAL_COUNT))
-                  while [ $RAND2 -eq $RAND1 ]; do
-                    RAND2=$((RANDOM % INDIVIDUAL_COUNT))
-                  done
-                  if [ -n "$SELECTED_OWNERS" ]; then
-                    SELECTED_OWNERS="$SELECTED_OWNERS,${INDIVIDUAL_ARRAY[$RAND1]},${INDIVIDUAL_ARRAY[$RAND2]}"
-                  else
-                    SELECTED_OWNERS="${INDIVIDUAL_ARRAY[$RAND1]},${INDIVIDUAL_ARRAY[$RAND2]}"
+
+                  # Add comma if not the last owner
+                  if [ $((i + 1)) -lt $OWNER_COUNT ]; then
+                    PING_MESSAGE="$PING_MESSAGE,"
                   fi
                 fi
-              fi
+              done
 
-            # Get full names for selected owners and build ping message
-            PING_MESSAGE="Hi"
-            IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
-            OWNER_COUNT=${#SELECTED_ARRAY[@]}
-            for i in "${!SELECTED_ARRAY[@]}"; do
-              owner="${SELECTED_ARRAY[$i]}"
-              if [ -n "$owner" ]; then
-                # Get user info
-                USER_API="https://api.github.com/users/$owner"
-                USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                               -H "Accept: application/vnd.github.v3+json" \
-                               "$USER_API" 2>/dev/null)
-                USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                  PING_MESSAGE="$PING_MESSAGE $USER_NAME [@$owner]"
-                else
-                  PING_MESSAGE="$PING_MESSAGE [@$owner]"
-                fi
-
-                # Add comma if not the last owner
-                if [ $((i + 1)) -lt $OWNER_COUNT ]; then
-                  PING_MESSAGE="$PING_MESSAGE,"
+              # Get full name for PR author
+              PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"  # Default to what we got from PR API
+              if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
+                # Try to fetch full name from GitHub API
+                AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
+                AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                       -H "Accept: application/vnd.github.v3+json" \
+                                       "$AUTHOR_USER_API" 2>/dev/null)
+                AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                if [ -n "$AUTHOR_FULL_NAME" ] && [ "$AUTHOR_FULL_NAME" != "null" ]; then
+                  PR_AUTHOR_FULL_NAME="$AUTHOR_FULL_NAME"
                 fi
               fi
-            done
 
-            # Get full name for PR author
-            PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"  # Default to what we got from PR API
-            if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
-              # Try to fetch full name from GitHub API
-              AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-              AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                     -H "Accept: application/vnd.github.v3+json" \
-                                     "$AUTHOR_USER_API" 2>/dev/null)
-              AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-              if [ -n "$AUTHOR_FULL_NAME" ] && [ "$AUTHOR_FULL_NAME" != "null" ]; then
-                PR_AUTHOR_FULL_NAME="$AUTHOR_FULL_NAME"
+              PING_MESSAGE="$PING_MESSAGE, this PR **[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
+
+              if [ "$PING_OWNERS" = "true" ]; then
+                # Create new ping comment
+                echo "Creating ping comment..."
+                curl -s -X POST \
+                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"body\": \"$PING_MESSAGE\"}" \
+                  "$COMMENTS_API"
+                echo "Ping comment created for PR #$PR_NUMBER"
+              else
+                # Just output the ping message to workflow logs
+                echo "Ping message (not sent):"
+                echo "$PING_MESSAGE"
               fi
-            fi
-
-            PING_MESSAGE="$PING_MESSAGE, this PR **[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
-
-            if [ "$PING_OWNERS" = "true" ]; then
-              # Create new ping comment
-              echo "Creating ping comment..."
-              curl -s -X POST \
-                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                -H "Content-Type: application/json" \
-                -d "{\"body\": \"$PING_MESSAGE\"}" \
-                "$COMMENTS_API"
-              echo "Ping comment created for PR #$PR_NUMBER"
             else
-              # Just output the ping message to workflow logs
-              echo "Ping message (not sent):"
-              echo "$PING_MESSAGE"
+              echo "No pending owners to ping"
             fi
-          else
-            echo "No pending owners to ping"
-          fi
