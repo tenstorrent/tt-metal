@@ -20,28 +20,29 @@ from ...utils.tensor import bf16_tensor, to_torch
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
+    ("mesh_device", "submesh_shape", "sp_axis_first", "num_links"),
     [
-        pytest.param((2, 4), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
-        pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
-        pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
+        pytest.param((2, 4), (1, 2), True, 1, id="1x2sp0tp1"),  # sp=1 tp=2
+        pytest.param((2, 4), (2, 1), False, 1, id="2x1sp1tp0"),  # sp=1 tp=2
+        pytest.param((2, 4), (2, 2), True, 1, id="2x2sp0tp1"),  # sp=2 tp=2
+        pytest.param((2, 4), (2, 4), True, 1, id="2x4sp0tp1"),  # sp=2 tp=4
+        pytest.param((2, 4), (2, 4), False, 1, id="2x4sp1tp0"),  # sp=4 tp=2
+        pytest.param((4, 8), (4, 4), True, 4, id="4x4sp0tp1"),  # sp=4 tp=4
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("batch_size", [2])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_transformer_motif(
+    *,
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
-    sp_axis: int,
-    tp_axis: int,
+    sp_axis_first: bool,
     num_links: int,
     batch_size: int,
 ) -> None:
+    sp_axis, tp_axis = (0, 1) if sp_axis_first else (1, 0)
+
     model_checkpoint_path = huggingface_hub.hf_hub_download(
         repo_id="Motif-Technologies/Motif-Image-6B-Preview",
         filename="motif_image_preview.bin",
