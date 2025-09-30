@@ -301,7 +301,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
         return tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/compute/compute_grid_sample.cpp",
+            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/compute/compute_grid_sample_legacy.cpp",
             cores,
             tt::tt_metal::ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,

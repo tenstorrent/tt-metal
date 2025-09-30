@@ -5,6 +5,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
 #define DEBUG_PRINT 1
 
@@ -23,6 +24,9 @@
 template <bool init_tilize = true, bool uninit_tilize = true>
 void tilize_in(uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
     if constexpr (init_tilize) {
+        tensix_sync();
+        unary_op_init_common(in_cb_id, out_cb_id);
+        tensix_sync();
         tilize_init(in_cb_id, in_block_w, out_cb_id);
         // DPRINT << "Tilize init done\n";
     }
