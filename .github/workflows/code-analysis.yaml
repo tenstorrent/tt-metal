@@ -70,10 +70,20 @@ jobs:
           REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
           REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                            -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API" 2>/dev/null)
+
+          # Check if API call was successful
+          REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
                            "$REVIEWS_API")
 
           # Extract approved reviews (state: APPROVED)
-          APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' | tr '\n' ',' | sed 's/,$//')
+          if [ "$REVIEWS_HTTP_CODE" = "200" ] && [ -n "$REVIEWS_DATA" ] && [ "$REVIEWS_DATA" != "null" ]; then
+            APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+          else
+            echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
+            APPROVED_REVIEWERS=""
+          fi
 
           # Get team members for teams that need approval
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
@@ -289,7 +299,25 @@ jobs:
               done
             fi
 
-            COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient.\n\n<!-- CodeOwners-Workflow-Bot -->"
+            COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient.\n\n---\n**Token Status:**"
+          fi
+
+          # Add token status information
+          if [ -n "$APPROVED_REVIEWERS" ]; then
+            COMMENT="$COMMENT\n- ✅ **PR Reviews**: Successfully fetched approved reviewers"
+          else
+            COMMENT="$COMMENT\n- ⚠️ **PR Reviews**: Could not fetch approved reviewers"
+          fi
+
+          if [ -n "$TEAM_MEMBERS" ]; then
+            # Check if team members were successfully fetched
+            if echo "$TEAM_MEMBERS" | grep -q "insufficient-permissions\|team-not-found\|unauthorized\|api-error"; then
+              COMMENT="$COMMENT\n- ⚠️ **Team Members**: Some teams could not be accessed (check token permissions)"
+            else
+              COMMENT="$COMMENT\n- ✅ **Team Members**: Successfully fetched team member information"
+            fi
+          else
+            COMMENT="$COMMENT\n- ⚠️ **Team Members**: No team member information available"
           fi
 
           # Get existing comments to find if we should edit or create new
