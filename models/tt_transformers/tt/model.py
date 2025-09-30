@@ -206,14 +206,13 @@ class Transformer(LightweightModule):
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
-        if (
-            trace_enabled and self.tt_rot_mats_prefill_global is None
-        ):  # currently, this only covers the case where we don't have chunked_prefill, so start_pos is always 0
-            self.tt_rot_mats_prefill_global = [
-                self.rope_setup.cos_matrix[:, :, start_pos : start_pos + self.args.max_seq_len, :],
-                # ovo nije fiksno, ali mora da bude fiksne velicine da spadne u sve opsege u kojima ce trace da se radi
-                self.rope_setup.sin_matrix[:, :, start_pos : start_pos + self.args.max_seq_len, :],
-            ]
+        if trace_enabled:
+            if self.tt_rot_mats_prefill_global is None:
+                self.tt_rot_mats_prefill_global = [
+                    self.rope_setup.cos_matrix[:, :, 0 : self.args.max_seq_len, :],
+                    # ovo nije fiksno, ali mora da bude fiksne velicine da spadne u sve opsege u kojima ce trace da se radi
+                    self.rope_setup.sin_matrix[:, :, 0 : self.args.max_seq_len, :],
+                ]
         else:
             self.tt_rot_mats_prefill_global = [
                 self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
@@ -221,10 +220,17 @@ class Transformer(LightweightModule):
             ]
 
         if hasattr(self, "rope_local_setup"):
-            self.tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
-            ]
+            if trace_enabled:
+                if self.tt_rot_mats_prefill_local is None:
+                    self.tt_rot_mats_prefill_local = [
+                        self.rope_local_setup.cos_matrix[:, :, 0 : self.args.max_seq_len, :],
+                        self.rope_local_setup.sin_matrix[:, :, 0 : self.args.max_seq_len, :],
+                    ]
+            else:
+                self.tt_rot_mats_prefill_local = [
+                    self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+                    self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+                ]
         else:
             self.tt_rot_mats_prefill_local = None
 
