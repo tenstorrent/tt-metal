@@ -1137,7 +1137,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     is_dram_conv = is_dram_conv && !is_conv1d;
 
     if (is_dram_conv) {
-        Conv2dSliceConfig dram_slice_config = determine_conv2d_slice_config(
+        Conv2dSliceConfig dram_slice_config;
+        std::tie(dram_slice_config, conv_config) = determine_conv2d_slice_config(
             dram_slice_config_,
             ConvDRAMParamters{
                 .in_channels = in_channels,

@@ -251,7 +251,7 @@ uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> dilation,
     std::array<uint32_t, 4> padding);
 
-Conv2dSliceConfig determine_conv2d_slice_config(
+std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
     std::optional<Conv2dSliceConfig> slice_config, const ConvDRAMParamters& params, MeshDevice* device);
 
 void tilize_with_optional_deallocation(Tensor& input_tensor_on_device, bool deallocate);

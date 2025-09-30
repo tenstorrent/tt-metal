@@ -862,7 +862,15 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     // anything.
 
     log_debug(
-        tt::LogOp, "Auto sharding Input={}x{}, Output={}x{}, ", input_height, input_width, output_height, output_width);
+        tt::LogOp,
+        "Auto sharding Input={}x{}, Output={}x{}, Padding={}, Input, Output DTYPE = {},{}",
+        input_height,
+        input_width,
+        output_height,
+        output_width,
+        padding,
+        input_datatype,
+        output_datatype);
     if ((input_memory_config.has_value() && input_memory_config.value().is_sharded()) ||
         conv_config.shard_layout.has_value()) {
         return conv_config;
@@ -980,23 +988,20 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             input_parallel_config,
             conv_config.act_block_h_override));
 
+        auto halo_input_shard_shape = halo_input_memory_config.shard_spec().value().shape;
         uint32_t approx_input_size_per_core = estimate_halo_output_elems(
-            halo_input_memory_config.shard_spec().value().shape,
-            batch_size,
-            input_height,
-            input_width,
-            kernel_size,
-            dilation,
-            padding);
+            halo_input_shard_shape, batch_size, input_height, input_width, kernel_size, dilation, padding);
 
-        l1_usage.tensor_allocation_size += approx_input_size_per_core * input_datum_size;
         log_trace(
             tt::LogOp,
-            "L1 usage for {}: {}, {}, Halo Output : {}",
+            "L1 usage for {}: Input {}, Output {}, CBs {}, Halo Output : {}",
             conv_config.shard_layout,
+            halo_input_memory_config,
             l1_usage.tensor_allocation_size,
             l1_usage.CB_allocation_size,
             approx_input_size_per_core);
+        l1_usage.tensor_allocation_size += approx_input_size_per_core * input_datum_size;
+
         return core_count_and_size{
             .core_count = std::max(input_parallel_config.grid.num_cores(), output_parallel_config.grid.num_cores()),
             .size = l1_usage.CB_allocation_size + l1_usage.tensor_allocation_size,
@@ -1138,7 +1143,7 @@ static Conv2dSliceConfig::SliceType determine_conv_slice_type(
         }
     }
 }
-static uint32_t calculate_conv_dram_slice_L1_usage(
+static std::pair<uint32_t, Conv2dConfig> calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
     Conv2dConfig conv_config = params.conv_config;
     TT_FATAL(
@@ -1423,17 +1428,22 @@ static uint32_t calculate_conv_dram_slice_L1_usage(
         }
     }
     log_debug(
-        tt::LogOp, " Conv2d DRAM AutoSlicing: Max L1 usage at slice {} of {} ", max_memory_index, max_memory_consumed);
-    return max_memory_consumed;
+        tt::LogOp,
+        " Conv2d DRAM AutoSlicing: Max L1 usage at slice {} of {} with params {}",
+        max_memory_index,
+        max_memory_consumed,
+        params);
+    return {max_memory_consumed, conv_config};
 }
 
-Conv2dSliceConfig determine_conv2d_slice_config(
+std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
     std::optional<Conv2dSliceConfig> slice_config_, const ConvDRAMParamters& params, MeshDevice* device) {
     if (slice_config_.has_value() && slice_config_.value().num_slices > 0) {
-        return slice_config_.value();
+        return {slice_config_.value(), params.conv_config};
     }
     auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
     Conv2dSliceConfig return_slice_config;
+    Conv2dConfig conv_config = params.conv_config;
     bool auto_slice_type = false;
     if (!slice_config_.has_value()) {
         auto_slice_type = true;
@@ -1449,10 +1459,10 @@ Conv2dSliceConfig determine_conv2d_slice_config(
     const uint32_t output_sliced_dim = return_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
                                            ? params.output_height
                                            : params.output_width;
-
+    uint32_t l1_usage;
     while (current_num_slices <= output_sliced_dim) {
         return_slice_config.num_slices = current_num_slices;
-        auto l1_usage = calculate_conv_dram_slice_L1_usage(params, device, return_slice_config);
+        std::tie(l1_usage, conv_config) = calculate_conv_dram_slice_L1_usage(params, device, return_slice_config);
         log_debug(
             tt::LogOp, "Conv2D DRAM Auto slice with {} slices requires {} L1 memory", current_num_slices, l1_usage);
         if (L1_stats.total_free_bytes >= l1_usage) {
@@ -1490,7 +1500,7 @@ Conv2dSliceConfig determine_conv2d_slice_config(
             return_slice_config);
     }
     log_info(tt::LogOp, "Conv2D DRAM Auto slice config is {}", return_slice_config);
-    return return_slice_config;
+    return {return_slice_config, conv_config};
 }
 
 conv_op_l1_usage conv2d::calculate_L1_usage(
