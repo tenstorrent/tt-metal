@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.18..3.30)
 include(cmake/compilers.cmake)
+set(CMAKE_COMPILE_WARNING_AS_ERROR ON)
 
 if(DEFINED ENV{CMAKE_C_COMPILER} AND DEFINED ENV{CMAKE_CXX_COMPILER})
     message(STATUS "Setting C and C++ compiler from environment variables")
