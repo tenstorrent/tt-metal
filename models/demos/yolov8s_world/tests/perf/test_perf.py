@@ -6,39 +6,27 @@
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0, run_for_wormhole_b0
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "batch_size",
-    [1],
-)
-@pytest.mark.parametrize(
-    "model_task",
+    "batch_size, expected_perf",
     [
-        "segment",  # To run the test for instance segmentation
-        "detect",  # To run the test for Object Detection
+        [1, 115],
     ],
-    ids=["segment", "detect"],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_yolov9c(model_task, batch_size):
-    subdir = "ttnn_yolov9c"
+def test_perf_device_yolov8s_world(batch_size, expected_perf):
+    subdir = "ttnn_yolov8s_world"
     num_iterations = 1
     margin = 0.03
-    enable_segment = model_task == "segment"
-    expected_perf = 94.7 if enable_segment else 108.4
+    expected_perf = expected_perf if is_wormhole_b0() else 0
 
-    command = (
-        f"pytest models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py::test_yolov9c[device_params0-segment-True]"
-        if model_task == "segment"
-        else f"pytest models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py::test_yolov9c[device_params0-detect-True]"
-    )
+    command = f"pytest models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_yolo_model"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
-    inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
     expected_perf_cols = {inference_time_key: expected_perf}
 
@@ -48,7 +36,7 @@ def test_perf_device_yolov9c(model_task, batch_size):
     logger.info(f"{expected_results}")
 
     prep_device_perf_report(
-        model_name=f"ttnn_functional_yolov9c{batch_size}",
+        model_name=f"ttnn_yolov8s_world{batch_size}",
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results=expected_results,

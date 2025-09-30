@@ -18,15 +18,6 @@ tt::tt_metal::Tensor make_metal_tensor(
     tt::tt_metal::Layout layout = tt::tt_metal::Layout::TILE,
     std::optional<tt::tt_metal::DataType> new_type = std::nullopt);
 
-template <typename T>
-consteval bool same_as_one_of() {
-    return true;
-};
-template <typename T, typename U, typename... Args>
-consteval bool same_as_one_of() {
-    return std::same_as<T, U> || same_as_one_of<T, Args...>();
-}
-
 [[noreturn]] void throw_exception(
     std::source_location source_location,
     nb::exception_type exception_type,
