@@ -579,6 +579,7 @@ def map_hf_to_meta_keys(loaded_weights):
 
 
 def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
+    print("a")
     # Define mappings at each level of the hierarchy
     meta_to_hf_mappings = {
         # Top level
