@@ -544,7 +544,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                      num_mux_cores_per_direction_per_link + worker];
                 opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
 
-                uint32_t worker_id = link * num_workers_per_direction + worker;
+                uint32_t worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
                 uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
