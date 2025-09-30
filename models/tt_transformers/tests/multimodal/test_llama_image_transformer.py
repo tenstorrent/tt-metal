@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import os
 
-import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mod
 import pytest
 import torch
 from llama_models.llama3.reference_impl.multimodal import encoder_utils
@@ -63,19 +62,22 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     dim = model_args.vision_dim
     ntok = model_args.vision_chunk_ntok - 1  # NOTE: -1 to remove class embedding
 
-    reference_model = llama_reference_mod.VisionEncoder(
-        max_num_tiles=4,
-        image_size=model_args.vision_chunk_size,
-        patch_size=model_args.vision_patch_size,
-        layers=n_layers,
-        n_global_layers=n_global_layers,
-        global_model=True,
-        return_intermediate=return_intermediate,
-    )
-    reference_model.load_state_dict(partial_state_dict, strict=False)
+    from transformers import MllamaForConditionalGeneration  # , MllamaConfig
 
+    weights_path = "/home/ubuntu/.cache/huggingface/hub/models--meta-llama--Llama-3.2-11B-Vision-Instruct/snapshots/9eb2daaa8597bf192a8b0e73f848f3a102794df5"
+    # config = MllamaConfig.from_pretrained(weights_path)
+    # config.vision_config.max_num_tiles = 4
+    # config.vision_config.image_size = model_args.vision_chunk_size
+    # config.vision_config.patch_size = model_args.vision_patch_size
+    # config.vision_config.num_hidden_layers = n_layers
+    # config.vision_config.num_global_layers = n_global_layers
+    # config.vision_config.output_hidden_states = return_intermediate
+
+    model = MllamaForConditionalGeneration.from_pretrained(
+        weights_path, torch_dtype=torch.bfloat16, device_map="auto"
+    )  # config=config,
+    reference_model = model.model.vision_model.eval()
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
-
     all_tests_pass = True
 
     tt_ccl = TT_CCL(mesh_device)
@@ -91,21 +93,10 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         gated=gated,
     )
 
-    # Create PT input
-    ar = torch.tensor([[2, 2]])
+    ar = torch.tensor([[2, 2]] * batch)
     pt_block_input = (torch.rand(batch, num_chunks, ntok, dim) * 2) - 1
-    pt_block_input = pt_block_input.reshape(batch * num_chunks, ntok, dim)
-    pt_block_input = reference_model.apply_class_embedding(pt_block_input)
-    ntok += 1
-    pt_block_input = pt_block_input.reshape(batch, num_chunks, ntok, dim)
-    pt_block_input = reference_model.apply_positional_embedding(pt_block_input, ar)
-
-    pt_block_input = reference_model.ln_pre(pt_block_input)
-
     tt_attention_input = pt_block_input.clone()
-    # Do PT padding
-    npad = 0
-    pt_block_input, npad = encoder_utils.expand_num_tokens_to_mult8(pt_block_input)
+
     # Create PT attention mask
     mask = encoder_utils.build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
     pt_block_input = pt_block_input.reshape(batch, -1, dim)
@@ -136,7 +127,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     )
 
     with torch.no_grad():
-        tt_out = tt_model(attention_input, return_intermediate=return_intermediate, mask=tt_mask)
+        tt_out = tt_model(attention_input, return_intermediate=return_intermediate, mask=None)
         if return_intermediate:
             tt_out, tt_intermediates = tt_out
             tt_intermediates = [tt.reshape(batch, num_chunks, ntok + npadtt, dim) for tt in tt_intermediates]
@@ -150,15 +141,17 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
-        reference_output = callable_reference(pt_block_input, return_intermediate=return_intermediate, mask=mask)
-        if return_intermediate:
-            reference_output, intermediates = reference_output
-            intermediates = intermediates.reshape(batch, num_chunks, ntok + npad, dim, -1)
-            intermediates = intermediates[..., :ntok, :, :]
-            intermediates = torch.chunk(intermediates, intermediates.shape[-1], dim=-1)
-            intermediates = [i.squeeze(-1) for i in intermediates]
-        reference_output = reference_output.reshape(batch, num_chunks, ntok + npad, dim)
-        reference_output = encoder_utils.contract_num_tokens_from_mult8(reference_output, npad)
+        tens_input = ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
+            :, :, :, :
+        ].reshape(batch * num_chunks, ntok + npadtt, dim)
+        # tens = callable_reference.layernorm_pre(tens_input)
+        feats = callable_reference(
+            tens_input[:, :ntok, :],
+            attention_mask=None,
+            output_hidden_states=True if return_intermediate != None else False,
+        )
+        reference_output = feats.last_hidden_state
+        intermediates = feats.hidden_states if return_intermediate != None else False
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
         if not passing:
