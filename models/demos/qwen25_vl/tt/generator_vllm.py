@@ -47,7 +47,7 @@ def allocate_vllm_kv_cache(kv_cache_shape, dtype, num_layers, model: Transformer
 
 def get_platform_specific_optimizations(model_name):
     is_72B = "72B" in model_name
-    max_seq_len = 4096 if is_72B else 12288
+    max_seq_len = 65536 if is_72B else 131072
 
     performance_opt = lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name)
 
