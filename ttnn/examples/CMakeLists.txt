@@ -9,8 +9,7 @@ target_link_libraries(
     example_opencv
     PRIVATE
         TTNN::CPP
-        opencv_core
-        opencv_imgcodecs
+        ${OpenCV_LIBS}
 )
 target_include_directories(example_opencv PRIVATE ${OpenCV_INCLUDE_DIRS})
 

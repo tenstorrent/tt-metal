@@ -11,8 +11,7 @@ target_link_libraries(
     ttnn_example_opencv
     PRIVATE
         TTNN::TTNN
-        opencv_core
-        opencv_imgcodecs
+        ${OpenCV_LIBS}
 )
 target_include_directories(ttnn_example_opencv PRIVATE ${OpenCV_INCLUDE_DIRS})
 #target_link_libraries(ttnn_example_opencv PUBLIC TTNN::TTNN)

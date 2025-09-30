@@ -32,7 +32,6 @@ target_sources(
             fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
-        mesh_graph_descriptor.cpp
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
@@ -73,6 +72,15 @@ endforeach()
 
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
+
+set_source_files_properties(
+    ${GENERATED_PROTO_SRCS}
+    PROPERTIES
+        COMPILE_OPTIONS
+            "-fvisibility=hidden;-fvisibility-inlines-hidden"
+        SKIP_PRECOMPILE_HEADERS
+            TRUE
+)
 
 target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(fabric SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
