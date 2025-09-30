@@ -1,0 +1,111 @@
+# This is a template workflow for running Ops Sanity pipeline tests.
+# These tests are meant to run after every commit and are meant to replace the existing APC pipeline.
+
+# The following parameters can be controlled in here:
+
+# arch: The architecture (WH, BH, etc. May be redundant with sku)
+# sku: the sku of the test (N150, N300, P100, P150b, llmbox, galaxy, etc)
+# timeout: The timeout for the whole pipeline
+
+# The following parameters can be controlled in the tests.json file by the developer:
+
+# name: The name of the test
+# cmd: The command to run the test
+# owner_id: The owner of the test
+
+
+name: "[testing] Ops Sanity pipeline"
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      arch:
+        required: false
+        type: string
+        default: wh
+      sku:
+        required: false
+        type: string
+        default: N150
+      runner-label:
+        required: false
+        type: string
+        default: N150
+      timeout:
+        required: false
+        type: number
+        default: 15
+  push:
+    branches:
+      ["roseli/28975-pipeline-reorg-apc-ops"]
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.load-test-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Load test matrix
+        id: load-test-matrix
+        run: echo "matrix=$(jq -c . ./tests/pipeline_reorg/ops/sanity/tests.json)" >> $GITHUB_OUTPUT
+
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
+
+  tests:
+    needs: [load-test-matrix, build-artifact]
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: 
+      - 28975_test_pipeline_reorg
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!' }}
+      env:
+        LOGURU_LEVEL: INFO
+        TT_METAL_HOME: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
+    steps:
+      - name: Mark repository as safe directory # not sure why this is needed
+        run: git config --global --add safe.directory ${{ github.workspace }}
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout || 15 }}
+        run: |
+          ls $(pwd)/tests/
+          echo ${{ matrix.test-group.cmd }}
+          ${{ matrix.test-group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
