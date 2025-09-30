@@ -141,7 +141,7 @@ void kernel_main() {
         size_t l1_read_addr = get_read_ptr(cb_to_allgather_writer);
         uint64_t noc0_dest_noc_addr = safe_get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
-        fused_write_atomic_and_advance_local_read_address_for_fabric_write(
+        l1_only_fused_write_atomic_and_advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
