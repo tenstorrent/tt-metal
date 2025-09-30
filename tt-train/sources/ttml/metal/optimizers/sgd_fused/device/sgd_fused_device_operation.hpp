@@ -32,16 +32,14 @@ struct SGDFusedDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const ttnn::Tensor& param_in,
+        const ttnn::Tensor& param,
         const ttnn::Tensor& grad,
         float lr,
         float momentum,
         float dampening,
         float weight_decay,
         bool nesterov,
-        const std::optional<ttnn::Tensor>& param_out = std::nullopt,
-        const std::optional<ttnn::Tensor>& momentum_in = std::nullopt,
-        const std::optional<ttnn::Tensor>& momentum_out = std::nullopt);
+        const std::optional<ttnn::Tensor>& momentum_buffer = std::nullopt);
 };
 
 }  // namespace ttml::metal::optimizers::sgd_fused::device

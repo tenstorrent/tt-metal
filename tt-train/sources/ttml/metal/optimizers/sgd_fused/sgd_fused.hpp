@@ -17,8 +17,6 @@ struct SGDFusedOptimizer {
         float dampening,
         float weight_decay,
         bool nesterov,
-        const std::optional<ttnn::Tensor>& param_out,
-        const std::optional<ttnn::Tensor>& momentum_in,
-        const std::optional<ttnn::Tensor>& momentum_out);
+        const std::optional<ttnn::Tensor>& momentum_buffer);
 };
 }  // namespace ttml::metal::optimizers::sgd_fused
