@@ -26,6 +26,7 @@ def test_ag_4_dev(
     warmup_iters,
     perf_target_us,
 ):
+    pytest.skip("Issue #29658: Skipping perf test as CI is building with the wrong version")
     if ttnn.get_num_devices() != 4:
         pytest.skip("Test is for p150x4 configuration")
     profiler = BenchmarkProfiler()
