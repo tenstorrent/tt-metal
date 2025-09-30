@@ -215,6 +215,31 @@ inline bool FileContainsAllStringsInOrder(std::string file_name, const std::vect
     return false;
 }
 
+// Delete all lines from file that start with a given prefix
+inline bool DeleteLinesStartingWith(std::string file_name, const std::string &prefix) {
+    std::fstream log_file;
+    if (!OpenFile(file_name, log_file, std::fstream::in)) {
+        log_info(tt::LogTest, "File '{}' does not exist!", file_name);
+        return false;
+    }
+    std::string content;
+    std::string line;
+    while (getline(log_file, line)) {
+        if (line.rfind(prefix, 0) == 0) {
+            // Skip lines that begin with prefix
+            continue;
+        }
+        content += line + "\n";
+    }
+    log_file.close();
+    if (!OpenFile(file_name, log_file, std::fstream::out | std::fstream::trunc)) {
+        std::cout << "Could not open file " << file_name << " for writing!" << std::endl;
+        return false;
+    }
+    log_file << content;
+    log_file.close();
+    return true;
+}
 // Checkes whether a given file matches a golden string.
 inline bool FilesMatchesString(std::string file_name, const std::string& expected) {
     // Open the input file.
