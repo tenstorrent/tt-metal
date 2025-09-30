@@ -333,14 +333,11 @@ CPMAddPackage(
     GITHUB_REPOSITORY capnproto/capnproto
     GIT_TAG
         d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
-    PATCHES
-        capnp.patch # We need to patch capnp until bug is properly fixed: https://github.com/capnproto/capnproto/issues/2418
     OPTIONS
         "BUILD_TESTING OFF"
         "CAPNP_LITE OFF"
         "BUILD_SHARED_LIBS OFF"
         "CMAKE_CXX_EXTENSIONS ON"
-    CUSTOM_CACHE_KEY "1_2_0_patched"
 )
 
 if(capnproto_ADDED)
