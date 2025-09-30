@@ -507,6 +507,8 @@ def main():
 
             # Permute
             x = ttnn.permute(x, (1, 0, 2))  # NLD -> LND
+
+            # Call Text Transformer
             x = self.transformer.forward(x)
 
             # Permute back
@@ -522,6 +524,7 @@ def main():
 
             torch_selected_features = torch_x[torch.arange(torch_x.shape[0]), torch_tokens.argmax(dim=-1)]
 
+            # Put tensor back on device for text projection
             x = ttnn.from_torch(torch_selected_features, device=get_device(), layout=ttnn.TILE_LAYOUT)
             x = ttnn.matmul(x, self.text_projection, transpose_b=True)
 
@@ -542,7 +545,9 @@ def main():
             logit_scale = math.exp(self.logit_scale)
 
             text_features_t = ttnn.transpose(text_features, 0, 1)
-            logits_per_image = logit_scale * image_features @ text_features_t
+
+            # logit_scale * image_features @ text_features.t()
+            logits_per_image = ttnn.matmul(logit_scale * image_features, text_features, transpose_b=True)
             logits_per_text = ttnn.transpose(logits_per_image, 0, 1)
 
             return logits_per_image, logits_per_text
