@@ -111,10 +111,10 @@ void kernel_main() {
                 } else {
                     forward_connection = false;
                 }
-                unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+                fabric_set_unicast_route<false>(unicast_packet_header, num_hops);
             } else {
                 const uint32_t num_hops = std::abs(int(target_device_id) - int(chip_id));
-                unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(num_hops));
+                fabric_set_unicast_route<false>(unicast_packet_header, num_hops);
                 forward_connection = target_device_id > chip_id;
             }
             auto& fabric_conn = forward_connection ? fabric_connection.get_forward_connection()
