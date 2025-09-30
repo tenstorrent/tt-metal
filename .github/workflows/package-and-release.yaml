@@ -245,7 +245,7 @@ jobs:
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' }}
+    # if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout stable branch
         uses: actions/checkout@v4
