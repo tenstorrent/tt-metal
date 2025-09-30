@@ -26,11 +26,11 @@ from ...pipelines.motif.pipeline_motif import (
     ],
 )
 @pytest.mark.parametrize(
-    ("mesh_device", "cfg", "sp", "tp", "topology", "num_links"),
+    ("mesh_device", "cfg", "sp", "tp", "topology", "num_links", "mesh_test_id"),
     [
-        # pytest.param((2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1, id="2x4cfg1sp0tp1"),
-        pytest.param((2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1, id="2x4cfg0sp0tp1"),
-        # pytest.param((4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4, id="4x8cfg1sp0tp1"),
+        pytest.param((2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1, "2x4cfg1sp0tp1", id="2x4cfg1sp0tp1"),
+        pytest.param((2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg0sp0tp1", id="2x4cfg0sp0tp1"),
+        pytest.param((4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4, "4x8cfg1sp0tp1", id="4x8cfg1sp0tp1"),
     ],
     indirect=["mesh_device"],
 )
@@ -69,6 +69,7 @@ def test_motif_pipeline(
     traced: bool,
     use_cache: bool,
     is_ci_env: bool,
+    mesh_test_id: str,
     monkeypatch,
 ) -> None:
     # Setup CI environment
@@ -124,7 +125,7 @@ def test_motif_pipeline(
         )
 
         # Save image
-        output_filename = f"motif_{image_w}_{image_h}.png"
+        output_filename = f"motif_{image_w}_{image_h}_{mesh_test_id}.png"
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
@@ -162,7 +163,7 @@ def test_motif_pipeline(
                 traced=traced,
             )
 
-            output_filename = f"motif_{image_w}_{image_h}_{i}.png"
+            output_filename = f"motif_{image_w}_{image_h}_{mesh_test_id}_{i}.png"
             images[0].save(output_filename)
             logger.info(f"Image saved as {output_filename}")
 
