@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import tt2torch_tensor, torch2tt_tensor, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
@@ -118,7 +118,6 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     assert all_pass
 
 
-@skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "input_dtype, output_dtype",
     [
@@ -156,7 +155,6 @@ def test_layernorm_part_2_with_program_cache(
     run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
 
 
-@skip_for_grayskull("Requires wormhole")
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat16],

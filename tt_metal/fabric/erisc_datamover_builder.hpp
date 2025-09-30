@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
@@ -292,7 +292,9 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_channel_ack_addr = 0;
     std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
     std::size_t edm_local_sync_address = 0;
+    std::size_t edm_local_tensix_sync_address = 0;
     std::size_t edm_status_address = 0;
+    std::size_t notify_worker_of_read_counter_update_src_address = 0;
 
     // Performance telemetry buffer address (16B aligned)
     std::size_t perf_telemetry_buffer_address = 0;
@@ -608,6 +610,7 @@ public:
 
     size_t termination_signal_ptr = 0;
     size_t edm_local_sync_ptr = 0;
+    size_t edm_local_tensix_sync_ptr = 0;
     size_t edm_status_ptr = 0;
     eth_chan_directions direction = eth_chan_directions::EAST;
     size_t downstream_edms_connected = 0;
@@ -647,6 +650,7 @@ public:
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;
+    uint32_t num_downstream_tensix_connections = 0;
 
 private:
     // Shared helper for setting up VC connections

@@ -350,8 +350,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
     std::optional<uint32_t> receiver_device_id,
     std::optional<uint32_t> sender_device_id) {
-    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::tt_metal::hal::get_arch());
-    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::tt_metal::hal::get_arch());
+    auto sender_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(tt::tt_metal::hal::get_arch());
+    auto receiver_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(tt::tt_metal::hal::get_arch());
     for (uint32_t i = 0; i < topology_config.num_links; ++i) {
         bool is_clockwise_direction_edm_enabled =
             !topology_config.is_linear || topology_config.ring_index != topology_config.ring_size - 1;
@@ -1549,8 +1549,12 @@ void validate_fabric_2d_dynamic_config(Topology topology) {
         physical_mesh_shape.dims() == 2,
         "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
     TT_FATAL(
-        physical_mesh_shape[0] == 1 || physical_mesh_shape[1] == 1,
-        "Fabric 2D dynamic CCLs are only supported for 1D physical meshes");
+        physical_mesh_shape[0] == 1 || physical_mesh_shape[1] == 1 ||
+            (physical_mesh_shape[0] == 2 && physical_mesh_shape[1] == 2),
+        "Fabric 2D dynamic CCLs are only supported for 1D physical meshes OR 1 2X2 ring that is equivalent to 1D but "
+        "physical shape reported is {} X {}",
+        physical_mesh_shape[0],
+        physical_mesh_shape[1]);
 }
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(

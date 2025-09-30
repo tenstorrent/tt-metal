@@ -1336,6 +1336,7 @@ static inline bool process_cmd_h(
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
 #if defined(FABRIC_RELAY)
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();
@@ -1497,4 +1498,5 @@ void kernel_main() {
         relay_client.template teardown<upstream_noc_index, upstream_noc_xy, upstream_dispatch_cb_sem_id>();
     }
     // DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
+    set_l1_data_cache<false>();
 }

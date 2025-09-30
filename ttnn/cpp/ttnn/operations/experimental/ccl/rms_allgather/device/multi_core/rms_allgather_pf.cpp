@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -20,7 +20,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -42,18 +41,6 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::fused::normalization {
-
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
-}
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
 
 // computes layernorm(a+*b)*gamma
 // if b is nullptr it's treated as zero (no addition)
@@ -80,7 +67,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool use_noc1_only) {
-    using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
 
@@ -177,13 +163,13 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                                               ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
                                               : tt::DataFormat::Float16_b;
     // tile sizes
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t residual_single_tile_size = tt::tt_metal::detail::TileSize(residual_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t stats_single_tile_size = tt::tt_metal::detail::TileSize(stats_data_format);
-    uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
-    uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t residual_single_tile_size = tt::tile_size(residual_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t stats_single_tile_size = tt::tile_size(stats_data_format);
+    uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
+    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "res_data_format: {}", residual_data_format);
@@ -697,8 +683,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = NOC::NOC_1;
     if (!use_noc1_only) {
-        reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(mesh_device->arch());
-        writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(mesh_device->arch());
+        reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(mesh_device->arch());
+        writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch());
 
         if (!skip_write_back) {
             reader_noc = NOC::NOC_0;

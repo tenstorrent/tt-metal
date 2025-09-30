@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,6 +11,8 @@
 //////
 
 #include "noc_parameters.h"
+
+void LOG_C(const char* format, ...);
 
 /*
 
@@ -51,6 +53,10 @@
 
 */
 
+void set_rd_ack_drop(uint32_t drop, uint32_t cmd_buf);
+void set_flush_bit(uint32_t flush, uint32_t cmd_buf);
+void force_dim_routing(uint32_t enable, uint32_t cmd_buf);
+
 /*
   Copy data from source to destination address.  Supports narrow transfers
   (size not a multiple of 16 bytes).  However, the alignment of source and
@@ -74,10 +80,7 @@
   <linked> => link with previous call for ordering
   <posted> => if copying from a local address, avoid sending ack on the
               response channel
-  <static_vc_alloc> => use static VC allocation
   <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
-  <vc_arb_priority> =>  arbitration priority for VC allocation;
-              set to 0 disable arbitration priority & use round-robin always
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
@@ -89,10 +92,22 @@ void noc_copy(
     uint32_t size,
     bool linked,
     bool posted,
-    bool static_vc_alloc,
     uint32_t static_vc,
-    uint32_t vc_arb_priority,
-    uint8_t transaction_id);
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
+
+void noc_copy_cmd(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint32_t size,
+    bool linked,
+    bool posted,
+    uint32_t static_vc,
+    uint32_t resp_static_vc,
+    uint32_t transaction_id,
+    uint32_t cmd_select);
 
 /*
   Copy data from source to destination address and accumulate at destination.
@@ -118,10 +133,7 @@ void noc_copy(
   <linked> => link with previous call for ordering
   <posted> => if copying from a local address, avoid sending ack on the
               response channel
-  <static_vc_alloc> => use static VC allocation
   <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
-  <vc_arb_priority> =>  arbitration priority for VC allocation;
-              set to 0 disable arbitration priority & use round-robin always
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
   <data_format => The format of the data used for accumulation: NOC_AT_ACC_*, e.g. NOC_AT_ACC_FP32>
@@ -136,73 +148,103 @@ void noc_accumulate(
     uint32_t size,
     bool linked,
     bool posted,
-    bool static_vc_alloc,
     uint32_t static_vc,
+    uint32_t resp_static_vc,
     bool multicast,
-    uint32_t multicast_mode,
-    uint32_t vc_arb_priority,
-    uint8_t transaction_id,
-    uint8_t data_format,
+    bool multicast_mode,
+    uint32_t transaction_id,
+    uint32_t data_format,
     bool disable_saturation);
 
 /*
-  Copy a single word with byte-enables from source to destination address.
-  Works similar to noc_copy, except limited to a single-word transfer and
-  provides the option to specify partial byte-enables.
-
-  This call works only with transfers from local memory.
-
-  <src_coordinate> => NOC ID portion of source address (unicast)
-  <src_addr> => source address (unicast, must be local memory)
-  <dst_coordinate> => NOC ID portion of destination address (unicast)
-  <dst_addr> => destination address (unicast)
-  <be> => byte enable mask
-  <linked> => link with previous call for ordering
-  <posted> => if copying from a local address, avoid sending ack on the
-              response channel
-  <static_vc_alloc> => use static VC allocation
-  <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
-  <transaction_id => optional ID tag for the outgoing request (0-15, used for
-              selective transaction flush)>
-*/
+-  Copy a single word with byte-enables from source to destination address.
+-  Works similar to noc_copy, except limited to a single-word transfer and
+-  provides the option to specify partial byte-enables.
+-
+-  This call works only with transfers from local memory.
+-
+-  <src_coordinate> => NOC ID portion of source address (unicast)
+-  <src_addr> => source address (unicast, must be local memory)
+-  <dst_coordinate> => NOC ID portion of destination address (unicast)
+-  <dst_addr> => destination address (unicast)
+-  <be> => byte enable mask
+-  <linked> => link with previous call for ordering
+-  <posted> => if copying from a local address, avoid sending ack on the
+-              response channel
+-  <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
+-  <transaction_id => optional ID tag for the outgoing request (0-15, used for
+-              selective transaction flush)>
+-*/
 void noc_copy_word_be(
     uint32_t src_coordinate,
     uint64_t src_addr,
     uint32_t dst_coordinate,
     uint64_t dst_addr,
-    uint64_t be,
+    uint32_t* be,
     bool linked,
     bool posted,
-    bool static_vc_alloc,
     uint32_t static_vc,
-    uint8_t transaction_id);
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
 
 /*
-  Write a single 32-bit value using inline header data. (The effect is the
+-  Multicast version of noc_copy_word_be.
+-
+-  Like noc_copy_word_be, this call works only with transfers from local memory,
+-  and is limited to single-word transfers.
+-
+-  <src_coordinate> => NOC ID portion of source address (unicast)
+-  <src_addr> => source address (unicast)
+-  <dst_coordinate> => NOC ID portion of destination address (multicast)
+-  <dst_addr> => destination address (multicast)
+-  <multicast_mode> => multicast direction (0 = x-direction, 1 = y-direction)
+-  <be> => byte enable mask
+-  <linked> => link with previous call for ordering
+-  <posted> => if copying from a local address, avoid sending ack on the
+-              response channel
+-  <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
+-  <transaction_id => optional ID tag for the outgoing request (0-15, used for
+-              selective transaction flush)>
+-*/
+void noc_multicast_copy_word_be(
+    uint32_t src_coordinate,
+    uint64_t src_addr,
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    bool multicast_mode,
+    uint32_t* be,
+    bool linked,
+    bool posted,
+    uint32_t static_vc,
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
+
+/*
+  Write a single 32-bit or 64-bit value using inline header data. (The effect is the
   same as when writing with noc_copy, however such writes save the bandwidth
   of an additional flit for register access.)
 
   <dst_coordinate> => NOC ID portion of destination address (unicast)
   <dst_addr> => destination address (unicast)
-  <be> => byte enable mask
+  <inline_64> => if true, write 64-bit value; otherwise, write 32-bit value
   <linked> => link with previous call for ordering
   <posted> => if copying from a local address, avoid sending ack on the
               response channel
-  <static_vc_alloc> => use static VC allocation
-  <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
+  <static_vc> => use specified VC for request
+  <resp_static_vc> => use specified VC for response
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_write_dw_inline(
+void noc_write_inline(
     uint32_t dst_coordinate,
     uint64_t dst_addr,
-    uint32_t val,
-    uint8_t be,
+    uint64_t val,
+    uint32_t size,
     bool linked,
     bool posted,
-    bool static_vc_alloc,
     uint32_t static_vc,
-    uint8_t transaction_id);
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
 
 /*
   Copy data from source to multiple destinations via multicast.  Supports
@@ -222,7 +264,6 @@ void noc_write_dw_inline(
   <linked> => link with previous call for ordering
   <posted> => if copying from a local address, avoid sending ack on the
               response channel
-  <static_vc_alloc> => use static VC allocation
   <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
@@ -232,13 +273,13 @@ void noc_multicast_copy(
     uint64_t src_addr,
     uint32_t dst_coordinate,
     uint64_t dst_addr,
-    uint32_t multicast_mode,
+    bool multicast_mode,
     uint32_t size,
     bool linked,
     bool posted,
-    bool static_vc_alloc,
     uint32_t static_vc,
-    uint8_t transaction_id);
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
 
 // support multicast ability to exclude nodes
 void noc_multicast_copy_exclude(
@@ -246,14 +287,15 @@ void noc_multicast_copy_exclude(
     uint64_t src_addr,
     uint32_t dst_coordinate,
     uint64_t dst_addr,
-    uint32_t multicast_mode,
-    uint32_t multicast_exclude,
+    bool multicast_mode,
+    uint32_t multicast_lo,
+    uint32_t multicast_hi,
     uint32_t size,
     bool linked,
     bool posted,
-    bool static_vc_alloc,
     uint32_t static_vc,
-    uint8_t transaction_id);
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
 
 // support src include
 void noc_multicast_copy_src_include(
@@ -261,46 +303,13 @@ void noc_multicast_copy_src_include(
     uint64_t src_addr,
     uint32_t dst_coordinate,
     uint64_t dst_addr,
-    uint32_t multicast_mode,
+    bool multicast_mode,
     uint32_t size,
     bool linked,
     bool posted,
-    bool static_vc_alloc,
     uint32_t static_vc,
-    uint8_t transaction_id);
-
-/*
-  Multicast version of noc_copy_word_be.
-
-  Like noc_copy_word_be, this call works only with transfers from local memory,
-  and is limited to single-word transfers.
-
-  <src_coordinate> => NOC ID portion of source address (unicast)
-  <src_addr> => source address (unicast)
-  <dst_coordinate> => NOC ID portion of destination address (multicast)
-  <dst_addr> => destination address (multicast)
-  <multicast_mode> => multicast direction (0 = x-direction, 1 = y-direction)
-  <be> => byte enable mask
-  <linked> => link with previous call for ordering
-  <posted> => if copying from a local address, avoid sending ack on the
-              response channel
-  <static_vc_alloc> => use static VC allocation
-  <static_vc> => use VC 0/1 for static request; don't-care if static_vc_alloc=0
-  <transaction_id => optional ID tag for the outgoing request (0-15, used for
-              selective transaction flush)>
-*/
-void noc_multicast_copy_word_be(
-    uint32_t src_coordinate,
-    uint64_t src_addr,
-    uint32_t dst_coordinate,
-    uint64_t dst_addr,
-    uint32_t multicast_mode,
-    uint64_t be,
-    bool linked,
-    bool posted,
-    bool static_vc_alloc,
-    uint32_t static_vc,
-    uint8_t transaction_id);
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
 
 /*
   Multicast version of noc_write_dw_inline.
@@ -312,21 +321,46 @@ void noc_multicast_copy_word_be(
   <linked> => link with previous call for ordering
   <posted> => if copying from a local address, avoid sending ack on the
               response channel
-  <static_vc_alloc> => use static VC allocation
   <transaction_id => optional ID tag for the outgoing request (0-15, used for
               selective transaction flush)>
 */
-void noc_multicast_write_dw_inline(
+void noc_multicast_write_inline(
     uint32_t dst_coordinate,
     uint64_t dst_addr,
-    uint32_t val,
-    uint32_t multicast_mode,
-    uint8_t be,
+    uint64_t val,
+    uint32_t size,
+    bool multicast_mode,
     bool linked,
     bool posted,
-    bool static_vc_alloc,
     uint32_t static_vc,
-    uint8_t transaction_id);
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
+
+/*
+  Multicast version of noc_write_dw_inline. Includes SRC with the inline data.
+
+  <dst_coordinate> => NOC ID portion of destination address (unicast)
+  <dst_addr> => destination address (unicast)
+  <multicast_mode> => multicast direction (0 = x-direction, 1 = y-direction)
+  <be> => byte enable mask
+  <linked> => link with previous call for ordering
+  <posted> => if copying from a local address, avoid sending ack on the
+              response channel
+  <transaction_id => optional ID tag for the outgoing request (0-15, used for
+              selective transaction flush)>
+*/
+
+void noc_multicast_write_inline_src_include(
+    uint32_t dst_coordinate,
+    uint64_t dst_addr,
+    uint64_t val,
+    uint32_t size,
+    bool multicast_mode,
+    bool linked,
+    bool posted,
+    uint32_t static_vc,
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
 
 /*
   Atomic wrapping increment of 32-bit value at destination address.  The address has
@@ -349,7 +383,14 @@ void noc_multicast_write_dw_inline(
   <wrap> => log2(wrapping limit)-1
   <linked> => link with previous call for ordering
 */
-void noc_atomic_increment(uint32_t noc_coordinate, uint64_t addr, uint32_t incr, uint32_t wrap, bool linked);
+void noc_atomic_increment(
+    uint32_t noc_coordinate,
+    uint64_t addr,
+    uint32_t incr,
+    uint32_t wrap,
+    bool linked,
+    uint32_t static_vc,
+    uint32_t transaction_id);
 
 /*
   Performs the same operation as noc_atomic_increment and reads the previous value from the
@@ -382,7 +423,9 @@ void noc_atomic_read_and_increment(
     uint32_t read_coordinate,
     uint64_t read_addr,
     bool linked,
-    uint8_t transaction_id);
+    uint32_t static_vc,
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
 
 /*
   Performs the same operation as noc_atomic_increment on multiple multicast destinations.
@@ -395,7 +438,14 @@ void noc_atomic_read_and_increment(
   <linked> => link with previous call for ordering
 */
 void noc_multicast_atomic_increment(
-    uint32_t noc_coordinate, uint64_t addr, uint32_t multicast_mode, uint32_t incr, uint32_t wrap, bool linked);
+    uint32_t noc_coordinate,
+    uint64_t addr,
+    bool multicast_mode,
+    uint32_t incr,
+    uint32_t wrap,
+    bool linked,
+    uint32_t static_vc,
+    uint32_t transaction_id);
 
 /*
   Performs the same operation as noc_atomic_read_and_increment on multiple multicast destinations.
@@ -422,13 +472,15 @@ void noc_multicast_atomic_increment(
 void noc_multicast_atomic_read_and_increment(
     uint32_t noc_coordinate,
     uint64_t addr,
-    uint32_t multicast_mode,
+    bool multicast_mode,
     uint32_t incr,
     uint32_t wrap,
     uint32_t read_coordinate,
     uint64_t read_addr,
     bool linked,
-    uint8_t transaction_id);
+    uint32_t static_vc,
+    uint32_t resp_static_vc,
+    uint32_t transaction_id);
 
 /*
   Set command buffer ID (0-3) to use for the next commmand issued.
@@ -493,7 +545,7 @@ volatile uint32_t noc_rd_resp_received();
   so there is no need to call it explicitly before these calls.
 
 */
-bool noc_command_ready();
+bool noc_command_ready(uint32_t cmd_select);
 
 /*
   Returns ID & dateline info of the local node in the format:
@@ -502,6 +554,7 @@ bool noc_command_ready();
      i_noc_y_size[3:0], i_noc_x_size[3:0],
      i_local_nodeid_y[3:0], i_local_nodeid_x[3:0]}
 */
+
 uint32_t noc_local_node_id();
 
 /*

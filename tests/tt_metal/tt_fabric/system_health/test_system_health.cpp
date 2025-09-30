@@ -375,12 +375,14 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 4;
         num_connections_per_side = 2;
-    } else if (
-        cluster_type == tt::tt_metal::ClusterType::GALAXY ||
-        cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+    } else if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         num_expected_chips = 32;
         num_expected_mmio_chips = 32;
         num_connections_per_side = 4;
+    } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        num_expected_chips = 32;
+        num_expected_mmio_chips = 32;
+        num_connections_per_side = 2;
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X2) {
         num_expected_chips = 2;
         num_expected_mmio_chips = 2;
