@@ -517,8 +517,7 @@ private:
                     if (p.type == "all_to_one") {
                         log_warning(tt::LogTest, "'iterations' specified alongside 'all_to_one' test, `iterations` will be followed instead of auto-generating iterations based on number of devices");
                     }
-                }
-                else if (p.type == "all_to_one") {
+                } else if (p.type == "all_to_one") {
                     // Dynamically calculate iterations for all_to_one patterns based on number of devices
                     uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
                     max_iterations = std::max(max_iterations, num_devices);
