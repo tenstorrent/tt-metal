@@ -10,7 +10,6 @@
 #include <tt-metalium/host_api.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
@@ -55,9 +54,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     tt::DataFormat src1_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
-    uint32_t src1_single_tile_size = tt::tt_metal::detail::TileSize(src1_cb_data_format);
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
+    uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;

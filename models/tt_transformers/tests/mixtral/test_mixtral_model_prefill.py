@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import bz2
@@ -9,12 +9,12 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.t3000.mixtral8x7b.reference.model import Transformer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import prepare_inputs_ttnn_prefill
 from models.tt_transformers.tt.common import PagedAttentionConfig, create_tt_model
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
-from models.utility_functions import comp_pcc, skip_for_grayskull
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py
 
@@ -31,7 +31,6 @@ def convert2ref(state_dict):
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

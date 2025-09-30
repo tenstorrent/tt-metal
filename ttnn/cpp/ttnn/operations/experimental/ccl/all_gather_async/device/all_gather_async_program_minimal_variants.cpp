@@ -18,7 +18,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -134,9 +133,9 @@ void fabric_mux_connection_rt_args(
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -156,9 +155,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     return all_gather_async_minimal_default_helper(
         program,
         input_tensor,
-        sender_device,
-        forward_device,
-        backward_device,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
         output_tensor,
         dim,
         num_links,
@@ -180,9 +179,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -243,8 +242,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -265,15 +264,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     uint32_t page_size = input_tensor.buffer()->page_size();
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
-    auto [unicast_forward_args, unicast_backward_args] =
-        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
         topology,
-        sender_device,
-        forward_device,
-        backward_device,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
         topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
-        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1);
+        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1,
+        mesh_device);
 
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
@@ -331,17 +331,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_sender_config);
 
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in1;
-    static constexpr auto num_packet_headers_storable = 8;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
-
     bool input_is_sharded = input_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
@@ -372,7 +361,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
     const uint32_t l1_unreserved_base_address =
-        sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
@@ -381,10 +370,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
         TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
         uint32_t TILE_WIDTH = 32;
+
         uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
         uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
+        uint32_t input_tensor_C = input_tensor_shape[1];
+
         uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
         uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
+        uint32_t output_tensor_C = output_tensor_shape[1];
 
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
@@ -404,7 +397,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 mux_base_l1_address);
 
             const bool mux_connection_valid =
-                (dir && backward_device.has_value()) || (!dir && forward_device.has_value());
+                (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
             if (mux_connection_valid) {
                 auto mux_kernel_id = tt::tt_metal::CreateKernel(
                     program,
@@ -416,15 +409,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                         .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
                         .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
                 std::vector<uint32_t> mux_rt_args = {};
-                const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                 if (dir) {  // forward
-                    const auto dst_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 } else {
-                    const auto dst_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }
@@ -500,8 +491,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor.buffer()->address(),                        // output_tensor_address
                     input_tensor_Wt,                                          // width in tiles of the output shard
                     input_tensor_Ht,                                          // height in tiles of the output shard
+                    input_tensor_C,                                           // num input channels
                     output_tensor_Wt,                                         // width in tiles of entire output
                     output_tensor_Ht,                                         // height in tiles of entire output
+                    output_tensor_C,                                          // num output channels
                     dim,                                                      // dim to gather on
                     batch_head_size,                                          // product of the first two dims
                     input_tile_id_start,                                      //
@@ -544,8 +537,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
                     ring_index,                       // my_chip_id
-                    reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
-                    num_packet_headers_storable,      // num_packet_headers_storable
                     sender_cb_index,                  // cb_forward_id
                     num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
                     page_size,                        // tensor0_page_size
@@ -596,8 +587,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor.buffer()->address(),                           // output_tensor_address
                     input_tensor_Wt,                                             // width in tiles of the output shard
                     input_tensor_Ht,                                             // height in tiles of the output shard
+                    input_tensor_C,                                              // num input channels
                     output_tensor_Wt,                                            // width in tiles of entire output
                     output_tensor_Ht,                                            // height in tiles of entire output
+                    output_tensor_C,                                             // num output channels
                     dim,                                                         // dim to gather on
                     batch_head_size,                                             // product of the first two dims
                     input_tile_id_start,                                         //
@@ -673,14 +666,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                         auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                         worker_reader_sender_runtime_args[0] = input.buffer()->address();
                         worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                        worker_reader_sender_runtime_args[11] = out_ready_semaphore.address();
+                        worker_reader_sender_runtime_args[13] = out_ready_semaphore.address();
                         // sender writer
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                        worker_writer_sender_runtime_args[12] = out_ready_semaphore.address();
+                        worker_writer_sender_runtime_args[14] = out_ready_semaphore.address();
 
                         if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[16] = barrier_semaphore.value().address();
+                            worker_writer_sender_runtime_args[18] = barrier_semaphore.value().address();
                         }
 
                         core_idx++;
@@ -694,9 +687,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -710,7 +703,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     bool use_optimal_ccl_for_llama = false) {
     tt::tt_metal::Program program{};
 
-    IDevice* mesh_device = input_tensor.device();
+    auto mesh_device = input_tensor.device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }
@@ -721,8 +714,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -733,7 +726,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [forward_args, backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
+        topology,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        num_targets_forward,
+        num_targets_backward,
+        mesh_device);
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
@@ -941,21 +940,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto src_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto dst_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_rt_args.push_back(forward_coord.has_value());
+        if (forward_coord.has_value()) {
+            const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+            const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
         }
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto src_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
-            const auto dst_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_rt_args.push_back(backward_coord.has_value());
+        if (backward_coord.has_value()) {
+            const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+            const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
         }

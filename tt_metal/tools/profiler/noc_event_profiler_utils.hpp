@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -62,7 +62,7 @@ public:
 
     // lookup Eth Channel ID given a physical chip id and physical EDM router core coordinate
     std::optional<tt::tt_fabric::chan_id_t> getRouterEthCoreToChannelLookup(
-        chip_id_t phys_chip_id, CoreCoord eth_router_phys_core_coord) const {
+        chip_id_t phys_chip_id, CoreCoord& eth_router_phys_core_coord) const {
         auto it = eth_core_to_channel_lookup_.find(std::make_tuple(phys_chip_id, eth_router_phys_core_coord));
         if (it != eth_core_to_channel_lookup_.end()) {
             return it->second;

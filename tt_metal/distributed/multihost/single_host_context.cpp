@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "single_host_context.hpp"
-#include "api/tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <cstring>
 

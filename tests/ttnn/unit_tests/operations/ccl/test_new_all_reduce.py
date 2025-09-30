@@ -9,7 +9,6 @@ from time import time
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.utility_functions import skip_for_grayskull
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     num_cores_to_rectangle_grid,
@@ -300,7 +299,6 @@ def run_all_reduce_impl(
     mesh_device.reset_sub_device_stall_group()
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(1500)
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
@@ -396,7 +394,6 @@ def test_all_reduce(
     logger.info(f"Time per iter: {latency_us} us")
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",

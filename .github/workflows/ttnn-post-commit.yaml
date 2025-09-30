@@ -97,16 +97,20 @@ jobs:
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 11 -m "not disable_fast_runtime_mode"
           - name: ttnn group 12
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 12 -m "not disable_fast_runtime_mode"
+          - name: ttnn notebook
+            cmd: TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/notebook_tests -xv -m "not disable_fast_runtime_mode"
           - name: ttnn fast runtime off
             cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
           - name: ttnn example tests
             cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    # ttnn group 1 is timing out on CIv2: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150, N300', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || ((inputs.runner-label == 'N300' && matrix.test-group.name == 'ttnn group 1') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
       image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
@@ -143,7 +147,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06CXU895AP # Michael Chiou
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

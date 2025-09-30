@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.utility_functions import comp_allclose
+from models.common.utility_functions import comp_allclose
 from loguru import logger
 
 

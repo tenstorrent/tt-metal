@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import (
@@ -66,7 +67,7 @@ class TokenAccuracy:
         return accuracy_top1, accuracy_top5
 
 
-def get_accuracy_thresholds(model_args, optimizations):
+def get_accuracy_thresholds(model_args):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
     # Read PERF.md
     perf_file = "models/tt_transformers/PERF.md"
@@ -75,10 +76,8 @@ def get_accuracy_thresholds(model_args, optimizations):
 
     # Split into sections based on optimization mode
     sections = content.split("## ")
-    if callable(optimizations):
-        optimizations = optimizations(model_args)
-    first_decoder_conf = optimizations.decoder_optimizations[0]
-    target_section = next(s for s in sections if s.lower().startswith(f"{first_decoder_conf.__name__}\n"))
+    optimizations = model_args.optimizations
+    target_section = next(s for s in sections if s.lower().startswith(f"{optimizations.__name__}\n"))
 
     # Parse the table and find the row for our model and device
     # Potential lines have the form "| Llama-3.1-8b    | T3K    | 91        | 99        | 49.8          |"
@@ -710,7 +709,7 @@ def test_demo_text(
 
         if num_devices == 32 and not tg_enabled:
             pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
-        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
+        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b) and is_wormhole_b0():
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
 
     if not stop_at_eos:
@@ -1240,10 +1239,7 @@ def test_demo_text(
 
         if not json_config_file:
             # Get accuracy thresholds from PERF.md, unless the configuration is from a json
-            min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-                model_args[0],
-                optimizations,
-            )
+            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0])
             assert (
                 total_top1_acc >= min_top1_acc
             ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"

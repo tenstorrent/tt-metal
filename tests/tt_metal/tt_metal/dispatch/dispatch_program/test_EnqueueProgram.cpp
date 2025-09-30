@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
@@ -34,7 +34,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -42,7 +41,6 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt_stl/span.hpp>
 
 #include "buffer_types.hpp"
@@ -59,6 +57,7 @@
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -259,7 +258,7 @@ void test_dummy_EnqueueProgram_with_runtime_args(
     tt::tt_metal::SetRuntimeArgs(program, dummy_kernel0, eth_core_coord, dummy_kernel0_args);
 
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
@@ -286,7 +285,7 @@ bool test_dummy_EnqueueProgram_with_cbs(
     initialize_dummy_kernels(program, program_config.cr_set);
     const bool is_blocking_op = false;
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, is_blocking_op);
     Finish(cq);
 
@@ -306,7 +305,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(
         initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
     initialize_dummy_kernels(program, program_config.cr_set);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
@@ -385,7 +384,7 @@ bool test_dummy_EnqueueProgram_with_sems(
     }
 
     initialize_dummy_semaphores(program, program_config.cr_set, expected_semaphore_values);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     return test_dummy_EnqueueProgram_with_sems(device, cq, workload, program_config, {expected_semaphore_values});
 }
@@ -468,7 +467,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
         }
     }
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     for (uint32_t i = 0; i < num_iterations; i++) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
     }
@@ -575,7 +574,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     uint32_t idx = 0;
     constexpr uint32_t num_common_runtime_args = 13;
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         auto& program_ = workload.get_programs().at(device_range);
@@ -940,7 +939,7 @@ bool test_increment_runtime_args_sanity(
     }
 
     // Compile and Launch the Program now.
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     Finish(mesh_device->mesh_command_queue());
 
@@ -1009,7 +1008,7 @@ void test_my_coordinates(
     Program program = tt::tt_metal::CreateProgram();
     create_kernel(processor, program, CoreRangeSet{cr}, compile_args, k_kernel_path);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(cq_id), workload, false);
     Finish(mesh_device->mesh_command_queue(cq_id));
 
@@ -1104,7 +1103,7 @@ TEST_F(UnitMeshCQFixture, TensixTestArbiterDoesNotHang) {
             cr_set,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false);
         Finish(device->mesh_command_queue());
     }
@@ -1183,7 +1182,7 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
         distributed::MeshWorkload workload;
         Program program;
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
 
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
@@ -1250,7 +1249,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatch
         distributed::MeshWorkload workload;
         Program program;
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
         CoreRange cr({0, 0}, {0, 0});
         CoreRangeSet cr_set({cr});
@@ -1588,7 +1587,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCore
         local_test_functions::initialize_dummy_semaphores(program, second_cr, initial_semaphore_vals);
         expected_semaphore_vals.push_back(initial_semaphore_vals);
         distributed::MeshWorkload workload;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(
             device, device->mesh_command_queue(), workload, config, expected_semaphore_vals));
     }
@@ -1804,7 +1803,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         distributed::MeshWorkload& workload = workloads.back();
 
         Program program;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), this->device_range_);
+        workload.add_program(this->device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(this->device_range_);
 
         std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
@@ -2081,7 +2080,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         distributed::MeshWorkload& workload = workloads.back();
 
         Program program;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), this->device_range_);
+        workload.add_program(this->device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(this->device_range_);
 
         std::map<std::string, std::string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
@@ -2316,7 +2315,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
         }
         distributed::MeshWorkload workload;
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
         this->create_kernel(program_, CoreType::WORKER, true);
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
@@ -2339,7 +2338,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
         }
         distributed::MeshWorkload workload;
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
 
         bool eth_kernel_added_to_program = false;
@@ -2371,7 +2370,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
         }
         distributed::MeshWorkload workload;
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
         // Large eth kernels currently don't fit in the ring buffer, so we're reducing the max number of RTAs
         // and the max kernel size to ensure that the kernel can fit in the ring buffer
@@ -2399,7 +2398,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
         }
         distributed::MeshWorkload workload;
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
 
         bool eth_kernel_added_to_program = false;
@@ -2432,7 +2431,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestAlternatingLargeAndSmallPrograms)
         }
         distributed::MeshWorkload workload;
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
 
         KernelProperties kernel_properties;
@@ -2457,7 +2456,7 @@ TEST_F(UnitMeshRandomProgramFixture, NIGHTLY_TensixTestLargeProgramFollowedBySma
         distributed::MeshWorkload workload;
         ;
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
 
         KernelProperties kernel_properties;
@@ -2481,7 +2480,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestLargeProgramInBetweenFiveSmallPro
         }
         distributed::MeshWorkload workload;
         Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
+        workload.add_program(device_range_, std::move(program));
         auto& program_ = workload.get_programs().at(device_range_);
         KernelProperties kernel_properties;
         if (i % 6 == 0) {

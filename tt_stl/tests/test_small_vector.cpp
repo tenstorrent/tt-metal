@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 //===----------------------------------------------------------------------===//
@@ -63,7 +63,6 @@ struct Tracked {
     Tracked& operator=(const Tracked& other) = default;
     Tracked& operator=(Tracked&& other) noexcept = default;
     ~Tracked() { ++dtorCount; }
-    friend bool operator==(const Tracked& lhs, const Tracked& rhs) { return lhs.value == rhs.value; }
 };
 
 int Tracked::ctorCount = 0;
@@ -77,7 +76,6 @@ int Tracked::dtorCount = 0;
 struct alignas(64) OverAligned {
     int payload;
     OverAligned(int v = 0) : payload(v) {}
-    friend bool operator==(const OverAligned& lhs, const OverAligned& rhs) { return lhs.payload == rhs.payload; }
 };
 
 // Fixture for tests using `SmallVector<int, kInlineCapacity>`.  Provides convenience

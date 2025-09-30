@@ -8,7 +8,7 @@ import sys
 import time
 import os
 from loguru import logger
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
 import random
 import pytest
 import torch
