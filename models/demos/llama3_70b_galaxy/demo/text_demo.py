@@ -115,6 +115,165 @@ def load_demo_targets(filename, galaxy_type):
     return demo_targets
 
 
+def _extract_and_compare_kv_cache(model, mesh_device, paged_attention, page_params, model_args, batch_size, iteration):
+    """
+    Extract K and V caches from TT model and perform PCC comparison
+    """
+    try:
+        logger.info(f"Extracting KV cache for iteration {iteration}")
+
+        # Extract KV cache from first layer for comparison
+        first_layer = model.layers[0]
+        tt_layer_present = first_layer.attention.layer_past
+
+        if paged_attention:
+            # Handle paged attention cache extraction
+            paged_attention_config = PagedAttentionConfig(
+                block_size=page_params["page_block_size"],
+                max_num_blocks=page_params["page_max_num_blocks"],
+            )
+
+            # First, let's get the raw tensor and log its shape
+            k_cache_raw = ttnn.to_torch(
+                tt_layer_present[0],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device,
+                    dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )
+
+            v_cache_raw = ttnn.to_torch(
+                tt_layer_present[1],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device,
+                    dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )
+
+            logger.info(f"Raw K cache shape: {k_cache_raw.shape}, elements: {k_cache_raw.numel()}")
+            logger.info(f"Raw V cache shape: {v_cache_raw.shape}, elements: {v_cache_raw.numel()}")
+
+            # Log the expected reshape dimensions
+            expected_shape = (
+                model_args.num_device_groups,
+                paged_attention_config.max_num_blocks,
+                model_args.n_kv_heads,
+                paged_attention_config.block_size,
+                model_args.head_dim,
+            )
+            expected_elements = (
+                model_args.num_device_groups
+                * paged_attention_config.max_num_blocks
+                * model_args.n_kv_heads
+                * paged_attention_config.block_size
+                * model_args.head_dim
+            )
+            logger.info(f"Expected reshape to: {expected_shape}, elements: {expected_elements}")
+
+            # Check if reshape is valid before attempting
+            if k_cache_raw.numel() != expected_elements:
+                logger.warning(f"Cannot reshape K cache: {k_cache_raw.numel()} != {expected_elements}")
+                # Use raw cache without complex reshaping
+                tt_k_cache = k_cache_raw[:batch_size] if k_cache_raw.shape[0] >= batch_size else k_cache_raw
+                tt_v_cache = v_cache_raw[:batch_size] if v_cache_raw.shape[0] >= batch_size else v_cache_raw
+            else:
+                # Perform the complex reshaping only if dimensions match
+                # Implied shuffling of blocks (same as in test)
+                permutation = torch.randperm(paged_attention_config.max_num_blocks)
+                reverse_permutation = torch.argsort(permutation)
+
+                tt_k_cache = (
+                    k_cache_raw.reshape(*expected_shape)[
+                        : 1 if batch_size == 1 else model_args.num_device_groups,
+                        reverse_permutation,
+                        : model_args.n_kv_heads,
+                        :,
+                        : model_args.head_dim,
+                    ]
+                    .reshape(
+                        model_args.max_batch_size,
+                        paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+                        model_args.n_kv_heads,
+                        paged_attention_config.block_size,
+                        model_args.head_dim,
+                    )
+                    .transpose(1, 2)
+                    .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                        :batch_size, ...
+                    ]
+                )
+
+                tt_v_cache = (
+                    v_cache_raw.reshape(*expected_shape)[
+                        : 1 if batch_size == 1 else model_args.num_device_groups,
+                        reverse_permutation,
+                        : model_args.n_kv_heads,
+                        :,
+                        : model_args.head_dim,
+                    ]
+                    .reshape(
+                        model_args.max_batch_size,
+                        paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+                        model_args.n_kv_heads,
+                        paged_attention_config.block_size,
+                        model_args.head_dim,
+                    )
+                    .transpose(1, 2)
+                    .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                        :batch_size, ...
+                    ]
+                )
+        else:
+            # Handle default attention cache extraction
+            tt_k_cache = ttnn.to_torch(
+                tt_layer_present[0],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device,
+                    dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )[:batch_size, :, :, :]
+
+            tt_v_cache = ttnn.to_torch(
+                tt_layer_present[1],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    mesh_device,
+                    dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                    mesh_shape=model_args.cluster_shape,
+                ),
+            )[:batch_size, :, :, :]
+
+        # Log cache shapes and statistics
+        logger.info(f"Final K cache shape: {tt_k_cache.shape}")
+        logger.info(f"Final V cache shape: {tt_v_cache.shape}")
+        logger.info(f"K cache mean: {tt_k_cache.mean():.6f}, std: {tt_k_cache.std():.6f}")
+        logger.info(f"V cache mean: {tt_v_cache.mean():.6f}, std: {tt_v_cache.std():.6f}")
+
+        # Extract non-zero portions for analysis
+        k_nonzero = tt_k_cache[tt_k_cache != 0]
+        v_nonzero = tt_v_cache[tt_v_cache != 0]
+
+        if len(k_nonzero) > 0:
+            logger.info(f"K cache non-zero elements: {len(k_nonzero)}/{tt_k_cache.numel()}")
+            logger.info(f"K cache non-zero mean: {k_nonzero.mean():.6f}, std: {k_nonzero.std():.6f}")
+
+        if len(v_nonzero) > 0:
+            logger.info(f"V cache non-zero elements: {len(v_nonzero)}/{tt_v_cache.numel()}")
+            logger.info(f"V cache non-zero mean: {v_nonzero.mean():.6f}, std: {v_nonzero.std():.6f}")
+
+        # You can add PCC comparison here if you have reference caches
+        # For now, just log the extraction was successful
+        logger.info(f"Successfully extracted KV cache for iteration {iteration}")
+
+    except Exception as e:
+        logger.warning(f"Failed to extract KV cache for iteration {iteration}: {str(e)}")
+        import traceback
+
+        logger.warning(f"Full traceback: {traceback.format_exc()}")
+
+
 def create_tt_model(
     mesh_device,
     instruct,
@@ -249,7 +408,7 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            1,  # num layers
+            80,  # num layers
             False,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
@@ -557,6 +716,7 @@ def test_demo_text(
     is_cur_pos_sharded,
     is_page_table_sharded,
 ):
+    # mesh_device.disable_and_clear_program_cache()
     """
     Simple demo with limited dependence on reference code.
     """
@@ -706,9 +866,12 @@ def test_demo_text(
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
+    list_prefill_tokens = []
+    list_kv_cache_tokens = [[], []]
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
+        # breakpoint()
         logger.info(f"Processing batch {batch_idx}")
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         # Preprocess initial prompt inputs
@@ -774,10 +937,51 @@ def test_demo_text(
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
         if batch_idx != 0:
             model.switch_mode("prefill")
+
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
+                # Save caches to tensor
+                # list_kv_cache_tokens
+                # Extract and compare KV caches if enabled
+                # if pcc_check and iteration < 3:  # Only check first few iterations to avoid spam
+                # _extract_and_compare_kv_cache(model, mesh_device, paged_attention,
+                # page_params, model_args, batch_size, iteration)
+
+                # Reset caches
                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
+            # breakpoint()
+
+            if tt_kv_cache is not None:
+                # For paged attention, tt_kv_cache contains the actual cache tensors
+                logger.info(
+                    f"Resetting paged attention cache: {len(tt_kv_cache)} models, {len(tt_kv_cache[0]) if tt_kv_cache[0] else 0} layers per model"
+                )
+                for i in range(len(tt_kv_cache)):
+                    if tt_kv_cache[i] is not None:
+                        for layer_idx, layer_cache in enumerate(tt_kv_cache[i]):
+                            if layer_cache is not None:
+                                k_cache, v_cache = layer_cache
+                                k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                                v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+                                logger.debug(f"Reset cache for model {i}, layer {layer_idx}")
+                # else:
+                #     # For non-paged attention, reset via layer.attention.layer_past
+                #     logger.info(f"Resetting non-paged attention cache: {len(model)} models")
+                #     for i in range(len(model)):
+                #         for layer_idx, layer in enumerate(model[i].layers):
+                #             if hasattr(layer.attention, 'layer_past') and layer.attention.layer_past is not None:
+                #                 k_cache, v_cache = layer.attention.layer_past
+                #                 k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                #                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+                #                 logger.debug(f"Reset cache for model {i}, layer {layer_idx}")
+                logger.info("KV cache reset completed")
+
+            # Reset generator state that might persist between batches
+            # if hasattr(generator, 'prev_page_table'):
+            #     generator.prev_page_table = None
+            #     logger.info("Reset generator prev_page_table")
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
         device_sampling_params = SamplingParams(
@@ -786,20 +990,20 @@ def test_demo_text(
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
-            try:
-                tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
-                toks = generator.prefill_forward_text(
-                    input_tokens_prefill_pt,  # Just warmup prefill for 1 user
-                    page_table=page_table,
-                    kv_cache=tt_kv_cache,
-                    prompt_lens=decoding_pos,
-                    enable_trace=prefill_enable_trace,
-                    tt_out_logits_all_users=tt_out_logits_all_users,
-                    sampling_params=device_sampling_params,
-                )
-            except Exception as e:
-                logger.error(f"Error during prefill warmup: {str(e)}")
-                raise e
+            # try:
+            #     tt_out_logits_all_users = torch.zeros(batch_size, 1, 131072) if pcc_check else None
+            #     toks = generator.prefill_forward_text(
+            #         input_tokens_prefill_pt,  # Just warmup prefill for 1 user
+            #         page_table=page_table,
+            #         kv_cache=tt_kv_cache,
+            #         prompt_lens=decoding_pos,
+            #         enable_trace=prefill_enable_trace,
+            #         tt_out_logits_all_users=tt_out_logits_all_users,
+            #         sampling_params=device_sampling_params,
+            #     )
+            # except Exception as e:
+            #     logger.error(f"Error during prefill warmup: {str(e)}")
+            #     raise e
             profiler.end(f"compile_prefill", iteration=batch_idx)
             logger.info("Finished prefill warmup")
 
@@ -850,6 +1054,12 @@ def test_demo_text(
             # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
         # Save prefill token
+        list_prefill_tokens.append(toks)
+
+        if len(list_prefill_tokens) > 1:
+            pcc_pass, pcc_message_prefill = comp_pcc(list_prefill_tokens[0], list_prefill_tokens[1], 0.9)
+            logger.info(f"prefill PCC pass: {pcc_pass}, message: {pcc_message_prefill}")
+            # breakpoint()
         prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
@@ -863,6 +1073,7 @@ def test_demo_text(
         for user in range(batch_size):
             user_tok = int(prefilled_token[user].item())
             all_outputs[user].append(user_tok)
+            logger.info(f"Prefill output token: {user_tok}, decoded token: {tokenizer.decode([user_tok])}")
 
         # Keeps track when a user reaches EoD token
         user_done = [False] * batch_size
@@ -882,6 +1093,7 @@ def test_demo_text(
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
         logger.info(f"prefill out token = {out_tok}")
+
         if out_tok.shape == torch.Size([]) or (len(out_tok.shape) > 0 and out_tok.shape[0] != 32):
             out_tok = out_tok.repeat(32, 1)
 
@@ -932,6 +1144,7 @@ def test_demo_text(
                 tt_out_toks.append(tt_out_tok)
                 if apc_test and iteration == 0:
                     tt_out_logits_saved_iter_0 = tt_out_logits_saved
+
             except Exception as e:
                 logger.error(f"Error during decoding: {str(e)}")
                 break

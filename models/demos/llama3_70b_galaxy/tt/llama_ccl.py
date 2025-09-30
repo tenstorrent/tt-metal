@@ -941,7 +941,7 @@ class TT_CCL:
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
-        ttnn.apply_device_delay(self.mesh_device, self.delays)
+        # ttnn.apply_device_delay(self.mesh_device, self.delays)
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
@@ -1068,7 +1068,7 @@ class TT_CCL:
             all_gather_function = ttnn.experimental.all_gather_async
 
         # breakpoint()
-        ttnn.apply_device_delay(self.mesh_device, self.delays)
+        # ttnn.apply_device_delay(self.mesh_device, self.delays)
         ttnn_tensor_out = all_gather_function(
             input_tensor=input_tensor_mesh,
             # persistent_intermediate_buffer=persistent_buffers["intermediate"],

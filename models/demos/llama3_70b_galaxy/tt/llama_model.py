@@ -18,6 +18,8 @@ from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetche
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 
+import gc
+
 
 class TtTransformer(LightweightModule):
     def __init__(
@@ -46,6 +48,7 @@ class TtTransformer(LightweightModule):
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
+        self.counter_saved_tensors = 0
 
         self.delays = []
         for row in range(self.mesh_device.shape[0]):
@@ -436,14 +439,40 @@ class TtTransformer(LightweightModule):
             else:
                 last_token_idx_i = last_token_idx
             x = x[:, :, last_token_idx_i : last_token_idx_i + 1, :]
-            # x_torch = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMesh2dToTensor(
-            #     self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
-            # ))
+
+            # ttnn.apply_device_delay(self.mesh_device, self.delays)
+
+            # Save x (input to lm_head) to torch before lm_head
+            # breakpoint()
+            x_torch_before_lm_head = ttnn.to_torch(
+                x,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            torch.save(x_torch_before_lm_head, f"x_before_lm_head_iter_{self.counter_saved_tensors}.pt")
+            print(
+                f"x before lm_head - shape: {x_torch_before_lm_head.shape}, mean: {x_torch_before_lm_head.mean():.6f}, std: {x_torch_before_lm_head.std():.6f}"
+            )
+
+            # ttnn.synchronize_device(self.mesh_device)
             # breakpoint()
             # ttnn.synchronize_device(self.mesh_device)
-
             tt_logits = self.lm_head(x, None, mode="prefill")
 
+            # breakpoint()
+            # Save tt_logits to torch before line_all_gather
+            tt_logits_torch = ttnn.to_torch(
+                tt_logits[0],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            torch.save(tt_logits_torch, f"tt_logits_before_line_all_gather_iter_{self.counter_saved_tensors}.pt")
+            print(
+                f"tt_logits before line_all_gather - shape: {tt_logits_torch.shape}, mean: {tt_logits_torch.mean():.6f}, std: {tt_logits_torch.std():.6f}"
+            )
+            # breakpoint()
             # Gather the output across all devices and untilize the tensor (for argmax)
             # ttnn.apply_device_delay(self.mesh_device, self.delays)
             tt_logits = self.tt_ccl.line_all_gather(
@@ -455,25 +484,54 @@ class TtTransformer(LightweightModule):
                 buffer_key="SAMPLING",
             )
 
+            # Save tt_logits to torch after line_all_gather
+            # breakpoint()
+            tt_logits_torch_after_line_all_gather = ttnn.to_torch(
+                tt_logits,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            torch.save(
+                tt_logits_torch_after_line_all_gather,
+                f"tt_logits_after_line_all_gather_iter_{self.counter_saved_tensors}.pt",
+            )
+            print(
+                f"tt_logits after line_all_gather - shape: {tt_logits_torch_after_line_all_gather.shape}, mean: {tt_logits_torch_after_line_all_gather.mean():.6f}, std: {tt_logits_torch_after_line_all_gather.std():.6f}"
+            )
+
+            # ttnn.apply_device_delay(self.mesh_device, self.delays)
             tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
+            # ttnn.apply_device_delay(self.mesh_device, self.delays)
             tt_logits = ttnn.reshape(
                 tt_logits,
                 ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
+            # ttnn.apply_device_delay(self.mesh_device, self.delays)
             tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]
 
+            # ttnn.apply_device_delay(self.mesh_device, self.delays)
             toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
+
+            # Save tt_out to torch after argmax
+            torch.save(toks, f"tt_out_after_argmax_iter_{self.counter_saved_tensors}.pt")
+
             toks_list.append(toks)
+
+            self.counter_saved_tensors += 1
 
         if tt_out_logits_saved is not None:
             # make sure tt_out_logits_saved is mutable
             logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()[0, 0, :, :]
             tt_out_logits_saved.copy_(logits_saved)
 
+        # Free up memory
+        gc.collect()
+        # breakpoint()
         return toks_list if isinstance(last_token_idx, list) else toks
 
     def process_output_decode(self, tt_out):
@@ -484,6 +542,8 @@ class TtTransformer(LightweightModule):
             tt_out = tt_out[0]
 
         tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        # tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
         return tt_out_cpu, ttnn.record_event(self.mesh_device, 0)
 
     def ttnn_prefill_forward(

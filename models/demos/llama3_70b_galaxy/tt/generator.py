@@ -381,6 +381,8 @@ class Generator:
         else:
             tt_tok = self._decode_forward_no_trace_text(**decode_kwargs, return_logits=return_logits)
 
+        ttnn.synchronize_device(self.mesh_device)
+        # breakpoint()
         if read_from_device:
             tt_tok, read_event = self.read_decode_output(tt_tok, tokens.shape[0])
             return tt_tok, read_event
