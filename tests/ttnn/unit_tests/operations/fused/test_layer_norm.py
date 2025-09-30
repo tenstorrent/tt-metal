@@ -310,3 +310,104 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
+
+
+@pytest.mark.parametrize("use_welford", [True])
+def test_layer_norm_sharded(device, use_welford):
+    torch.manual_seed(0)
+
+    tile_height = 32
+    tile_width = 32
+
+    # Test parameters
+    tensor_height = 32 * 4
+    tensor_width = 32 * 8
+    shard_grid_rows = 2
+    shard_grid_cols = 8
+    block_wt = 1
+    block_ht = tensor_height // tile_height
+    subblock_w = 1
+
+    # Run torch layer norm
+    # Create a tensor with identical rows where each row increases
+    # from 1 to tensor_width
+    torch_input_tensor = torch.rand((tensor_height, tensor_width), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[tensor_width])
+
+    # Tensor dimensions in tiles (padded)
+    Mt = (tensor_height + tile_height - 1) // tile_height
+    Kt = (tensor_width + tile_width - 1) // tile_width
+
+    # Block dimensions in elements
+    block_h = block_ht * tile_height
+    block_w = block_wt * tile_width
+
+    # Check mcast_1d condition
+    mcast_1d = tensor_height == block_h
+
+    # All-to-all worker calculations
+    num_blocks = shard_grid_cols
+    num_rows_per_all_to_all_worker = (block_ht + num_blocks - 1) // num_blocks
+    num_cores_all_to_all = (block_ht + num_rows_per_all_to_all_worker - 1) // num_rows_per_all_to_all_worker
+
+    print(f"Tensor dimensions: {tensor_height}x{tensor_width}")
+    print(f"Shard grid: {shard_grid_rows}x{shard_grid_cols}")
+    print(f"Block dimensions: {block_ht}x{block_wt} tiles = {block_h}x{block_w} elements")
+    print(f"Mt={Mt}, Kt={Kt}")
+    print(f"mcast_1d={mcast_1d}")
+    print(f"num_cores_all_to_all={num_cores_all_to_all}")
+
+    # Create shard spec
+    shard_height = tensor_height
+    shard_width = tensor_width // shard_grid_cols
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(shard_grid_rows - 1, shard_grid_cols - 1),
+                )
+            }
+        ),
+        [shard_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    print(f"Shard spec: {shard_spec}")
+
+    # Create memory config with sharding
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec
+    )
+
+    # Convert to TTNN tensor
+    input_ttnn = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.Layout.TILE,
+        device=device,
+        memory_config=memory_config,
+    )
+
+    # Create output memory config (same sharding as input)
+    output_memory_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec
+    )
+
+    # Run layernorm
+    output_ttnn = ttnn.layer_norm(
+        input_ttnn,
+        memory_config=output_memory_config,
+        program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            subblock_w=subblock_w,
+            block_h=block_ht,
+            block_w=block_wt,
+            inplace=False,
+        ),
+    )
+    output_ttnn = ttnn.to_layout(output_ttnn, ttnn.ROW_MAJOR_LAYOUT)
+    output_ttnn = ttnn.from_device(output_ttnn)
+    output_ttnn = ttnn.to_torch(output_ttnn)
+
+    assert_with_pcc(torch_output_tensor, output_ttnn, 0.9998)
