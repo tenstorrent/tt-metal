@@ -325,7 +325,8 @@ jobs:
                                 "$COMMENTS_API")
 
           # Find existing comment from this workflow (starts with CodeOwners Analysis or contains our marker)
-          EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r ".[] | select(.body | startswith(\"## CodeOwners\") or contains(\"CodeOwners-Workflow-Bot\")) | .id" | head -1)
+          # Get the most recent one by sorting by created_at descending
+          EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r "[.[] | select(.body | startswith(\"## CodeOwners\") or contains(\"CodeOwners-Workflow-Bot\"))] | sort_by(.created_at) | reverse | .[0].id")
 
           if [ "$CREATE_NEW" = "true" ] || [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
             # Create new comment
