@@ -174,6 +174,9 @@ Tensor pad_bfloat4_b(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     float pad_value) {
+    using tt::tt_metal::pack_as_bfp4_tiles;
+    using tt::tt_metal::unpack_bfp4_tiles_into_float_vec;
+
     auto tile = tensor.tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 

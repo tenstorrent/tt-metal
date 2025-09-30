@@ -8,6 +8,7 @@
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
+#include "tt-metalium/bfloat4.hpp"
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/host_buffer.hpp"
 #include "tt-metalium/shape.hpp"
@@ -27,6 +28,7 @@ namespace operations::conv {
 using namespace tt;
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
+using tt::tt_metal::pack_as_bfp4_tiles;
 
 namespace conv2d {
 

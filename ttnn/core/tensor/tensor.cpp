@@ -13,6 +13,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <tt-metalium/bfloat4.hpp>
 #include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -282,6 +283,8 @@ Tensor Tensor::from_vector(
 
 template <>
 std::vector<float> Tensor::to_vector<float>(std::optional<ttnn::QueueId> cq_id) const {
+    using tt::tt_metal::unpack_bfp4_tiles_into_float_vec;
+
     ZoneScoped;
     Tensor cpu_tensor = this->cpu(/*blocking=*/true, cq_id);
     switch (cpu_tensor.dtype()) {
