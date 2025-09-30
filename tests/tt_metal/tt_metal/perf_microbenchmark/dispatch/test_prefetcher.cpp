@@ -252,6 +252,20 @@ void add_bare_prefetcher_cmd(vector<uint32_t>& cmds, CQPrefetchCmd& cmd, bool pa
     }
 }
 
+void add_bare_prefetcher_cmd(vector<uint32_t>& cmds, CQPrefetchCmdLarge& cmd, bool pad = false) {
+    uint32_t* ptr = (uint32_t*)&cmd;
+    for (int i = 0; i < sizeof(CQPrefetchCmdLarge) / sizeof(uint32_t); i++) {
+        cmds.push_back(*ptr++);
+    }
+
+    if (pad) {
+        // Pad debug cmd to always be the alignment size
+        for (uint32_t i = 0; i < (CQ_PREFETCH_CMD_BARE_MIN_SIZE - sizeof(CQPrefetchCmdLarge)) / sizeof(uint32_t); i++) {
+            cmds.push_back(std::rand());
+        }
+    }
+}
+
 void add_prefetcher_packed_paged_read_cmd(
     vector<uint32_t>& cmds, vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds, uint32_t length) {
     CQPrefetchCmd cmd{};
@@ -319,11 +333,10 @@ void add_prefetcher_linear_read_cmd(IDevice* device,
                                     uint32_t length) {
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
-    CQPrefetchCmd cmd{};
+    CQPrefetchCmdLarge cmd{};
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
 
     cmd.relay_linear.pad1 = 0;
-    cmd.relay_linear.length_hi = 0;
     cmd.relay_linear.noc_xy_addr =
         tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_worker_core.x, phys_worker_core.y);
     cmd.relay_linear.addr = addr;
@@ -1617,7 +1630,7 @@ void gen_relay_linear_h_test(
             add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
             // Create the relay linear H command
-            CQPrefetchCmd cmd{};
+            CQPrefetchCmdLarge cmd{};
             cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR_H;
 
             // Set up the source NOC address - we'll read from DRAM where data is initialized

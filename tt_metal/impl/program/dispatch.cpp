@@ -1074,6 +1074,18 @@ public:
             MetalContext::instance().dispatch_mem_map(constants.dispatch_core_type).scratch_db_size() / 2;
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
+
+        const uint32_t unicast_cmd_sequence_sizeB = [using_prefetcher_cache]() {
+            DeviceCommandCalculator calc;
+            constexpr bool flush_prefetch = false;
+            calc.add_dispatch_write_linear<flush_prefetch>(0);
+            if (not using_prefetcher_cache) {
+                calc.add_prefetch_relay_paged();
+            } else {
+                calc.add_prefetch_relay_ringbuffer(1);
+            }
+            return calc.write_offset_bytes();
+        }();
         for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program_transfer_info.kernel_bins) {
             const auto [noc_encoding, write_linear] = std::visit(
                 ttsl::overloaded{
@@ -1087,9 +1099,9 @@ public:
                 cores);
             for (uint32_t kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
                 if (write_linear) {
-                    kernel_bins_unicast_cmds.emplace_back(2 * hal.get_alignment(HalMemType::HOST));
+                    kernel_bins_unicast_cmds.emplace_back(unicast_cmd_sequence_sizeB);
+                    calculator.update_write_offset_bytes(unicast_cmd_sequence_sizeB);
                     constexpr bool flush_prefetch = false;
-                    calculator.add_dispatch_write_linear<flush_prefetch>(0);
 
                     // Set write offset if required
                     auto write_offset = DISPATCH_WRITE_OFFSET_ZERO;
@@ -1130,7 +1142,6 @@ public:
                             page_offset = kg_transfer_info.page_offsets[kernel_idx];
                         }
 
-                        calculator.add_prefetch_relay_paged();
                         kernel_bins_unicast_cmds.back().add_prefetch_relay_paged(
                             true,  // is_dram
                             page_offset,
@@ -1139,7 +1150,6 @@ public:
                             relayed_bytes / kernels_buffer->page_size(),
                             length_adjust);
                     } else {
-                        calculator.add_prefetch_relay_ringbuffer(1);
                         kernel_bins_unicast_cmds.back().add_prefetch_relay_ringbuffer(
                             1,
                             std::vector<CQPrefetchRelayRingbufferSubCmd>(
