@@ -68,7 +68,7 @@ T3K_MODELS = [
     "meta-llama/Llama-3.2-11B-Vision-Instruct",
     "meta-llama/Llama-3.2-90B-Vision-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
-    "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    "mistralai/Mixtral-8x7B-v0.1",
     "stabilityai/stable-diffusion-3.5-large",
     "tiiuae/falcon-7b-instruct",
     "tiiuae/falcon-40b-instruct",

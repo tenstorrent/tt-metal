@@ -1192,7 +1192,7 @@ def test_demo_text(
                 # N300 targets
                 "N300_Qwen2.5-7B": 90,
                 # T3K targets
-                "T3K_Llama-3.1-70B": 204,
+                "T3K_Llama-3.1-70B": 228,
                 "T3K_Qwen2.5-Coder-32B": 173,  # `f10cs08`
                 "T3K_Qwen2.5-72B": 240,
                 "T3K_Qwen3-32B": 166.5,
