@@ -408,11 +408,11 @@ jobs:
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
-          # Collect pending owners by source
+          # Collect pending owners ONLY from groups that are still pending approval
           TEAM_OWNERS=""
           INDIVIDUAL_OWNERS=""
 
-          # Collect from teams
+          # Collect from teams - but only if the team is still pending (no members have approved)
           if [ -n "$TEAMS" ]; then
             IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
             for team in "${TEAM_ARRAY[@]}"; do
@@ -425,18 +425,31 @@ jobs:
                   team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
                   if [ "$team_owners" != "insufficient-permissions" ] && [ "$team_owners" != "team-not-found" ] && [ "$team_owners" != "unauthorized" ] && [ "$team_owners" != "api-error" ] && [ "$team_owners" != "no-members" ]; then
                     IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+
+                    # Check if any member of this team has approved
+                    team_has_approval=false
                     for member in "${MEMBERS_ARRAY[@]}"; do
-                      if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                        TEAM_OWNERS="$TEAM_OWNERS$member,"
+                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                        team_has_approval=true
+                        break
                       fi
                     done
+
+                    # Only add team members to ping list if team has NO approval yet
+                    if [ "$team_has_approval" = false ]; then
+                      for member in "${MEMBERS_ARRAY[@]}"; do
+                        if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                          TEAM_OWNERS="$TEAM_OWNERS$member,"
+                        fi
+                      done
+                    fi
                   fi
                 fi
               fi
             done
           fi
 
-          # Collect from individual patterns
+          # Collect from individual patterns - but only if the pattern is still pending (no owners have approved)
           if [ -n "$INDIVIDUALS" ]; then
             IFS='@@@' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
             for pattern_group in "${PATTERN_GROUPS[@]}"; do
@@ -444,12 +457,26 @@ jobs:
               pattern=$(echo "$pattern_group" | cut -d':' -f1)
               owners=$(echo "$pattern_group" | cut -d':' -f2)
               IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
+
+              # Check if any owner in this pattern has approved
+              pattern_has_approval=false
               for owner_pair in "${OWNERS_ARRAY[@]}"; do
                 username=$(echo "$owner_pair" | cut -d'|' -f1)
-                if ! echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
-                  INDIVIDUAL_OWNERS="$INDIVIDUAL_OWNERS$username,"
+                if echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                  pattern_has_approval=true
+                  break
                 fi
               done
+
+              # Only add pattern owners to ping list if pattern has NO approval yet
+              if [ "$pattern_has_approval" = false ]; then
+                for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                  username=$(echo "$owner_pair" | cut -d'|' -f1)
+                  if ! echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                    INDIVIDUAL_OWNERS="$INDIVIDUAL_OWNERS$username,"
+                  fi
+                done
+              fi
             done
           fi
 
