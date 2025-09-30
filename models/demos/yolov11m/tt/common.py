@@ -91,6 +91,18 @@ class Yolov11Conv2D:
         stride = [self.stride[0], self.stride[1]]
         padding = [self.padding[0], self.padding[1]]
 
+        # Calculate tensor size to determine if we need DRAM
+        estimated_output_elements = batch_size * self.out_channels * input_height * input_width
+        estimated_memory_mb = (estimated_output_elements * 2) / (1024 * 1024)  # bfloat16 = 2 bytes
+        
+        # Use DRAM for large tensors to avoid L1 overflow
+        if estimated_memory_mb > 1.0:  # If > 1MB, use DRAM
+            output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            print(f"🔧 [CONV MEMORY] Using DRAM for conv output ({estimated_memory_mb:.1f}MB)")
+        else:
+            output_memory_config = ttnn.L1_MEMORY_CONFIG
+            print(f"🔧 [CONV MEMORY] Using L1 for conv output ({estimated_memory_mb:.1f}MB)")
+            
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -110,6 +122,7 @@ class Yolov11Conv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
+            memory_config=output_memory_config,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
