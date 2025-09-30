@@ -20,5 +20,5 @@ python tests/tt_metal/tt_fabric/benchmark/collectives/unicast/run_unicast_sweep.
   --src 0:0 --dst 0:3 \
   --recv-core 6,6 \
   $COMMON \
-  --p50-targets 4096:0.0368183,32768:0.283387,1048576:3.52898 \
+  --p50-targets 4096:0.985881,32768:3.54215,1048576:5.60438 \
   --csv "$OUT/unicast_0to3.csv"
