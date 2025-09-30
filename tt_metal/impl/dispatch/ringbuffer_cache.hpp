@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include <vector>
 #include <optional>
 #include <climits>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <memory>
 namespace tt::tt_metal {
 
@@ -23,6 +23,7 @@ namespace tt::tt_metal {
  * all the data fits into the cache and gets reuse from locality.
  */
 class RingbufferCacheManager {
+    // NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor)
     friend class RingbufferCacheRandomizedTestsFixture;  // for unit testing purposes
 
 public:
@@ -40,7 +41,7 @@ public:
     /*! @brief Swap the ringbuffer cache manager.
      *  We provide this functionality to stash away the cache state for the duration of recording a trace.
      */
-    friend void swap(RingbufferCacheManager& a, RingbufferCacheManager& b);
+    friend void swap(RingbufferCacheManager& a, RingbufferCacheManager& b) noexcept;
 
     struct CacheOffset {
         bool is_cached{false};  // true if the program is already cached

@@ -44,7 +44,6 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
     export_enum<MathFidelity>(m_tensor);
     export_enum<TensorMemoryLayout>(m_tensor);
     export_enum<ShardOrientation>(m_tensor);
-    export_enum<ShardMode>(m_tensor);
 
     py::enum_<tt::tt_metal::BufferType>(m_tensor, "BufferType")
         .value("DRAM", BufferType::DRAM)
@@ -403,19 +402,6 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(py::self == py::self)
         .def(py::self != py::self);
 
-    m_tensor.def(
-        "dump_memory_config",
-        py::overload_cast<const std::string&, const MemoryConfig&>(&dump_memory_config),
-        R"doc(
-            Dump memory config to file
-        )doc");
-    m_tensor.def(
-        "load_memory_config",
-        py::overload_cast<const std::string&>(&load_memory_config),
-        R"doc(
-            Load memory config to file
-        )doc");
-
     auto pyCoreRange = static_cast<py::class_<CoreRange>>(m_tensor.attr("CoreRange"));
     pyCoreRange.def(py::init<>([](const CoreCoord& start, const CoreCoord& end) { return CoreRange{start, end}; }))
         .def_readonly("start", &CoreRange::start_coord)
@@ -440,29 +426,15 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(
             py::init<>([](const CoreRangeSet& core_sets,
                           const std::array<uint32_t, 2>& shard_shape,
-                          const ShardOrientation& shard_orientation,
-                          const ShardMode& shard_mode) {
-                return ShardSpec(core_sets, shard_shape, shard_orientation, shard_mode);
-            }),
-            py::arg("grid"),
-            py::arg("shard_shape"),
-            py::arg("shard_orientation"),
-            py::arg("shard_mode") = ShardMode::PHYSICAL)
-        .def(
-            py::init<>([](const CoreRangeSet& core_sets,
-                          const std::array<uint32_t, 2>& shard_shape,
-                          const std::array<uint32_t, 2>& physical_shard_shape,
                           const ShardOrientation& shard_orientation) {
-                return ShardSpec(core_sets, shard_shape, physical_shard_shape, shard_orientation);
+                return ShardSpec(core_sets, shard_shape, shard_orientation);
             }),
             py::arg("grid"),
             py::arg("shard_shape"),
-            py::arg("physical_shard_shape"),
             py::arg("shard_orientation"))
         .def_readwrite("shape", &ShardSpec::shape, "Shape of shard.")
         .def_readwrite("grid", &ShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &ShardSpec::orientation, "Orientation of cores to read shards")
-        .def_readwrite("mode", &ShardSpec::mode, "Treat shard shape as physical (default) or logical")
         .def("num_cores", &ShardSpec::num_cores, "Number of cores")
         .def(py::self == py::self)
         .def(py::self != py::self);

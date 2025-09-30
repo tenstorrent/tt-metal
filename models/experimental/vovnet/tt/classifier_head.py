@@ -5,6 +5,13 @@
 import ttnn.torch_tracer
 import ttnn
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 class TtClassifierHead:
     def __init__(
@@ -20,6 +27,9 @@ class TtClassifierHead:
         self.bias = parameters[f"{base_address}.fc.bias"]
 
     def forward(self, x):
+        if use_signpost:
+            signpost(header="classifier_head")
+
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.global_avg_pool2d(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.permute(x, (0, 3, 1, 2))
@@ -31,7 +41,13 @@ class TtClassifierHead:
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             core_grid=ttnn.CoreGrid(y=x.shape[0], x=8),
+            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+                packer_l1_acc=False,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+            ),
         )
-
         x = ttnn.reshape(x, [x.shape[0], 1000])
+
         return x

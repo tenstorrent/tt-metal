@@ -14,7 +14,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <sstream>
 #include <type_traits>
@@ -49,8 +48,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const GlobalSemaphore& barrier_semaphore,
-    bool do_sync,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_direction_opt,
@@ -163,13 +162,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
             topology,
             semaphore,
             barrier_semaphore,
-            do_sync,
+            using_persistent_buffers,
             sub_device_id,
             all_gather_fused_op_signaler,
             chunks_per_sync,
             num_workers_per_direction_opt,
             num_buffers_per_channel,
-            core_grid_offset);
+            core_grid_offset,
+            false);  // reverse_order = false by default
     const auto all_gather_override_runtime_arguments_callback =
         program_with_callbacks.override_runtime_arguments_callback;
 

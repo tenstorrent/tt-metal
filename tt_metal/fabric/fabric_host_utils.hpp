@@ -8,7 +8,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>                   // FabricType
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <llrt/tt_cluster.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <set>
@@ -44,7 +44,7 @@ struct IntraMeshAdjacencyMap {
 IntraMeshAdjacencyMap build_mesh_adjacency_map(
     const std::set<chip_id_t>& user_chip_ids,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func,
+    const std::function<std::vector<chip_id_t>(chip_id_t)>& get_adjacent_chips_func,
     std::optional<chip_id_t> start_chip_id = std::nullopt);
 
 // Helper: Convert 1D mesh adjacency map to row-major vector representation

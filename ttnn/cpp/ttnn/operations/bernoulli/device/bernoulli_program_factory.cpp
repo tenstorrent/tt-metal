@@ -16,7 +16,7 @@ namespace ttnn::operations::bernoulli {
 using namespace tt;
 using namespace tt::tt_metal;
 
-std::mt19937 rng(std::time(0));
+std::mt19937 rng(std::time(nullptr));
 std::uniform_int_distribution d(1, 1 << 20);
 
 uint32_t get_random_seed() { return d(rng); }

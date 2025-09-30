@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -109,14 +109,14 @@ def run(
         dtype=input_a_dtype,
         layout=input_a_layout,
         device=device,
-        memory_config=input_b_memory_config,
+        memory_config=input_a_memory_config,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
         dtype=input_b_dtype,
         layout=input_b_layout,
         device=device,
-        memory_config=input_a_memory_config,
+        memory_config=input_b_memory_config,
     )
     start_time = start_measuring_time()
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=output_memory_config)

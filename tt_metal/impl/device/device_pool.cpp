@@ -8,7 +8,7 @@
 #include <sched.h>
 #include <tracy/Tracy.hpp>
 #include <tt_metal.hpp>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 #include <algorithm>
 #include <cstdlib>
@@ -17,17 +17,14 @@
 #include <unordered_map>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
-#include "hostdevcommon/fabric_common.h"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_types.hpp"
-#include "hal.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -36,11 +33,10 @@
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/common/executor.hpp"
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 using namespace tt::tt_metal;
 
@@ -801,23 +797,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         mmio_devices_to_close.insert(mmio_device_id);
     }
 
-    // Global Sync across all devices that are being closed
-    // We need to ensure that commands sent to each device have been completed
-    // before closing any device + modifying routing info.
-    // If this is not done, non-blocking CCLs followed by a close will hang, since
-    // the main thread will modify device state while the CCL is running on device.
-    // On TG - this should not be done on MMIO mapped devices, since we don't run
-    // any workloads on them
-    if (!skip_synchronize) {
-        for (const auto& dev_id : devices_to_close) {
-            auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
-                continue;
-            }
-            Synchronize(dev);    // Synchronize device
-        }
-    }
-
     // TODO(MO): Remove when legacy non-mesh device is removed
     for (const chip_id_t device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
@@ -835,7 +814,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
 
         auto dispatch_cores = tt::tt_metal::get_virtual_dispatch_cores(dev_id);
-        tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
+        tt::llrt::internal_::wait_until_cores_done(dev_id, dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
     }
 
     // Process registered termination signals from topology

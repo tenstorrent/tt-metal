@@ -15,7 +15,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -84,8 +83,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
     auto mesh_device = input_tensor[0].device();
-    const bool is_first_chip = ring_index == 0;
-    const bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] const bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",

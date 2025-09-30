@@ -29,7 +29,7 @@ from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.manager import CCLManager
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
 from ...utils.padding import PaddingConfig
-from ...utils.cache import get_cache_path, load_cache_dict
+from ...utils.cache import save_cache_dict, load_cache_dict, cache_dict_exists, get_and_create_cache_path
 
 TILE_SIZE = 32
 
@@ -261,7 +261,7 @@ class StableDiffusion3Pipeline:
 
         logger.info("creating TT-NN transformer...")
 
-        assert "stabilityai/stable-diffusion-3.5-large" in model_checkpoint_path
+        assert "stabilityai/stable-diffusion-3.5-large" in str(model_checkpoint_path)
 
         if torch_transformer.config.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
@@ -290,20 +290,26 @@ class StableDiffusion3Pipeline:
                 mesh_device=submesh_device,
                 ccl_manager=self.ccl_managers[i],
                 parallel_config=self.dit_parallel_config,
-                init=False,
                 padding_config=padding_config,
             )
 
             if use_cache:
-                cache_path = get_cache_path(
+                cache_path = get_and_create_cache_path(
                     model_name="stable-diffusion-3.5-large",
                     subfolder="transformer",
                     parallel_config=self.dit_parallel_config,
                     dtype="bf16",
                 )
-                logger.info(f"Loading transformer weights from cache: {cache_path}")
-                cache_dict = load_cache_dict(cache_path)
-                tt_transformer.from_cached_state_dict(cache_dict)
+                # create cache if it doesn't exist
+                if not cache_dict_exists(cache_path):
+                    logger.info(
+                        f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
+                    )
+                    tt_transformer.load_state_dict(torch_transformer.state_dict())
+                    save_cache_dict(tt_transformer.to_cached_state_dict(cache_path), cache_path)
+                else:
+                    logger.info(f"Loading transformer weights from cache: {cache_path}")
+                    tt_transformer.from_cached_state_dict(load_cache_dict(cache_path))
             else:
                 logger.info("Loading transformer weights from PyTorch state dict")
                 tt_transformer.load_state_dict(torch_transformer.state_dict())

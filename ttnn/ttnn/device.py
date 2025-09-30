@@ -91,12 +91,21 @@ def get_default_dispatch_core_type():
     )
 
 
-def get_default_dispatch_core_axis():
-    return DispatchCoreAxis.COL if is_blackhole() else DispatchCoreAxis.ROW
+def get_default_dispatch_core_axis(fabric_tensix_config=None):
+    """Get default dispatch core axis, considering fabric tensix config if available."""
+    if is_blackhole():
+        # On Blackhole, if fabric tensix MUX is enabled, use ROW; otherwise use COL
+        if fabric_tensix_config == ttnn.FabricTensixConfig.MUX:
+            return DispatchCoreAxis.ROW
+        else:
+            return DispatchCoreAxis.COL
+    else:
+        # Non-Blackhole architectures default to ROW
+        return DispatchCoreAxis.ROW
 
 
 class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
-    def __init__(self, type: DispatchCoreType = None, axis: DispatchCoreAxis = None):
+    def __init__(self, type: DispatchCoreType = None, axis: DispatchCoreAxis = None, fabric_tensix_config=None):
         # Validate user provided args
         if type:
             if not isinstance(type, DispatchCoreType):
@@ -108,8 +117,10 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
             if not isinstance(axis, DispatchCoreAxis):
                 valid_values = [e for e in DispatchCoreAxis.__members__.values()]
                 raise ValueError(f"Invalid dispatch core axis: {axis}. Valid values are: {valid_values}")
-            if axis == DispatchCoreAxis.ROW and is_blackhole():
-                raise ValueError("ROW dispatch core axis is not supported for blackhole arch")
+            if axis == DispatchCoreAxis.ROW and is_blackhole() and fabric_tensix_config != ttnn.FabricTensixConfig.MUX:
+                raise ValueError(
+                    "ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled"
+                )
         if type and axis:
             # User provided both valid type and axis, check if they are compatible
             self.type = type
@@ -117,8 +128,8 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
         elif type:
             # User provided only valid type
             self.type = type
-            self.axis = get_default_dispatch_core_axis()
-            logger.info(f"Using default dispatch core axis for this system: {self.axis}")
+            self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
+            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
         elif axis:
             self.axis = axis
             # User provided only valid axis
@@ -131,13 +142,13 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
             elif self.axis == DispatchCoreAxis.ROW:
                 # ROW axis is supported for all dispatch core types, use default type for their system
                 self.type = get_default_dispatch_core_type()
-                logger.info(f"Using default dispatch core type for this system: {self.type}")
+                logger.debug(f"Using default dispatch core type for this system: {self.type}")
         else:
             # User provided no valid type or axis, use default for their system
             self.type = get_default_dispatch_core_type()
-            logger.info(f"Using default dispatch core type for this system: {self.type}")
-            self.axis = get_default_dispatch_core_axis()
-            logger.info(f"Using default dispatch core axis for this system: {self.axis}")
+            logger.debug(f"Using default dispatch core type for this system: {self.type}")
+            self.axis = get_default_dispatch_core_axis(fabric_tensix_config)
+            logger.debug(f"Using default dispatch core axis for this system: {self.axis}")
         super().__init__(self.type, self.axis)
 
 
@@ -237,7 +248,5 @@ pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 SubDevice = ttnn._ttnn.device.SubDevice
 SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
-
-DefaultQueueId = ttnn._ttnn.device.DefaultQueueId
 
 __all__ = []

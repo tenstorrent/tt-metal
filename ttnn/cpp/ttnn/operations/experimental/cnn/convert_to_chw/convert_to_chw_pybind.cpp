@@ -31,13 +31,11 @@ void bind_convert_to_chw(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype,
-               QueueId queue_id) { return self(queue_id, input, memory_config, dtype); },
+               const std::optional<DataType> dtype) { return self(input, memory_config, dtype); },
             py::arg("input"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("dtype") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::cnn::detail

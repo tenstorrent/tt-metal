@@ -22,14 +22,14 @@ pytest models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py::test_mobilenetv2
 
 ### Performant Model with Trace+2CQ
 #### Single Device (BS=10):
-- End-2-end perf is 2470 FPS
+- End-2-end perf is 3009 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 
 ```
 pytest models/demos/mobilenetv2/tests/perf/test_perf_e2e_mobilenetv2.py:test_mobilenetv2_e2e
 ```
 
 #### Multi Device (DP=2, n300):
-- End-2-end perf is 4933 FPS
+- End-2-end perf is 5146 FPS
 
 ```
 pytest models/demos/mobilenetv2/tests/perf/test_perf_e2e_mobilenetv2.py::test_mobilenetv2_e2e_dp

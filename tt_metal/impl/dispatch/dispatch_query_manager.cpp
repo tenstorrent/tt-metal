@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,11 +10,11 @@
 #include <unordered_set>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace {
 
@@ -69,8 +69,11 @@ std::vector<CoreCoord> get_consistent_logical_cores(
     std::vector<CoreCoord> first_core_set;
     std::vector<CoreCoord> current_cores;
 
+    // Forward the callable once to preserve its value category.
+    auto&& callable = std::forward<F>(func);
+
     for (auto chip : user_chips) {
-        current_cores = std::forward<F>(func)(chip, num_hw_cqs, dispatch_core_config);
+        current_cores = callable(chip, num_hw_cqs, dispatch_core_config);
         if (!first_core_set.empty()) {
             TT_FATAL(first_core_set == current_cores, "Expected logical cores to match across user exposed devices");
         } else {

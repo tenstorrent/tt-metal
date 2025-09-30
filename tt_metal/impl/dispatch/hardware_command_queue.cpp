@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffers/dispatch.hpp"
 #include "cq_shared_state.hpp"
 #include "device/dispatch.hpp"
@@ -38,7 +38,7 @@
 #include "trace/trace_node.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
-#include <umd/device/tt_xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
@@ -85,7 +85,13 @@ HWCommandQueue::HWCommandQueue(
     uint32_t completion_queue_reader_core) :
     manager_(device->sysmem_manager()),
     completion_queue_thread_{},
+    id_(id),
     completion_queue_reader_core_(completion_queue_reader_core),
+    device_(device),
+    cq_shared_state_(std::move(cq_shared_state)),
+    noc_index_(noc_index),
+    num_entries_in_completion_q_(0),
+    num_completed_completion_q_reads_(0),
     prefetcher_dram_aligned_block_size_(MetalContext::instance().hal().get_alignment(HalMemType::DRAM)),
     prefetcher_cache_sizeB_(
         MetalContext::instance().dispatch_mem_map(this->get_dispatch_core_type()).ringbuffer_size()),
@@ -97,12 +103,6 @@ HWCommandQueue::HWCommandQueue(
     dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
         prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)) {
     ZoneScopedN("CommandQueue_constructor");
-    this->device_ = device;
-    this->cq_shared_state_ = std::move(cq_shared_state);
-    this->id_ = id;
-    this->noc_index_ = noc_index;
-    this->num_entries_in_completion_q_ = 0;
-    this->num_completed_completion_q_reads_ = 0;
 
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_->id());
@@ -410,7 +410,7 @@ void HWCommandQueue::enqueue_write_to_core(
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
-    std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
+    std::vector<SubDeviceId> sub_device_ids = {program.impl().determine_sub_device_ids(device_)};
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
 
     if (!this->manager_.get_bypass_mode()) {
@@ -420,12 +420,12 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
-    program.finalize_offsets(device_);
+    program.impl().finalize_offsets(device_);
 
-    if (program.get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
+    if (program.impl().get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
-        program.allocate_kernel_bin_buf_on_device(device_);
-        if (program.impl().get_program_transfer_info().binary_data.size()) {
+        program.impl().allocate_kernel_bin_buf_on_device(device_);
+        if (!program.impl().get_program_transfer_info().binary_data.empty()) {
             const BufferRegion buffer_region(0, program.impl().get_kernels_buffer(device_)->size());
             this->enqueue_write_buffer(
                 *program.impl().get_kernels_buffer(device_),
@@ -433,7 +433,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
                 buffer_region,
                 false);
         }
-        program.set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
+        program.impl().set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
     }
 
     // Lower the program to device: Generate dispatch commands.
@@ -441,8 +441,8 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // buffer state at runtime.
     auto program_sizeB = program.impl().kernel_bins_sizeB;
     bool use_prefetcher_cache = program_sizeB and program_sizeB <= this->prefetcher_cache_sizeB_;
-    program.generate_dispatch_commands(device_, use_prefetcher_cache);
-    program.set_last_used_command_queue_for_testing(this);
+    program.impl().generate_dispatch_commands(device_, use_prefetcher_cache);
+    program.impl().set_last_used_command_queue_for_testing(this);
 
     if (this->manager_.get_bypass_mode()) {
         this->trace_nodes_.push_back(
@@ -454,11 +454,11 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     const auto sub_device_index = *sub_device_id;
 
     uint32_t num_additional_workers = 0;
-    if (program.runs_on_noc_multicast_only_cores()) {
+    if (program.impl().runs_on_noc_multicast_only_cores()) {
         num_additional_workers +=
             calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
-    if (program.runs_on_noc_unicast_only_cores()) {
+    if (program.impl().runs_on_noc_unicast_only_cores()) {
         num_additional_workers +=
             calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
@@ -497,7 +497,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     if (use_prefetcher_cache) {
         bool& is_cached = dispatch_metadata.prefetcher_cache_info.is_cached;
         uint32_t& cache_offset = dispatch_metadata.prefetcher_cache_info.offset;
-        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.get_id(), program_sizeB);
+        std::tie(is_cached, cache_offset) = this->query_prefetcher_cache(program.impl().get_id(), program_sizeB);
         TT_ASSERT(
             cache_offset + program_sizeB <= this->prefetcher_cache_sizeB_,
             "Prefetcher cache overflow: offset: {}, program size: {}, cache size: {}",
@@ -525,10 +525,10 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         sub_device_id,
         dispatch_metadata);
     // Update wptrs for tensix and eth launch message in the device class
-    if (program.runs_on_noc_multicast_only_cores()) {
+    if (program.impl().runs_on_noc_multicast_only_cores()) {
         worker_launch_message_buffer_state.inc_mcast_wptr(1);
     }
-    if (program.runs_on_noc_unicast_only_cores()) {
+    if (program.impl().runs_on_noc_unicast_only_cores()) {
         worker_launch_message_buffer_state.inc_unicast_wptr(1);
     }
     this->enqueue_command(command, blocking, sub_device_ids);
@@ -572,6 +572,7 @@ void HWCommandQueue::enqueue_record_event(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
     event_dispatch::issue_record_event_commands(
         device_,
+        device_->id(),
         event->event_id,
         id_,
         device_->num_hw_cqs(),
@@ -639,7 +640,7 @@ void HWCommandQueue::read_completion_queue() {
                         [&, this](ReadEventDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
-                                read_descriptor, mmio_device_id, channel, id_, manager_);
+                                read_descriptor, mmio_device_id, this->device_->id(), channel, id_, manager_);
                         },
                         [&, this](const ReadCoreDataDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadCoreData");
@@ -709,7 +710,7 @@ void HWCommandQueue::record_begin(const uint32_t tid, const std::shared_ptr<Trac
 
     // Record commands using bypass mode
     this->tid_ = tid;
-    this->trace_ctx_ = std::move(ctx);
+    this->trace_ctx_ = ctx;
     this->manager_.set_bypass_mode(true, true);  // start trace capture
 
     swap(this->dummy_prefetcher_cache_manager_, this->prefetcher_cache_manager_);

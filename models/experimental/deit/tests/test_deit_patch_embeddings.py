@@ -6,7 +6,7 @@ import torch
 from loguru import logger
 from transformers import DeiTModel
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
 )

@@ -12,7 +12,6 @@ from models.demos.segformer.reference.segformer_selfoutput import SegformerSelfO
 from models.demos.segformer.tt.common import preprocess_linear_bias, preprocess_linear_weight
 from models.demos.segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -36,7 +35,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size, seq_len, hidden_size, block_i, self_output_i",
     [

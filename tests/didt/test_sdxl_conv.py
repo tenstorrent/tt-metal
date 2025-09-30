@@ -9,7 +9,7 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
-from models.utility_functions import skip_for_blackhole, is_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
@@ -362,7 +362,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         reallocate_halo_output=test_config["reallocate_halo_output"],
         enable_act_double_buffer=test_config["enable_act_double_buffer"],
         enable_weights_double_buffer=test_config["enable_weights_double_buffer"],
-        enable_split_reader=False,
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=test_config["act_block_h_override"],

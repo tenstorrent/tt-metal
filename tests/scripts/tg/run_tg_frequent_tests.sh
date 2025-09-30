@@ -46,12 +46,14 @@ run_tg_tests() {
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_TG.py --timeout=500 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_TG.py --timeout=500 ; fail+=$?
+    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py --timeout=500 ; fail+=$?
+    TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py --timeout=500 ; fail+=$?
 
   elif [[ "$1" == "sd35" ]]; then
     echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"
-    pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_transformer_block.py -k "tg_cfg2_sp4_tp4" ; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/test_vae_sd35.py -k "tg" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
+    pytest -n auto models/experimental/tt_dit/tests/models/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
 
   else
     echo "LOG_METAL: Unknown model type: $1"

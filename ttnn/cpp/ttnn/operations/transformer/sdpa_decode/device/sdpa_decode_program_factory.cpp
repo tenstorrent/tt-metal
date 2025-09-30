@@ -11,7 +11,6 @@
 #include "sdpa_decode_op.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -421,7 +420,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     if (use_cur_pos_tensor) {
         auto pos_buffer = cur_pos_tensor.value().buffer();
         tt::DataFormat pos_df = tt_metal::datatype_to_dataformat_converter(cur_pos_tensor.value().dtype());
-        pos_tensor_tile_size = tt_metal::detail::TileSize(pos_df);
+        pos_tensor_tile_size = tt::tile_size(pos_df);
         index_stick_size = pos_buffer->aligned_page_size();
 
         // cb pos
@@ -516,7 +515,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto c_tilized_q_config = CircularBufferConfig(q_tiles * q_tile_size, {{CBIndex::c_10, q_df}})
                                   .set_page_size(CBIndex::c_10, q_tile_size)
                                   .set_tile_dims(CBIndex::c_10, q_tile);
-    auto cb_tilized_q_id = CreateCircularBuffer(program, core_grid, c_tilized_q_config);
+    CreateCircularBuffer(program, core_grid, c_tilized_q_config);
 
     // cb_col_identity
     auto col_identity_tile = full_tile;

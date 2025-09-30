@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include <optional>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/mesh_device.hpp"
@@ -76,10 +76,7 @@ Tensor _transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor,
             conv_weight_tensor.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
 
     return Tensor(
-        conv_weight_tensor.host_storage().transform(compute),
-        output_spec,
-        conv_weight_tensor.distributed_tensor_config(),
-        conv_weight_tensor.tensor_topology());
+        conv_weight_tensor.host_storage().transform(compute), output_spec, conv_weight_tensor.tensor_topology());
 }
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel) {

@@ -13,7 +13,7 @@ from tt_lib.fused_ops.softmax import softmax as tt_softmax
 
 import models.experimental.bloom.tt.baddbmm as baddbmm
 from typing import Tuple
-from models.utility_functions import pad_by_zero
+from models.common.utility_functions import pad_by_zero
 
 
 def split_heads(fused_qkv: torch.Tensor, num_heads, head_dim) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

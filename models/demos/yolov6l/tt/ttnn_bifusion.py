@@ -7,26 +7,26 @@ from models.demos.yolov6l.tt.common import Yolov6l_Conv2D, Yolov6x_Conv_T_2D
 
 
 class TtBiFusion:
-    def __init__(self, device, parameters, model_params):
+    def __init__(self, device, parameters, model_params, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED):
         self.parameters = parameters
         self.model_params = model_params
         self.cv1 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv1.block.conv,
             conv_pth=parameters.cv1.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         )
         self.cv2 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv2.block.conv,
             conv_pth=parameters.cv2.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         )
         self.cv3 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.cv3.block.conv,
             conv_pth=parameters.cv3.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=True,
             return_height_width=True,
         )
@@ -40,8 +40,9 @@ class TtBiFusion:
             device=device,
             conv=model_params.downsample.block.conv,
             conv_pth=parameters.downsample.block.conv,
-            activation="relu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=True,
+            shard_layout=shard_layout,
         )
 
     def __call__(self, x):
@@ -63,5 +64,8 @@ class TtBiFusion:
             use_height_and_width_as_shard_shape=True,
         )
         output = ttnn.concat([conv_t, conv1, downsample], dim=-1, memory_config=output_sharded_memory_config)
+        ttnn.deallocate(conv_t)
+        ttnn.deallocate(conv1)
+        ttnn.deallocate(downsample)
         output, out_h, out_w = self.cv3(output)
         return output, out_h, out_w

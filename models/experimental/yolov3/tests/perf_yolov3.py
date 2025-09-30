@@ -11,7 +11,7 @@ from models.experimental.yolov3.reference.models.common import DetectMultiBacken
 from models.experimental.yolov3.tt.yolov3_detection_model import TtDetectionModel
 from models.experimental.yolov3.reference.utils.dataloaders import LoadImages
 from models.experimental.yolov3.reference.utils.general import check_img_size
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     profiler,
     disable_persistent_kernel_cache,

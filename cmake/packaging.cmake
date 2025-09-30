@@ -15,15 +15,6 @@ set(CPACK_DEBIAN_NN-DEV_PACKAGE_SECTION "devel")
 set(CPACK_DEBIAN_NN-EXAMPLES_PACKAGE_SECTION "doc")
 set(CPACK_DEBIAN_NN-VALIDATION_PACKAGE_SECTION "utils")
 
-# Add descriptions for protobuf components
-set(CPACK_DEBIAN_LIBPROTOBUF_DESCRIPTION "Protocol Buffers - C++ runtime library")
-set(CPACK_DEBIAN_LIBPROTOBUF-LITE_DESCRIPTION "Protocol Buffers - C++ lite runtime library")
-set(CPACK_DEBIAN_LIBPROTOC_DESCRIPTION "Protocol Buffers - C++ compiler library")
-set(CPACK_DEBIAN_PROTOBUF-EXPORT_DESCRIPTION "Protocol Buffers - CMake export files")
-set(CPACK_DEBIAN_PROTOBUF-HEADERS_DESCRIPTION "Protocol Buffers - header files")
-set(CPACK_DEBIAN_PROTOBUF-PROTOS_DESCRIPTION "Protocol Buffers - protobuf files")
-set(CPACK_DEBIAN_PROTOC_DESCRIPTION "Protocol Buffers - compiler")
-
 set(CPACK_DEB_COMPONENT_INSTALL YES)
 set(CPACK_DEBIAN_PACKAGE_CONTROL_STRICT_PERMISSION TRUE)
 

@@ -207,6 +207,7 @@ init_packages() {
                 "libc++abi-17-dev"
                 "wget"
                 "curl"
+                "xxd"
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi-bin" "libopenmpi-dev")
@@ -234,6 +235,7 @@ init_packages() {
                 "capstone-devel"
                 "wget"
                 "curl"
+                "vim-common" # Includes xxd
             )
             if [ "$distributed" -eq 1 ]; then
                 PACKAGES+=("openmpi" "openmpi-devel")
@@ -336,27 +338,28 @@ install_sfpi() {
 	exit 1
     fi
     local $(grep -v '^#' $version_file)
-    local sfpi_arch_os=$(uname -m)_$(uname -s)
-    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_${pkg}_md5")
+    local sfpi_arch=$(uname -m)
+    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch}_${pkg}_md5")
     if [ -z $(eval echo "$sfpi_${pkg}_md5") ] ; then
-	echo "[ERROR] SFPI $pkg package for ${sfpi_arch_os} is not available" >&2
+	echo "[ERROR] SFPI $sfpi_version $pkg package for ${sfpi_arch} is not available" >&2
 	exit 1
     fi
     local TEMP_DIR=$(mktemp -d)
-    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.${pkg}"
-    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.${pkg}" | cut -d' ' -f1) \
+    local filename="sfpi_${sfpi_version}_${sfpi_arch}.${pkg}"
+    wget -P $TEMP_DIR "$sfpi_url/v$sfpi_version/$filename"
+    if [ $(md5sum -b "${TEMP_DIR}/$filename" | cut -d' ' -f1) \
 	     != "$sfpi_pkg_md5" ] ; then
-	echo "[ERROR] SFPI sfpi-${sfpi_arch_os}.${pkg} md5 mismatch" >&2
+	echo "[ERROR] SFPI $filename md5 mismatch" >&2
 	rm -rf $TEMP_DIR
 	exit 1
     fi
     # we must select exactly this version
     case "$pkg" in
 	deb)
-	    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+	    apt-get install -y --allow-downgrades $TEMP_DIR/$filename
 	    ;;
 	rpm)
-	    rpm --upgrade --force $TEMP_DIR/sfpi-${sfpi_arch_os}.rpm
+	    rpm --upgrade --force $TEMP_DIR/$filename
 	    ;;
     esac
     rm -rf $TEMP_DIR

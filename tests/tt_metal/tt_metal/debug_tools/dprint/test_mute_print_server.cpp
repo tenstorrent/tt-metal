@@ -43,9 +43,8 @@ void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
 
     // This tests prints only on a single core
     constexpr CoreCoord core = {0, 0}; // Print on first core only
@@ -79,7 +78,7 @@ void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice
 }
 
 TEST_F(DPrintMeshFixture, TensixTestPrintMuting) {
-    for (auto mesh_device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, mesh_device);
     }
 }

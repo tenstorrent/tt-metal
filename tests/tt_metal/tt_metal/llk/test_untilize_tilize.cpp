@@ -40,8 +40,7 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -95,13 +94,13 @@ struct TestConfig {
 };
 
 void run_single_core_tilize_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt::tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -192,6 +191,7 @@ void run_single_core_tilize_program(
 
     std::string compute_kernel;
     if (test_config.untilize_type.has_value()) {
+        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
         std::string untilize_type = enchantum::to_string(test_config.untilize_type.value()).data();
         std::transform(untilize_type.begin(), untilize_type.end(), untilize_type.begin(), [](unsigned char c) {
             return std::tolower(c);
@@ -308,7 +308,7 @@ void run_single_core_tilize_program(
         golden.resize(golden.size() * 2);
         for (auto i = 0; i < golden_unpacked.size(); i++) {
             // Cast float32 to "packed "uint32 golden vector if fp32_dest_acc_en:
-            golden[i] = std::bit_cast<uint32_t>(golden_unpacked[i].to_float());
+            golden[i] = std::bit_cast<uint32_t>(static_cast<float>(golden_unpacked[i]));
         }
     }
 

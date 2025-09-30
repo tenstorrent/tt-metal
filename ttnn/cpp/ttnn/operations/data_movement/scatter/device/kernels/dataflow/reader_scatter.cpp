@@ -3,12 +3,66 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-
+#include "../scatter_common.hpp"
 #include "dprint.h"
 
-#include "../scatter_common.hpp"
+#include <array>
 
 namespace {
+
+template <int32_t N>
+FORCE_INLINE std::array<uint32_t, N> make_strides(const std::array<uint32_t, N>& dims) {
+    std::array<uint32_t, N> s{};
+    uint32_t acc = 1;
+    for (int32_t i = N - 1; i >= 0; --i) {
+        s[i] = acc;
+        acc *= dims[i];
+    }
+    return s;
+}
+
+template <int32_t N>
+FORCE_INLINE bool in_bounds(const std::array<uint32_t, N>& idx, const std::array<uint32_t, N>& dims) {
+    for (int32_t i = 0; i < N; ++i) {
+        if (idx[i] >= dims[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <int32_t N>
+FORCE_INLINE bool next_inplace(std::array<uint32_t, N>& idx, const std::array<uint32_t, N>& dims) {
+    // last axis fastest
+    for (int32_t i = N - 1; i >= 0; --i) {
+        if (++idx[i] < dims[i]) {
+            return true;  // normal increment without carry
+        }
+        idx[i] = 0;  // carry and continue
+    }
+    return false;  // overflow past most significant digit
+}
+
+template <int32_t N>
+FORCE_INLINE uint32_t to_id(const std::array<uint32_t, N>& idx, const std::array<uint32_t, N>& strides) {
+    uint32_t id = 0;
+    for (int32_t i = 0; i < static_cast<int32_t>(N); ++i) {
+        id += idx[i] * strides[i];
+    }
+    return id;
+}
+
+// Convert linear id -> coordinates (row-major, last axis fastest).
+template <int32_t N>
+std::array<uint32_t, N> from_id(int32_t id, const std::array<uint32_t, N>& dims) {
+    std::array<uint32_t, N> coord{};
+    // Go left to right: for [d0, d1, ..., dN-1], last axis fastest
+    for (int32_t i = N - 1; i >= 0; --i) {
+        coord[i] = id % dims[i];
+        id /= dims[i];
+    }
+    return coord;
+}
 
 // this function is supposed to load either a whole stick or part of it (76800 elements)
 template <typename AddrGen>
@@ -102,7 +156,8 @@ void kernel_main() {
     const uint32_t input_and_output_chunk_size = get_arg_val<uint32_t>(5);
     // for the inner index/source loop (DRAM accesses per stick per single input/output loop: index_row_elem_num /
     // 76800)
-    const uint32_t index_and_source_chunk_size = get_arg_val<uint32_t>(6);
+    const uint32_t index_chunk_size = get_arg_val<uint32_t>(6);
+    const uint32_t source_chunk_size = get_arg_val<uint32_t>(7);
 
     const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address, ctas.input_stick_size_bytes);
     const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address, ctas.index_stick_size_bytes);
@@ -111,7 +166,17 @@ void kernel_main() {
     using input_std_type = std_type_t<get_dataformat(ctas.input_cb)>;
     using index_std_type = std_type_t<get_dataformat(ctas.index_cb)>;
 
-    for (uint32_t stick_id = start_stick_id; stick_id < start_stick_id + sticks_for_core; ++stick_id) {
+    constexpr uint32_t N = ctas.input_rank - 1;
+    // generate 2 stick shape counters
+    const auto input_dims{make_shape_array_from_runtime_args<N>(8)};
+    const auto index_dims{make_shape_array_from_runtime_args<N>(8 + N)};
+
+    const auto index_strides = make_strides<N>(index_dims);
+
+    std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
+
+    for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
+         ++input_stick_id) {
         // process input/output chunks sequentially
         for (uint32_t input_offset = 0; input_offset < ctas.input_stick_size;
              input_offset += input_and_output_chunk_size) {
@@ -124,48 +189,58 @@ void kernel_main() {
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
                 input_chunk_length * sizeof(input_std_type),
-                stick_id);
+                input_stick_id);
             cb_wait_front(ctas.input_cb, ONE_PAGE);
             cb_reserve_back(ctas.output_cb, ONE_PAGE);
 
             copy_input_to_output<input_std_type>(ctas.input_cb, ctas.output_cb, input_chunk_length);
 
-            // second phase: load index and source data chunk-by-chunk and scatter
-            for (uint32_t index_offset = 0; index_offset < ctas.index_stick_size;
-                 index_offset += index_and_source_chunk_size) {
-                // if stick is chunked, the last chunk is usually smaller
-                const uint32_t index_chunk_length =
-                    std::min(ctas.index_stick_size - index_offset, index_and_source_chunk_size);
-                load_to_cb(
-                    ctas.index_cb,
-                    index_addr_gtor,
-                    index_offset * sizeof(index_std_type),
-                    index_chunk_length * sizeof(index_std_type),
-                    stick_id);
-                load_to_cb(
-                    ctas.source_cb,
-                    source_addr_gtor,
-                    index_offset * sizeof(input_std_type),
-                    index_chunk_length * sizeof(input_std_type),
-                    stick_id);
-                cb_wait_front(ctas.index_cb, ONE_PAGE);
-                cb_wait_front(ctas.source_cb, ONE_PAGE);
-                scatter_along_chunk<input_std_type, index_std_type>(
-                    ctas.input_cb,
-                    ctas.index_cb,
-                    ctas.source_cb,
-                    ctas.output_cb,
-                    ctas.input_stick_size,
-                    input_offset,
-                    input_chunk_length,
-                    index_chunk_length);
-                cb_pop_front(ctas.source_cb, ONE_PAGE);
-                cb_pop_front(ctas.index_cb, ONE_PAGE);
+            if (in_bounds<N>(coord, index_dims)) {
+                const uint32_t index_stick_id = to_id<N>(coord, index_strides);
+                // DPRINT << "INSIDE " << index_stick_id << ENDL();
+                // second phase: load index and source data chunk-by-chunk and scatter
+                for (uint32_t index_offset = 0, source_offset = 0; index_offset < ctas.index_stick_size;
+                     index_offset += index_chunk_size, source_offset += source_chunk_size) {
+                    // if stick is chunked, the last chunk is usually smaller
+                    const uint32_t index_chunk_length =
+                        std::min(ctas.index_stick_size - index_offset, index_chunk_size);
+                    const uint32_t source_chunk_length =
+                        std::min(ctas.source_stick_size - source_offset, source_chunk_size);
+
+                    load_to_cb(
+                        ctas.index_cb,
+                        index_addr_gtor,
+                        index_offset * sizeof(index_std_type),
+                        index_chunk_length * sizeof(index_std_type),
+                        index_stick_id);
+                    // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
+                    // map 1:1
+                    load_to_cb(
+                        ctas.source_cb,
+                        source_addr_gtor,
+                        source_offset * sizeof(input_std_type),
+                        source_chunk_length * sizeof(input_std_type),
+                        index_stick_id);
+                    cb_wait_front(ctas.index_cb, ONE_PAGE);
+                    cb_wait_front(ctas.source_cb, ONE_PAGE);
+                    scatter_along_chunk<input_std_type, index_std_type>(
+                        ctas.input_cb,
+                        ctas.index_cb,
+                        ctas.source_cb,
+                        ctas.output_cb,
+                        ctas.input_stick_size,
+                        input_offset,
+                        input_chunk_length,
+                        index_chunk_length);
+                    cb_pop_front(ctas.source_cb, ONE_PAGE);
+                    cb_pop_front(ctas.index_cb, ONE_PAGE);
+                }
             }
 
-            // third phase: push to the output cb
-            cb_push_back(ctas.output_cb, ONE_PAGE);
-            cb_pop_front(ctas.input_cb, ONE_PAGE);
+                // third phase: push to the output cb
+                cb_push_back(ctas.output_cb, ONE_PAGE);
+                cb_pop_front(ctas.input_cb, ONE_PAGE);
         }
+        next_inplace<N>(coord, input_dims);
     }
 }

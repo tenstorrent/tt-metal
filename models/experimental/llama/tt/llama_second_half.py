@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 import ttnn
 from models.experimental.llama.llama_utils import _make_causal_mask, _expand_mask, linear
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )

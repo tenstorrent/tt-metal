@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "nlp_concat_heads_boltz_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -20,7 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     bool in_sharded = a.is_sharded();
     bool out_sharded = output.is_sharded();
@@ -74,8 +73,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
     uint32_t src0_cb_index = 0, out_cb_index = 16;
-
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     tt::tt_metal::KernelHandle reader_kernel_id = 0, writer_kernel_id = 0;
     if (in_sharded) {

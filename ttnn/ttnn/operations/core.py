@@ -250,7 +250,7 @@ def from_torch(
     device: Optional[ttnn.MeshDevice] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
-    cq_id: Optional[int] = ttnn.DefaultQueueId,
+    cq_id: Optional[int] = None,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`. For bfloat8_b or bfloat4_b format, the function itself is called twice,
@@ -337,7 +337,7 @@ def to_torch(
     torch_rank: Optional[int] = None,
     mesh_composer: Optional[ttnn.CppMeshToTensor] = None,
     device: Optional[ttnn.MeshDevice] = None,
-    cq_id: Optional[int] = ttnn.DefaultQueueId,
+    cq_id: Optional[int] = None,
 ) -> "torch.Tensor":
     """
     Converts the `ttnn.Tensor` tensor into a `torch.Tensor`. It does not call to_layout for bfloat8_b or bfloat4_b as we now convert
@@ -367,7 +367,7 @@ def to_torch(
     import torch
 
     if ttnn.is_tensor_storage_on_device(tensor):
-        tensor = ttnn.from_device(tensor, cq_id=cq_id)
+        tensor = ttnn.from_device(tensor, queue_id=cq_id)
 
     tensor = tensor.to_torch(mesh_composer=mesh_composer)
 
@@ -613,15 +613,6 @@ def as_tensor(
     dtype_name = dtype.name if dtype is not None else "None"
     layout_name = layout.name if layout is not None else "None"
 
-    def get_cache_path(cache_file_name: str):
-        base_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}"
-        if ttnn.using_distributed_env():
-            base_file_name = f"{base_file_name}_{os.getenv('TT_MESH_HOST_RANK')}"
-
-        cache_file_name = f"{base_file_name}.tensorbin"
-
-        return pathlib.Path(cache_file_name)
-
     def torch_to_ttnn(
         tensor: "torch.Tensor",
         dtype: Optional[ttnn.DataType],
@@ -643,54 +634,47 @@ def as_tensor(
 
     if cache_file_name is None:
         return torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
-    else:
 
-        def from_torch_and_dump(
-            tensor: "torch.Tensor",
-            dtype: Optional[ttnn.DataType],
-            layout: Optional[ttnn.Layout],
-            cache_file_name: str,
-            mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper],
-        ):
-            # Generate the tensor on host, and dump it to the cache file.
-            tensor = torch_to_ttnn(
-                tensor=tensor,
-                dtype=dtype,
-                layout=layout,
-                device=None,
-                memory_config=memory_config,
-                # For fully replicated tensors, cache unsharded tensor, so that it can be loaded on any device.
-                mesh_mapper=None if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
-            )
-            assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
-            logger.debug(
-                f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
-            )
-            pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
-            ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
-            if device is not None:
-                tensor = tensor.to(device, memory_config)
-            return tensor
-
-        cache_path = get_cache_path(cache_file_name)
-        cache_file_name = str(cache_path)
-
-        if not cache_path.exists() or not cache_path.is_file():
-            return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
-
-        try:
-            tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
-
-            if tuple(tensor.shape) != tuple(tensor.shape):
-                logger.warning(
-                    f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
-                )
-                tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
-            logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
-        except RuntimeError as e:
-            logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
-            tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
+    def from_torch_and_dump(
+        tensor: "torch.Tensor",
+        dtype: Optional[ttnn.DataType],
+        layout: Optional[ttnn.Layout],
+        cache_file_name: str,
+        mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper],
+    ):
+        tensor = torch_to_ttnn(
+            tensor=tensor,
+            dtype=dtype,
+            layout=layout,
+            device=None,
+            memory_config=memory_config,
+            # For fully replicated tensors, cache unsharded tensor, so that it can be loaded on any device.
+            mesh_mapper=None if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
+        )
+        assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
+        logger.debug(
+            f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
+        )
+        pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
+        ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
+        if device is not None:
+            tensor = tensor.to(device, memory_config)
         return tensor
+
+    cache_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}.tensorbin"
+    cache_path = pathlib.Path(cache_file_name)
+
+    if not cache_path.exists() or not cache_path.is_file():
+        return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
+
+    try:
+        tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
+        logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
+    except RuntimeError as e:
+        logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
+        tensor = from_torch_and_dump(torch_tensor, dtype, layout, cache_file_name, mesh_mapper)
+
+    return tensor
 
 
 __all__ = []

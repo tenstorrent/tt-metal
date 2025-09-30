@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 import ttnn
 from models.experimental.swin_s.runner.performant_runner import SwinSPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.swin_s.common import SWIN_S_L1_SMALL_SIZE
 
 

@@ -8,7 +8,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -191,7 +190,7 @@ operation::ProgramWithCallbacks pad_tile(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     log_debug(tt::LogOp, "pad_tile");
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
@@ -1396,7 +1395,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
 
     uint32_t padding_value_as_u32;
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
-        uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
+        uint16_t bfloat_pad_value_bits = std::bit_cast<uint16_t>(bfloat16(pad_value));
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);

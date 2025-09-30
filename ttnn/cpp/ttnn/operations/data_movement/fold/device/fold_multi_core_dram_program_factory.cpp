@@ -10,7 +10,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operation.hpp"
@@ -31,7 +30,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
-    const uint32_t input_height = input_tensor.logical_shape()[1];
     const uint32_t input_width = input_tensor.logical_shape()[2];
 
     // Get compute grid size and buffer pointers
@@ -40,7 +38,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     ttnn::Shape output_padded_shape = output.padded_shape();
     ttnn::Shape input_padded_shape = input_tensor.padded_shape();
@@ -161,7 +159,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         });
 
     // Create cliff compute kernel if needed (for handling edge cases)
-    if (core_range_cliff.ranges().size() > 0) {
+    if (!core_range_cliff.ranges().empty()) {
         tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,

@@ -100,7 +100,7 @@ run_t3000_stable_diffusion_35_large_tests() {
 
   echo "LOG_METAL: Running run_t3000_stable_diffusion_35_large_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/stable_diffusion_35_large/tests/test_performance.py -k "t3k_cfg2_sp2_tp2" ; fail+=$?
+  pytest models/experimental/tt_dit/tests/models/test_performance_sd35.py -k "2x4cfg1sp0tp1" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

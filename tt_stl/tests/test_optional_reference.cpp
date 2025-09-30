@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,11 +87,12 @@ TEST(OptionalReferenceTest, CopyConstruction) {
 TEST(OptionalReferenceTest, MoveConstruction) {
     int value = 42;
     optional_reference<int> ref1(value);
-    optional_reference<int> ref2(std::move(ref1));
+    optional_reference<int> ref2(std::move(ref1)); // NOLINT(performance-move-const-arg)
 
     EXPECT_TRUE(ref2.has_value());
     EXPECT_EQ(*ref2, 42);
     // Note: ref1 should still be valid after move (it's just a pointer copy)
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(ref1.has_value());
 }
 

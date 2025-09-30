@@ -43,7 +43,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    if (input.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+    if (input.dtype() == DataType::FLOAT32 && !fp32_dest_acc_en) {
         TT_THROW(
             "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
             "compute kernel configuration.");

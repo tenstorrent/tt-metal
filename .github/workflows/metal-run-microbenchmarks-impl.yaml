@@ -56,7 +56,15 @@ jobs:
             runs-on: ["BH", "pipeline-perf", "in-service"],
             name: "BH Data Movement Regressions",
             cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
-          } # Ata Tuzuner
+          }, # Ata Tuzuner
+          {
+            arch: blackhole,
+            # No perf check for now, so let's run on something that won't block everybody
+            # https://github.com/tenstorrent/tt-metal/pull/28148#issuecomment-3275595011
+            runs-on: "tt-ubuntu-2204-p150b-viommu-stable",
+            name: "BH P150 PCIe Performance",
+            cmd: build/tools/mem_bench --benchmark_filter="Device (Reading|Writing) Host"
+          } # Nigel Huang
         ]
     container:
       image: ${{ inputs.docker-image }}
@@ -69,6 +77,7 @@ jobs:
         LOGURU_LEVEL: INFO
         # We make extensive use of device profiler
         TT_METAL_DEVICE_PROFILER: 1
+        TRACY_NO_INVARIANT_CHECK: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

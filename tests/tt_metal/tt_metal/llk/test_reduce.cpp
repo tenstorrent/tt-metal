@@ -20,7 +20,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -39,8 +39,7 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -149,7 +148,9 @@ void add_reader_writer_kernels(
         case ReduceDim::H: {
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
             uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-            std::vector<uint32_t> reader_compile_args = {(std::uint32_t)true, packed_scaler_value};
+            std::vector<uint32_t> reader_compile_args = {};
+            tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
+            reader_compile_args.push_back(packed_scaler_value);
             std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
 
             auto unary_reader_kernel = tt_metal::CreateKernel(
@@ -273,13 +274,13 @@ std::string get_compute_kernel_name(const ReduceDim& reduce_dim) {
 }
 
 void run_single_core_reduce_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const ReduceConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};

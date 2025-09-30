@@ -55,16 +55,14 @@ void bind_tosa_scatter(py::module& module) {
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& index_tensor,
                const ttnn::Tensor& source_tensor,
-               const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
-               const QueueId& queue_id = DefaultQueueId) -> Tensor {
-                return self(queue_id, input_tensor, index_tensor, source_tensor, opt_out_memory_config);
+               const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config) -> Tensor {
+                return self(input_tensor, index_tensor, source_tensor, opt_out_memory_config);
             },
             py::arg("input").noconvert(),
             py::arg("index").noconvert(),
             py::arg("src").noconvert(),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

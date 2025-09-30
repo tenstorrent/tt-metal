@@ -49,6 +49,7 @@ def test_sd35_transformer_block(
     B: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
+    model_location_generator,
 ) -> None:
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16
@@ -64,8 +65,11 @@ def test_sd35_transformer_block(
     use_dual_attention = False
 
     # Create Torch model
+    model_name = model_location_generator(
+        f"stabilityai/stable-diffusion-3.5-large", model_subdir="StableDiffusion_35_Large"
+    )
     parent_torch_model = TorchSD3Transformer2DModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-large", subfolder="transformer", torch_dtype=torch_dtype
+        model_name, subfolder="transformer", torch_dtype=torch_dtype
     )
     torch_model = parent_torch_model.transformer_blocks[0]
     torch_model.eval()
@@ -106,7 +110,6 @@ def test_sd35_transformer_block(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -272,7 +275,6 @@ def test_sd35_transformer2d_model(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     if load_cache:
         cache_path = get_cache_path(
@@ -473,7 +475,6 @@ def test_sd35_transformer_model_caching(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     start = time.time()
     tt_model.load_state_dict(torch_model.state_dict())
@@ -506,7 +507,6 @@ def test_sd35_transformer_model_caching(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     loaded_cache_dict = load_cache_dict(cache_path)
     cache_model.from_cached_state_dict(loaded_cache_dict)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,12 +8,13 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 
 SDMeshCommandQueue::SDMeshCommandQueue(
     MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
-    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), lock_api_function) {}
+    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), std::move(lock_api_function)) {}
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     TT_THROW("Trace not supported for slow dispatch");
@@ -67,13 +68,19 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index)
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
     auto lock = lock_api_function_();
     if (!blocking) {
-        log_warning(
+        log_debug(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload execution.", __FUNCTION__);
     }
     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
         for (const auto& coord : coord_range) {
             auto device = mesh_device_->get_device(coord);
-            tt_metal::detail::LaunchProgram(device, program);
+            tt_metal::detail::LaunchProgram(device, program, false);
+        }
+    }
+    for (auto& [coord_range, program] : mesh_workload.get_programs()) {
+        for (const auto& coord : coord_range) {
+            auto device = mesh_device_->get_device(coord);
+            tt_metal::detail::WaitProgramDone(device, program);
         }
     }
 }

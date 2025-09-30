@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package tt.fabric.proto;
+
+// Represents a connection endpoint with ID, direction, and channel
+message ConnectionEndpoint {
+    uint32 id = 1;
+    uint32 port_direction = 2;  // RoutingDirection enum value
+    uint32 port_channel = 3;    // Channel number
+}
+
+// Represents a connection between two endpoints
+message ConnectionPair {
+    ConnectionEndpoint first = 1;
+    ConnectionEndpoint second = 2;
+}
+
+// Root table containing all connection pairs
+message ConnectionsTable {
+    repeated ConnectionPair connections = 1;
+}

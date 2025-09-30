@@ -66,7 +66,7 @@ inline std::vector<bfloat16> get_col_slice(
     return result;
 }
 
-inline void print_faces(std::vector<bfloat16> data, std::string name) {
+inline void print_faces(std::vector<bfloat16> data, const std::string& name) {
     std::cout << name << ": " << std::endl;
 
     int tile_index = 0;
@@ -81,7 +81,7 @@ inline void print_faces(std::vector<bfloat16> data, std::string name) {
                 face_index = 0;
             }
         }
-        std::cout << data.at(i).to_float() << ", ";
+        std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
             std::cout << std::endl;
         }
@@ -134,11 +134,11 @@ inline bool move_tiles_to_dram(
 }
 
 inline bool move_tiles_to_dram(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     std::vector<uint32_t> tensor,
     int tiles_r,
     int tiles_c,
-    std::shared_ptr<distributed::MeshBuffer> buffer) {
+    const std::shared_ptr<distributed::MeshBuffer>& buffer) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
     int start_index = 0;

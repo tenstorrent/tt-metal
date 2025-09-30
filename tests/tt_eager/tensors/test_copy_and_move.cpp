@@ -13,7 +13,7 @@
 #include <exception>
 #include <utility>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -219,7 +219,6 @@ void test_tensor_deallocate_and_close_device(distributed::MeshDevice* device) {
 
     // dev tensor allocate, deallocate, reallocate same address DRAM
     Tensor dev_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE).to_device(device, dram_mem_config);
-    uint32_t address_a = dev_a.buffer()->address();
     device->close();
     dev_a.deallocate();
 }

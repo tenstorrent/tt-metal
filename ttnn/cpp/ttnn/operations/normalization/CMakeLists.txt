@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_normalization)
 set_target_properties(
     ttnn_op_normalization
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -26,8 +26,9 @@ target_sources(
             layernorm/layernorm.hpp
             layernorm/device/layernorm_types.hpp
             rmsnorm/rmsnorm.hpp
-            softmax/device/softmax_op.hpp
-            softmax/device/softmax_types.hpp
+            softmax/device/softmax_operation_types.hpp
+            softmax/device/softmax_device_operation.hpp
+            softmax/device/softmax_program_factory.hpp
             softmax/softmax.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -53,15 +54,13 @@ target_sources(
         layernorm_distributed/layernorm_post_all_gather.cpp
         layernorm_distributed/layernorm_pre_all_gather.cpp
         rmsnorm/rmsnorm.cpp
+        softmax/softmax.cpp
+        softmax/device/softmax_device_operation.cpp
+        softmax/device/softmax_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_normalization
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_normalization PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

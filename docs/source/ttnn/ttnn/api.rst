@@ -71,6 +71,7 @@ Tensor Creation
    ttnn.ones_like
    ttnn.full
    ttnn.full_like
+   ttnn.rand
 
 Matrix Multiplication
 =====================
@@ -82,6 +83,20 @@ Matrix Multiplication
 
    ttnn.matmul
    ttnn.linear
+   ttnn.matmul_batched_weights
+   ttnn.addmm
+   ttnn.sparse_matmul
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: class.rst
+
+   ttnn.MatmulMultiCoreReuseProgramConfig
+   ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
+   ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig
+   ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+
 
 Pointwise Unary
 ================
@@ -180,7 +195,6 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
-   ttnn.softmax
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -450,6 +464,23 @@ Normalization
    ttnn.layer_norm
    ttnn.rms_norm
    ttnn.batch_norm
+   ttnn.softmax
+   ttnn.scale_mask_softmax
+   ttnn.softmax_in_place
+   ttnn.scale_mask_softmax_in_place
+   ttnn.scale_causal_mask_hw_dims_softmax_in_place
+
+Normalization Program Configs
+=============================
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: class.rst
+
+   ttnn.SoftmaxProgramConfig
+   ttnn.SoftmaxDefaultProgramConfig
+   ttnn.SoftmaxShardedMultiCoreProgramConfig
 
 
 Moreh Operations

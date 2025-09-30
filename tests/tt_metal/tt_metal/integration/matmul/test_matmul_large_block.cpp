@@ -19,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -36,8 +36,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -74,7 +73,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void create_CBs_for_fused_matmul(
     distributed::MeshWorkload& workload,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -212,7 +211,7 @@ void create_CBs_for_fused_matmul(
 
 bool matmul_large_block(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     bool activations_rm,
     bool output_rm,
     MathFidelity math_fidelity = MathFidelity::HiFi4) {
@@ -222,7 +221,7 @@ bool matmul_large_block(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};
@@ -415,7 +414,7 @@ bool matmul_large_block(
     // If we're testing LoFi/HiFi2 we generate matching golden (trunc LSB).
     // Note that this will work only for multiplying with identity matrix
     for (auto i = 0; i < golden.size(); i++) {
-        golden[i] = bfloat16(golden[i].to_uint16() & math_fid_mask);
+        golden[i] = std::bit_cast<bfloat16>(static_cast<uint16_t>(std::bit_cast<uint16_t>(golden[i]) & math_fid_mask));
     }
 
     if (output_rm) {

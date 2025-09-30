@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,6 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -326,7 +325,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
     EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::HOST);
-    EXPECT_EQ(input_host_tensor_sharded.distributed_tensor_config(), mapper->config());
     EXPECT_EQ(input_host_tensor_sharded.tensor_spec().logical_shape(), sharded_shape);
 
     std::vector<Tensor> input_host_shards = get_device_tensors(input_host_tensor_sharded);
@@ -341,8 +339,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
         }
     }();
 
-    EXPECT_EQ(device_tensor.distributed_tensor_config(), mapper->config());
-
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_THAT(device_storage->coords, ElementsAreArray(coord_matchers));
@@ -356,7 +352,6 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             return tensor_impl::to_host_wrapper(device_tensor);
         }
     }();
-    EXPECT_EQ(output_host_tensor.distributed_tensor_config(), mapper->config());
 
     std::vector<Tensor> output_host_shards = get_device_tensors(output_host_tensor);
     ASSERT_EQ(output_host_shards.size(), input_host_shards.size());
@@ -433,6 +428,45 @@ auto get_mesh_tensor_write_test_params() {
         params.push_back(param);
     }
     return params;
+}
+
+TEST_F(MeshTensorTest2x4, CopyToDeviceTransfersTensorTopology) {
+    const ttnn::Shape replicated_shape{1, 1, 32, 32};
+    const TensorSpec replicated_tensor_spec =
+        TensorSpec(replicated_shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+
+    std::vector<float> source_data(replicated_shape.volume());
+    std::iota(source_data.begin(), source_data.end(), 1.0f);
+    Tensor source_host_tensor = Tensor::from_vector(source_data, replicated_tensor_spec);
+    auto replicated_mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor source_distributed_tensor = distribute_tensor(source_host_tensor, *replicated_mapper);
+
+    const ttnn::Shape sharded_input_shape{1, 8, 32, 32};
+    const TensorSpec sharded_input_spec =
+        TensorSpec(sharded_input_shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    std::vector<float> target_data(sharded_input_shape.volume());
+    std::iota(target_data.begin(), target_data.end(), 2000.0f);
+    Tensor target_host_tensor_for_shard = Tensor::from_vector(target_data, sharded_input_spec);
+    auto sharded_mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    Tensor target_distributed_sharded = distribute_tensor(target_host_tensor_for_shard, *sharded_mapper);
+    Tensor target_device_tensor = target_distributed_sharded.to_device(mesh_device_.get());
+
+    EXPECT_EQ(
+        source_distributed_tensor.tensor_spec().logical_shape(), target_device_tensor.tensor_spec().logical_shape());
+
+    const auto source_topology = source_distributed_tensor.tensor_topology();
+    const auto initial_target_topology = target_device_tensor.tensor_topology();
+
+    EXPECT_TRUE(std::holds_alternative<MeshMapperConfig::Replicate>(source_topology.placements()[0]));
+    EXPECT_TRUE(std::holds_alternative<MeshMapperConfig::Shard>(initial_target_topology.placements()[0]));
+
+    tensor_impl::copy_to_device_wrapper(source_distributed_tensor, target_device_tensor);
+
+    const auto final_target_topology = target_device_tensor.tensor_topology();
+    EXPECT_EQ(final_target_topology.distribution_shape(), source_topology.distribution_shape());
+    EXPECT_EQ(final_target_topology.placements(), source_topology.placements());
+    EXPECT_EQ(final_target_topology.mesh_coords(), source_topology.mesh_coords());
+    EXPECT_TRUE(std::holds_alternative<MeshMapperConfig::Replicate>(final_target_topology.placements()[0]));
 }
 
 INSTANTIATE_TEST_SUITE_P(

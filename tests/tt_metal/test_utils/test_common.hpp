@@ -26,13 +26,13 @@ constexpr std::false_type always_false{};
 template <class T>
 T parse(const std::string& s) {
     if constexpr (std::is_same_v<T, std::uint32_t>) {
-        return std::stoul(s, 0, 0);
+        return std::stoul(s, nullptr, 0);
     } else if constexpr (std::is_same_v<T, int>) {
-        return std::stoi(s, 0, 0);
+        return std::stoi(s, nullptr, 0);
     } else if constexpr (std::is_same_v<T, std::uint64_t>) {
-        return std::stoull(s, 0, 0);
+        return std::stoull(s, nullptr, 0);
     } else if constexpr (std::is_same_v<T, bool>) {
-        return static_cast<bool>(std::stoi(s, 0, 0));
+        return static_cast<bool>(std::stoi(s, nullptr, 0));
     } else if constexpr (std::is_same_v<T, std::string>) {
         return s;
     } else {
@@ -73,7 +73,7 @@ inline std::uint32_t get_command_option_uint32(
     } else {
         param = get_command_option(test_args, option);
     }
-    return std::stoul(param, 0, 0);
+    return std::stoul(param, nullptr, 0);
 }
 
 inline std::int32_t get_command_option_int32(
@@ -86,7 +86,7 @@ inline std::int32_t get_command_option_int32(
     } else {
         param = get_command_option(test_args, option);
     }
-    return std::stoi(param, 0, 0);
+    return std::stoi(param, nullptr, 0);
 }
 
 inline double get_command_option_double(
@@ -99,7 +99,7 @@ inline double get_command_option_double(
     } else {
         param = get_command_option(test_args, option);
     }
-    return std::stod(param, 0);
+    return std::stod(param, nullptr);
 }
 
 inline bool has_command_option(const std::vector<std::string>& test_args, const std::string& option) {
@@ -138,7 +138,7 @@ inline std::tuple<std::uint32_t, std::vector<std::string>> get_command_option_ui
     } else {
         std::tie(param, remaining_args) = get_command_option_and_remaining_args(test_args, option);
     }
-    return {std::stoul(param, 0, 0), remaining_args};
+    return {std::stoul(param, nullptr, 0), remaining_args};
 }
 
 inline std::tuple<std::uint64_t, std::vector<std::string>> get_command_option_uint64_and_remaining_args(
@@ -154,7 +154,7 @@ inline std::tuple<std::uint64_t, std::vector<std::string>> get_command_option_ui
         std::tie(param, remaining_args) = get_command_option_and_remaining_args(test_args, option);
     }
 
-    return {std::stoull(param, 0, 0), remaining_args};
+    return {std::stoull(param, nullptr, 0), remaining_args};
 }
 
 inline std::tuple<std::int32_t, std::vector<std::string>> get_command_option_int32_and_remaining_args(
@@ -169,7 +169,7 @@ inline std::tuple<std::int32_t, std::vector<std::string>> get_command_option_int
     } else {
         std::tie(param, remaining_args) = get_command_option_and_remaining_args(test_args, option);
     }
-    return {std::stoi(param, 0, 0), remaining_args};
+    return {std::stoi(param, nullptr, 0), remaining_args};
 }
 
 inline std::tuple<double, std::vector<std::string>> get_command_option_double_and_remaining_args(
@@ -184,7 +184,7 @@ inline std::tuple<double, std::vector<std::string>> get_command_option_double_an
     } else {
         std::tie(param, remaining_args) = get_command_option_and_remaining_args(test_args, option);
     }
-    return {std::stod(param, 0), remaining_args};
+    return {std::stod(param, nullptr), remaining_args};
 }
 
 inline std::tuple<bool, std::vector<std::string>> has_command_option_and_remaining_args(
@@ -201,8 +201,7 @@ inline std::tuple<bool, std::vector<std::string>> has_command_option_and_remaini
 
 template <class T>
 inline void split_string_into_vector(
-    std::vector<T>& output_vector, const std::string input_command, const char* delimiter) {
-    std::string input_command_modified = input_command;
+    std::vector<T>& output_vector, std::string input_command_modified, const char* delimiter) {
     if (!input_command_modified.empty()) {
         size_t current_pos = input_command_modified.find(delimiter);
         while (current_pos != std::string::npos) {

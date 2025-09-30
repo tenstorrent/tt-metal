@@ -15,14 +15,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[0][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_0_1 = TtYOLOv12xConv2D(
             conv=parameter.cv2[0][1].conv,
             conv_pth=conv_pt.cv2[0][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_0_2 = TtYOLOv12xConv2D(
             conv=parameter.cv2[0][2], conv_pth=conv_pt.cv2[0][2], device=device, is_detect=True
@@ -33,14 +33,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[1][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_1_1 = TtYOLOv12xConv2D(
             conv=parameter.cv2[1][1].conv,
             conv_pth=conv_pt.cv2[1][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_1_2 = TtYOLOv12xConv2D(
             conv=parameter.cv2[1][2], conv_pth=conv_pt.cv2[1][2], device=device, is_detect=True
@@ -51,14 +51,14 @@ class TtnnDetect:
             conv_pth=conv_pt.cv2[2][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_2_1 = TtYOLOv12xConv2D(
             conv=parameter.cv2[2][1].conv,
             conv_pth=conv_pt.cv2[2][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv2_2_2 = TtYOLOv12xConv2D(
             conv=parameter.cv2[2][2], conv_pth=conv_pt.cv2[2][2], device=device, is_detect=True
@@ -69,21 +69,21 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[0][0][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_0_0_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[0][0][1].conv,
             conv_pth=conv_pt.cv3[0][0][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_0_1_0 = TtYOLOv12xConv2D(
             conv=parameter.cv3[0][1][0].conv,
             conv_pth=conv_pt.cv3[0][1][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             config_override={"act_block_h": 32},
         )
@@ -92,7 +92,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[0][1][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_0_2 = TtYOLOv12xConv2D(
             conv=parameter.cv3[0][2], conv_pth=conv_pt.cv3[0][2], device=device, is_detect=True
@@ -103,7 +103,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[1][0][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             config_override={"act_block_h": 32},
         )
@@ -112,21 +112,21 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[1][0][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_1_1_0 = TtYOLOv12xConv2D(
             conv=parameter.cv3[1][1][0].conv,
             conv_pth=conv_pt.cv3[1][1][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_1_1_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[1][1][1].conv,
             conv_pth=conv_pt.cv3[1][1][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_1_2 = TtYOLOv12xConv2D(
             conv=parameter.cv3[1][2], conv_pth=conv_pt.cv3[1][2], device=device, is_detect=True
@@ -137,7 +137,7 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[2][0][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
         self.cv3_2_0_1 = TtYOLOv12xConv2D(
@@ -145,21 +145,21 @@ class TtnnDetect:
             conv_pth=conv_pt.cv3[2][0][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_2_1_0 = TtYOLOv12xConv2D(
             conv=parameter.cv3[2][1][0].conv,
             conv_pth=conv_pt.cv3[2][1][0].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_2_1_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[2][1][1].conv,
             conv_pth=conv_pt.cv3[2][1][1].conv,
             device=device,
             is_detect=True,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.cv3_2_2 = TtYOLOv12xConv2D(
             conv=parameter.cv3[2][2], conv_pth=conv_pt.cv3[2][2], device=device, is_detect=True

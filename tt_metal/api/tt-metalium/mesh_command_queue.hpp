@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -30,7 +30,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/vector_aligned.hpp>
-#include <umd/device/tt_core_coordinates.h>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {

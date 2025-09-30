@@ -35,34 +35,45 @@ using ::tt::tt_metal::TensorSpec;
 
 using BigMeshDualRankTest2x4 = tt::tt_metal::MeshDevice2x4Fixture;
 
+int count_local_buffers(const Tensor& tensor) {
+    int count = 0;
+    tensor.host_storage().buffer().apply([&count](const auto&) { count++; });
+    return count;
+}
+
 TEST_F(BigMeshDualRankTest2x4, HostAllGather) {
-    constexpr int num_devices = 8;
-    ASSERT_EQ(mesh_device_->num_devices(), num_devices);
+    constexpr int kNumDevices = 8;
+    ASSERT_EQ(mesh_device_->num_devices(), kNumDevices);
 
     std::vector<float> test_data;
-    for (int i = 0; i < num_devices; i++) {
+    for (int i = 0; i < kNumDevices; i++) {
         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
     }
     Tensor input_tensor = Tensor::from_vector(
         test_data,
         TensorSpec(
-            ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})));
+            ttnn::Shape{1, kNumDevices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})));
 
     auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
-    std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    ASSERT_EQ(device_tensors.size(), 8);
+    ASSERT_EQ(count_local_buffers(sharded_tensor), kNumDevices / 2);
 
     // Perform all-gather on host and validate the data at each host.
     auto all_gather_tensor = host_ccl::all_gather(sharded_tensor);
     EXPECT_EQ(all_gather_tensor.storage_type(), tt::tt_metal::StorageType::HOST);
-    EXPECT_THAT(get_device_tensors(all_gather_tensor), SizeIs(num_devices));
+    EXPECT_EQ(count_local_buffers(all_gather_tensor), kNumDevices);
 
     auto composer = concat_mesh_to_tensor_composer(*mesh_device_, /*dim=*/0);
-    Tensor concatenated_tensor = aggregate_tensor(all_gather_tensor, *composer);
 
-    EXPECT_THAT(concatenated_tensor.to_vector<float>(), Pointwise(FloatEq(), test_data));
+    EXPECT_THAT(aggregate_tensor(all_gather_tensor, *composer).to_vector<float>(), Pointwise(FloatEq(), test_data));
+
+    // Calling `all_gather` again should be a no-op.
+    all_gather_tensor = host_ccl::all_gather(all_gather_tensor);
+    EXPECT_EQ(all_gather_tensor.storage_type(), tt::tt_metal::StorageType::HOST);
+    EXPECT_EQ(count_local_buffers(all_gather_tensor), kNumDevices);
+
+    EXPECT_THAT(aggregate_tensor(all_gather_tensor, *composer).to_vector<float>(), Pointwise(FloatEq(), test_data));
 }
 
 }  // namespace

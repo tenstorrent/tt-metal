@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 #include <optional>
 #include <tuple>
 #include <vector>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/small_vector.hpp>
 #include "ttnn/common/queue_id.hpp"
@@ -160,7 +160,6 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
 
         // Run Conv2D
         auto [output_tensor, output_dimensions] = std::get<static_cast<int>(ResultType::OUTPUT_DIM)>(ttnn::conv2d(
-            DefaultQueueId,
             input_tensor,
             weight_tensor,
             device.get(),

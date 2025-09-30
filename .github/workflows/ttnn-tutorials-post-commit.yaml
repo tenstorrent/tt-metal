@@ -24,6 +24,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
 
   workflow_dispatch:
     inputs:
@@ -59,11 +63,11 @@ jobs:
     name: TTNN tutorials ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -82,6 +86,7 @@ jobs:
         timeout-minutes: 10
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
 
       - name: 🐍 Install minimum set of packages
         timeout-minutes: 10
@@ -99,7 +104,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           cd /work  # Go back to root for test_tutorials.py
-          python3 -m pytest tests/ttnn/unit_tests/test_tutorials.py -v
+          python3 -m pytest tests/ttnn/notebook_tests/test_tutorials.py -v
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

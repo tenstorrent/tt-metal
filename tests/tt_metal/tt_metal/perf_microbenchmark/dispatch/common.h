@@ -113,7 +113,8 @@ DeviceData::DeviceData(
     uint32_t dram_data_addr,
     void* pcie_data_addr,
     bool is_banked,
-    uint32_t dram_data_size_words) {
+    uint32_t dram_data_size_words) :
+    banked(is_banked), amt_written(0) {
     this->base_data_addr[static_cast<int>(CoreType::WORKER)] = l1_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
@@ -121,27 +122,19 @@ DeviceData::DeviceData(
     this->base_result_data_addr[static_cast<int>(CoreType::PCIE)] = (uint64_t)pcie_data_addr;
     this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
 
-    this->banked = is_banked;
-    this->amt_written = 0;
-
-    const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
-    for (const CoreCoord& core_coord : pcie_cores) {
-        CoreCoord core = {core_coord.x, core_coord.y};
-        // TODO: make this all work w/ phys coords
-        // this is really annoying
-        // the PCIE phys core conflicts w/ worker logical cores
-        // so we hack the physical core for tracking, blech
-        // no simple way to handle this, need to use phys cores
-        core = {100, 100};
-        this->all_data[core][0] = one_core_data_t();
-        this->all_data[core][0].logical_core = core;
-        this->all_data[core][0].phys_core = core;
-        this->all_data[core][0].core_type = CoreType::PCIE;
-        this->all_data[core][0].bank_id = 20;
-        this->all_data[core][0].bank_offset = 0;
-        this->host_core = core;
-    }
+    // TODO: make this all work w/ phys coords
+    // this is really annoying
+    // the PCIE phys core conflicts w/ worker logical cores
+    // so we hack the physical core for tracking, blech
+    // no simple way to handle this, need to use phys cores
+    CoreCoord core = {100, 100};
+    this->all_data[core][0] = one_core_data_t();
+    this->all_data[core][0].logical_core = core;
+    this->all_data[core][0].phys_core = core;
+    this->all_data[core][0].core_type = CoreType::PCIE;
+    this->all_data[core][0].bank_id = 20;
+    this->all_data[core][0].bank_offset = 0;
+    this->host_core = core;
 
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
@@ -490,7 +483,7 @@ bool DeviceData::validate(IDevice* device) {
 
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (auto& [bank, one_core_data] : bank_device_data) {
-            if (one_core_data.data.size() == 0) {
+            if (one_core_data.data.empty()) {
                 continue;
             }
 
@@ -533,7 +526,7 @@ void DeviceData::overflow_check(IDevice* device) {
 template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
-    std::string path,
+    const std::string& path,
     const std::map<std::string, std::string>& defines_in,
     std::vector<uint32_t> compile_args,
     CoreCoord my_core,
@@ -1042,7 +1035,7 @@ inline void gen_rnd_dispatcher_packed_write_cmd(IDevice* device, std::vector<uin
     }
 
     std::vector<CoreCoord> gets_data;
-    while (gets_data.size() == 0) {
+    while (gets_data.empty()) {
         for (auto& [core, one_worker] : device_data.get_data()) {
             if (device_data.core_and_bank_present(core, 0) && one_worker[0].core_type == CoreType::WORKER) {
                 if (send_to_all_g || std::rand() % 2) {

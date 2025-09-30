@@ -131,6 +131,8 @@ def preprocess_return_value(return_value):
             output_tensors += preprocess_return_value(value)
     elif return_value is None:
         pass
+    elif isinstance(return_value, int):
+        pass
     else:
         raise ValueError(f"Unexpected type {type(return_value)}")
     return output_tensors

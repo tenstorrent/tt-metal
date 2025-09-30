@@ -41,7 +41,7 @@ struct LoopbackConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfig& test_config) {
+bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const LoopbackConfig& test_config) {
     IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
@@ -103,7 +103,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfi
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f,
         100.0f,
-        transaction_size_bytes / bfloat16::SIZEOF,
+        transaction_size_bytes / sizeof(bfloat16),
         chrono::system_clock::now().time_since_epoch().count());
 
     // Golden output
@@ -115,10 +115,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const LoopbackConfi
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // Launch program and record outputs
-    auto mesh_workload = distributed::CreateMeshWorkload();
+    auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
@@ -178,7 +178,6 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
     auto mesh_device = get_mesh_device();
-    auto device = mesh_device->get_device(0);
 
     uint32_t test_id = 55;
 

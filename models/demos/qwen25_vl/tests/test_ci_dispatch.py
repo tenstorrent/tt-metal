@@ -6,11 +6,8 @@ import os
 import pytest
 from loguru import logger
 
-from models.utility_functions import skip_for_grayskull
-
 
 # This test will run all the nightly fast dispatch tests for all supported TTT models in CI [N150 / N300 only]
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "model_weights",
     [
@@ -38,6 +35,7 @@ def test_ci_dispatch(model_weights):
             "models/demos/qwen25_vl/tests/test_vision_block.py",
             "models/demos/qwen25_vl/tests/test_model.py",
             "models/demos/qwen25_vl/tests/test_wrapped_model.py",
+            "models/demos/qwen25_vl/tests/test_windowed_sdpa.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )

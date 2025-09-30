@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@
 
 namespace tt::tt_fabric {
 
-extern template class compressed_routing_table_t<MAX_MESH_SIZE>;
-extern template class compressed_routing_table_t<MAX_NUM_MESHES>;
+extern template struct compressed_routing_table_t<MAX_MESH_SIZE>;
+extern template struct compressed_routing_table_t<MAX_NUM_MESHES>;
 
 }  // namespace tt::tt_fabric

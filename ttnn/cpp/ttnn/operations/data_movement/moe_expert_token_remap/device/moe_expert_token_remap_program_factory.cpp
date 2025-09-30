@@ -131,9 +131,6 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
-    const bool topk_is_dram = topk_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool mapping_is_dram = mapping_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool metadata_is_dram = metadata_tensor.buffer()->buffer_type() == BufferType::DRAM;
 
     // slightly abusing this functionality since here we also have a single page if any experts are activated
     constexpr bool local_reduce = true;

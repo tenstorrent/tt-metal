@@ -12,7 +12,7 @@ from loguru import logger
 
 import models.experimental.bloom.bloom_utils as bloom_utils
 import models.experimental.bloom.tt.bloom_model as bloom_model
-from models.utility_functions import is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 def run_bloom_model_test(device):

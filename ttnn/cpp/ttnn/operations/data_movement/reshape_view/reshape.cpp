@@ -6,8 +6,6 @@
 
 #include <tt-metalium/constants.hpp>
 
-#include "ttnn/common/queue_id.hpp"
-
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -37,7 +35,6 @@ ttnn::Tensor convert_tile_to_rm(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const QueueId queue_id,
     const PadValue& pad_value) {
     // Convert the 3D->3D reshaping to row major and back to tile
     TT_FATAL(
@@ -47,8 +44,7 @@ ttnn::Tensor convert_tile_to_rm(
         "illegal dimensions for a bfloat8 tensor");
     auto new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
     new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT);
-    new_tensor =
-        ReshapeViewOperation::invoke(queue_id, new_tensor, logical_shape, padded_shape, memory_config, pad_value);
+    new_tensor = ReshapeViewOperation::invoke(new_tensor, logical_shape, padded_shape, memory_config, pad_value);
     new_tensor = ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.dtype(), memory_config);
     new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.dtype()) : new_tensor;
     return new_tensor;
@@ -58,13 +54,13 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
-    const MemoryConfig& memory_config,
-    const QueueId queue_id) {
+    const MemoryConfig& memory_config) {
     auto temp_tensor = tensor;
     auto intermediate_out_memory_config = memory_config;
+
     if (tensor.memory_config().is_sharded()) {
         MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        temp_tensor = ttnn::sharded_to_interleaved(queue_id, tensor, temp_memory_config, std::nullopt);
+        temp_tensor = ttnn::sharded_to_interleaved(tensor, temp_memory_config, std::nullopt);
     }
     if (memory_config.is_sharded()) {
         intermediate_out_memory_config =
@@ -76,11 +72,10 @@ ttnn::Tensor perform_reshape_on_2D_RM(
                             ReshapeDeviceOperation{logical_shape, padded_shape, intermediate_out_memory_config},
                             {temp_tensor},
                             {},
-                            {},
-                            queue_id)
+                            {})
                             .at(0);
     if (memory_config.is_sharded()) {
-        return ttnn::interleaved_to_sharded(queue_id, temp_tensor2, memory_config, std::nullopt);
+    return ttnn::interleaved_to_sharded(temp_tensor2, memory_config, std::nullopt);
     } else {
         return temp_tensor2;
     }
@@ -92,8 +87,7 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
-    const MemoryConfig& memory_config,
-    const QueueId queue_id) {
+    const MemoryConfig& memory_config) {
     //This function turns a RM 2D->MD into an equivalent 2D->2D conversion and then turns the 2D output back to MD using a 0 cost view
     TT_FATAL((logical_shape.rank() != 0), "Can't do reshape to rank 0 tensor");
     //Collapse into the second last dimension
@@ -106,8 +100,7 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
             tensor,
             ttnn::Shape({second_dim, logical_shape[-1]}),
             ttnn::Shape({second_dim, logical_shape[-1]}),
-            memory_config,
-            queue_id),
+            memory_config),
         logical_shape,
         padded_shape,
         tile_first_dim,
@@ -122,7 +115,6 @@ ttnn::Tensor reshape_rm(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const QueueId queue_id,
     const PadValue& pad_value) {
     // This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
     const auto& tensor_shape = tensor.logical_shape();
@@ -146,8 +138,7 @@ ttnn::Tensor reshape_rm(
         padded_shape,
         tile_first_dim,
         tile_second_dim,
-        memory_config,
-        queue_id);
+        memory_config);
 }
 }  // namespace detail
 
@@ -202,7 +193,6 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
-    const QueueId queue_id,
     const PadValue& pad_value) {
     // squeeze input tensor and requested shape to 3D
 
@@ -225,7 +215,7 @@ ttnn::Tensor reshape_tiled(
 
     if (tensor.memory_config().is_sharded()) {
         MemoryConfig working_input_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        tensor3d = ttnn::sharded_to_interleaved(queue_id, tensor, working_input_memory_config, std::nullopt);
+        tensor3d = ttnn::sharded_to_interleaved(tensor, working_input_memory_config, std::nullopt);
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
@@ -243,12 +233,11 @@ ttnn::Tensor reshape_tiled(
             ReshapeDeviceOperation{requested_shape_3d, requested_padded_shape_3d, working_output_memory_config},
             {tensor3d},
             {},
-            {},
-            queue_id)
+            {})
             .at(0);
 
     if (memory_config.is_sharded()) {
-        output_tensor_3d = ttnn::interleaved_to_sharded(queue_id, output_tensor_3d, memory_config, std::nullopt);
+        output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, memory_config, std::nullopt);
     }
 
     if (tensor.dtype() == DataType::BFLOAT8_B) {
@@ -259,7 +248,6 @@ ttnn::Tensor reshape_tiled(
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
-    const QueueId queue_id,
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_input_shape,
     const ttnn::Shape& padded_input_shape,
@@ -339,30 +327,26 @@ ttnn::Tensor ReshapeViewOperation::invoke(
             tile_first_dim,
             tile_second_dim,
             mem_config,
-            queue_id,
             pad_value.value_or(default_pad_value));
     } else {
-        return reshape_tiled(tensor, logical_shape, mem_config, queue_id, pad_value.value_or(default_pad_value));
+        return reshape_tiled(tensor, logical_shape, mem_config, pad_value.value_or(default_pad_value));
     }
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
-    const QueueId queue_id,
     const ttnn::Tensor& tensor,
     const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value) {
-    return invoke(queue_id, tensor, shape, shape, memory_config, pad_value);
+    return invoke(tensor, shape, shape, memory_config, pad_value);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
-    const QueueId queue_id,
     const ttnn::Tensor& tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value) {
-    return invoke(
-        queue_id, tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector), memory_config, pad_value);
+    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector), memory_config, pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement

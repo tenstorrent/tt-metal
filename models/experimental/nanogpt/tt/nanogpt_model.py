@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 import ttnn
-from models.helper_funcs import Linear
+from models.common.helper_funcs import Linear
 import tt_lib.fallback_ops as fallback_ops
 
 import ttnn
@@ -13,7 +13,7 @@ import ttnn
 import models.experimental.nanogpt.tt.nanogpt_block as nanogpt_block
 from models.experimental.nanogpt.nanogpt_utils import unpad_from_zero
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch_to_tt_tensor_rm,
     tt_to_torch_tensor,
 )

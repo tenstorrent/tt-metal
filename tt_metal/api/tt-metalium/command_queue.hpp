@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,12 +15,12 @@
 
 namespace tt::tt_metal {
 
-class Event;
+struct Event;
 class Program;
 class Kernel;
 class SystemMemoryManager;
 class WorkerConfigBufferMgr;
-class TraceDescriptor;
+struct TraceDescriptor;
 
 class CommandQueue {
 public:

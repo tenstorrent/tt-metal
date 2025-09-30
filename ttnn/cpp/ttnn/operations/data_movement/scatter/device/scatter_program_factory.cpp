@@ -9,8 +9,10 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <algorithm>
+#include <cmath>
 
 namespace ttnn::operations::data_movement::scatter {
 
@@ -21,7 +23,6 @@ uint64_t ceil32(const uint64_t& number) {
     return ((number & BIT_MASK_32) == 0) ? number : ((number | BIT_MASK_32) + 1);
 }
 
-bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
 }  // namespace
 
 // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
@@ -30,7 +31,13 @@ bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 
 // tensors)
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~20% to account for reserved memory
-uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l1_size_per_core() / 4 / 4 * 0.8 - 32); }
+uint32_t calculate_optimal_chunk_size(IDevice* device) {
+    const auto l1_size_bytes = static_cast<double>(device->l1_size_per_core());
+    const auto optimal_chunk_size = (l1_size_bytes / 4.0 / 4.0) * 0.8 - 32.0;
+    const auto clamped_chunk_size = std::max(optimal_chunk_size, 0.0);
+    const auto integer_chunk_size = static_cast<uint64_t>(std::ceil(clamped_chunk_size));
+    return ceil32(integer_chunk_size);
+}
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -86,10 +93,11 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t input_and_output_max_chunk_size = calculate_optimal_chunk_size(input_tensor.device());
     const uint32_t index_and_source_max_chunk_size = input_and_output_max_chunk_size;
     const uint32_t input_and_output_chunk_size = std::min(input_stick_size, input_and_output_max_chunk_size);
-    const uint32_t index_and_source_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
+    const uint32_t index_chunk_size = std::min(index_stick_size, index_and_source_max_chunk_size);
+    const uint32_t source_chunk_size = std::min(source_stick_size, index_and_source_max_chunk_size);
     const uint32_t input_and_output_chunk_size_bytes = input_and_output_chunk_size * input_datum_size;
-    const uint32_t index_chunk_size_bytes = index_and_source_chunk_size * index_datum_size;
-    const uint32_t source_chunk_size_bytes = index_and_source_chunk_size * source_datum_size;
+    const uint32_t index_chunk_size_bytes = index_chunk_size * index_datum_size;
+    const uint32_t source_chunk_size_bytes = source_chunk_size * source_datum_size;
 
     // pad pages to 32
     const uint32_t input_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
@@ -123,7 +131,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         input_stick_size_bytes,
         index_stick_size_bytes,
         source_stick_size_bytes,
-        output_stick_size_bytes};
+        output_stick_size_bytes,
+        input_shape.rank()};
     tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*index_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
@@ -150,23 +159,30 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel,
-            core,
-            {input_buffer->address(),
-             index_buffer->address(),
-             src_buffer->address(),
-             stick_offset,
-             sticks_per_core,
-             input_and_output_chunk_size,
-             index_and_source_chunk_size});
+        std::vector<uint32_t> reader_runtime_args{
+            input_buffer->address(),
+            index_buffer->address(),
+            src_buffer->address(),
+            stick_offset,
+            sticks_per_core,
+            input_and_output_chunk_size,
+            index_chunk_size,
+            source_chunk_size};
+        std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(reader_runtime_args));
+        std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(reader_runtime_args));
 
-        SetRuntimeArgs(
-            program,
-            writer_kernel,
-            core,
-            {output_buffer->address(), stick_offset, sticks_per_core, input_and_output_chunk_size});
+        SetRuntimeArgs(program, reader_kernel, core, reader_runtime_args);
+
+        std::vector<uint32_t> writer_runtime_args{
+            output_buffer->address(),
+            stick_offset,
+            sticks_per_core,
+            input_and_output_chunk_size,
+        };
+        // std::copy(input_shape.cbegin(), input_shape.cend() - 1, std::back_inserter(writer_runtime_args));
+        // std::copy(index_shape.cbegin(), index_shape.cend() - 1, std::back_inserter(writer_runtime_args));
+
+        SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
 
         stick_offset += sticks_per_core;
     }
