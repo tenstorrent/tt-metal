@@ -101,7 +101,8 @@ ALWI void fused_eltwise_binary_reuse_dest() {
 // should be called only once
 ALWI void fused_reduce_populate_ones() {
     MATH(ckernel::sfpu::_populate_first_tile_with_ones_());
-    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>());
+    // Use explicit tile index 0 to ensure we move tile 0 to srcB
+    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0));
 }
 
 ALWI void fused_eltwise_binary_reuse_dest_multiple_tiles(uint32_t idst) {

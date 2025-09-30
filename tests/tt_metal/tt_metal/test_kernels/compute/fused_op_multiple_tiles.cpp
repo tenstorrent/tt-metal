@@ -51,12 +51,14 @@ void MAIN {
                                    // step (that's why we're doing it before the loop)
     // after that move the ones from dest to srcB as the second operand (srcB stays the same until the very end)
 
-    dprint_tensix_dest_reg(0);
+    // for(int i = 0; i<8;i++)
+    // {
+    //     dprint_tensix_dest_reg(i);
+    // }
 
     fused_reduce_init<REDUCE_OP, REDUCE_DIM>();  // initialize reduce operation, should also fill the first face(and the
                                                  // second one) of the dest with zeros, since the result is accumulated
                                                  // there
-    // but we put that under comment since it should make the results slightly incorrect (+3) but not x3!!!
 
     int reduce_dst_idx = 0;  // we're accumulating the result in the first face of the dest
 
@@ -91,25 +93,25 @@ void MAIN {
 
     // // DPRINT_PACK({ DPRINT << "After pack" << ENDL(); });
 
-    // DPRINT_PACK({
-    //     DPRINT << "Output tile in cb_out0:" << ENDL();
-    //     for (uint16_t r = 0; r < 32; ++r) {
-    //         DPRINT << (uint)r << " : "
-    //                << TileSlice(
-    //                       cb_out0,
-    //                       0,
-    //                       SliceRange{
-    //                           .h0 = (uint8_t)r,
-    //                           .h1 = (uint8_t)(r + 1),
-    //                           .hs = (uint8_t)1,
-    //                           .w0 = (uint8_t)0,
-    //                           .w1 = (uint8_t)32,
-    //                           .ws = (uint8_t)1},
-    //                       true,
-    //                       false)
-    //                << ENDL();
-    //     }
-    // });
+    DPRINT_PACK({
+        DPRINT << "Output tile in cb_out0:" << ENDL();
+        for (uint16_t r = 0; r < 32; ++r) {
+            DPRINT << (uint)r << " : "
+                   << TileSlice(
+                          cb_out0,
+                          0,
+                          SliceRange{
+                              .h0 = (uint8_t)r,
+                              .h1 = (uint8_t)(r + 1),
+                              .hs = (uint8_t)1,
+                              .w0 = (uint8_t)0,
+                              .w1 = (uint8_t)32,
+                              .ws = (uint8_t)1},
+                          true,
+                          false)
+                   << ENDL();
+        }
+    });
 
     cb_push_back(cb_out0, 1);
 
