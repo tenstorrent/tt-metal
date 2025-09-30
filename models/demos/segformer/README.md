@@ -33,7 +33,9 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
 
 ### Performant Model with Trace+2CQ
 #### Single Device (BS=1):
-- end-2-end perf is 105 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- end-2-end perf is 106 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+
+*Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/segformer/tests/perf/test_e2e_performant.py#L58) for the e2e perf from the code.*
 
 Use the following command to run Model performant running with Trace+2CQ
 ```
@@ -43,10 +45,13 @@ pytest models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_
 #### Multi Device (DP=2, n300):
 - end-2-end perf is 182 FPS
 
+*Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/segformer/tests/perf/test_e2e_performant.py#L78) for the e2e perf from the code.*
+
 Use the following command to run Model performant running with Trace+2CQ
 ```
 pytest models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_e2e_dp
 ```
+
 
 ### Segformer Semantic Segmentation Performant Demo
 - This script downloads 30 validation images and their annotations of [ADE20K](https://www.kaggle.com/datasets/awsaf49/ade20k-dataset) Dataset.

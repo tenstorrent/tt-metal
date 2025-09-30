@@ -26,6 +26,7 @@ def run_yolov8s(
     device,
     batch_size_per_device,
     model_location_generator,
+    expected_inference_throughput,
 ):
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
@@ -61,6 +62,10 @@ def run_yolov8s(
         f"Model: ttnn_yolov8s - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round((batch_size) / inference_time_avg)}"
     )
 
+    assert (
+        round(batch_size / inference_time_avg) >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {round(batch_size/inference_time_avg)} fps"
+
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
@@ -72,15 +77,20 @@ def run_yolov8s(
     "batch_size_per_device",
     ((1),),
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        212 if ttnn.get_num_devices() < 2 else 185,
+    ],
+)
 def test_run_yolov8s_trace_2cqs_inference(
-    device,
-    batch_size_per_device,
-    model_location_generator,
+    device, batch_size_per_device, model_location_generator, expected_inference_throughput
 ):
     run_yolov8s(
         device,
         batch_size_per_device,
         model_location_generator,
+        expected_inference_throughput=expected_inference_throughput,
     )
 
 
@@ -96,13 +106,21 @@ def test_run_yolov8s_trace_2cqs_inference(
     "batch_size_per_device",
     ((1),),
 )
+@pytest.mark.parametrize(
+    "expected_inference_throughput",
+    [
+        366,
+    ],
+)
 def test_run_yolov8s_trace_2cqs_dp_inference(
-    mesh_device,
-    batch_size_per_device,
-    model_location_generator,
+    mesh_device, batch_size_per_device, model_location_generator, expected_inference_throughput
 ):
+    if ttnn.get_num_devices() < 2:
+        pytest.skip()
+
     run_yolov8s(
         mesh_device,
         batch_size_per_device,
         model_location_generator,
+        expected_inference_throughput=expected_inference_throughput,
     )

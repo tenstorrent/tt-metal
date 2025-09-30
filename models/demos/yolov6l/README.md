@@ -25,6 +25,8 @@ pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
 
 - For `640x640`, end-2-end perf is `103` FPS(**On N150**), On N300 single device, the FPS will be low as it uses ethernet dispatch.
 
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov6l/tests/perf/test_e2e_performant.py#L106) for the e2e perf from the code.
+
   ```
   pytest --disable-warnings models/demos/yolov6l/tests/perf/test_e2e_performant.py::test_perf_yolov6l
   ```
@@ -32,6 +34,8 @@ pytest --disable-warnings models/demos/yolov6l/tests/pcc/test_ttnn_yolov6l.py
 #### Multi Device (DP=2, N300) :
 
 - For `640x640`, end-2-end perf is `181` FPS.
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov6l/tests/perf/test_e2e_performant.py#L148) for the e2e perf from the code.
 
   ```
   pytest --disable-warnings models/demos/yolov6l/tests/perf/test_e2e_performant.py::test_perf_yolov6l_dp

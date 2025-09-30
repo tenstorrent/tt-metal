@@ -19,14 +19,20 @@ pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::t
 
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `179` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- For `640x640`, end-2-end perf is `184` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov11/tests/perf/test_e2e_performant.py#L83) for the e2e perf from the code.
+
 ```
 pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
 ### Performant Demo with Trace+2CQ
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `290` FPS :
+- For `640x640`, end-2-end perf is `297` FPS :
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov11/tests/perf/test_e2e_performant.py#L128) for the e2e perf from the code.
+
   ```
   pytest --disable-warnings models/demos/yolov11/tests/test_e2e_performant.py::test_e2e_performant_dp
   ```

@@ -24,7 +24,9 @@ Wormhole (n150, n300)
 
 #### Single Device (BS=1):
 
-- For `224x224`, end-2-end perf is `127` FPS
+- For `224x224`, end-2-end perf is `146` FPS
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/experimental/vovnet/tests/perf/test_e2e_performant.py#L97) for the e2e perf from the code.
 
   ```
   pytest models/experimental/vovnet/tests/perf/test_e2e_performant.py::test_vovnet_e2e_performant
@@ -32,7 +34,9 @@ Wormhole (n150, n300)
 
 #### Multi Device (DP=2, N300):
 
-- For `224x224`, end-2-end perf is `245` FPS
+- For `224x224`, end-2-end perf is `236` FPS
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/experimental/vovnet/tests/perf/test_e2e_performant.py#L140) for the e2e perf from the code.
 
   ```
   pytest models/experimental/vovnet/tests/perf/test_e2e_performant.py::test_vovnet_e2e_performant_dp
