@@ -1,36 +1,15 @@
-name: Test Slack Integration
+name: Debug Slack Bot
 
 on:
   workflow_dispatch:
-    inputs:
-      message:
-        description: 'Message to send to Slack'
-        required: false
-        default: 'Hello from GitHub Actions! This is a test message. 🚀'
-        type: string
-
-permissions:
-  contents: read
 
 jobs:
-  test-slack:
+  who-am-i:
     runs-on: ubuntu-latest
     steps:
-      - name: Send test message to Slack
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          channel-id: C09HT5VSXRB   # channel ID (not #name)
-          slack-message: |
-            {
-              "text": "${{ inputs.message }}",
-              "username": "GitHub Actions Bot",
-              "icon_emoji": ":robot_face:"
-            }
+      - name: Call Slack auth.test
+        run: |
+          curl -s -X POST https://slack.com/api/auth.test \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" | jq
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
-      - name: Confirm message sent
-        run: |
-          echo "✅ Test message sent to Slack!"
-          echo "Channel ID: C09HT5VSXRB"
-          echo "Message: ${{ inputs.message }}"
