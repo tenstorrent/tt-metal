@@ -329,20 +329,3 @@ if(TT_INSTALL)
 endif()
 
 find_package(OpenCV REQUIRED)
-
-add_executable(test_device_tree test_device.cpp)
-target_link_libraries(
-    test_device_tree
-    PRIVATE
-        ttnncpp
-        tt_metal
-        opencv_core
-        opencv_imgproc
-)
-target_include_directories(
-    test_device_tree
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/ttnn
-        ${CMAKE_CURRENT_SOURCE_DIR}/tt_metal
-        ${OpenCV_INCLUDE_DIRS}
-)
