@@ -1165,88 +1165,121 @@ async function run() {
     let stayedFailingSection = '';
     try {
       // Use the already-enriched regressedDetails and stayedFailingDetails arrays directly
-      if (regressedDetails.length > 0) {
-        const lines = regressedDetails.map(it => {
+      if (regressedDetails.length > 0) { // check if there are any regressed pipelines
+        const lines = regressedDetails.map(it => { // for each regressed pipeline, build a markdown line with details
+          // Build the base line: workflow name with optional link
           const base = it.workflow_url ? `- [${it.name}](${it.workflow_url})` : `- ${it.name}`;
-          if (it.first_failed_run_url) {
+
+          if (it.first_failed_run_url) { // if we found the first failing run in the window
+            // Extract the short SHA for the first failing commit
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+            // Create a clickable link to the first failing commit
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
+            // Format the timestamp of the first failure
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
+            // Build the author attribution (GitHub username with link, or just name)
             const author = it.first_failed_author_login
               ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
               : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
-            // Error snippets first
+
+            // Render error snippets from the latest failing run as an HTML table
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml, ''].join('\n');
-            if (it.no_success_in_window) {
+
+            if (it.no_success_in_window) { // if no successful run was found in the 2-week window
+              // Build a link to the latest (most recent) failing run with timestamp and commit
               const latestLink = it.run_url ? ` | Latest failing run: [Run](${it.run_url}) ${it.created_at ? new Date(it.created_at).toISOString() : ''} ${it.commit_short ? `[\\\`${it.commit_short}\\"](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})` : ''}` : '';
+              // Return a special message indicating no success was found, show oldest and latest failures
               return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLink}`, errorsList].filter(Boolean).join('\n');
             }
-            // Include commits between success and failure
+
+            // If we found a success in the window, show commits between success and first failure
             let commitsList = '';
-            const commitsHtml = renderCommitsTable(it.commits_between || []);
+            const commitsHtml = renderCommitsTable(it.commits_between || []); // render the commits as an HTML table
             commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml, ''].join('\n');
-            const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
-            const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+
+            // Build information about the latest failing run (for normal regressions)
+            const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : ''; // timestamp of latest failure
+            const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined); // short SHA of latest failure
             const latestShaLink = (latestShaShort && it.commit_sha)
-              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})`
+              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})` // clickable link to latest failing commit
               : '';
             const latestLine = it.run_url
-              ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
+              ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}` // link to latest failing run with details
               : '';
+            // Return the full details: first failure info, latest failure info, errors, and commits
             return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
+          // If no first_failed_run_url, just return the workflow name
           return base;
         });
+        // Build the regressions section with header and all lines
         regressionsSection = ['', '## Regressions (Pass → Fail)', ...lines, ''].join('\n');
       } else {
+        // If no regressions, show a "None" message
         regressionsSection = ['','## Regressions (Pass → Fail)','- None',''].join('\n');
       }
-      if (stayedFailingDetails.length > 0) {
-        const lines = stayedFailingDetails.map(it => {
+      if (stayedFailingDetails.length > 0) { // check if there are any pipelines that stayed failing
+        const lines = stayedFailingDetails.map(it => { // for each stayed-failing pipeline, build a markdown line
+          // Build the base line: workflow name with optional link
           const base = it.workflow_url ? `- [${it.name}](${it.workflow_url})` : `- ${it.name}`;
-          if (it.first_failed_run_url) {
+
+          if (it.first_failed_run_url) { // if we found the first failing run in the window
+            // Extract the short SHA for the first failing commit
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+            // Create a clickable link to the first failing commit
             const shaLink = sha ? `[\`${sha}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.first_failed_head_sha})` : '';
+            // Format the timestamp of the first failure
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
-            // Error snippets first
+
+            // Render error snippets from the latest failing run as an HTML table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
-            if (it.no_success_in_window) {
-              const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
-              const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+
+            if (it.no_success_in_window) { // if no successful run was found in the 2-week window
+              // Build information about the latest failing run
+              const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : ''; // timestamp of latest failure
+              const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined); // short SHA of latest failure
               const latestShaLink = (latestShaShort && it.commit_sha)
-                ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})`
+                ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})` // clickable link to latest failing commit
                 : '';
               const latestLine = it.run_url
-                ? ` | Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
+                ? ` | Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}` // link to latest failing run with details
                 : '';
+              // Return a message showing oldest failure in window and latest failure
               return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList].filter(Boolean).join('\n');
             }
+
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
-            const commitsHtml2 = renderCommitsTable(it.commits_between || []);
+            const commitsHtml2 = renderCommitsTable(it.commits_between || []); // render the commits as an HTML table
             commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2, ''].join('\n');
-            const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
-            const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+
+            // Build information about the latest failing run
+            const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : ''; // timestamp of latest failure
+            const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined); // short SHA of latest failure
             const latestShaLink = (latestShaShort && it.commit_sha)
-              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})`
+              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})` // clickable link to latest failing commit
               : '';
             const latestLine = it.run_url
-              ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
+              ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}` // link to latest failing run with details
               : '';
+            // Return the full details: first failure info, latest failure info, errors, and commits
             return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
+          // If no first_failed_run_url, just return the workflow name
           return base;
         });
+        // Build the stayed-failing section with header and all lines
         stayedFailingSection = ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
       } else {
+        // If no stayed-failing pipelines, show a "None" message
         stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
       }
     } catch (_) {
-      // Fallback: always show headers even if nothing parsed
+      // Fallback: if any error occurs during rendering, show empty sections with headers
       regressionsSection = ['','## Regressions (Pass → Fail)','- None',''].join('\n');
       stayedFailingSection = ['','## Still Failing (No Recovery)','- None',''].join('\n');
     }
