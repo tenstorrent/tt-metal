@@ -74,7 +74,6 @@ target_sources(
         telemetry/ethernet/ethernet_endpoint.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
-        telemetry/arc/arc_telemetry_reader.cpp
         telemetry/arc/arc_metrics.cpp
         telemetry/hal/hal.cpp
 )

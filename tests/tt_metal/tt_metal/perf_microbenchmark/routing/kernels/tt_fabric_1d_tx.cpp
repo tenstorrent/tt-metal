@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -33,7 +33,7 @@ inline void setup_header_routing_1d(
         packet_header->to_chip_multicast(
             MulticastRoutingCommandHeader{static_cast<uint8_t>(start_distance), static_cast<uint8_t>(range)});
     } else {
-        packet_header->to_chip_unicast(static_cast<uint8_t>(start_distance));
+        fabric_set_unicast_route<false>((LowLatencyPacketHeader*)packet_header, start_distance);
     }
 }
 
@@ -82,7 +82,7 @@ inline void setup_header_routing_2d(
                 dst_mesh_id,
                 ew_dim);  // Ignored: Dynamic Routing does not need mesh dimensions
         } else {
-            fabric_set_unicast_route(dst_dev_id, (LowLatencyMeshPacketHeader*)packet_header);
+            fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id);
         }
     }
 }

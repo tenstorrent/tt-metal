@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """Test script for Qwen2_5_VLMLP implementation."""

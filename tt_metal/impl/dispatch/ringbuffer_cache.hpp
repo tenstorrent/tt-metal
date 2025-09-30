@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@ namespace tt::tt_metal {
  * all the data fits into the cache and gets reuse from locality.
  */
 class RingbufferCacheManager {
+    // NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor)
     friend class RingbufferCacheRandomizedTestsFixture;  // for unit testing purposes
 
 public:

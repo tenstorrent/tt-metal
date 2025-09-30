@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,8 +45,7 @@ bool runTest(
         tt::tt_metal::ComputeConfig{
             .compile_args = compile_args,
         });
-    distributed::AddProgramToMeshWorkload(
-        workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     distributed::Finish(mesh_device->mesh_command_queue());
