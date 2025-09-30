@@ -91,8 +91,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
         return True, "Row major is only supported for fp32 & fp16"
-    if not test_vector["keepdim"]:
-        return True, "keepdim = false is not supported"
 
     return False, None
 
