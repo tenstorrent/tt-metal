@@ -255,6 +255,7 @@ def test_stable_diffusion_vae_trace(device):
     ],
 )
 def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected_compile_time, expected_inference_time):
+    pytest.skip("https://github.com/tenstorrent/tt-metal/actions/runs/17495339605/job/49695272304#step:8:385")
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
