@@ -9,12 +9,12 @@
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
+#include "core/ttnn_all_includes.hpp"
 #include "nb_autograd.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_models.hpp"
 #include "nb_ops.hpp"
 #include "nb_optimizers.hpp"
-#include "ttnn/api/ttnn/tensor/layout/layout.hpp"
 
 namespace ttml::nanobind {
 using namespace ::nanobind;
