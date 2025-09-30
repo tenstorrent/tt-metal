@@ -278,10 +278,10 @@ Notes:
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // --- Mesh trace capture & replay ---
-    auto sender_workload = Dist::MeshWorkload();
-    auto receiver_workload = Dist::MeshWorkload();
-    Dist::AddProgramToMeshWorkload(sender_workload, std::move(sender_prog), Dist::MeshCoordinateRange(src_coord));
-    Dist::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_prog), Dist::MeshCoordinateRange(dst_coord));
+    Dist::MeshWorkload sender_workload;
+    Dist::MeshWorkload receiver_workload;
+    sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
+    receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
 
     // 1) Warm-up each workload (receiver first so it's ready, then sender)
     Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
