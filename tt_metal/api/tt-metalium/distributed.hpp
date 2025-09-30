@@ -117,11 +117,6 @@ MeshEvent EnqueueRecordEventToHost(
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
     const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
-// Make the specified MeshCommandQueue wait for the completion of an event.
-// This operation is non-blocking on host, however the specified command queue
-// will stall until the event is recorded.
-void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event);
-
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);
 

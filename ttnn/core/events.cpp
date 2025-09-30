@@ -15,7 +15,6 @@
 namespace ttnn::events {
 
 using ::tt::tt_metal::distributed::EnqueueRecordEventToHost;
-using ::tt::tt_metal::distributed::EnqueueWaitForEvent;
 using ::tt::tt_metal::distributed::EventSynchronize;
 
 MeshEvent record_mesh_event(
@@ -27,7 +26,7 @@ MeshEvent record_mesh_event(
 }
 
 void wait_for_mesh_event(QueueId cq_id, const MeshEvent& event) {
-    EnqueueWaitForEvent(event.device()->mesh_command_queue(*cq_id), event);
+    event.device()->mesh_command_queue(*cq_id).enqueue_wait_for_event(event);
 }
 
 void event_synchronize(const MeshEvent& event) { EventSynchronize(event); }
