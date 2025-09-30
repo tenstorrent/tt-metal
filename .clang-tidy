@@ -16,6 +16,7 @@ Checks: >
   -bugprone-exception-escape,
   -bugprone-forwarding-reference-overload,
   -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-integer-division,
   -bugprone-narrowing-conversions,
   -bugprone-sizeof-expression,
   -bugprone-switch-missing-default-case,
