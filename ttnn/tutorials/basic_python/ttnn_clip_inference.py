@@ -502,8 +502,6 @@ def main():
 
             x = ttnn.embedding(tokens, weight=self.token_embedding, dtype=ttnn.bfloat16)
 
-            assert x.dtype == ttnn.bfloat16
-
             # Add positional embedding
             x = x + self.positional_embedding
 
@@ -518,8 +516,7 @@ def main():
             x = ttnn.layer_norm(x, weight=self.ln_final_weights, bias=self.ln_final_bias)
 
             # Extract features at the end-of-sequence token position and apply text projection
-            # Currently using PyTorch for argmax operation (future: implement in TT-NN)
-
+            # Currently falling back to PyTorch for argmax operation
             torch_tokens = ttnn.to_torch(tokens)
             text_projection = ttnn.to_torch(self.text_projection)
             torch_x = ttnn.to_torch(x)
