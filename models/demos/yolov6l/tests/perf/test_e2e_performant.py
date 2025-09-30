@@ -15,6 +15,13 @@ from models.demos.yolov6l.runner.performant_runner import YOLOv6lPerformantRunne
 from models.demos.yolov6l.tt.common import get_mesh_mappers
 from models.perf.perf_utils import prep_perf_report
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 def get_expected_times(name):
     base = {"yolov6l": (183.7, 0.0115)}
@@ -50,11 +57,18 @@ def run_yolov6_inference(
     input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
+    if use_signpost:
+        signpost(header="start")
+
     t0 = time.time()
+
     for _ in range(10):
         _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
+
+    if use_signpost:
+        signpost(header="stop")
 
     performant_runner.release()
     inference_time = round((t1 - t0) / 10, 6)
