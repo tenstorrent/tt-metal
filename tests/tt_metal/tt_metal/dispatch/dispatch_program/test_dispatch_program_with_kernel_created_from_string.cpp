@@ -42,7 +42,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
             kernel_src_code,
             cores,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         this->RunProgram(mesh_device, workload);
     };
 }
@@ -78,7 +78,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = {}});
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         this->RunProgram(mesh_device, workload);
     };
 }
@@ -112,7 +112,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
             kernel_src_code,
             *active_ethernet_cores.begin(),
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         this->RunProgram(mesh_device, workload);
     };
 }
