@@ -130,7 +130,7 @@ class MoEGate(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         mode: str,
-        topk_fallback: bool = True,
+        topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
@@ -224,7 +224,7 @@ class MoEGate(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = True,
+        topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
     ) -> ModelDecodeConfig:
         return cls.model_config(hf_config, mesh_device, "decode", topk_fallback, use_bitonic_sort)
@@ -234,7 +234,7 @@ class MoEGate(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = True,
+        topk_fallback: bool = False,
         use_bitonic_sort: bool = True,
     ) -> ModelPrefillConfig:
         return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback, use_bitonic_sort)
