@@ -39,9 +39,9 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const Tensor& input_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     std::vector<Tensor>& output_tensors,
     const uint32_t num_links,
     const uint32_t ring_size,
@@ -57,8 +57,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        sender_device->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -73,7 +73,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
 
@@ -84,7 +83,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
 
     // Info for RM tensors
     uint32_t row_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
-    uint32_t page_size = round_up_to_mul32(row_size);
+    uint32_t page_size = input_tensor.buffer()->aligned_page_size();
 
     uint32_t num_rows = input_tensor.logical_shape().size() > 2
                             ? input_tensor.logical_shape()[-2] * input_tensor.logical_shape()[-3]
@@ -97,7 +96,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const size_t packet_size_bytes = tilized ? tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes() : 4096;
     size_t max_packet_size = packet_size_bytes;
     uint32_t num_packets_per_row = std::ceil(static_cast<double>(row_size) / max_packet_size);
-    uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
+    uint32_t l1_scratch_cb_page_size_bytes = input_tensor.buffer()->aligned_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
     uint32_t src0_cb_index = tt::CB::c_in0;
@@ -124,9 +123,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     // KERNEL CREATION
     // Reader
     std::vector<uint32_t> reader_compile_args = {
-        src0_cb_index,              // cb0_id
-        num_pages_per_packet,       // packet_size_in_pages
-        op_config.get_page_size(),  // tensor0_page_size
+        src0_cb_index,                               // cb0_id
+        num_pages_per_packet,                        // packet_size_in_pages
+        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
     };
 
     if (!tilized) {
@@ -139,11 +138,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     std::vector<uint32_t> writer_compile_args = {
-        src0_cb_index,              // cb0_id
-        num_pages_per_packet,       // packet_size_in_pages
-        op_config.get_page_size(),  // tensor0_page_size
-        num_targets_forward,        // num_targets_forward_direction
-        num_targets_backward,       // num_targets_backward_direction
+        src0_cb_index,                               // cb0_id
+        num_pages_per_packet,                        // packet_size_in_pages
+        input_tensor.buffer()->aligned_page_size(),  // tensor0_page_size
+        num_targets_forward,                         // num_targets_forward_direction
+        num_targets_backward,                        // num_targets_backward_direction
     };
 
     if (!tilized) {
@@ -160,11 +159,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
     std::vector<uint32_t> mcast_forward_args(2, 0);
     std::vector<uint32_t> mcast_backward_args(2, 0);
-    if (forward_device.has_value()) {
+    if (forward_coord.has_value()) {
         mcast_forward_args[0] = 1;
         mcast_forward_args[1] = num_targets_forward;
     }
-    if (backward_device.has_value()) {
+    if (backward_coord.has_value()) {
         mcast_backward_args[0] = 1;
         mcast_backward_args[1] = num_targets_backward;
     }
@@ -250,24 +249,22 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             barrier_core.x,                                  // barrier_sem_noc0_x
             barrier_core.y                                   // barrier_sem_noc0_y
         };
-        auto num_connections = (int)forward_device.has_value() + (int)backward_device.has_value();
+        auto num_connections = (int)forward_coord.has_value() + (int)backward_coord.has_value();
         writer_rt_args.push_back(num_connections);
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
         }
 
-        const auto sender_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+        const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
         dst_nodes.reserve(num_connections);
-        if (forward_device.has_value()) {
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
-            dst_nodes.push_back(forward_device_fabric_node_id);
+        if (forward_coord.has_value()) {
+            const auto forward_coord_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+            dst_nodes.push_back(forward_coord_fabric_node_id);
         }
-        if (backward_device.has_value()) {
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
-            dst_nodes.push_back(backward_device_fabric_node_id);
+        if (backward_coord.has_value()) {
+            const auto backward_coord_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+            dst_nodes.push_back(backward_coord_fabric_node_id);
         }
 
         append_routing_plane_connection_manager_rt_args(

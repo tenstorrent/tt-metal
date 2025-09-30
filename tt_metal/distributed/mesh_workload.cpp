@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -48,10 +48,12 @@ enum class HalProgrammableCoreType;
 }  // namespace tt_metal
 }  // namespace tt
 
-static uint64_t get_next_counter() {
+namespace {
+uint64_t get_next_counter() {
     static std::atomic<uint64_t> workload_counter = 0;
     return workload_counter++;
 }
+}  // namespace
 
 namespace tt::tt_metal::distributed {
 

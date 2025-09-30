@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -193,8 +193,20 @@ constexpr uint32_t edm_local_sync_ptr_addr =
 constexpr uint32_t edm_local_tensix_sync_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 2);
 constexpr uint32_t edm_status_ptr_addr = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 3);
 
+// for blackhole we need to disable the noc flush in inline writes to L1 for better perf. For wormhole this flag is not
+// used.
+constexpr bool enable_read_counter_update_noc_flush = false;
+constexpr uint32_t notify_worker_of_read_counter_update_src_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_2 + 4);
+constexpr size_t NOTIFY_WORKER_SRC_ADDR_MARKER_IDX = MAIN_CT_ARGS_IDX_2 + 5;
+constexpr size_t NOTIFY_WORKER_SRC_ADDR_MARKER = 0x7A9B3C4D;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED ||
+        get_compile_time_arg_val(NOTIFY_WORKER_SRC_ADDR_MARKER_IDX) == NOTIFY_WORKER_SRC_ADDR_MARKER,
+    "Notify worker marker not found. This implies some arguments were misaligned between host and device. Double "
+    "check the CT args.");
+
 // Per-channel counters
-constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 4;
+constexpr size_t MAIN_CT_ARGS_IDX_3 = MAIN_CT_ARGS_IDX_2 + 6;
 constexpr bool enable_fabric_counters = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 0) != 0;
 constexpr size_t receiver_channel_0_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 1);
 constexpr size_t receiver_channel_1_counters_address = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_3 + 2);

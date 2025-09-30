@@ -241,7 +241,9 @@ bool is_active_eth_core(chip_id_t chip_id, const CoreCoord& core) {
     return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
 }
 
-static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
+namespace {
+
+bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord& core, int run_state) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip_id, core);
     const auto& hal = tt_metal::MetalContext::instance().hal();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
@@ -270,6 +272,8 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     };
     return get_mailbox_is_done(go_msg_addr);
 }
+
+}  // namespace
 
 void wait_until_cores_done(
     chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms) {
