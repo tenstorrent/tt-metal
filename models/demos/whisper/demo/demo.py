@@ -621,7 +621,7 @@ def test_demo_for_conditional_generation(
     )
 
     metrics_dictionary = {
-        1: {"prefill_t/s/u": 3.7, "decode_t/s/u": 51.1},
+        1: {"prefill_t/s/u": 4.1, "decode_t/s/u": 53.2},
         2: {"prefill_t/s/u": 3.7, "decode_t/s/u": 51.1},
         8: {"prefill_t/s/u": 3.5, "decode_t/s/u": 42.1},
         32: {"prefill_t/s/u": 2.8, "decode_t/s/u": 37.1},
