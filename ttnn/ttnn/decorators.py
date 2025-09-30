@@ -11,6 +11,7 @@ import traceback
 import types
 
 from contextlib import contextmanager
+from datetime import datetime
 from functools import wraps
 from importlib.machinery import ModuleSpec
 from importlib.util import module_from_spec
@@ -372,11 +373,31 @@ class FastOperation:
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
 
-        if cq_id is None:
-            result = self.function(*function_args, **function_kwargs)
-        else:
-            with command_queue(cq_id):
+        try:
+            if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
+            else:
+                with command_queue(cq_id):
+                    result = self.function(*function_args, **function_kwargs)
+            raise Exception("Oops something went wrong")  # TODO: Remove, just a test
+        except Exception as e:
+            # Record error to database if reporting is enabled
+            if ttnn.CONFIG.report_path is not None:
+                operation_id = ttnn._ttnn.get_python_operation_id()
+                error_type = type(e).__name__
+                error_message = str(e)
+                stack_trace = traceback.format_exc()
+                timestamp = datetime.now().isoformat()
+                ttnn.database.insert_error(
+                    ttnn.CONFIG.report_path,
+                    operation_id,
+                    self.python_fully_qualified_name,
+                    error_type,
+                    error_message,
+                    stack_trace,
+                    timestamp,
+                )
+            raise
 
         return result
 
@@ -609,15 +630,34 @@ class Operation:
                 if ttnn.CONFIG.enable_comparison_mode:
                     decorated_function = comparison_decorator(decorated_function)
 
-                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                try:
+                    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
-                if cq_id is None:
-                    output = decorated_function(*function_args, **function_kwargs)
-                else:
-                    with command_queue(cq_id):
+                    if cq_id is None:
                         output = decorated_function(*function_args, **function_kwargs)
+                    else:
+                        with command_queue(cq_id):
+                            output = decorated_function(*function_args, **function_kwargs)
 
-                captured_graph = ttnn.graph.end_graph_capture()
+                    captured_graph = ttnn.graph.end_graph_capture()
+                except Exception as e:
+                    # Record error to database if reporting is enabled
+                    if ttnn.CONFIG.report_path is not None:
+                        operation_id = ttnn._ttnn.get_python_operation_id()
+                        error_type = type(e).__name__
+                        error_message = str(e)
+                        stack_trace = traceback.format_exc()
+                        timestamp = datetime.now().isoformat()
+                        ttnn.database.insert_error(
+                            ttnn.CONFIG.report_path,
+                            operation_id,
+                            self.python_fully_qualified_name,
+                            error_type,
+                            error_message,
+                            stack_trace,
+                            timestamp,
+                        )
+                        raise
 
                 local_tensor_comparison_records = []
                 local_golden_function_output = []
