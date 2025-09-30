@@ -3,6 +3,7 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/reduce.h"
+#include "/localdev/vbabic/tt-metal/tt_metal/hw/inc/debug/dprint_tensix.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary.h"
@@ -10,30 +11,28 @@
 #include "ckernel_sfpu.h"
 #endif
 
-namespace ckernel {
+namespace ckernel {}  // namespace ckernel
 
 // clang-format off
 /**
- * Simplified interface that handles the complete fused operation
- * Following the exact algorithm step by step as specified
+ * Initializes the fused eltwise binary reduce operation.
+ *
+ * This function initializes all necessary components (UNPACK, MATH, PACK) for the fused operation.
+ * Must be called before fused_eltwise_binary_reduce().
  *
  * | Argument       | Description                                                   | Type     | Valid Range | Required |
  * |----------------|---------------------------------------------------------------|----------|-------------|----------|
  * | cb_inp0        | Input circular buffer 0                                       | uint32_t | 0 to 31     | True     |
  * | cb_inp1        | Input circular buffer 1                                       | uint32_t | 0 to 31     | True     |
- * | cb_scaler      | Scaler circular buffer                                        | uint32_t | 0 to 31     | True     |
- * | cb_out         | Output circular buffer                                        | uint32_t | 0 to 31     | True     |
- * | itile0         | Input tile 0 index                                           | uint32_t | 0+          | True     |
- * | itile1         | Input tile 1 index                                           | uint32_t | 0+          | True     |
- * | iscaler        | Scaler tile index                                             | uint32_t | 0+          | True     |
- * | idst           | Destination tile index                                        | uint32_t | 0+          | True     |
+ * | acc_to_dest    | Whether to accumulate to destination                          | bool     | true/false  | False    |
  */
 // clang-format on
-// =============================================================================
-// PHASE 1: ELTWISE BINARY INITIALIZATION (NO PACKER)
-// =============================================================================
-template <EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE, bool full_init = true>
-ALWI void fused_eltwise_binary_init(uint32_t cb_inp0, uint32_t cb_inp1, bool acc_to_dest = false) {
+template <
+    EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE,
+    PoolType reduce_type = REDUCE_OP,
+    ReduceDim reduce_dim = REDUCE_DIM,
+    bool full_init = true>
+ALWI void fused_eltwise_binary_reduce_init(uint32_t cb_inp0, uint32_t cb_inp1, bool acc_to_dest = false) {
     // UNPACK initialization - configure and init for both input CBs
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_inp0, cb_inp1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(cb_inp0, cb_inp1)));
@@ -52,103 +51,88 @@ ALWI void fused_eltwise_binary_init(uint32_t cb_inp0, uint32_t cb_inp1, bool acc
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
-// =============================================================================
-// PHASE 2: ELTWISE BINARY OPERATION
-// =============================================================================
-template <EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE, uint32_t idst>
-ALWI void fused_eltwise_binary_compute(uint32_t cb_inp0, uint32_t cb_inp1, uint32_t itile0, uint32_t itile1) {
-    // Use the low-level LLK calls directly since we're in a fused operation
-    UNPACK((llk_unpack_AB(cb_inp0, cb_inp1, itile0, itile1)));
-    MATH((llk_math_eltwise_binary<
-          eltwise_binary_type,
-          NONE,
-          DST_ACCUM_MODE,
-          MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE>(idst)));
-}
+// clang-format off
+/**
+ * Performs a complete fused eltwise binary reduce operation on multiple tiles.
+ *
+ * This function performs the following operations in sequence:
+ * 1. Eltwise binary operation on all tiles (storing results in destination register)
+ * 2. Reuses destination data by moving it to source registers
+ * 3. Populates the first tile with ones for the reduce operation
+ * 4. Performs reduce operation across all tiles
+ *
+ * CRITICAL: When packing the result, you MUST use tile index 0 (pack_tile(0, cb_out)).
+ * The reduce operation uses the entire destination register (indices 0-7) and overwrites
+ * the first tile with the result, so the entire fused operation resolves around this.
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | cb_inp0        | Input circular buffer 0                                       | uint32_t | 0 to 31     | True     |
+ * | cb_inp1        | Input circular buffer 1                                       | uint32_t | 0 to 31     | True     |
+ * | itile0         | Input tile 0 index                                           | uint32_t | 0+          | True     |
+ * | itile1         | Input tile 1 index                                           | uint32_t | 0+          | True     |
+ * | tile_cnt       | Number of tiles to process                                    | uint32_t | 1 to 8      | True     |
+ */
+// clang-format on
+template <
+    EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE,
+    PoolType reduce_type = REDUCE_OP,
+    ReduceDim reduce_dim = REDUCE_DIM,
+    bool fp32_transpose = false>
+ALWI void fused_eltwise_binary_reduce(
+    uint32_t cb_inp0, uint32_t cb_inp1, uint32_t itile0, uint32_t itile1, uint32_t tile_cnt) {
+    // Step 1: Perform eltwise binary operations on all tiles
+    for (uint32_t i = 0; i < tile_cnt; ++i) {
+        UNPACK((llk_unpack_AB(cb_inp0, cb_inp1, itile0, itile1)));
+        MATH((llk_math_eltwise_binary<
+              eltwise_binary_type,
+              NONE,
+              DST_ACCUM_MODE,
+              MATH_FIDELITY,
+              EltwiseBinaryReuseDestType::NONE>(i)));
+    }
 
-// Runtime version for multiple tiles (when idst is not known at compile time)
-template <EltwiseBinaryType eltwise_binary_type = ELTWISE_OP_TYPE>
-ALWI void fused_eltwise_binary_compute(
-    uint32_t cb_inp0, uint32_t cb_inp1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
-    // Use the low-level LLK calls directly since we're in a fused operation
-    UNPACK((llk_unpack_AB(cb_inp0, cb_inp1, itile0, itile1)));
-    MATH((llk_math_eltwise_binary<
-          eltwise_binary_type,
-          NONE,
-          DST_ACCUM_MODE,
-          MATH_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE>(idst)));
-}
+    // for(uint32_t i = 0; i < 8; ++i) { // ispis ok
+    //     dprint_tensix_dest_reg(i);
+    // }
 
-// =============================================================================
-// PHASE 3: DESTINATION REUSE
-// =============================================================================
-ALWI void fused_eltwise_binary_reuse_dest() {
-    // 4. eltwise_binary_reuse_dest_as_src, moving the result to srcA
-    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>());
+    // Step 2: Reset counters before reduce operation
+    MATH((_fused_eltwise_binary_uninit_()));
 
-    // 5. populate dest with ones
-    MATH(ckernel::sfpu::_populate_first_tile_with_ones_());
+    // Step 3: Prepare data for reduce operation
+    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0));  // Move tile 0 to srcA
+    MATH(ckernel::sfpu::_populate_first_tile_with_ones_());                               // Fill tile 0 with ones
+    // for(uint32_t i = 0; i < 8; ++i) { // ispis ok
+    //     dprint_tensix_dest_reg(i);
+    // }
+    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0));  // Move tile 0 to srcB
 
-    // 6. eltwise_binary_reuse_dest_as_src, moving the result to srcB
-    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>());
-}
-
-// =============================================================================
-// PHASE 3B: DESTINATION REUSE FOR MULTIPLE TILES
-// =============================================================================
-// should be called only once
-ALWI void fused_reduce_populate_ones() {
-    MATH(ckernel::sfpu::_populate_first_tile_with_ones_());
-    // Use explicit tile index 0 to ensure we move tile 0 to srcB
-    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0));
-}
-
-ALWI void fused_eltwise_binary_reuse_dest_multiple_tiles(uint32_t idst) {
-    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(idst));
-}
-
-// =============================================================================
-// PHASE 4: REDUCE INITIALIZATION (NO UNPACKER)
-// =============================================================================
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
-ALWI void fused_reduce_init() {
-    // MATH initialization - init reduce operation (no unpacker calls)
+    // Step 4: Initialize reduce operation
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
-
-    // PACK initialization - configure the reduce mask to ensure only the final
-    // reduced result is packed and intermediate/partial results are masked out
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
+
+    // Step 5: Perform reduce operation (result stored in tile 0)
+    uint32_t reduce_dst_idx = 0;
+    for (uint32_t i = 0; i < tile_cnt; ++i) {
+        if (i != 0) {
+            MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i));
+        }
+        dprint_tensix_dest_reg(0);
+        MATH((llk_math_reduce_fused<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(
+            reduce_dst_idx)));
+        UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
+    }
+
+    // Step 6: Clear data valid flags after reduce loop
+    MATH((llk_math_reduce_clear_dvalid_after_for_loop()));
 }
 
-// =============================================================================
-// PHASE 5: REDUCE OPERATION
-// =============================================================================
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
-ALWI void fused_reduce_compute(
-    uint32_t idst, uint32_t operandA, uint32_t operandB, uint32_t tile_index_a, uint32_t tile_index_b) {
-    // 8. reduce operation (using srcA from dest reuse, cb_scaler used as dummy first param)
-    // **FIXED: Use llk_math_reduce_fused which doesn't clear data valid flags**
-    MATH((llk_math_reduce_fused<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(idst)));
-    UNPACK((llk_unpack_AB_but_fused_so_no_mop(operandA, operandB, tile_index_a, tile_index_b)));
-}
-
-// =============================================================================
-// PHASE 5B: CLEAR DVALID AFTER FOR LOOP
-// =============================================================================
-ALWI void fused_reduce_clear_dvalid_after_for_loop() { MATH((llk_math_reduce_clear_dvalid_after_for_loop())); }
-
-// =============================================================================
-// PHASE 6A: ELTWISE BINARY CLEANUP
-// =============================================================================
-ALWI void fused_eltwise_binary_uninit() { MATH((_fused_eltwise_binary_uninit_())); }
-
-// =============================================================================
-// PHASE 6B: REDUCE CLEANUP
-// =============================================================================
-ALWI void fused_reduce_uninit() {
-    // 9. reduce_uninit
-    reduce_uninit();
-}
-}  // namespace ckernel
+// clang-format off
+/**
+ * Uninitializes the fused eltwise binary reduce operation.
+ *
+ * This function cleans up the reduce operation and should be called after
+ * all fused operations are complete.
+ */
+// clang-format on
+ALWI void fused_eltwise_binary_reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }

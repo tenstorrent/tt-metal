@@ -146,3 +146,5 @@ context_for_claude/GAPOOL.md
 context_for_claude/MVMUL.md
 context_for_claude/ZEROACC.md
 context_for_claude/debug.md
+context_for_claude/test_validation.md
+log_after_reduce.txt
