@@ -302,7 +302,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: '.github/workflows/package-and-release.yaml',
-              ref: 'stable',
+              ref: 'dpopov-automate-release-flow',
               inputs: {
                 'release-type': 'rc',
                 'dry-run': 'false'
