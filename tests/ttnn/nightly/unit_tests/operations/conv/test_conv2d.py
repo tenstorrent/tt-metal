@@ -68,14 +68,15 @@ def randomize_torch_tensor(
     generate_positive_numbers=False,
 ):
     if generate_positive_numbers:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-        torch_tensor = torch.abs(torch_tensor)
-        return torch_tensor
+        # Generate normal distribution and make positive in-place (faster than abs())
+        return torch.randn(tensor_shape, dtype=torch.float32).abs_()
     else:
-        if tensor_shape in torch_tensor_map.keys():
+        # Direct membership test is faster than .keys()
+        if tensor_shape in torch_tensor_map:
             torch_tensor = torch_tensor_map[tensor_shape]
         else:
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
+            # Generate directly in target dtype to avoid conversion
+            torch_tensor = torch.randn(tensor_shape, dtype=torch.float32)
             torch_tensor_map[tensor_shape] = torch_tensor
 
     return torch_tensor
