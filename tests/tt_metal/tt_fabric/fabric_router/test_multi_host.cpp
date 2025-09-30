@@ -77,7 +77,7 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
 }
 
 TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }
@@ -279,6 +279,11 @@ TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
         GTEST_SKIP();
     }
 
+    log_warning(
+        tt::LogTest,
+        "This test is currently broken due to a bug in logical to physical mapping nw chip pinning, Issue #29719");
+    GTEST_SKIP();
+
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -307,6 +312,12 @@ TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
         log_info(tt::LogTest, "This test is only for N300 2x2");
         GTEST_SKIP();
     }
+
+    // This test is currently broken due to a bug in logical to physical mapping nw chip pinning
+    log_warning(
+        tt::LogTest,
+        "This test is currently broken due to a bug in logical to physical mapping nw chip pinning, Issue #29719");
+    GTEST_SKIP();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);

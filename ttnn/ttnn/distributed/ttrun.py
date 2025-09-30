@@ -86,11 +86,11 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
             mock_data = yaml.safe_load(f)
 
         # Validate mock cluster rank binding configuration
-        for rank, path in mock_data["rank_to_filename"].items():
+        for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
             if not Path(path).expanduser().resolve().is_file():
                 raise ValueError(f"Mock cluster rank binding configuration file not found: {path}")
 
-        config.mock_cluster_rank_binding = mock_data["rank_to_filename"]
+        config.mock_cluster_rank_binding = mock_data["rank_to_cluster_mock_cluster_desc"]
 
     return config
 
@@ -316,7 +316,7 @@ def main(
     The mock cluster descriptor mapping file is a YAML file that maps each rank to a mock cluster descriptor file.
 
     Mock Cluster Rank Binding YAML Example:
-        rank_to_filename:
+        rank_to_cluster_mock_cluster_desc:
           - rank: 0
             filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_0.yaml"
           - rank: 1
