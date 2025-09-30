@@ -100,46 +100,35 @@ void py_module(nb::module_& m) {
             return ret;
         });
         py_tensor.def("dtype", [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).dtype(); });
-        py_tensor.def_static(
+        py_tensor.def(
             "__add__",
-            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::AutocastTensor&)>(
-                &ttml::ops::operator+),
-            nb::arg("a"),
-            nb::arg("b"),
+            [](const TensorPtr& self, const AutocastTensor& other) { return ttml::ops::operator+(self, other); },
+            nb::arg("other"),
             nb::is_operator());
-        py_tensor.def_static(
+        py_tensor.def(
             "__add__",
-            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
-                &ttml::ops::operator+),
-            nb::arg("a"),
-            nb::arg("b"),
+            [](const TensorPtr& self, const TensorPtr& other) { return ttml::ops::operator+(self, other); },
+            nb::arg("other"),
             nb::is_operator());
-        py_tensor.def_static(
+        py_tensor.def(
             "__mul__",
-            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
-                &ttml::ops::operator*),
-            nb::arg("a"),
-            nb::arg("b"),
+            [](const TensorPtr& self, const TensorPtr& other) { return ttml::ops::operator*(self, other); },
+            nb::arg("other"),
             nb::is_operator());
-        py_tensor.def_static(
+        py_tensor.def(
             "__mul__",
-            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, float)>(&ttml::ops::operator*),
-            nb::arg("a"),
-            nb::arg("b"),
+            [](const TensorPtr& self, float other) { return ttml::ops::operator*(self, other); },
+            nb::arg("other"),
             nb::is_operator());
-        py_tensor.def_static(
+        py_tensor.def(
             "__sub__",
-            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
-                &ttml::ops::operator-),
-            nb::arg("a"),
-            nb::arg("b"),
+            [](const TensorPtr& self, const TensorPtr& other) { return ttml::ops::operator-(self, other); },
+            nb::arg("other"),
             nb::is_operator());
-        py_tensor.def_static(
+        py_tensor.def(
             "__div__",
-            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::TensorPtr&)>(
-                &ttml::ops::operator/),
-            nb::arg("a"),
-            nb::arg("b"),
+            [](const TensorPtr& self, const TensorPtr& other) { return ttml::ops::operator/(self, other); },
+            nb::arg("other"),
             nb::is_operator());
     }
 
