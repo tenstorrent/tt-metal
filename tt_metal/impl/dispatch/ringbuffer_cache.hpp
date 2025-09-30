@@ -23,6 +23,7 @@ namespace tt::tt_metal {
  * all the data fits into the cache and gets reuse from locality.
  */
 class RingbufferCacheManager {
+    // NOLINTNEXTLINE(cppcoreguidelines-virtual-class-destructor)
     friend class RingbufferCacheRandomizedTestsFixture;  // for unit testing purposes
 
 public:
