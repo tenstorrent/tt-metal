@@ -61,64 +61,40 @@ void SGDFusedDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
-    const auto& param_in = tensor_args.param_in;
-    const auto& param_out = tensor_args.param_out;
-    check_tensor(param_in, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    if (param_out.has_value()) {
-        check_tensor(
-            param_out.value(), "Preallocated Output", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-    }
+    const auto& param = tensor_args.param;
+    check_tensor(param, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
 }
 
 SGDFusedDeviceOperation::spec_return_value_t SGDFusedDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    if (tensor_args.param_out.has_value()) {
-        return tensor_args.param_out->tensor_spec();
-    }
-    auto param_in_logical_shape = tensor_args.param_in.logical_shape();
-    return ttnn::TensorSpec(
-        ttnn::Shape(param_in_logical_shape),
-        tt::tt_metal::TensorLayout(
-            tensor_args.param_in.dtype(), tt::tt_metal::Layout::TILE, tensor_args.param_in.memory_config()));
+    return tensor_args.param.tensor_spec();
 }
 
 SGDFusedDeviceOperation::tensor_return_value_t SGDFusedDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    tensor_return_value_t output_tensor;
-
-    spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
-
-    if (tensor_args.param_out.has_value()) {
-        output_tensor = tensor_args.param_out.value();
-    } else {
-        output_tensor = create_device_tensor(output_specs, tensor_args.param_in.device());
-    }
-
-    return output_tensor;
+    return tensor_args.param;
 }
 
 ttsl::hash::hash_t SGDFusedDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& param_in_tensor = tensor_args.param_in;
-    const auto& param_in_logical_shape = param_in_tensor.logical_shape();
+    const auto& param_tensor = tensor_args.param;
+    const auto& param_logical_shape = param_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     auto hash = tt::tt_metal::operation::hash_operation<SGDFusedDeviceOperation>(
-        args, program_factory.index(), param_in_tensor.dtype(), param_in_logical_shape);
+        args, program_factory.index(), param_tensor.dtype(), param_logical_shape);
 
     return hash;
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invoke(
-    const ttnn::Tensor& param_in,
+    const ttnn::Tensor& param,
     const ttnn::Tensor& grad,
     float lr,
     float momentum,
     float dampening,
     float weight_decay,
     bool nesterov,
-    const std::optional<ttnn::Tensor>& param_out,
-    const std::optional<ttnn::Tensor>& momentum_in,
-    const std::optional<ttnn::Tensor>& momentum_out) {
+    const std::optional<ttnn::Tensor>& momentum_buffer) {
     return {
         operation_attributes_t{
             .lr = lr,
@@ -128,11 +104,9 @@ std::tuple<operation_attributes_t, tensor_args_t> SGDFusedDeviceOperation::invok
             .nesterov = nesterov,
         },
         tensor_args_t{
-            .param_in = param_in,
+            .param = param,
             .grad = grad,
-            .param_out = param_out,
-            .momentum_in = momentum_in,
-            .momentum_out = momentum_out,
+            .momentum_buffer = momentum_buffer,
         }};
 }
 

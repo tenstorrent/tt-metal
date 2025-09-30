@@ -20,11 +20,9 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const ttnn::Tensor& param_in;
+    const ttnn::Tensor& param;
     const ttnn::Tensor& grad;
-    std::optional<ttnn::Tensor> param_out = std::nullopt;
-    std::optional<ttnn::Tensor> momentum_in = std::nullopt;
-    std::optional<ttnn::Tensor> momentum_out = std::nullopt;
+    std::optional<ttnn::Tensor> momentum_buffer = std::nullopt;
 };
 
 using tensor_return_value_t = ttnn::Tensor;
