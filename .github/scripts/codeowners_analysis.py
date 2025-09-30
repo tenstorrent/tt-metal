@@ -38,7 +38,9 @@ def get_user_full_name(username):
         # Use GitHub API to get user information
         url = f"https://api.github.com/users/{clean_username}"
         req = urllib.request.Request(url)
-        req.add_header("Authorization", f'Bearer {os.environ.get("GITHUB_TOKEN", "")}')
+        req.add_header(
+            "Authorization", f'Bearer {os.environ.get("GITHUB_TOKEN", os.environ.get("ORG_READ_GITHUB_TOKEN", ""))}'
+        )
         req.add_header("Accept", "application/vnd.github.v3+json")
         req.add_header("User-Agent", "GitHub-Actions-CodeOwners-Analysis")
 

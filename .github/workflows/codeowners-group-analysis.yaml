@@ -89,13 +89,23 @@ jobs:
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
               MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                -H "Accept: application/vnd.github.v3+json" \
+                               "$MEMBERS_API" 2>/dev/null)
+
+              # Check if API call was successful (HTTP 200)
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API")
 
-              # Extract member logins
-              TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-
-              if [ -n "$TEAM_MEMBER_LOGINS" ] && [ "$TEAM_MEMBER_LOGINS" != "null" ]; then
-                TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
+              if [ "$MEMBERS_HTTP_CODE" = "200" ] && [ -n "$MEMBERS_DATA" ] && [ "$MEMBERS_DATA" != "null" ]; then
+                # Extract member logins successfully
+                TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+                if [ -n "$TEAM_MEMBER_LOGINS" ]; then
+                  TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
+                fi
+              else
+                # API call failed or insufficient permissions - use placeholder
+                echo "Warning: Could not fetch members for team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:insufficient-permissions|"
               fi
             done
           fi
@@ -192,17 +202,23 @@ jobs:
                   team_members_line=$(echo "$TEAM_MEMBERS" | grep "^$team:" | head -1)
                   if [ -n "$team_members_line" ]; then
                     team_owners=$(echo "$team_members_line" | cut -d':' -f2)
-                    # For teams, we show all members since we can't easily get full names for team members
-                    all_members=$(echo "$team_owners" | sed 's/,/, /g')
-                    team_members_info="Members: $all_members"
 
-                    # Check which members have approved
-                    IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
-                    for member in "${MEMBERS_ARRAY[@]}"; do
-                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                        approved_members="$approved_members$member, "
-                      fi
-                    done
+                    if [ "$team_owners" = "insufficient-permissions" ]; then
+                      # Token doesn't have permission to read team members
+                      team_members_info="Members: (insufficient token permissions)"
+                    else
+                      # For teams, we show all members since we can't easily get full names for team members
+                      all_members=$(echo "$team_owners" | sed 's/,/, /g')
+                      team_members_info="Members: $all_members"
+
+                      # Check which members have approved
+                      IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+                      for member in "${MEMBERS_ARRAY[@]}"; do
+                        if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                          approved_members="$approved_members$member, "
+                        fi
+                      done
+                    fi
                   fi
                 fi
 
