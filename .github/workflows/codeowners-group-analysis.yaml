@@ -445,8 +445,8 @@ jobs:
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
-          # Collect 2 owners from EACH pending group (teams and individual patterns)
-          SELECTED_OWNERS=""
+          # Collect 2 owners from EACH pending group, then deduplicate
+          TEMP_SELECTED_OWNERS=""
 
           # Process pending teams - select up to 2 owners from each pending team
           if [ -n "$TEAMS" ]; then
@@ -489,7 +489,7 @@ jobs:
 
                         if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
                           # Only 1 member
-                          SELECTED_OWNERS="$SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
                         elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
                           # Select 2 random members
                           RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
@@ -497,7 +497,7 @@ jobs:
                           while [ $RAND2 -eq $RAND1 ]; do
                             RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
                           done
-                          SELECTED_OWNERS="$SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
                         fi
                       fi
                     fi
@@ -545,7 +545,7 @@ jobs:
 
                   if [ $PATTERN_OWNER_COUNT -eq 1 ]; then
                     # Only 1 owner
-                    SELECTED_OWNERS="$SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[0]},"
+                    TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[0]},"
                   elif [ $PATTERN_OWNER_COUNT -ge 2 ]; then
                     # Select 2 random owners
                     RAND1=$((RANDOM % PATTERN_OWNER_COUNT))
@@ -553,15 +553,21 @@ jobs:
                     while [ $RAND2 -eq $RAND1 ]; do
                       RAND2=$((RANDOM % PATTERN_OWNER_COUNT))
                     done
-                    SELECTED_OWNERS="$SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[$RAND1]},${PATTERN_OWNERS_ARRAY[$RAND2]},"
+                    TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[$RAND1]},${PATTERN_OWNERS_ARRAY[$RAND2]},"
                   fi
                 fi
               fi
             done
           fi
 
-          # Clean up the final list
-          SELECTED_OWNERS=$(echo "$SELECTED_OWNERS" | sed 's/,$//')
+          # Remove trailing comma and deduplicate the selected owners
+          TEMP_SELECTED_OWNERS=$(echo "$TEMP_SELECTED_OWNERS" | sed 's/,$//')
+          if [ -n "$TEMP_SELECTED_OWNERS" ]; then
+            # Sort and deduplicate
+            SELECTED_OWNERS=$(echo "$TEMP_SELECTED_OWNERS" | tr ',' '\n' | sort | uniq | tr '\n' ',' | sed 's/,$//')
+          else
+            SELECTED_OWNERS=""
+          fi
 
             # Check if we have any owners to ping
             if [ -n "$SELECTED_OWNERS" ]; then
