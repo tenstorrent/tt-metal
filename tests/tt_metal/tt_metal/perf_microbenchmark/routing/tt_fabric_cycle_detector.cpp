@@ -255,7 +255,7 @@ void dump_cycles_to_yaml(
 
 // Main cycle detection function for inter-mesh traffic ONLY
 // Intra-mesh traffic uses dimension-ordered routing and cannot have cycles
-bool detect_cycles_in_random_inter_mesh_traffic(
+bool detect_cycles_in_traffic(
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
     const IRouteManager& route_manager,
     const std::string& test_name,
@@ -344,7 +344,7 @@ bool detect_cycles_in_random_inter_mesh_traffic(
 }
 
 // Detect and handle cycles with retry logic
-bool detect_and_handle_cycles(
+bool detect_cycles_with_retry(
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
     const IRouteManager& route_manager,
     const std::string& test_name,
@@ -353,16 +353,16 @@ bool detect_and_handle_cycles(
         return false;  // Cycle detection disabled
     }
 
-    return detect_cycles_in_random_inter_mesh_traffic(pairs, route_manager, test_name);
+    return detect_cycles_in_traffic(pairs, route_manager, test_name);
 }
 
 // New control plane-based cycle detection function
-bool detect_cycles_using_control_plane(
+bool detect_cycles(
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& pairs,
     const ControlPlane& control_plane,
     const std::string& test_name) {
     // Delegate directly to the control plane's cycle detection method
-    return control_plane.detect_routing_cycles_in_inter_mesh_traffic(pairs, test_name);
+    return control_plane.detect_inter_mesh_cycles(pairs, test_name);
 }
 
 }  // namespace tt::tt_fabric::fabric_tests

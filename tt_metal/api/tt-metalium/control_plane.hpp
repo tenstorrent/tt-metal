@@ -128,7 +128,7 @@ public:
     // Cycle detection for inter-mesh traffic routing paths
     // Returns true if cycles are detected in the routing paths for the given traffic pairs
     // Only checks inter-mesh traffic (intra-mesh uses dimension-ordered routing and is cycle-free)
-    bool detect_routing_cycles_in_inter_mesh_traffic(
+    bool detect_inter_mesh_cycles(
         const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs,
         const std::string& test_name = "CycleDetection") const;
 

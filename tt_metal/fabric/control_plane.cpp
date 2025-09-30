@@ -1429,7 +1429,7 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     return route;
 }
 
-bool ControlPlane::detect_routing_cycles_in_inter_mesh_traffic(
+bool ControlPlane::detect_inter_mesh_cycles(
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs, const std::string& test_name) const {
     // Type aliases for cycle detection
     using NodeGraph = std::unordered_map<FabricNodeId, std::vector<FabricNodeId>>;
@@ -1476,7 +1476,19 @@ bool ControlPlane::detect_routing_cycles_in_inter_mesh_traffic(
 
             // Add edges to routing graph
             for (size_t i = 0; i < path.size() - 1; ++i) {
-                routing_graph[path[i]].push_back(path[i + 1]);
+                FabricNodeId current_node = path[i];
+                FabricNodeId next_node = path[i + 1];
+
+                // Skip self-loops (don't represent actual deadlock conditions)
+                if (current_node == next_node) {
+                    continue;
+                }
+
+                // Avoid duplicate edges
+                auto& neighbors = routing_graph[current_node];
+                if (std::find(neighbors.begin(), neighbors.end(), next_node) == neighbors.end()) {
+                    neighbors.push_back(next_node);
+                }
             }
 
         } catch (const std::exception& e) {

@@ -625,13 +625,12 @@ private:
             if (has_inter_mesh_pairs || is_likely_inter_mesh) {
                 // Use enhanced inter-mesh cycle detection for better accuracy
                 log_info(tt::LogTest, "Using inter-mesh cycle detection for test '{}'", config.name);
-                has_cycles = tt::tt_fabric::fabric_tests::detect_cycles_in_random_inter_mesh_traffic(
-                    pairs, *fixture_, config.name);
+                has_cycles = tt::tt_fabric::fabric_tests::detect_cycles_in_traffic(pairs, *fixture_, config.name);
             } else {
                 // Use regular cycle detection for intra-mesh traffic
                 log_info(tt::LogTest, "Using standard cycle detection for test '{}'", config.name);
                 has_cycles =
-                    tt::tt_fabric::fabric_tests::detect_and_handle_cycles(pairs, *fixture_, config.name, false);
+                    tt::tt_fabric::fabric_tests::detect_cycles_with_retry(pairs, *fixture_, config.name, false);
             }
 
             if (has_cycles) {
