@@ -698,7 +698,7 @@ CableLength calc_cable_length(const Host& host1, const Host& host2) {
     double rack_distance = std::abs(rack_0 - rack_1) * standard_rack_w;
     double u_distance = std::abs(shelf_u_0 - shelf_u_1) * standard_rack_u_h;
 
-    double cable_length = std::sqrt(rack_distance * rack_distance + u_distance * u_distance) + 150;  // 150mm slack
+    double cable_length = std::sqrt((rack_distance * rack_distance) + (u_distance * u_distance)) + 150;  // 150mm slack
 
     if (cable_length <= 500.0) {
         return CableLength::CABLE_0P5;

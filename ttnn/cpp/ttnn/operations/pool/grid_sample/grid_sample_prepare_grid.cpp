@@ -54,16 +54,16 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
         for (uint32_t h = 0; h < grid_h; h++) {
             for (uint32_t w = 0; w < grid_w; w++) {
                 // Calculate input indices for grid coordinates
-                uint32_t x_idx = ((n * grid_h + h) * grid_w + w) * 2 + 0;  // x coordinate
-                uint32_t y_idx = ((n * grid_h + h) * grid_w + w) * 2 + 1;  // y coordinate
+                uint32_t x_idx = (((n * grid_h + h) * grid_w + w) * 2) + 0;  // x coordinate
+                uint32_t y_idx = (((n * grid_h + h) * grid_w + w) * 2) + 1;  // y coordinate
 
                 // Extract normalized coordinates [-1, 1]
                 float x_coord = static_cast<float>(input_buffer[x_idx]);
                 float y_coord = static_cast<float>(input_buffer[y_idx]);
 
                 // Transform to image coordinates
-                float h_coord_image = y_coord * height_scale + height_offset;
-                float w_coord_image = x_coord * width_scale + width_offset;
+                float h_coord_image = (y_coord * height_scale) + height_offset;
+                float w_coord_image = (x_coord * width_scale) + width_offset;
 
                 // Get corner pixel coordinates (floor operation)
                 int32_t h0 = static_cast<int32_t>(std::floor(h_coord_image));

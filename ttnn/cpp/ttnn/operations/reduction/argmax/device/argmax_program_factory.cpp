@@ -375,7 +375,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
 
     // If red_dim_units is not a multiple of min_red_dim_units_per_core, then the last core will read a smaller amount
     // of data We calculate that number here
-    const int ideal_red_dim_units = num_cores0 * red_dim_units0 + num_cores1 * red_dim_units1;
+    const int ideal_red_dim_units = (num_cores0 * red_dim_units0) + (num_cores1 * red_dim_units1);
 
     uint32_t red_dim_units_last0, red_dim_units_last1;
     if (num_cores1 > 0) {
@@ -482,8 +482,8 @@ operation::ProgramWithCallbacks argmax_multi_core(
             {src_buffer->address(),
              dst_buffer->address(),
              static_cast<uint32_t>(num_cores0 + i),
-             src_offset1 + i * src_read_size1,
-             red_dim_offset1 + i * red_dim_units1,
+             src_offset1 + (i * src_read_size1),
+             red_dim_offset1 + (i * red_dim_units1),
              (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
              (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
     }

@@ -61,7 +61,7 @@ public:
         PageMapping current_page_mapping{
             .bank_id = shard_id % accessor.dspec().num_banks(),
             .bank_page_offset =
-                shard_id / accessor.dspec().num_banks() * accessor.dspec().shard_volume() + current_page_id_in_shard};
+                (shard_id / accessor.dspec().num_banks() * accessor.dspec().shard_volume()) + current_page_id_in_shard};
         current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
         ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         update_current_page();

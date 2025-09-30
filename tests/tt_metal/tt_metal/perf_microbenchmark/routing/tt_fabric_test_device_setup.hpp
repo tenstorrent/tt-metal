@@ -644,7 +644,7 @@ inline void TestDevice::create_sender_kernels() {
         if (!sender.configs_.empty()) {
             // Estimate total size based on first config to reduce reallocations
             const auto first_traffic_args = sender.configs_[0].first.get_args();
-            local_args.reserve(local_args.size() + sender.configs_.size() * first_traffic_args.size());
+            local_args.reserve(local_args.size() + (sender.configs_.size() * first_traffic_args.size()));
             local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
             for (size_t i = 1; i < sender.configs_.size(); ++i) {
@@ -682,7 +682,7 @@ inline void TestDevice::create_receiver_kernels() {
         if (!receiver.configs_.empty()) {
             // Estimate total size based on first config to reduce reallocations
             const auto first_traffic_args = receiver.configs_[0].get_args();
-            local_args.reserve(local_args.size() + receiver.configs_.size() * first_traffic_args.size());
+            local_args.reserve(local_args.size() + (receiver.configs_.size() * first_traffic_args.size()));
             local_args.insert(local_args.end(), first_traffic_args.begin(), first_traffic_args.end());
 
             for (size_t i = 1; i < receiver.configs_.size(); ++i) {

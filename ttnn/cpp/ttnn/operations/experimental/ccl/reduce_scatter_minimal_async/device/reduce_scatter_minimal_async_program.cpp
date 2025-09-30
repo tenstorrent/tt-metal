@@ -471,8 +471,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
-            uint32_t mux_core_offset =
-                link * num_cores_per_link + dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+            uint32_t mux_core_offset = (link * num_cores_per_link) +
+                                       (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
             CoreCoord mux_logical_core = all_cores[mux_core_offset];
             CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
 
@@ -517,12 +517,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
                 CoreCoord supplemental_core = all_cores
-                    [link * num_cores_per_link +
-                     (1 - dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction) +
+                    [(link * num_cores_per_link) +
+                     ((1 - dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction)) +
                      num_mux_cores_per_direction_per_link + worker];
                 opposite_core_coord = mesh_device->worker_core_from_logical_core(supplemental_core);
 
-                uint32_t worker_id = link * num_workers_per_direction + worker;
+                uint32_t worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
                 uint32_t tiles_read = (worker_id * batch_slice_num_pages / num_workers);
                 uint32_t tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
@@ -737,8 +737,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
                     for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                         uint32_t mux_core_offset =
-                            link * num_cores_per_link +
-                            dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+                            (link * num_cores_per_link) +
+                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                         CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
                         std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
                             GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
@@ -991,8 +991,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const bool is_forward = dir;
 
             // Fabrix mux kernel
-            uint32_t mux_core_offset =
-                link * num_cores_per_link + dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+            uint32_t mux_core_offset = (link * num_cores_per_link) +
+                                       (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
             CoreCoord mux_logical_core = all_cores[mux_core_offset];
             CoreCoord mux_virtual_core = mesh_device->worker_core_from_logical_core(mux_logical_core);
 
@@ -1043,8 +1043,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 // FWD core needs BWD core coordinate for fwd/bwd final reduction sync.
                 // For final synchronization, each core needs to know the coordinate of the opposite direction's core.
                 uint32_t opposite_mux_core_offset =
-                    link * num_cores_per_link +
-                    (1 - dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+                    (link * num_cores_per_link) +
+                    ((1 - dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                 uint32_t opposite_core_idx = opposite_mux_core_offset + num_mux_cores_per_direction_per_link + worker;
                 auto opposite_core = all_cores[opposite_core_idx];
                 auto opposite_core_coord = mesh_device->worker_core_from_logical_core(opposite_core);
@@ -1126,7 +1126,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     output_tensor.buffer()->address(),        // output_tensor_address
                     semaphore.at(0).address(),                // remote transfer sync semaphore
-                    link * num_workers_per_direction + worker,
+                    (link * num_workers_per_direction) + worker,
                     num_links * num_workers_per_direction,
                     fwd_bwd_semaphore_address};
                 if (input_is_sharded) {
@@ -1215,7 +1215,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     semaphore.at(0).address(),                // remote transfer sync semaphore
                     semaphore.at(1).address(),                // final reduction slot semaphore
                     semaphore.at(2).address(),                // batch_ready_semaphore
-                    link * num_workers_per_direction + worker,
+                    (link * num_workers_per_direction) + worker,
                     num_links * num_workers_per_direction,
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
@@ -1258,7 +1258,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     sender_reduce_kernel_config);
                 reduce_kernel_ids.push_back(reduce_kernel_id);
 
-                std::vector<uint32_t> reduce_rt_args = {link * num_workers_per_direction + worker};
+                std::vector<uint32_t> reduce_rt_args = {(link * num_workers_per_direction) + worker};
                 tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_id, {core}, reduce_rt_args);
             }
         }
@@ -1291,8 +1291,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
                     for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
                         uint32_t mux_core_offset =
-                            link * num_cores_per_link +
-                            dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
+                            (link * num_cores_per_link) +
+                            (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
                         CoreCoord core = all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
                         std::vector<std::vector<RuntimeArgsData>> reader_runtime_args =
                             GetRuntimeArgs(program, reader_kernel_ids[core_idx]);

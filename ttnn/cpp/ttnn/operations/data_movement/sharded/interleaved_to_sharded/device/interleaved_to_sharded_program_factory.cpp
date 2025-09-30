@@ -333,7 +333,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
-                uint32_t start_id = curr_idx_h * output_width_in_pages + page_id_within_row;
+                uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
                 writer_run_time_args = {
                     dst_buffer->address(),
                     shard_height,

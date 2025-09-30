@@ -67,7 +67,7 @@ inline static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
 inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_core, int risc_id) {
     uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
-    return addr + sizeof(DebugPrintMemLayout) * risc_id;
+    return addr + (sizeof(DebugPrintMemLayout) * risc_id);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {

@@ -28,7 +28,9 @@ uint64_t ceil32(const uint64_t& number) {
 // tensors)
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~20% to account for reserved memory
-uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l1_size_per_core() / 4 / 4 * 0.8 - 32); }
+uint32_t calculate_optimal_chunk_size(IDevice* device) {
+    return ceil32((device->l1_size_per_core() / 4 / 4 * 0.8) - 32);
+}
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
