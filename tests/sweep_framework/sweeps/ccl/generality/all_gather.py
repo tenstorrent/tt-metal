@@ -81,10 +81,15 @@ parameters = {
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 1440],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
-            [1, 1, 32, 32],  # Qwen3 dim:3 cluster_axis: 1
-            [1, 8, 8, 128],  # Qwen3 dim:3 cluster_axis: 1
+            [1, 1, 32, 32],  # Qwen3, Llama on Glx, DeepSeek dim:3 cluster_axis: 1
+            [1, 8, 8, 128],  # Qwen3, Llama on Glx dim:3 cluster_axis: 1
             [3, 1, 4096, 192],  # Gemma3 Dim: 3
             [3, 1, 4096, 144],  # Gemma3 Dim: 3
+            [1, 1, 32, 896],  # DeepSeek dim:3 cluster_axis 1
+            [1, 1, 32, 192],  # DeepSeek dim:3 cluster_axis 1
+            [1, 1, 32, 576],  # DeepSeek dim: 1 cluster_axis 1
+            [1, 1, 32, 224],  # DeepSeek dim:3 cluster_axis 0
+            [1, 4, 128, 512],  # DeepSeek dim: 1 cluster_axis 1
         ],
         "dim": [1, 3],
         "cluster_axis": [0, 1],
