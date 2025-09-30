@@ -335,8 +335,7 @@ void build_tt_fabric_program(
     }
 
     const auto topology = fabric_context.get_fabric_topology();
-    const bool is_galaxy =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+    const bool is_galaxy = tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
     auto build_downstream_connections = [&](tt::tt_fabric::chan_id_t eth_chan_dir1,
                                             tt::tt_fabric::chan_id_t eth_chan_dir2) {

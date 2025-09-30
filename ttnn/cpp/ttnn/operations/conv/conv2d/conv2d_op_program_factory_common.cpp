@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@
 #include <umd/device/types/arch.hpp>
 #include <unordered_map>
 #include <vector>
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/hal.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
@@ -48,8 +48,8 @@ uint32_t calculate_act_cb_size_with_reuse(
 
 std::vector<CBInfo> get_cb_info(
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const OptimizedConvBlockConfig& block_config,
-    const OptimizedConvParallelizationConfig& pconfig,
+    const Conv2dBlockConfig& block_config,
+    const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> input_shape,

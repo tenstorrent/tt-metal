@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, final
 
 import torch
-import ttnn.experimental
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -19,8 +18,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     MulConfig,
     OpConfigBase,
-    ReduceScatterAsyncConfig,
+    ReduceScatterAsyncMinimalConfig,
     ReshardConfig,
+    SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -32,7 +32,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
     get_state_dicts,
-    save_and_get_path,
+    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
@@ -73,19 +73,17 @@ class MLP(AbstractModule):
     ) -> WeightConfig:
         return {
             models_name: {
-                "input_tensor_b": save_and_get_path(
+                "input_tensor_b": cls.convert_metaweight(
                     output_path / f"{models_name}.input_tensor_b",
-                    cls.convert_metaweight(
-                        get_state_dicts(
-                            state_dicts,
-                            f"{hf_name}.weight",
-                            shape=(out_features, in_features),
-                            dtype=cls.WEIGHT_TORCH_DTYPE,
-                        ),
-                        mesh_device,
-                        is_w2,
+                    get_state_dicts(
+                        state_dicts,
+                        f"{hf_name}.weight",
+                        shape=(out_features, in_features),
+                        dtype=cls.WEIGHT_TORCH_DTYPE,
                     ),
-                )
+                    mesh_device,
+                    is_w2,
+                ),
             }
             for hf_name, models_name, is_w2 in [
                 ("gate_proj", "w1", False),
@@ -99,10 +97,11 @@ class MLP(AbstractModule):
     @classmethod
     def convert_metaweight(
         cls,
+        path: Path,
         torch_metaweight_tensor: torch.Tensor,
         mesh_device: ttnn.Device,
         is_w2: bool,
-    ) -> ttnn.Tensor:
+    ) -> SavedWeight:
         """
         Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
 
@@ -130,19 +129,20 @@ class MLP(AbstractModule):
             mesh_sharded_dim = 2
 
         # Convert the torch tensor to a TTNN tensor
-        metaweight_tensor = ttnn.from_torch(
+        return shard_and_save(
+            path,
             torch_metaweight_tensor,
+            shard_dims=(0, mesh_sharded_dim),
+            mesh_device=mesh_device,
+            remove_dims=(True, False),
             dtype=cls.WEIGHT_DTYPE,
             layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
             memory_config=dram_sharded_weight_config(
                 per_device_in_features,
                 per_device_out_features,
                 mesh_device.dram_grid_size(),
             ),
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, mesh_sharded_dim)),
         )
-        return ttnn.squeeze(metaweight_tensor, 0)  # Remove the row shard dimension
 
     @final
     @classmethod
@@ -203,11 +203,9 @@ class MLP(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
-            "reduce_scatter_async": ReduceScatterAsyncConfig(
-                dim=-1,  # We are scattering across the feature dimension (last one)
+            "reduce_scatter_async": ReduceScatterAsyncMinimalConfig(
+                dim=3,  # We are scattering across the feature dimension (last one)
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
-                mesh_device=MeshDeviceStub(mesh_device.shape),
-                math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
@@ -310,11 +308,9 @@ class MLP(AbstractModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
-            "reduce_scatter_async": ReduceScatterAsyncConfig(
-                mesh_device=MeshDeviceStub(mesh_device.shape),
+            "reduce_scatter_async": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
-                dim=-1,  # We are scattering across the feature dimension (last one)
-                math_op=ttnn.ReduceType.Sum,
+                dim=3,  # We are scattering across the feature dimension (last one)
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
             ),
@@ -373,11 +369,12 @@ class MLP(AbstractModule):
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(1),
+                "barrier_semaphore": ccl.get_barrier_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
             "reduce_scatter_async": {
-                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
+                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(1),
+                "barrier_semaphore": ccl.get_barrier_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
         }
@@ -478,7 +475,7 @@ class MLP(AbstractModule):
         ttnn.deallocate(activated)
 
         # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_async(output, **cfg["reduce_scatter_async"])
+        output = ttnn.experimental.reduce_scatter_minimal_async(output, **cfg["reduce_scatter_async"])
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -514,7 +511,9 @@ class MLP(AbstractModule):
         ttnn.deallocate(activated)
 
         # Add reduce-scatter
-        output = ttnn.experimental.reduce_scatter_async(w2_out, **cfg["reduce_scatter_async"])
+        w2_out = ttnn.to_memory_config(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+        # TODO: File issue on RS not being able to run sharded memory config
+        output = ttnn.experimental.reduce_scatter_minimal_async(w2_out, **cfg["reduce_scatter_async"])
         ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]

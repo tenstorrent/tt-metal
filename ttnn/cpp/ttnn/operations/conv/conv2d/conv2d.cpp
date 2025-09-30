@@ -10,7 +10,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include <tt_stl/small_vector.hpp>
@@ -700,7 +700,7 @@ Result conv2d_L1(
         }
     }
 
-    // call optimized conv op or matmul micro op
+    // call conv op or matmul micro op
     bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
 
@@ -753,7 +753,7 @@ Result conv2d_L1(
         }
 
         // call conv micro op
-        auto conv_output = optimized_conv_new(
+        auto conv_output = conv2d(
             input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,

@@ -119,6 +119,7 @@ template struct ExecuteUnary<UnaryOpType::FRAC>;
 template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
 template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
 template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
+template struct ExecuteUnary<UnaryOpType::CBRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -137,24 +138,10 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::EXP>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
-
-template <UnaryOpType unary_op_type>
-Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
-    const Tensor& input_tensor,
-    const bool parameter,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return detail::unary_impl(
-        input_tensor,
-        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
-        memory_config,
-        optional_output_tensor);
-}
-
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG10>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG2>;
-template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG1P>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG10>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG2>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG1P>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
@@ -228,6 +215,7 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::RPOW>;
 
 // threshold(a,t,v) = (a <= t ? v : a)
 template struct ExecuteUnaryWithTwoFloatParameter<UnaryOpType::THRESHOLD>;

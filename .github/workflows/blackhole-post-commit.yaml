@@ -167,7 +167,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
@@ -182,7 +182,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       timeout: 40
       arch: blackhole
@@ -198,7 +198,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
@@ -329,13 +329,8 @@ jobs:
     if: ${{ inputs.enable-llmbox-tests }}
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
       arch: blackhole
-      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
@@ -376,9 +371,13 @@ jobs:
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-post-commit-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [ "BH-LLMBox" ]
     with:
       arch: blackhole
-      runner-label: BH-LLMBox
+      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

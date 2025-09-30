@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from models.utility_functions import skip_for_grayskull
 
 pytestmark = pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 
@@ -322,7 +321,6 @@ def run_all_gather_on_t3000_impl_tight_loop(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -383,7 +381,6 @@ def test_all_gather_on_t3000_post_commit_looping(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -436,7 +433,6 @@ def test_all_gather_on_t3000_nightly_commit_looping(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -489,7 +485,6 @@ def test_all_gather_on_t3000_nightly_commit_looping_4chip_ring(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -534,7 +529,6 @@ def test_all_gather_on_t3000_post_commit_for_profiler_regression(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -612,7 +606,6 @@ def test_all_gather_on_t3000_post_commit(
 
 # Enumerate the post-commit cases explicitly
 @pytest.mark.skip(reason="Flaky. Sometimes fails in CI on certain runners")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -667,7 +660,6 @@ def test_all_gather_on_t3000_post_commit_4chip_ring(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -732,7 +724,6 @@ def test_line_all_gather_on_t3000_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -790,7 +781,6 @@ def test_line_all_gather_on_t3000_post_commit_4chip_ring(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -950,7 +940,6 @@ nightly_all_gather_shape_dim_layouts = [
 ]
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
@@ -998,7 +987,6 @@ def test_all_gather_on_t3000_nightly(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
@@ -1336,7 +1324,6 @@ def run_all_gather_sharded_n300(
 
 
 # @pytest.mark.parametrize("num_devices", [4, 8])
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1417,7 +1404,6 @@ def test_all_gather_sharded_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1502,7 +1488,6 @@ def test_all_gather_height_sharded_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1582,7 +1567,6 @@ def test_all_gather_block_sharded_post_commit(
 
 
 # @pytest.mark.parametrize("num_devices", [4, 8])
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1669,7 +1653,6 @@ def test_line_all_gather_sharded_post_commit(
 
 
 # @pytest.mark.parametrize("num_devices", [4, 8])
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1827,7 +1810,6 @@ def test_sharded_all_gather_nightly(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.skip("#7705: Hanging on various configs")
 @pytest.mark.parametrize(
     "input_shape, dim, layout",
@@ -1879,7 +1861,6 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
         assert eq, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1951,7 +1932,6 @@ def test_tiny_all_gather_sharded_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [

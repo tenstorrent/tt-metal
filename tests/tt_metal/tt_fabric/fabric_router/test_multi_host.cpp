@@ -20,7 +20,7 @@ namespace tt::tt_fabric {
 namespace multi_host_tests {
 
 TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }
@@ -35,7 +35,7 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
 }
 
 TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }
@@ -76,7 +76,7 @@ TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
 }
 
 TEST(MultiHost, TestDualGalaxyFabric1DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
         GTEST_SKIP();
     }

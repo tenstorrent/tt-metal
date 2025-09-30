@@ -9,8 +9,10 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+
+#include <algorithm>
+#include <cmath>
 
 namespace ttnn::operations::data_movement::scatter {
 
@@ -21,7 +23,6 @@ uint64_t ceil32(const uint64_t& number) {
     return ((number & BIT_MASK_32) == 0) ? number : ((number | BIT_MASK_32) + 1);
 }
 
-bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 0) && number >= 32; }
 }  // namespace
 
 // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
@@ -30,7 +31,13 @@ bool is_pow2_min32(const uint64_t& number) { return ((number & (number - 1)) == 
 // tensors)
 // ... divided by 4 to account for 4-byte datum sizes of each tensor (fp32, int32)
 // ... minimized by ~20% to account for reserved memory
-uint32_t calculate_optimal_chunk_size(IDevice* device) { return ceil32(device->l1_size_per_core() / 4 / 4 * 0.8 - 32); }
+uint32_t calculate_optimal_chunk_size(IDevice* device) {
+    const auto l1_size_bytes = static_cast<double>(device->l1_size_per_core());
+    const auto optimal_chunk_size = (l1_size_bytes / 4.0 / 4.0) * 0.8 - 32.0;
+    const auto clamped_chunk_size = std::max(optimal_chunk_size, 0.0);
+    const auto integer_chunk_size = static_cast<uint64_t>(std::ceil(clamped_chunk_size));
+    return ceil32(integer_chunk_size);
+}
 
 ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
