@@ -232,6 +232,22 @@ struct tensix_fabric_connections_l1_info_t {
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
+
+#if defined(COMPILE_FOR_ERISC)
+#define ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D
+// DUMMY
+#define ROUTING_TABLE_BASE 0
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+#define ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D
+#define ROUTING_TABLE_BASE MEM_IERISC_ROUTING_TABLE_BASE
+#else
+#define ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE_2D
+#define ROUTING_TABLE_BASE MEM_TENSIX_ROUTING_TABLE_BASE
+#endif
+
 #include "fabric/hw/inc/fabric_routing_table_interface.h"
 #include "fabric/hw/inc/fabric_routing_path_interface.h"
 #endif
