@@ -154,7 +154,9 @@ def test_forward_pass(
         else None
     )
 
-    tt_page_table = MLA.create_page_table(torch_page_table, paged_config, mesh_device)
+    tt_page_table = MLA.create_page_table(
+        page_table=torch_page_table, paged_config=paged_config, mesh_device=mesh_device
+    )
 
     # RoPE setup
     rope_setup = RotarySetup(
