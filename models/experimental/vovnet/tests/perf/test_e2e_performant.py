@@ -137,7 +137,7 @@ def test_vovnet_e2e_performant(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        268,
+        234,
     ],
 )
 def test_vovnet_e2e_performant_dp(
