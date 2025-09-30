@@ -163,6 +163,9 @@ std::string get_physical_slot_str(chip_id_t chip_id) {
 std::string get_physical_loc_str(chip_id_t chip_id, ClusterType cluster_type) {
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY ||
         cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        std::cout << tt::tt_fabric::get_ubb_id(chip_id).asic_id << " "
+                  << tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_asic_location(chip_id)
+                  << std::endl;
         return get_ubb_id_str(chip_id);
     } else {
         return get_physical_slot_str(chip_id);
