@@ -457,56 +457,56 @@ jobs:
           TEAM_OWNERS=$(echo "$TEAM_OWNERS" | sed 's/,$//')
           INDIVIDUAL_OWNERS=$(echo "$INDIVIDUAL_OWNERS" | sed 's/,$//')
 
-          # Check if we have any owners to ping
-          if [ -n "$TEAM_OWNERS" ] || [ -n "$INDIVIDUAL_OWNERS" ]; then
-            # Smart selection: prefer to include at least one individual owner if available
-            if [ -n "$INDIVIDUAL_OWNERS" ] && [ -n "$TEAM_OWNERS" ]; then
-              # Select 1 from individual owners and 1 from team owners
-              IFS=',' read -ra INDIVIDUAL_ARRAY <<< "$INDIVIDUAL_OWNERS"
-              IFS=',' read -ra TEAM_ARRAY <<< "$TEAM_OWNERS"
-              INDIVIDUAL_COUNT=${#INDIVIDUAL_ARRAY[@]}
-              TEAM_COUNT=${#TEAM_ARRAY[@]}
+            # Check if we have any owners to ping
+            if [ -n "$TEAM_OWNERS" ] || [ -n "$INDIVIDUAL_OWNERS" ]; then
+              # Selection logic: select up to 2 owners FROM EACH pending group
+              SELECTED_OWNERS=""
 
-              if [ $INDIVIDUAL_COUNT -gt 0 ] && [ $TEAM_COUNT -gt 0 ]; then
-                RAND_INDIVIDUAL=$((RANDOM % INDIVIDUAL_COUNT))
-                RAND_TEAM=$((RANDOM % TEAM_COUNT))
-                SELECTED_OWNERS="${INDIVIDUAL_ARRAY[$RAND_INDIVIDUAL]},${TEAM_ARRAY[$RAND_TEAM]}"
-              elif [ $INDIVIDUAL_COUNT -gt 0 ]; then
-                RAND_INDIVIDUAL=$((RANDOM % INDIVIDUAL_COUNT))
-                SELECTED_OWNERS="${INDIVIDUAL_ARRAY[$RAND_INDIVIDUAL]}"
-              else
-                RAND_TEAM=$((RANDOM % TEAM_COUNT))
-                SELECTED_OWNERS="${TEAM_ARRAY[$RAND_TEAM]}"
-              fi
-            elif [ -n "$INDIVIDUAL_OWNERS" ]; then
-              # Only individual owners
-              IFS=',' read -ra INDIVIDUAL_ARRAY <<< "$INDIVIDUAL_OWNERS"
-              INDIVIDUAL_COUNT=${#INDIVIDUAL_ARRAY[@]}
-              if [ $INDIVIDUAL_COUNT -eq 1 ]; then
-                SELECTED_OWNERS="${INDIVIDUAL_ARRAY[0]}"
-              else
-                RAND1=$((RANDOM % INDIVIDUAL_COUNT))
-                RAND2=$((RANDOM % INDIVIDUAL_COUNT))
-                while [ $RAND2 -eq $RAND1 ]; do
-                  RAND2=$((RANDOM % INDIVIDUAL_COUNT))
-                done
-                SELECTED_OWNERS="${INDIVIDUAL_ARRAY[$RAND1]},${INDIVIDUAL_ARRAY[$RAND2]}"
-              fi
-            else
-              # Only team owners
-              IFS=',' read -ra TEAM_ARRAY <<< "$TEAM_OWNERS"
-              TEAM_COUNT=${#TEAM_ARRAY[@]}
-              if [ $TEAM_COUNT -eq 1 ]; then
-                SELECTED_OWNERS="${TEAM_ARRAY[0]}"
-              else
-                RAND1=$((RANDOM % TEAM_COUNT))
-                RAND2=$((RANDOM % TEAM_COUNT))
-                while [ $RAND2 -eq $RAND1 ]; do
+              # Process team owners - select up to 2 from each team
+              if [ -n "$TEAM_OWNERS" ]; then
+                IFS=',' read -ra TEAM_ARRAY <<< "$TEAM_OWNERS"
+                TEAM_COUNT=${#TEAM_ARRAY[@]}
+
+                if [ $TEAM_COUNT -eq 1 ]; then
+                  # Only 1 team member
+                  SELECTED_OWNERS="${TEAM_ARRAY[0]}"
+                else
+                  # Select 2 random team members
+                  RAND1=$((RANDOM % TEAM_COUNT))
                   RAND2=$((RANDOM % TEAM_COUNT))
-                done
-                SELECTED_OWNERS="${TEAM_ARRAY[$RAND1]},${TEAM_ARRAY[$RAND2]}"
+                  while [ $RAND2 -eq $RAND1 ]; do
+                    RAND2=$((RANDOM % TEAM_COUNT))
+                  done
+                  SELECTED_OWNERS="${TEAM_ARRAY[$RAND1]},${TEAM_ARRAY[$RAND2]}"
+                fi
               fi
-            fi
+
+              # Process individual owners - select up to 2 from each individual pattern
+              if [ -n "$INDIVIDUAL_OWNERS" ]; then
+                IFS=',' read -ra INDIVIDUAL_ARRAY <<< "$INDIVIDUAL_OWNERS"
+                INDIVIDUAL_COUNT=${#INDIVIDUAL_ARRAY[@]}
+
+                if [ $INDIVIDUAL_COUNT -eq 1 ]; then
+                  # Only 1 individual owner
+                  if [ -n "$SELECTED_OWNERS" ]; then
+                    SELECTED_OWNERS="$SELECTED_OWNERS,${INDIVIDUAL_ARRAY[0]}"
+                  else
+                    SELECTED_OWNERS="${INDIVIDUAL_ARRAY[0]}"
+                  fi
+                else
+                  # Select 2 random individual owners
+                  RAND1=$((RANDOM % INDIVIDUAL_COUNT))
+                  RAND2=$((RANDOM % INDIVIDUAL_COUNT))
+                  while [ $RAND2 -eq $RAND1 ]; do
+                    RAND2=$((RANDOM % INDIVIDUAL_COUNT))
+                  done
+                  if [ -n "$SELECTED_OWNERS" ]; then
+                    SELECTED_OWNERS="$SELECTED_OWNERS,${INDIVIDUAL_ARRAY[$RAND1]},${INDIVIDUAL_ARRAY[$RAND2]}"
+                  else
+                    SELECTED_OWNERS="${INDIVIDUAL_ARRAY[$RAND1]},${INDIVIDUAL_ARRAY[$RAND2]}"
+                  fi
+                fi
+              fi
 
             # Get full names for selected owners
             PING_MESSAGE="Hi"
