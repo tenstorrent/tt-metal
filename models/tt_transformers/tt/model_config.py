@@ -2733,7 +2733,12 @@ class HfAttentionWrapper:
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
             fuse_qkv = False
-        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
+
+        try:
+            dense_name = hasattr(self.attention, "dense")
+        except:
+            dense_name = False
+        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, dense_name, fuse_qkv))
 
     @property
     def cache_k(self):
@@ -2812,7 +2817,14 @@ class HfDecoderWrapper:
             fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+
+        try:
+            dense_name = hasattr(self.decoder.self_attn, "dense")
+        except:
+            dense_name = False
+        return self.decoder.load_state_dict(
+            convert_meta_to_hf(state_dict, self.head_dim, dense_name, fuse_qkv, fuse_mlp)
+        )
 
 
 class HfModelWrapper:
