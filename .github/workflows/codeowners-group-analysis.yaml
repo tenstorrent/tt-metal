@@ -137,7 +137,7 @@ jobs:
         id: analyze
         run: |
           # Run the dedicated Python script for CODEOWNERS analysis
-          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ="${{ secrets.ORG_READ }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
+          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ_GITHUB_TOKEN="${{ secrets.ORG_READ_GITHUB_TOKEN }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
         # The script writes directly to GITHUB_OUTPUT, so we don't need to capture stdout here
 
   post-comment:
@@ -161,14 +161,14 @@ jobs:
               # Remove @org/ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
 
-              # Get team members using GitHub API (using ORG_READ for org access)
+              # Get team members using GitHub API (using ORG_READ_GITHUB_TOKEN for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API" 2>/dev/null)
 
               # Check if API call was successful (HTTP 200)
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API")
 
@@ -257,7 +257,7 @@ jobs:
                         if [ -n "$member" ] && [ "$member" != " " ]; then
                           # Get user info from GitHub API
                           USER_API="https://api.github.com/users/$member"
-                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                          -H "Accept: application/vnd.github.v3+json" \
                                          "$USER_API" 2>/dev/null)
                           USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -277,7 +277,7 @@ jobs:
                           # Get full name for approved member
                           approved_name="$member"
                           USER_API="https://api.github.com/users/$member"
-                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                          -H "Accept: application/vnd.github.v3+json" \
                                          "$USER_API" 2>/dev/null)
                           USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
@@ -294,9 +294,9 @@ jobs:
                 if [ -n "$approved_members" ]; then
                   # Remove trailing comma and space
                   approved_members=$(echo "$approved_members" | sed 's/, $//')
-                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | Approved by: $approved_members"
+                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members"
                 else
-                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | Pending approval"
+                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**"
                 fi
               done
             fi
@@ -345,9 +345,9 @@ jobs:
                 if [ -n "$approved_owners" ]; then
                   # Remove trailing comma and space
                   approved_owners=$(echo "$approved_owners" | sed 's/, $//')
-                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | Approved by: $approved_owners"
+                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners"
                 else
-                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | Pending approval"
+                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**"
                 fi
               done
             fi
