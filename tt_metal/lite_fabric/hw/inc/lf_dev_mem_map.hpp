@@ -4,6 +4,10 @@
 
 #pragma once
 
+#define VERSION_MAJOR 1
+#define VERSION_MINOR 0
+#define VERSION_PATCH 0
+
 #define MEM_LOCAL_SIZE (8 * 1024) /* Local memory size -- on erisc1. not being shared with base firmware*/
 #define MEM_LOCAL_BASE 0xFFB00000 /* Local memory base address */
 #define MEM_LITE_FABRIC_NOC_ATOMIC_RET_VAL_ADDR 4
