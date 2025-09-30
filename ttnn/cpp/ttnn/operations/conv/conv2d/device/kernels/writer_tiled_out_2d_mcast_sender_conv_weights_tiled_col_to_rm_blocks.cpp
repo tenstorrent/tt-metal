@@ -34,14 +34,11 @@ void kernel_main() {
 
 #ifdef SPLIT_READER
     constexpr bool split_reader_enabled = true;
-    // Use existing args that factory already passes but are currently ignored
     constexpr uint32_t cb_id_act_second_reader = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(4);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(5);
     constexpr uint32_t window_outer = get_compile_time_arg_val(6);  // num_blocks_act_w
     constexpr bool sliced_inner_dim = num_blocks_weight_h > 1;      // Derived like block sharded reader
-
-    // Additional args - will need factory integration for block sharded + split reader
     constexpr uint32_t act_block_num_tiles_split_last = get_compile_time_arg_val(18);  // This is what factory passes
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(19);
     constexpr uint32_t weight_size_w = get_compile_time_arg_val(20);

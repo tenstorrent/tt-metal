@@ -225,7 +225,10 @@ std::vector<CBInfo> get_cb_info(
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
         const bool overlap_act_cb = sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
         // ACT CB plays a different role depending on the sharding scheme
-        // TODO make this more clear between BS and HS
+        // In block sharded convs, ACT CB is used for mcasting activations and needs full activation block size
+        // regardless of split reader.
+        // In height sharded convs, ACT CB is used for storing img2col data and its size can
+        // be approx halved by using split reader (ACT_SECOND_READER CB stores the other half then).
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT,
             .num_pages = overlap_act_cb ? 0

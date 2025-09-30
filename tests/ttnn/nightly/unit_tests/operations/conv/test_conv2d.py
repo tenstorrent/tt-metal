@@ -5020,10 +5020,6 @@ def test_resnet50_first_conv_p150(
     )
 
 
-@pytest.mark.parametrize(
-    "batch_size",
-    [1],
-)
 @pytest.mark.parametrize("config_in_dram", [False,True])
 @pytest.mark.parametrize("full_inner_dim", [False,True])
 @pytest.mark.parametrize(
