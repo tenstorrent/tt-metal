@@ -2731,8 +2731,7 @@ class HfAttentionWrapper:
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
             fuse_qkv = False
-
-        try:
+        try:  # Checking for dense name
             dense_name = hasattr(self.attention, "dense")
         except:
             dense_name = False
@@ -2815,8 +2814,7 @@ class HfDecoderWrapper:
             fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-
-        try:
+        try:  # Checking for dense name
             dense_name = hasattr(self.decoder.self_attn, "dense")
         except:
             dense_name = False
@@ -2857,6 +2855,10 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
+        try:  # Checking for dense name
+            dense_name = hasattr(self.model.model.layers[0].self_attn, "dense")
+        except:
+            dense_name = False
         return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
 
     def eval(self):
