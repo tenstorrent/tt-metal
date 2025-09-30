@@ -1867,3 +1867,25 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
     golden_tensor = golden_function(in_data)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize("negative_slope", [1.0, 5.0, 10.0, 0.1])
+def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
+    in_data = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100, 100)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.leaky_relu(input_tensor, negative_slope=negative_slope)
+    golden_function = ttnn.get_golden_function(ttnn.leaky_relu)
+    golden_tensor = golden_function(in_data, negative_slope=negative_slope)
+
+    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
