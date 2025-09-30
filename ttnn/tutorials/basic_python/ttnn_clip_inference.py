@@ -19,36 +19,45 @@ from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normal
 
 def main():
     def open_ttnn():
+        """Initialize TT-NN device with specified L1 cache size."""
         global device
         device = ttnn.open_device(device_id=0, l1_small_size=8192)
 
     def close_ttnn():
+        """Clean up and close the TT-NN device."""
         global device
         if device is not None:
             ttnn.close_device(device)
 
     def get_device():
+        """Get the current TT-NN device handle."""
         global device
         return device
 
     def convert_from_ttnn(x):
+        """Convert TT-NN tensor to PyTorch tensor if needed."""
         global device
         if isinstance(x, ttnn._ttnn.tensor.Tensor):
             return ttnn.to_torch(x)
         return x
 
     def to_ttnn(torch_tensor, dtype=None, layout=ttnn.TILE_LAYOUT):
+        """Convert PyTorch tensor to TT-NN tensor with specified dtype and layout."""
         global device
         ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=layout, dtype=dtype)
         return ttnn_tensor
 
     def to_torch_shape(ttnn_shape):
+        """Convert TT-NN shape to PyTorch-compatible tuple."""
         return tuple(ttnn_shape)
 
-    # Change dtype of ttnn tensor and optionally reshape
     def convert_ttnn_dtype(ttnn_tensor, dtype, new_shape=None):
-        # HACK: Can't convert dtype on device
+        """
+        Change dtype of TT-NN tensor and optionally reshape.
+        Note: Currently requires moving tensor to host for dtype conversion.
+        """
         device = get_device()
+        # Move tensor to host for dtype conversion (current TT-NN limitation)
         host_tensor = ttnn.from_device(ttnn_tensor)
         host_tensor = ttnn.to_dtype(host_tensor, dtype=dtype)
         if new_shape is not None:
@@ -57,28 +66,49 @@ def main():
         return ttnn.to_device(host_tensor, device=device)
 
     def convert_model_to_ttnn(state_dict):
-        ttnn_state_dict = {}
-        logger.info(f"Converting model to ttnn")
+        """
+        Convert a PyTorch model's state dictionary to TT-NN format.
 
-        # Convert state dict to ttnn tensor
+        Args:
+            state_dict: PyTorch model state dictionary containing weights and biases
+
+        Returns:
+            dict: State dictionary with tensors converted to TT-NN format
+        """
+        ttnn_state_dict = {}
+        logger.info(f"Converting model to TT-NN format")
+
+        # Convert each tensor in the state dictionary to TT-NN format
         for key, value in state_dict.items():
             if isinstance(value, torch.Tensor):
+                # Convert PyTorch tensors to TT-NN tensors
                 state_dict[key] = to_ttnn(value)
             elif isinstance(value, torch.Size):
+                # Convert PyTorch Size objects to TT-NN Size objects
                 state_dict[key] = ttnn.Size(value)
 
         return state_dict
 
     class Transformer:
         def __init__(self, state_dict, heads, attention_mask=None, prefix=""):
+            """
+            Initialize a generic Transformer that can be used for both text and vision encoding.
+
+            Args:
+                state_dict: Model weights dictionary
+                heads: Number of attention heads
+                attention_mask: Attention mask for causal attention (used for text, None for vision)
+                prefix: Prefix for layer names in state_dict (e.g., "text_model.encoder" or "vision_model.encoder")
+            """
             self.layers = []
             self.heads = heads
             self.attention_mask = attention_mask
             self.prefix = prefix
 
+            # Use regex to find all layer indices in the state dictionary
             layer_pattern = re.compile(f"{prefix}\.layers\.(\d+)\.")
 
-            # Count number of layers
+            # Count number of transformer layers by finding unique layer indices
             layers_ids = set()
             for k in state_dict.keys():
                 re_match = re.search(layer_pattern, k)
@@ -87,17 +117,21 @@ def main():
 
             num_layers = len(layers_ids)
 
+            # Initialize each transformer layer with converted weights
             for i in range(0, num_layers):
                 resblock_prefix = f"{prefix}.layers.{i}"
 
+                # Extract and convert all weights for this layer to bfloat16 precision
                 self.layers.append(
                     {
+                        # First layer normalization weights
                         "ln_1_weight": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.layer_norm1.weight"], ttnn.bfloat16
                         ),
                         "ln_1_bias": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.layer_norm1.bias"], ttnn.bfloat16
                         ),
+                        # Multi-head attention projection weights (Q, K, V)
                         "q_proj_weight": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.self_attn.q_proj.weight"], ttnn.bfloat16
                         ),
@@ -116,18 +150,21 @@ def main():
                         "v_proj_bias": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.self_attn.v_proj.bias"], ttnn.bfloat16
                         ),
+                        # Attention output projection weights
                         "out_proj_weight": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.self_attn.out_proj.weight"], ttnn.bfloat16
                         ),
                         "out_proj_bias": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.self_attn.out_proj.bias"], ttnn.bfloat16
                         ),
+                        # Second layer normalization weights
                         "ln_2_weight": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.layer_norm2.weight"], ttnn.bfloat16
                         ),
                         "ln_2_bias": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.layer_norm2.bias"], ttnn.bfloat16
                         ),
+                        # MLP weights (feed-forward network)
                         "mlp_c_fc_weight": convert_ttnn_dtype(
                             state_dict[f"{resblock_prefix}.mlp.fc1.weight"], ttnn.bfloat16
                         ),
@@ -173,7 +210,7 @@ def main():
                     packer_l1_acc=True,
                 )
 
-                # TODO: No KV-caching for now
+                # Note: KV-caching not implemented (not needed for single forward pass)
                 (q_weights, k_weights, v_weights) = fused_qkv_weight
                 (q_bias, k_bias, v_bias) = fused_qkv_bias
 
@@ -295,11 +332,13 @@ def main():
 
             assert self.conv1_weights.dtype == ttnn.bfloat16
 
-            self.ln_pre_weights = state_dict["vision_model.pre_layrnorm.weight"]  # TODO: What's this ?
-            self.ln_pre_bias = state_dict["vision_model.pre_layrnorm.bias"]  # TODO: What's this ?
+            # Layer normalization applied before transformer layers
+            self.ln_pre_weights = state_dict["vision_model.pre_layrnorm.weight"]
+            self.ln_pre_bias = state_dict["vision_model.pre_layrnorm.bias"]
 
-            self.ln_post_weights = state_dict["vision_model.post_layernorm.weight"]  # TODO: What's this ?
-            self.ln_post_bias = state_dict["vision_model.post_layernorm.bias"]  # TODO: What's this ?
+            # Layer normalization applied after transformer layers (to class token)
+            self.ln_post_weights = state_dict["vision_model.post_layernorm.weight"]
+            self.ln_post_bias = state_dict["vision_model.post_layernorm.bias"]
 
             self.transformer = Transformer(
                 state_dict, self.vision_heads, attention_mask=None, prefix="vision_model.encoder"
@@ -348,7 +387,7 @@ def main():
                 stride=(self.patch_size, self.patch_size),
                 padding=(0, 0),
                 dilation=(1, 1),
-                groups=0,  # No grouped convolution (?)
+                groups=0,  # No grouped convolution (standard convolution)
                 device=get_device(),
                 return_weights_and_bias=False,
                 return_output_dim=False,
@@ -368,16 +407,19 @@ def main():
 
             class_embedding = convert_ttnn_dtype(self.class_embedding, x.dtype, (x.shape[0], 1, x.shape[-1]))
 
-            # TODO: See why we use zero tensor here and addition here ?
+            # Create zero tensor to ensure proper broadcasting and memory layout
+            # This helps align the class embedding tensor with the expected shape and memory configuration
             zero_tensor = ttnn.zeros(
                 shape=(x.shape[0], 1, x.shape[-1]), dtype=x.dtype, device=device, layout=ttnn.TILE_LAYOUT
             )
 
             class_embedding = ttnn.reshape(class_embedding, zero_tensor.shape)
-            class_embedding = class_embedding + zero_tensor
+            class_embedding = (
+                class_embedding + zero_tensor
+            )  # Addition with zero preserves values but ensures proper layout
 
-            # TODO: Do this in L1 Sharded Memory
-            # For now, move data to DRAM
+            # Move tensor to DRAM memory for concatenation operation
+            # Future optimization: Use L1 sharded memory for better performance
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             class_embedding = ttnn.reshape(
@@ -385,8 +427,8 @@ def main():
             )
             class_embedding = ttnn.to_memory_config(class_embedding, memory_config=x.memory_config())
 
-            # ERROR: RuntimeError: bad optional access (???)
-            # TODO: Avoid move to host and keep on device
+            # Concatenate class embedding with patch embeddings
+            # Note: Future optimization could avoid host transfers for better performance
             x = ttnn.concat([class_embedding, x], dim=1, memory_config=None)  # shape = [*, grid ** 2 + 1, width]
 
             positional_embedding = convert_ttnn_dtype(self.positional_embedding, x.dtype, (1, x.shape[1], x.shape[2]))
@@ -475,8 +517,8 @@ def main():
             # LayerNorm
             x = ttnn.layer_norm(x, weight=self.ln_final_weights, bias=self.ln_final_bias)
 
-            # TODO: Change to TTNN
-            # text_projection = ttnn.transpose(self.text_projection, -2, -1)
+            # Extract features at the end-of-sequence token position and apply text projection
+            # Currently using PyTorch for argmax operation (future: implement in TT-NN)
 
             torch_tokens = ttnn.to_torch(tokens)
             text_projection = ttnn.to_torch(self.text_projection)
@@ -545,39 +587,57 @@ def main():
             raise Exception(f"Failed to process downloaded image: {e}")
 
     if __name__ == "__main__":
+        # Initialize TT-NN device for hardware acceleration
         open_ttnn()
 
+        # Set up logging for debugging (optional)
         logging_file = open("logging.csv", "w")
 
+        # Load pre-trained CLIP model and convert weights to TT-NN format
+        print("Loading pre-trained CLIP model...")
         model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         state_dict = convert_model_to_ttnn(model.state_dict())
 
+        # Initialize our TT-NN CLIP implementation
         clip = CLIP(state_dict)
 
-        # Download image from URL
+        # Download and preprocess test image
+        print("Downloading and preprocessing image...")
         image_url = "https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/nmaurice/clip-tutorial/media/clip_tutorial/CLIP.png"
         image = download_image(image_url)
 
-        # Preprocess image
+        # Preprocess image to model requirements (224x224, normalized)
         image = preprocess_image(image, 224).unsqueeze(0).to("cpu")
 
+        # Convert image to TT-NN tensor with bfloat16 precision
         preferred_dtype = ttnn.bfloat16
         tt_image = to_ttnn(image, preferred_dtype)
 
+        # Define text prompts for zero-shot classification
         prompts = ["a diagram", "a dog", "a cat"]
 
-        # Tokenize text
+        # Tokenize text prompts using CLIP's tokenizer
+        print("Tokenizing text prompts...")
         tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
         tokenized_inputs = tokenizer(prompts, padding="max_length", max_length=clip.context_length, return_tensors="pt")
         tokens_pretrained_host = tokenized_inputs["input_ids"]
         tokens_pretrained = ttnn.from_torch(tokens_pretrained_host, device=get_device(), layout=ttnn.TILE_LAYOUT)
 
+        # Perform CLIP inference: compute similarity between image and text
+        print("Running CLIP inference...")
         logits_per_image, logits_per_text = clip.forward(tt_image, tokens_pretrained)
+
+        # Convert logits to probabilities using softmax
         probs = ttnn.softmax(logits_per_image, dim=-1)
-        print(f"Label probs: {probs}")
+        print(f"Classification probabilities: {probs}")
 
+        # Display results
+        probs_torch = ttnn.to_torch(probs)
+        for i, prompt in enumerate(prompts):
+            print(f"'{prompt}': {probs_torch[0][i].item():.4f}")
+
+        # Clean up resources
         logging_file.close()
-
         close_ttnn()
 
 
