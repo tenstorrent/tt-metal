@@ -277,6 +277,8 @@ struct LegacyCclTensorSlicer {
 
     virtual void increment(uint32_t num_pages) = 0;
 
+    virtual ~LegacyCclTensorSlicer() = default;
+
     uint32_t input_page_size;
     uint32_t num_rows;
     uint32_t num_cols;
@@ -378,6 +380,7 @@ struct InterleavedTensorWorkerSlice {
 template <class DERIVED_SLICER_T>
 class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
     public:
+    ~RingReduceScatterBaseTensorSlicer() override = default;
     RingReduceScatterBaseTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
@@ -442,6 +445,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
 
 class RingReduceScatterTensorSlicer : public RingReduceScatterBaseTensorSlicer<RingReduceScatterTensorSlicer> {
    public:
+    ~RingReduceScatterTensorSlicer() override = default;
     RingReduceScatterTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
@@ -470,6 +474,7 @@ class RingReduceScatterTensorSlicer : public RingReduceScatterBaseTensorSlicer<R
 // Define a class RingReduceScatterWrappedTensor slicer that inherits from RingReduceScatterBaseTensorSlicer and overwrites the compute_worker_slice_offsets and create_worker_slice_shapes_for_tile_layout functions
 class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorSlicer<RingReduceScatterWrappedTensorSlicer> {
    public:
+    ~RingReduceScatterWrappedTensorSlicer() override = default;
     RingReduceScatterWrappedTensorSlicer(
         Tensor const& input_tensor,
         Tensor const& output_tensor,
@@ -497,6 +502,7 @@ class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorS
 
 class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
    public:
+    ~InterleavedRingAllGatherTensorSlicer() override = default;
     InterleavedRingAllGatherTensorSlicer(
          const Tensor & input_tensor,  const Tensor & output_tensor, int slice_dim, uint32_t slice_idx) :
         LegacyCclTensorSlicer() {
