@@ -161,7 +161,11 @@ void MAIN {
             tile_regs_acquire();
 
             tensix_sync();
-            reduce_init(tilized_input_cb_id, curr_scalar_cb_id, out_cb_id);
+            // reduce_init(tilized_input_cb_id, curr_scalar_cb_id, out_cb_id);
+            UNPACK((llk_unpack_AB_reduce_init<REDUCE_DIM>(tilized_input_cb_id, curr_scalar_cb_id)));
+            MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY, false>()));
+            // MATH((llk_math_hw_configure_disaggregated(tilized_input_cb_id, curr_scalar_cb_id)));
+            // PACK((llk_pack_reduce_mask_config<false /*untilize*/, REDUCE_DIM>()));
             tensix_sync();
 
             for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
@@ -175,6 +179,7 @@ void MAIN {
 
             if (n == 0) {
                 tensix_sync();
+                MATH(DPRINT << "After reduce math\n";)
                 dprint_tensix_dest_reg(0);
                 tensix_sync();
                 // dprint_tensix_dest_reg(1);
@@ -184,8 +189,24 @@ void MAIN {
 
             reduce_uninit();
 
+            if (n == 0) {
+                tensix_sync();
+                MATH(DPRINT << "After reduce uninit\n";)
+                dprint_tensix_dest_reg(0);
+                tensix_sync();
+                // dprint_tensix_dest_reg(1);
+            }
+
             tile_regs_commit();
             tile_regs_wait();
+
+            if (n == 0) {
+                tensix_sync();
+                MATH(DPRINT << "After tile regs commit\n";)
+                dprint_tensix_dest_reg(0);
+                tensix_sync();
+                // dprint_tensix_dest_reg(1);
+            }
 
             // Pack output directly to row-major format (no tiling needed for grid sample)
 
@@ -193,14 +214,23 @@ void MAIN {
 
             pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
+            if (n == 0) {
+                tensix_sync();
+                MATH(DPRINT << "After untilize init\n";)
+                dprint_tensix_dest_reg(0);
+                tensix_sync();
+                // dprint_tensix_dest_reg(1);
+            }
+
             // DPRINT << "Pack untilize dest init completed, pack starting \n";
 
             pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
 
             if (n == 0) {
-                // tensix_sync();
+                tensix_sync();
+                MATH(DPRINT << "After untilize pack\n";)
                 dprint_tensix_dest_reg(0);
-                // tensix_sync();
+                tensix_sync();
                 // dprint_tensix_dest_reg(1);
             }
 
