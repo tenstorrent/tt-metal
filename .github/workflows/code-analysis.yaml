@@ -91,6 +91,10 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+      - name: Install codeowners package
+        run: |
+          pip install codeowners
+
       - name: Analyze CODEOWNERS
         id: analyze
         run: |
