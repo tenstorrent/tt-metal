@@ -18,12 +18,16 @@
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
+#include "hal.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "mesh_workload.hpp"
+#include "rtoptions.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <vector>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A simple test for checking DPRINTs from all harts.

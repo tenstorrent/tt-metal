@@ -3,18 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <filesystem>
 #include <memory>
 #include <vector>
 
-#include "fabric_fixture.hpp"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include "routing_table_generator.hpp"
 
 namespace tt::tt_fabric {
 namespace multi_host_tests {

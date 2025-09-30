@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch_core_common.hpp"
+#include "fabric_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>

@@ -8,22 +8,25 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <enchantum/entries.hpp>
 #include <map>
 #include <optional>
 #include <ostream>
 #include <utility>
 
 #include <core_coord.hpp>
-#include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
 #include "impl/program/program_impl.hpp"
+#include <fmt/format.h>
 #include <umd/device/tt_core_coordinates.h>
 
 #include <tt_stl/assert.hpp>
+#include <vector>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"  // NOLINT(misc-include-cleaner)
 #include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
 

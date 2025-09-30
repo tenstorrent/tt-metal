@@ -4,13 +4,20 @@
 
 #include "llrt/hal.hpp"
 
+#include <ostream>
+#include <string_view>
+#include <cstddef>
+#include <functional>
 #include <tt_stl/assert.hpp>
 
 #include <cstdint>
 #include <enchantum/iostream.hpp>
 
 #include "hal_types.hpp"
+#include <tuple>
+#include "tt_stl/enum.hpp"
 #include <umd/device/types/arch.hpp>
+#include <utility>
 
 namespace tt {
 

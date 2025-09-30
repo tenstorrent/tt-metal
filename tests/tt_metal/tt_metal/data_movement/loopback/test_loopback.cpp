@@ -2,9 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "bfloat16.hpp"
+#include <gtest/gtest.h>
 #include "multi_device_fixture.hpp"
+#include <cstdint>
+#include <memory>
+#include <tt-logger/tt-logger.hpp>
+#include <chrono>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include "tt_backend_api_types.hpp"
+#include <vector>
+#include "tt_metal.hpp"
+#include <utility>
+#include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"

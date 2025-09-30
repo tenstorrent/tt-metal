@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-metalium/distributed.hpp>
+#include <cstddef>
+#include <cstdint>
+#include <stdexcept>
 #include <tt-metalium/distributed_context.hpp>
-#include "tt_metal/distributed/mesh_socket_serialization.hpp"
-#include "tests/tt_metal/multihost/common/multihost_test_tools.hpp"
-#include <random>
+#include "mesh_coord.hpp"
+#include "mesh_socket.hpp"
+#include "buffer_types.hpp"
+#include "sub_device_types.hpp"
+#include "hal_types.hpp"
+#include "distributed/mesh_socket_utils.hpp"
+#include "tt_stl/assert.hpp"
+#include <vector>
 
 using namespace tt::tt_metal::distributed::multihost;
 using namespace tt::tt_metal::distributed;

@@ -6,6 +6,7 @@
 #include <fmt/base.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <cstddef>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -13,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -25,11 +27,14 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
+#include "distributed.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "mesh_workload.hpp"
+#include "mesh_buffer.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 

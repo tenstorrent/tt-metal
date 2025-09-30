@@ -4,13 +4,17 @@
 
 #include "tt_metal/impl/program/dispatch.hpp"
 
-#include <mesh_workload.hpp>
+#include <memory>
+#include <enchantum/enchantum.hpp>
+#include <array>
+#include <cstddef>
+#include <cstring>
+#include <limits>
 #include <stddef.h>
 #include <string.h>
 #include <span>
 #include <sub_device_types.hpp>
 #include <tracy/Tracy.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt_align.hpp>
@@ -24,7 +28,8 @@
 #include <set>
 #include <tuple>
 #include <type_traits>
-#include <unordered_set>
+#include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -35,14 +40,19 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "dispatch/device_command.hpp"
+#include "hal.hpp"
+#include "hal/generated/dev_msgs.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
+#include "kernel_types.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
+#include "program/program_impl.hpp"
 #include "program_device_map.hpp"
+#include "trace/trace_node.hpp"
 #include "tt-metalium/program.hpp"
 #include "runtime_args_data.hpp"
 #include "semaphore.hpp"

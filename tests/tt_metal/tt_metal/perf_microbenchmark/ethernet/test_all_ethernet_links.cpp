@@ -3,10 +3,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/format.h>
 #include <algorithm>
+#include <cstdint>
+#include <memory>
+#include <numeric>
+#include <cstddef>
+#include <cstdlib>
+#include <iterator>
+#include <enchantum/entries.hpp>
+#include <exception>
+#include <filesystem>
+#include <fstream>
+#include <ios>
+#include <ostream>
+#include <string>
 #include <tuple>
 #include <map>
 #include <set>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <utility>
+#include <unordered_map>
+#include <unordered_set>
+#include <umd/device/types/core_coordinates.hpp>
 #include <vector>
 #include <queue>
 #include <optional>
@@ -21,25 +41,28 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "tt_metal/test_utils/df/df.hpp"
+#include "hostdevcommon/common_values.hpp"
+#include "buffer.hpp"
+#include "buffer_types.hpp"
+#include "hal_types.hpp"
+#include "data_types.hpp"
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
 
-#include <tt-metalium/persistent_kernel_cache.hpp>
 #include <thread>
 #include "impl/context/metal_context.hpp"
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
+#include "tt_stl/assert.hpp"
 
 #include <enchantum/enchantum.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 struct TestParams {
     BenchmarkType benchmark_type;

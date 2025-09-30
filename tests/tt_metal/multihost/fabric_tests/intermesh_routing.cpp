@@ -2,20 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
 #include <gtest/gtest.h>
 #include <stdint.h>
-#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <tt-logger/tt-logger.hpp>
 #include <vector>
 
+#include "fabric_tests/intermesh_routing_test_utils.hpp"
+#include "distributed_context.hpp"
 #include "multihost_fabric_fixtures.hpp"
-#include <tt-metalium/distributed.hpp>
+#include "tt_metal/tt_fabric/common/fabric_fixture.hpp"
 #include <tt-metalium/fabric.hpp>
-
-#include <random>
-#include <algorithm>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests::multihost {

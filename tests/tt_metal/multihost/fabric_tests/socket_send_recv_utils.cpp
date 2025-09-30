@@ -3,11 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <gtest/gtest.h>
 #include <stdint.h>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
+#include <memory>
+#include <optional>
+#include <random>
+#include <set>
+#include <unordered_set>
+#include <utility>
+#include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
@@ -17,6 +26,19 @@
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "mesh_socket.hpp"
+#include "distributed_context.hpp"
+#include "core_coord.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "buffer_types.hpp"
+#include "mesh_buffer.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "data_types.hpp"
+#include "circular_buffer_config.hpp"
+#include "tt_backend_api_types.hpp"
+#include "mesh_graph.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests::multihost {

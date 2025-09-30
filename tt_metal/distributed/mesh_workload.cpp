@@ -27,6 +27,7 @@
 #include "mesh_coord.hpp"
 #include "mesh_device.hpp"
 #include "mesh_workload_impl.hpp"
+#include "program/dispatch.hpp"
 #include "program/program_device_map.hpp"
 #include "program/program_impl.hpp"
 #include "tt-metalium/program.hpp"
@@ -35,8 +36,8 @@
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_stl/span.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>
 

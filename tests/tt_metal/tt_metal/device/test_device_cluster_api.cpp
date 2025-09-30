@@ -6,15 +6,14 @@
 #include <algorithm>
 #include <iterator>
 #include <map>
-#include <set>
 #include <tuple>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_set>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include "multi_device_fixture.hpp"
-#include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 

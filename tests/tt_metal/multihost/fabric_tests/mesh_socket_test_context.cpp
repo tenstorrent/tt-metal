@@ -3,15 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
+#include "fabric_tests/mesh_socket_yaml_parser.hpp"
+#include "distributed_context.hpp"
+#include "mesh_device.hpp"
+#include "mesh_config.hpp"
+#include "distributed.hpp"
+#include "mesh_graph.hpp"
+#include "routing_table_generator.hpp"
+#include "fabric_types.hpp"
+#include "fabric_edm_types.hpp"
+#include "fabric.hpp"
+#include "mesh_socket.hpp"
+#include "buffer_types.hpp"
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <chrono>
 #include <map>
 
+#include <string>
+#include <memory>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
-#include "tt_metal/fabric/fabric_context.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include "tt_stl/assert.hpp"
+#include <unordered_map>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <vector>
 
 namespace tt::tt_fabric::mesh_socket_tests {
 

@@ -11,10 +11,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <cstring>
 #include <exception>
-#include <iostream>
 #include <map>
 #include <optional>
 #include <string>
@@ -28,10 +26,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
+#include "mesh_coord.hpp"
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"

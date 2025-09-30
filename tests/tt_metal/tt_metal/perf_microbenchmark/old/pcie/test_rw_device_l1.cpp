@@ -9,11 +9,9 @@
 #include <stdlib.h>
 #include <time.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <algorithm>
 #include <cstring>
 #include <exception>
 #include <string>

@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <tt-metalium/host_api.hpp>
+#include <exception>
+#include <cstring>
+#include <cerrno>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
@@ -13,6 +15,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -17,7 +18,9 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <umd/device/types/core_coordinates.hpp>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -28,16 +31,15 @@
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt.hpp"
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_workload.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////

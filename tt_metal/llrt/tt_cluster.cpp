@@ -3,9 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_cluster.hpp"
+#include "cluster.hpp"
+#include "data_types.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include "llrt/rtoptions.hpp"
 
+#include <bit>
 #include <core_coord.hpp>
+#include <optional>
+#include <set>
+#include <map>
+#include <limits>
 #include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
@@ -16,6 +24,10 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>                                                     // for get
+#include <umd/device/simulation/simulation_chip.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -30,6 +42,8 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/llrt/tlb_config.hpp"
+#include "tt_target_device.hpp"
+#include "tt_stl/assert.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/simulation/simulation_device.hpp>
@@ -37,7 +51,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <unistd.h>
+#include <vector>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;

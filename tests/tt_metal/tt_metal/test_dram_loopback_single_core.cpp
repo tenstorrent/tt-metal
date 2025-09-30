@@ -10,11 +10,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <cstring>
 #include <exception>
-#include <map>
-#include <memory>
 #include <variant>
 #include <vector>
 
@@ -26,7 +23,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 
 namespace tt {
 namespace tt_metal {

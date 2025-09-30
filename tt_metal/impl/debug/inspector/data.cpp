@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "data.hpp"
+#include <exception>
+#include <mutex>
+#include <cstdint>
+#include <cstddef>
+#include <set>
 #include <stdexcept>
+#include "impl/debug/inspector/rpc.capnp.h"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include "program/program_impl.hpp"
 
 namespace tt::tt_metal::inspector {
 

@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <tt-metalium/allocator.hpp>
 #include <memory>
 #include <optional>
-#include <string>
 #include <vector>
 
 #include <tt-metalium/allocator_types.hpp>
@@ -15,6 +13,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include "data_types.hpp"
 #include "gmock/gmock.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_config.hpp>

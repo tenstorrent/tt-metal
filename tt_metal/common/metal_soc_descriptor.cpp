@@ -4,11 +4,16 @@
 
 #include "metal_soc_descriptor.h"
 
+#include <cstdint>
+#include <cstddef>
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
-#include <string>
 
-#include <umd/device/types/arch.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include "core_coord.hpp"
+#include <umd/device/types/core_coordinates.hpp>
+#include <vector>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const {
     TT_ASSERT(

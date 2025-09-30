@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <array>
+#include <functional>
 #include <iostream>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
@@ -9,15 +12,17 @@
 #include <cstdint>
 #include <filesystem>
 #include <initializer_list>
-#include <iomanip>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
-#include <queue>
 #include <set>
+#include <sstream>
 #include <string>
 #include <tuple>
+#include <umd/device/types/arch.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -26,15 +31,15 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
-#include "compressed_routing_table.hpp"
-#include "compressed_routing_path.hpp"
+#include "fabric_edm_types.hpp"
+#include "fabric_host_utils.hpp"
+#include "erisc_datamover_builder.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
-#include "host_api.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/common/env_lib.hpp"
+#include "tt_cluster.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include "mesh_graph.hpp"
@@ -45,10 +50,10 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
-#include "tt_stl/small_vector.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
+#include "tt_stl/span.hpp"
 
 namespace tt::tt_fabric {
 

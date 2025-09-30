@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
+#include <cstddef>
+#include <cstdint>
 #include <tt-logger/tt-logger.hpp>
 
-#include <vector>
-#include <functional>
+#include "erisc_datamover_builder.hpp"
+#include "fabric_edm_types.hpp"
 
 namespace tt::tt_fabric::core_placement {
 

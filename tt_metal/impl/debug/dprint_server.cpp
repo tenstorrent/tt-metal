@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/format.h>
 #include <math.h>
 #include <pthread.h>
+#include <string.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -11,20 +13,23 @@
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <future>
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
-#include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
 #include <tt_stl/assert.hpp>
@@ -41,6 +46,7 @@
 #include "hostdevcommon/kernel_structs.h"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
 #include "tt_backend_api_types.hpp"
 
 using std::cout;

@@ -2,11 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "cluster.hpp"
+#include "data_types.hpp"
 #include "fabric.hpp"
 
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <utility>
+#include <algorithm>
+#include <unordered_map>
+#include <cstdint>
+#include <umd/device/types/core_coordinates.hpp>
+#include <set>
+#include <tt-logger/tt-logger.hpp>
+#include <memory>
+#include <map>
+#include <string>
+#include <cstddef>
 #include <variant>
+#include <vector>
 
 #include "erisc_datamover_builder.hpp"
+#include "fabric_types.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
@@ -18,6 +36,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include "tt_stl/assert.hpp"
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000

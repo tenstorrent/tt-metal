@@ -3,7 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hal_1xx_common.hpp"
+#include <vector>
+#include <string>
+#include "hal.hpp"
+#include <fmt/format.h>
+#include "hal_types.hpp"
+#include <enchantum/enchantum.hpp>
 #include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_metal::hal_1xx {
 

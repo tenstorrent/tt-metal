@@ -13,14 +13,11 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
-#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -28,7 +25,6 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -48,9 +44,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include "mesh_workload.hpp"
 #include "test_common.hpp"
 #include <tt-metalium/tilize_utils.hpp>
-#include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>

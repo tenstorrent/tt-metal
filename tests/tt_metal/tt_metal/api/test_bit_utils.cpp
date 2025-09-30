@@ -5,7 +5,6 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 #include <cstdint>
-#include <memory>
 
 #include "bit_utils.h"
 

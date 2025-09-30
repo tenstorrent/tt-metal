@@ -12,7 +12,6 @@
 #include <map>
 #include <memory>
 #include <numeric>
-#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -27,7 +26,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>

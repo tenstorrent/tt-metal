@@ -2,26 +2,54 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <gtest/gtest.h>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <string>
+#include <array>
+#include <cstdlib>
+#include <ctime>
+#include <tt-logger/tt-logger.hpp>
+#include <exception>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/work_split.hpp>
+#include "core_coord.hpp"
+#include "mesh_socket.hpp"
+#include "hal_types.hpp"
+#include "buffer_types.hpp"
+#include "mesh_buffer.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "data_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "mesh_coord.hpp"
+#include "mesh_config.hpp"
+#include "fabric_types.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
 #include <chrono>
 #include <random>
-#include "gmock/gmock.h"
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include "tt_backend_api_types.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/hw/inc/socket.h"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
-#include <tt-metalium/system_mesh.hpp>
+#include "tt_stl/span.hpp"
+#include "tt_stl/assert.hpp"
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
+#include <vector>
+#include <utility>
+#include <unordered_set>
+#include <unordered_map>
 
 namespace tt::tt_metal::distributed {
 

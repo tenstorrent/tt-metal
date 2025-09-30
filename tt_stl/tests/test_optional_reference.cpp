@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
+#include <optional>
 #include <tt_stl/optional_reference.hpp>
+#include <utility>
 
 namespace ttsl {
 namespace {

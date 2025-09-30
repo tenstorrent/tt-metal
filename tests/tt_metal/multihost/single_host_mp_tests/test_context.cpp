@@ -2,10 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <memory>
+#include <cstddef>
+#include <chrono>
+#include <array>
 #include <tt-metalium/distributed_context.hpp>
 #include <gtest/gtest.h>
 #include <numeric>
 #include <thread>
+#include "tt_stl/span.hpp"
+#include <vector>
 
 namespace {
 using Rank = tt::tt_metal::distributed::multihost::Rank;

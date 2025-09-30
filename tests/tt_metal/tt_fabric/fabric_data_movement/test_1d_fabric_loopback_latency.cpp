@@ -2,13 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "core_coord.hpp"
+#include "hal_types.hpp"
+#include "buffer_types.hpp"
+#include "fabric_edm_types.hpp"
+#include "fabric.hpp"
+#include "fabric_edm_packet_header.hpp"
+#include "erisc_datamover_builder_helper.hpp"
+#include "circular_buffer_config.hpp"
 #include "host_api.hpp"
+#include "mesh_buffer.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "kernel_types.hpp"
 #include "tests/tt_metal/tt_fabric/common/test_fabric_edm_common.hpp"
+#include <memory>
+#include "tt_stl/assert.hpp"
+#include <algorithm>
+#include <tt-logger/tt-logger.hpp>
+#include "tt_backend_api_types.hpp"
+#include <string>
+#include <cstdlib>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <cstdint>
 #include <cstddef>
 #include <optional>
+#include <variant>
+#include <vector>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 // The writer that sends the packets that will have latency measured
 struct LatencyPacketTestWriterSpec {

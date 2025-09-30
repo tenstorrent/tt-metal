@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <vector>
+#include <cstddef>
+#include "tt_memory.h"
 #define HAL_BUILD tt::tt_metal::blackhole::idle_eth
 #define COMPILE_FOR_ERISC
 

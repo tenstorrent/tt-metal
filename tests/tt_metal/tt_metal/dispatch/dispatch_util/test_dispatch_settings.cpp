@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <stdint.h>
 #include <tt-logger/tt-logger.hpp>
 #include <array>
 #include <functional>
-#include <memory>
 #include <stdexcept>
 
 #include "gtest/gtest.h"

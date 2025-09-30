@@ -32,22 +32,31 @@
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 
-using MeshDevice = tt::tt_metal::distributed::MeshDevice;
-using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
-using MeshShape = tt::tt_metal::distributed::MeshShape;
-using MeshWorkload = tt::tt_metal::distributed::MeshWorkload;
-using MeshCoordinateRange = tt::tt_metal::distributed::MeshCoordinateRange;
-using DeviceLocalBufferConfig = tt::tt_metal::distributed::DeviceLocalBufferConfig;
-using MeshBufferConfig = tt::tt_metal::distributed::MeshBufferConfig;
-using ReplicatedBufferConfig = tt::tt_metal::distributed::ReplicatedBufferConfig;
-using MeshBuffer = tt::tt_metal::distributed::MeshBuffer;
-using BufferDistributionSpec = tt::tt_metal::BufferDistributionSpec;
-using Shape = tt::tt_metal::Shape;
-using MeshHostRankId = tt::tt_fabric::MeshHostRankId;
-using SystemMesh = tt::tt_metal::distributed::SystemMesh;
-using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
-
-using Topology = tt::tt_fabric::Topology;
+using tt::tt_fabric::MeshHostRankId;
+using tt::tt_fabric::Topology;
+using tt::tt_metal::BufferDistributionSpec;
+using tt::tt_metal::BufferShardingArgs;
+using tt::tt_metal::BufferType;
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRange;
+using tt::tt_metal::CoreRangeSet;
+using tt::tt_metal::HalL1MemAddrType;
+using tt::tt_metal::HalProgrammableCoreType;
+using tt::tt_metal::Shape;
+using tt::tt_metal::ShardOrientation;
+using tt::tt_metal::ShardSpecBuffer;
+using tt::tt_metal::TensorMemoryLayout;
+using tt::tt_metal::distributed::DeviceLocalBufferConfig;
+using tt::tt_metal::distributed::MeshBuffer;
+using tt::tt_metal::distributed::MeshBufferConfig;
+using tt::tt_metal::distributed::MeshCoordinate;
+using tt::tt_metal::distributed::MeshCoordinateRange;
+using tt::tt_metal::distributed::MeshDevice;
+using tt::tt_metal::distributed::MeshDeviceConfig;
+using tt::tt_metal::distributed::MeshShape;
+using tt::tt_metal::distributed::MeshWorkload;
+using tt::tt_metal::distributed::ReplicatedBufferConfig;
+using tt::tt_metal::distributed::SystemMesh;
 
 namespace tt::tt_fabric {
 namespace fabric_tests {

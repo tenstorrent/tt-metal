@@ -26,7 +26,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
 
@@ -34,8 +33,9 @@
 #include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
+#include "distributed.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"  // NOLINT(misc-include-cleaner)
 
 using namespace tt;
 using namespace tt::tt_metal;

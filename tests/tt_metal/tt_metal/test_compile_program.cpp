@@ -38,7 +38,7 @@
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"  // NOLINT(misc-include-cleaner)
 
 using std::vector;
 using namespace tt;

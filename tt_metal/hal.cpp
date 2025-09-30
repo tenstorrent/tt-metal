@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
 #include <hal.hpp>
 #include <tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>

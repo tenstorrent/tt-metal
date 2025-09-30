@@ -4,11 +4,9 @@
 
 #include <errno.h>
 #include <fmt/base.h>
-#include <enchantum/enchantum.hpp>
+#include <enchantum/generators.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <ttnn/operations/functions.hpp>
-#include <array>
 #include <cstring>
 #include <exception>
 #include <stdexcept>
@@ -19,11 +17,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/shape_base.hpp>
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"

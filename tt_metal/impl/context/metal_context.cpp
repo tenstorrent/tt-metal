@@ -2,22 +2,47 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
+#include <algorithm>
 #include <cstdint>
+#include <enchantum/entries.hpp>
+#include <cstdlib>
 #include <filesystem>
 
 #include <enchantum/enchantum.hpp>
+#include <string>
+#include <memory>
+#include <set>
+#include <map>
+#include <optional>
+#include <limits>
+#include <stdexcept>
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include "allocator_types.hpp"
+#include "buffer_types.hpp"
 #include "core_coord.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
+#include "dispatch/dispatch_query_manager.hpp"
+#include "dispatch/dispatch_mem_map.hpp"
+#include "core_descriptor.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch_core_common.hpp"
+#include "fabric_types.hpp"
 #include "hal.hpp"
+#include "hal/generated/dev_msgs.hpp"
 #include "hal_types.hpp"
+#include "tt_align.hpp"
+#include "rtoptions.hpp"
+#include "mesh_graph.hpp"
+#include "hostdevcommon/common_values.hpp"
+#include "tt_memory.h"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
-#include "tt_metal/impl/debug/inspector/data.hpp"
+#include "tt_metal/impl/debug/inspector/data.hpp"  // NOLINT(misc-include-cleaner)
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -25,13 +50,25 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/llrt/get_platform_architecture.hpp"
 #include "tt_metal/llrt/llrt.hpp"
+#include "tt_stl/assert.hpp"
+#include "tt_target_device.hpp"
+#include <tt-logger/tt-logger.hpp>
+#include "tt_stl/indestructible.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/cluster_descriptor.hpp>
+#include <type_traits>
+#include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
 
 namespace tt::tt_metal {
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/bfloat4.hpp>
@@ -13,12 +14,12 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -31,6 +32,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include "mesh_workload.hpp"
+#include "mesh_buffer.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 

@@ -2,9 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <cstddef>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 #include <stdexcept>
 #include "tt_metal/fabric/serialization/port_descriptor_serialization.hpp"
+#include "control_plane.hpp"
+#include "fabric_types.hpp"
+#include "mesh_graph.hpp"
 #include "protobuf/port_descriptor_table.pb.h"
 
 namespace tt::tt_fabric {

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/tt-metalium/distributed_context.hpp"
+#include <cstddef>
 
 #if defined(OPEN_MPI)
 #include "mpi_distributed_context.hpp"

@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
-#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -24,14 +23,12 @@
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "math.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 

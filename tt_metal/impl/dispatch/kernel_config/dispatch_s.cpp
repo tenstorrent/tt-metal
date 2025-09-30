@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch_s.hpp"
 
+#include <cstdint>
 #include <host_api.hpp>
 #include <tt_metal.hpp>
 #include <map>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include "core_coord.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"

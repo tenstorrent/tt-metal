@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/ostream.h>
+#include <fmt/base.h>
+#include <cstdlib>
+#include <exception>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -13,9 +15,18 @@
 #include <cstdint>
 #include <memory>
 #include <random>
-#include <string_view>
+#include <utility>
 #include <vector>
-#include "tt-metalium/base_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "tt-metalium/mesh_command_queue.hpp"
+#include "tt-metalium/constants.hpp"
+#include "tt-metalium/mesh_buffer.hpp"
+#include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/mesh_coord.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
+#include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/data_types.hpp"
+#include "tt_stl/assert.hpp"
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX

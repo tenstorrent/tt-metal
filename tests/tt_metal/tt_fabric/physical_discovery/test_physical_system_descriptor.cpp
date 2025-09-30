@@ -2,27 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <enchantum/enchantum.hpp>
-#include <iomanip>
-#include <map>
+#include <algorithm>
 #include <tuple>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_map>
-#include <utility>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include <tt-metalium/mesh_graph.hpp>
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tests/tt_metal/test_utils/test_common.hpp"
 
 namespace tt::tt_fabric {
 namespace physical_discovery {
 
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
+    using tt::tt_metal::AsicID;
     using namespace tt::tt_metal::distributed::multihost;
     auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();

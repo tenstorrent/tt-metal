@@ -3,10 +3,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rpc_server_controller.hpp"
+#include <capnp/ez-rpc.h>
 #include <kj/async.h>
+#include <string>
+#include <cstdint>
+#include <mutex>
+#include <stdexcept>
+#include <kj/memory.h>
+#include <kj/exception.h>
+#include <exception>
 #include <tt-logger/tt-logger.hpp>
 #include <chrono>
 #include <thread>
+#include "impl/debug/inspector/rpc_server_generated.hpp"
 
 namespace tt::tt_metal::inspector {
 

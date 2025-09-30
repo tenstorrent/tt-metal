@@ -2,14 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "core_coord.hpp"
+#include "dispatch/dispatch_core_manager.hpp"
 #include "gtest/gtest.h"
 #include "command_queue_fixture.hpp"
 #include "hal_types.hpp"
-#include "llrt.hpp"
+#include "mesh_coord.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include <cstdint>
+#include <stdexcept>
 #include <tt-metalium/distributed.hpp>
+#include <vector>
+#include <unordered_set>
+#include <umd/device/types/core_coordinates.hpp>
 
 using namespace tt::tt_metal;
 

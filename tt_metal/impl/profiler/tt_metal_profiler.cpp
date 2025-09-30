@@ -1,11 +1,19 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <common/TracyColor.hpp>
+#include <fmt/format.h>
+#include <common/TracyTTDeviceData.hpp>
+#include <atomic>
+#include <algorithm>
 #include <core_descriptor.hpp>
 #include <device.hpp>
 #include <device_pool.hpp>
 #include <dispatch_core_common.hpp>
+#include <fstream>
 #include <host_api.hpp>
+#include <memory>
+#include <ios>
 #include <profiler.hpp>
 #include <mesh_workload.hpp>
 #include <mesh_command_queue.hpp>
@@ -24,7 +32,9 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>

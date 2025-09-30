@@ -4,9 +4,9 @@
 
 #include "prefetch.hpp"
 
+#include <cstdint>
 #include <host_api.hpp>
 #include <tt_metal.hpp>
-#include <array>
 #include <map>
 #include <string>
 #include <variant>
@@ -21,13 +21,13 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "fabric_edm_types.hpp"
-#include "fabric_types.hpp"
+#include "fabric.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include "kernel_types.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
 using namespace tt::tt_metal;

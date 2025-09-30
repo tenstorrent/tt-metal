@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <tt_stl/assert.hpp>
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
@@ -16,16 +18,20 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_map>
 #include <unordered_set>
 
+#include "core_coord.hpp"
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "hal_types.hpp"
+#include "tt_memory.h"
+#include "rtoptions.hpp"
 #include "llrt.hpp"
 #include <umd/device/driver_atomics.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <vector>
 
 namespace {
 void print_aerisc_training_status(chip_id_t device_id, const CoreCoord& virtual_core) {

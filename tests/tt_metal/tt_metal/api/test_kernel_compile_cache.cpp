@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <enchantum/enchantum.hpp>
 #include <stdint.h>
+#include <enchantum/entries.hpp>
 #include <filesystem>
 #include <string>
 #include <type_traits>
@@ -16,7 +16,6 @@
 #include "detail/kernel_cache.hpp"
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "jit_build/build.hpp"

@@ -4,7 +4,6 @@
 
 #include <errno.h>
 #include <fmt/base.h>
-#include <tt-metalium/host_api.hpp>
 #include <ttnn/operations/functions.hpp>
 #include <cstring>
 #include <exception>
@@ -12,9 +11,9 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/normalization/layernorm/layernorm.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

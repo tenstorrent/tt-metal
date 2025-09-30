@@ -6,12 +6,12 @@
 #include <assert.h>
 #include <fmt/base.h>
 #include <stdint.h>
+#include <memory>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <algorithm>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -21,6 +21,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -29,11 +30,14 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "df/float32.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include "hal_types.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -41,7 +45,6 @@
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 class N300TestDevice {
 public:

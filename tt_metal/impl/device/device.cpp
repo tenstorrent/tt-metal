@@ -5,14 +5,12 @@
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
-#include <device_pool.hpp>
 #include <host_api.hpp>
 #include <initializer_list>
-#include <persistent_kernel_cache.hpp>
+#include <mutex>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
 #include <tt-metalium/program_cache.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <tt_stl/span.hpp>
@@ -24,6 +22,7 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <umd/device/types/arch.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -35,19 +34,19 @@
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
+#include "dispatch/cq_shared_state.hpp"
+#include "hal/generated/dev_msgs.hpp"
 #include "program/program_impl.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
-#include "jit_build/build.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "tt-metalium/program.hpp"
-#include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
@@ -57,9 +56,7 @@
 #include "tt_metal/fabric/fabric_init.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include <tt-metalium/control_plane.hpp>
-#include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/tensix_soft_reset_options.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
 namespace tt {

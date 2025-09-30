@@ -4,9 +4,13 @@
 
 #include "jit_build_options.hpp"
 
+#include <cstdint>
+#include <cstddef>
 #include <string>
 
 #include "build.hpp"
+#include "tt_backend_api_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
 
 enum class MathFidelity : uint8_t;
 namespace tt {

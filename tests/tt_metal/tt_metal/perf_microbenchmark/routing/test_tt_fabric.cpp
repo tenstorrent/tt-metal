@@ -2,21 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <utility>
+#include <tuple>
+#include <tt-logger/tt-logger.hpp>
+#include <cstdint>
+#include <ios>
 #include <vector>
 #include <string>
 #include <unordered_map>
-#include <map>
 #include <algorithm>
-#include <chrono>
 #include <fstream>
 #include <random>
 #include <filesystem>
 #include <optional>
-#include <iomanip>
-#include <sstream>
 #include <memory>
 
+#include "routing/tt_fabric_test_common.hpp"
+#include "fabric_edm_types.hpp"
+#include "routing/tt_fabric_test_common_types.hpp"
+#include "fabric_types.hpp"
 #include "tt_fabric_test_context.hpp"
+#include "tt_stl/assert.hpp"
 
 const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::pair_hash>
     TestFixture::topology_to_fabric_config_map = {

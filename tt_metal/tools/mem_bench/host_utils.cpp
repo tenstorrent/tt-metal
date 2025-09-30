@@ -5,12 +5,19 @@
 #include "host_utils.hpp"
 
 #include "impl/context/metal_context.hpp"
+#include "vector_aligned.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
+#include <iostream>
 #include <limits>
+#include <ostream>
+#include <optional>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 namespace tt::tt_metal::tools::mem_bench {
 

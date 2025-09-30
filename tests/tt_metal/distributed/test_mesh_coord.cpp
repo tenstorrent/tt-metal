@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
+#include <algorithm>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <iterator>
+#include <cstddef>
 #include <optional>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 #include <vector>

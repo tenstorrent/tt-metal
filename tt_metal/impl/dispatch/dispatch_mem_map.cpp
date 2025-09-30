@@ -2,19 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
+#include <enchantum/entries.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 #include "dispatch_mem_map.hpp"
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
-#include "control_plane.hpp"
 #include "dispatch_settings.hpp"
-#include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt_stl/enum.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <vector>
+#include <utility>
 
 namespace tt::tt_metal {
 
