@@ -386,13 +386,15 @@ def fuse_qkv_meta(state_dict):
     return state_dict
 
 
-def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, name_dense=False, name_ffn2=False):
+def convert_meta_to_hf(
+    state_dict, head_dim, fuse_qkv=False, fuse_mlp=False, name_dense=False, name_ffn2=False, name_final_layernorm=False
+):
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
     if fuse_qkv:
         state_dict = fuse_qkv_meta(state_dict)
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
-    state_dict = map_meta_to_hf_keys(state_dict, name_dense, name_ffn2)
+    state_dict = map_meta_to_hf_keys(state_dict, name_dense, name_ffn2, name_final_layernorm)
     return state_dict
 
 
@@ -590,7 +592,6 @@ def map_hf_to_meta_keys(loaded_weights):
         # phi-1
         ("dense", "wo"),
         ("layernorm", "attention_norm"),
-        ("input_layernorm", "attention_norm"),
         ("final_layernorm", "norm"),
         ("fc1", "w1"),
         ("fc2", "w2"),
@@ -599,15 +600,18 @@ def map_hf_to_meta_keys(loaded_weights):
     return replace_keys(loaded_weights, replacements)
 
 
-def map_meta_to_hf_keys(loaded_weights, name_dense=False, name_ffn2=False, language_prefix=""):
+def map_meta_to_hf_keys(
+    loaded_weights, name_dense=False, name_ffn2=False, name_final_layernorm=False, language_prefix=""
+):
     # Define mappings at each level of the hierarchy
     meta_to_hf_mappings = {
         # Top level
         "tok_embeddings.weight": "model.embed_tokens.weight",
-        "norm.weight": "model.norm.weight",
         "output.weight": "lm_head.weight",
+        "output.bias": "lm_head.bias",
         # Layer level
         "attention_norm.weight": "input_layernorm.weight",
+        "attention_norm.bias": "input_layernorm.bias",
         "ffn_norm.weight": "post_attention_layernorm.weight",
         "pre_feedforward_layernorm.weight": "pre_feedforward_layernorm.weight",
         "post_feedforward_layernorm.weight": "post_feedforward_layernorm.weight",
@@ -693,6 +697,12 @@ def map_meta_to_hf_keys(loaded_weights, name_dense=False, name_ffn2=False, langu
         meta_to_hf_mappings["w1.bias"] = "gate_proj.bias"
         meta_to_hf_mappings["w3.bias"] = "up_proj.bias"
         meta_to_hf_mappings["w2.bias"] = "down_proj.bias"
+
+    if name_final_layernorm:
+        meta_to_hf_mappings["norm.weight"] = "model.final_layernorm.weight"
+        meta_to_hf_mappings["norm.bias"] = "model.final_layernorm.bias"
+    else:
+        meta_to_hf_mappings["norm.weight"] = "model.norm.weight"
 
     hf_state_dict = {}
     for key, tensor in loaded_weights.items():

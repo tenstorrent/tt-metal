@@ -87,6 +87,7 @@ def test_decoder_inference(
         model_args.max_seq_len,
         model_args.rope_theta,
         model_args.rope_scaling,
+        model_args.partial_rotary_factor,
     )
 
     if model_args.rope_theta_local is not None:

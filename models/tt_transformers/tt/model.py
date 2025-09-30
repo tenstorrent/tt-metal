@@ -67,6 +67,7 @@ class Transformer(LightweightModule):
             max_seq_len=args.max_seq_len,
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
+            partial_rotary_factor=args.partial_rotary_factor,
         )
 
         if args.rope_theta_local:

@@ -2949,9 +2949,19 @@ class HfModelWrapper:
             name_ffn2 = hasattr(self.model.model.layers[0].mlp, "fc2")
         except:
             name_ffn2 = False
+        try:
+            name_final_layernorm = hasattr(self.model.model, "final_layernorm")
+        except:
+            name_final_layernorm = False
         return self.model.load_state_dict(
             convert_meta_to_hf(
-                state_dict, self.head_dim, fuse_qkv, fuse_mlp, name_dense=name_dense, name_ffn2=name_ffn2
+                state_dict,
+                self.head_dim,
+                fuse_qkv,
+                fuse_mlp,
+                name_dense=name_dense,
+                name_ffn2=name_ffn2,
+                name_final_layernorm=name_final_layernorm,
             )
         )
 
