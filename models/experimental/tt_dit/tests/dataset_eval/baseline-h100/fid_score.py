@@ -132,23 +132,35 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
 
     diff = mu1 - mu2
 
-    # Product might be almost singular
+    # ensure float32 to avoid massive slowdowns
+    sigma1 = sigma1.astype(np.float32)
+    sigma2 = sigma2.astype(np.float32)
+
+    # compute dot product
+    logger.info("calculating dot")
+    s_dot_s = sigma1 @ sigma2
+
+    # compute matrix square root with threadpool limit
     logger.info("calculating sqrtm...")
     with threadpool_limits(limits=1):  # limit mkl/openblas threads only here
-        covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+        covmean, _ = linalg.sqrtm(s_dot_s, disp=False)
     logger.info("done sqrtm")
+
+    # handle numerical issues
     if not np.isfinite(covmean).all():
         logger.info(f"fid calculation produces singular product; adding {eps} to diagonal of cov estimates")
-        offset = np.eye(sigma1.shape[0]) * eps
-        covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
+        offset = np.eye(sigma1.shape[0], dtype=np.float32) * eps
+        with threadpool_limits(limits=1):
+            covmean, _ = linalg.sqrtm((sigma1 + offset) @ (sigma2 + offset), disp=False)
 
-    # Numerical error might give slight imaginary component
+    # handle imaginary parts due to sqrtm precision issues
     if np.iscomplexobj(covmean):
         if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
             m = np.max(np.abs(covmean.imag))
-            raise ValueError("Imaginary component {}".format(m))
+            raise ValueError(f"Imaginary component {m}")
         covmean = covmean.real
 
+    covmean = covmean.astype(np.float32)
     tr_covmean = np.trace(covmean)
 
     return diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
