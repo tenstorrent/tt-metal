@@ -37,8 +37,6 @@ MeshEvent EnqueueRecordEventToHost(
     return mesh_cq.enqueue_record_event_to_host(sub_device_ids, device_range);
 }
 
-void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
-
 void EventSynchronize(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return;
