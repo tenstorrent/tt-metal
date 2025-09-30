@@ -145,7 +145,7 @@ def analyze_codeowners(changed_files_path, codeowners_path):
             owners_str = ",".join(owners_pairs)
             pattern_groups_list.append(f"{pattern}:{owners_str}")
 
-    individuals_list = "|".join(pattern_groups_list) if pattern_groups_list else ""
+    individuals_list = "@@@".join(pattern_groups_list) if pattern_groups_list else ""
 
     # Combine all groups
     if teams_list and individuals_list:

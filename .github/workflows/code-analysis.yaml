@@ -270,9 +270,12 @@ jobs:
 
             # Add pattern groups with member information and approval status
             if [ -n "$INDIVIDUALS" ]; then
-              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2|pattern2:..."
-              IFS='|' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2@@@pattern2:..."
+              IFS='@@@' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
               for pattern_group in "${PATTERN_GROUPS[@]}"; do
+                # Skip empty groups
+                [ -z "$pattern_group" ] && continue
+
                 # Split pattern:owners
                 pattern=$(echo "$pattern_group" | cut -d':' -f1)
                 owners=$(echo "$pattern_group" | cut -d':' -f2)
