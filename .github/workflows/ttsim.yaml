@@ -204,10 +204,8 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_async.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_reduce_t3000_frequent.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_TG.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py \
-            tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_TG.py \
             tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_t3000.py \
             tests/ttnn/unit_tests/operations/ccl/test_barrier_t3000_frequent.py \
             tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py \
