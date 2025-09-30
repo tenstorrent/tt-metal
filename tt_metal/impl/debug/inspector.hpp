@@ -27,6 +27,13 @@ public:
     static std::unique_ptr<inspector::Data> initialize();
     static void serialize_rpc();
 
+    // Operation tracking
+    static void track_operation(
+        std::optional<std::int64_t> device_op_id, const std::string& operation_name, const std::string& arguments);
+
+    // Get callstack for current location (handles both C++ and Python)
+    static std::string get_call_stack();
+
     static void program_created(
         const detail::ProgramImpl* program) noexcept;
     static void program_destroyed(

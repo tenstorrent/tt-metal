@@ -4,6 +4,9 @@
 
 #include "data.hpp"
 #include <stdexcept>
+#include <fstream>
+#include <sstream>
+#include "impl/debug/inspector.hpp"
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/context/metal_context.hpp"
@@ -29,6 +32,7 @@ Data::Data()
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
             get_rpc_server().setGetKernelCallback([this](auto params, auto result) { this->rpc_get_kernel(params, result); });
+            get_rpc_server().setGetOperationsCallback([this](auto result) { this->rpc_get_operations(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -36,6 +40,8 @@ Data::Data()
 }
 
 Data::~Data() {
+    // Serialize operation tracking before shutting down
+    dbg_serialize_operations();
     rpc_server_controller.stop();
 }
 
@@ -208,6 +214,32 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     kernel.setProgramId(program_id);
 }
 
+void Data::rpc_get_operations(rpc::Inspector::GetOperationsResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(operations_mutex);
+
+    auto operations_list = results.initOperations(operations_.size());
+    for (size_t i = 0; i < operations_.size(); ++i) {
+        const auto& op = operations_[i];
+        auto capnp_op = operations_list[i];
+
+        // Set device operation ID - use "none" for host-only operations
+        if (op.device_operation_id.has_value()) {
+            capnp_op.setDeviceOperationId(std::to_string(op.device_operation_id.value()));
+        } else {
+            capnp_op.setDeviceOperationId("none");
+        }
+
+        capnp_op.setOperationName(op.operation_name);
+        capnp_op.setCallstack(op.call_stack);
+        capnp_op.setArguments(op.arguments);
+
+        // Convert timestamp to nanoseconds since epoch
+        auto time_since_epoch = op.timestamp.time_since_epoch();
+        auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(time_since_epoch).count();
+        capnp_op.setTimestamp(static_cast<uint64_t>(nanos));
+    }
+}
+
 // Helper function to convert internal enum to Cap'n Proto enum
 rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
     switch (status) {
@@ -222,5 +254,113 @@ rpc::BinaryStatus Data::convert_binary_status(ProgramBinaryStatus status) {
     }
 }
 
+// Helper function to escape YAML strings
+static std::string escape_yaml_string(const std::string& str) {
+    // For simplicity, we'll use quoted strings if they contain special characters
+    bool needs_quotes = false;
+    for (char c : str) {
+        if (c == '\n' || c == '\r' || c == ':' || c == '#' || c == '"' || c == '\'' || c == '\\') {
+            needs_quotes = true;
+            break;
+        }
+    }
+
+    if (!needs_quotes) {
+        return str;
+    }
+
+    // Use double quotes and escape special characters
+    std::stringstream escaped;
+    escaped << '"';
+    for (char c : str) {
+        switch (c) {
+            case '"': escaped << "\\\""; break;
+            case '\\': escaped << "\\\\"; break;
+            case '\n': escaped << "\\n"; break;
+            case '\r': escaped << "\\r"; break;
+            case '\t': escaped << "\\t"; break;
+            default: escaped << c; break;
+        }
+    }
+    escaped << '"';
+    return escaped.str();
+}
+
+void Data::dbg_serialize_operations() {
+    std::lock_guard<std::mutex> lock(operations_mutex);
+
+    if (operations_.empty()) {
+        return;
+    }
+
+    // Create directory structure
+    auto ops_dir = logger.get_logging_path() / "ops";
+    std::filesystem::create_directories(ops_dir);
+
+    // Write to YAML format (matching Python output format)
+    auto filepath = ops_dir / "ops.yaml";
+    std::ofstream file(filepath);
+
+    if (!file.is_open()) {
+        // Silent failure - we don't want to crash the program if we can't write debug info
+        return;
+    }
+
+    // Write operations as a proper YAML list
+    for (const auto& op : operations_) {
+        // Start a new list item
+        file << "- device_operation_id: ";
+        if (op.device_operation_id.has_value()) {
+            file << *op.device_operation_id;
+        } else {
+            file << "none";
+        }
+        file << "\n";
+
+        // Operation name
+        file << "  operation_name: " << op.operation_name << "\n";
+
+        // Call stack (if available)
+        if (!op.call_stack.empty()) {
+            // Use YAML literal block scalar for multiline strings
+            file << "  callstack: ";
+            if (op.call_stack.find('\n') != std::string::npos) {
+                // Multiline - use literal block scalar
+                file << "|\n";
+                std::istringstream stream(op.call_stack);
+                std::string line;
+                while (std::getline(stream, line)) {
+                    file << "    " << line << "\n";
+                }
+            } else {
+                // Single line
+                file << escape_yaml_string(op.call_stack) << "\n";
+            }
+        } else {
+            file << "  callstack: \"\"\n";
+        }
+
+        // Arguments
+        file << "  arguments: ";
+        if (!op.arguments.empty()) {
+            if (op.arguments.find('\n') != std::string::npos) {
+                // Multiline - use literal block scalar
+                file << "|\n";
+                std::istringstream stream(op.arguments);
+                std::string line;
+                while (std::getline(stream, line)) {
+                    file << "    " << line << "\n";
+                }
+            } else {
+                // Single line
+                file << escape_yaml_string(op.arguments) << "\n";
+            }
+        } else {
+            file << "\"\"\n";
+        }
+    }
+
+    file.close();
+}
 
 }  // namespace tt::tt_metal::inspector

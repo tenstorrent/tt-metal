@@ -23,6 +23,7 @@ private:
     void rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Builder& results);
     void rpc_get_devices_in_use(rpc::Inspector::GetDevicesInUseResults::Builder& results);
     void rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::Inspector::GetKernelResults::Builder results);
+    void rpc_get_operations(rpc::Inspector::GetOperationsResults::Builder& results);
 
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
 
@@ -35,6 +36,19 @@ private:
     std::unordered_map<int, uint64_t> kernel_id_to_program_id{};
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data{};
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data{};
+
+    // Operation tracking
+    struct OperationInfo {
+        std::optional<std::int64_t> device_operation_id;
+        std::string operation_name;
+        std::string call_stack;
+        std::string arguments;
+        std::chrono::time_point<std::chrono::steady_clock> timestamp;
+    };
+    mutable std::mutex operations_mutex;
+    std::vector<OperationInfo> operations_;
+
+    void dbg_serialize_operations();
 
     friend class tt::tt_metal::Inspector;
 };
