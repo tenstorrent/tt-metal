@@ -37,7 +37,7 @@ The following image illustrates the connection between the different components 
 
     The register names are historical and may not clearly reflect their roles. The matrix engine (FPU) was developed before the vector engine (SFPU), and the names ``SrcA``, ``SrcB``, and ``Dst`` were chosen based on their use in matrix operations: ``SrcA`` and ``SrcB`` as source operands, and ``Dst`` as the destination. These names remained unchanged when the vector engine was added.
 
-    ``SrcA`` and ``SrcB`` are physical registers inside the matrix engine. The names might suggest references to memory locations, but they are just hardware registers used for computation. And unlike ``Dst``, ``SrcA`` and ``SrcB`` are single registers, not a register set.
+    ``SrcA`` and ``SrcB`` are physical registers inside the matrix engine. The names might suggest references to memory locations, but they are just hardware registers used for computation. Unlike ``Dst``, ``SrcA`` and ``SrcB`` are single registers, not a register set.
 
 .. note::
 
