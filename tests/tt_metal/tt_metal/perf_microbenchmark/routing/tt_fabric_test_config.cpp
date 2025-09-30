@@ -695,9 +695,6 @@ std::vector<ParsedTestConfig> CmdlineParser::generate_default_configs() {
         fabric_setup.topology = Topology::Linear;
         log_info(LogTest, "No topology specified via --topology, defaulting to Linear.");
     }
-    fabric_setup.routing_type = RoutingType::LowLatency;
-    fabric_setup.fabric_tensix_config = FabricTensixConfig::DISABLED;
-    log_info(LogTest, "Setting default routing type to LowLatency and Disabling Fabric MUX.");
 
     ParsedTestConfig default_test;
 
