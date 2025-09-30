@@ -3,7 +3,6 @@
 
 import ttnn
 from models.experimental.transfuser.tt.utils import TTConv2D
-from models.experimental.transfuser.tt.bottleneck import RegNetBottleneck
 from typing import List
 from loguru import logger
 

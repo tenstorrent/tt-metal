@@ -6,7 +6,7 @@ from loguru import logger
 from models.experimental.transfuser.tt.utils import TTConv2D
 
 
-class RegNetBottleneck:
+class TTRegNetBottleneck:
     def __init__(
         self,
         parameters,
@@ -21,12 +21,14 @@ class RegNetBottleneck:
         self.model_config = model_config
         # print(parameters)
 
+        print(parameters)
         # conv1: 1x1 convolution
         self.conv1 = TTConv2D(
             kernel_size=1,
             stride=1,
             padding=0,
-            parameters=parameters["conv1"],
+            # parameters=parameters["conv1"],
+            parameters=parameters["conv1"]["conv"],
             kernel_fidelity=model_config,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -45,7 +47,8 @@ class RegNetBottleneck:
             kernel_size=3,
             stride=stride,
             padding=1,
-            parameters=parameters["conv2"],
+            # parameters=parameters["conv2"],
+            parameters=parameters["conv2"]["conv"],
             kernel_fidelity=model_config,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             groups=groups,
@@ -101,7 +104,8 @@ class RegNetBottleneck:
             kernel_size=1,
             stride=1,
             padding=0,
-            parameters=parameters["conv3"],
+            # parameters=parameters["conv3"],
+            parameters=parameters["conv3"]["conv"],
             kernel_fidelity=model_config,
             activation=None,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -120,7 +124,8 @@ class RegNetBottleneck:
                 kernel_size=1,
                 stride=stride,
                 padding=0,
-                parameters=parameters["downsample"],
+                # parameters=parameters["downsample"],
+                parameters=parameters["downsample"][0],
                 kernel_fidelity=model_config,
                 activation=None,
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,

@@ -2,8 +2,26 @@ import torch
 import pytest
 import ttnn
 from models.experimental.transfuser.reference.bottleneck import Bottleneck as PyTorchBottleneck
+from models.experimental.transfuser.tt.custom_preprocessing import create_custom_mesh_preprocessor
+from models.experimental.transfuser.tt.bottleneck import TTRegNetBottleneck
+from ttnn.model_preprocessing import (
+    preprocess_model_parameters,
+)
+from tests.ttnn.utils_for_testing import check_with_pcc
+from loguru import logger
+
 
 # from models.experimental.transfuser.tt.ttn_bottleneck import TTNNBottleneck
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() != 1:
+        return (
+            ttnn.ShardTensorToMesh(device, dim=0),
+            None,
+            ttnn.ConcatMeshToTensor(device, dim=0),
+        )
+    return None, None, None
 
 
 def comp_pcc(golden, actual, pcc=0.99):
@@ -79,7 +97,7 @@ def preprocess_parameters_for_ttnn(torch_model, device):
     "in_chs, out_chs, stride, input_size",
     [
         (32, 72, 2, (1, 32, 80, 352)),  # stage 1 DS
-        (72, 72, 1, (1, 72, 40, 176)),  # stage 1 NDS
+        # (72, 72, 1, (1, 72, 40, 176)),  # stage 1 NDS
     ],
 )
 def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size):
@@ -98,32 +116,53 @@ def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size):
         with torch.no_grad():
             torch_output = torch_model(torch_input)
 
-        pytest.skip("Torch Inference Done!, Skipping stage tests. TODO: implement TTBottleneck")
-        # Preprocess parameters for TTNN
-        params = preprocess_parameters_for_ttnn(torch_model, device)
+        inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(device)
+        parameters = preprocess_model_parameters(
+            initialize_model=lambda: torch_model,
+            custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+            device=None,
+        )
 
-        # Create TTNN model
-        ttnn_model = TTNNBottleneck(device=device, **params, in_chs=64, out_chs=256, stride=2, group_size=8)
+        model_config = {
+            "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
+            "WEIGHTS_DTYPE": ttnn.bfloat8_b,
+            "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
+        }
+        downsample = False
+        if in_chs == out_chs and stride == 1:
+            downsample = True
 
-        # Convert input to TTNN format
-        ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
+        bottle_ratio = 1.0
+        group_size = 24
+        bottleneck_chs = int(round(out_chs * bottle_ratio))
+        groups = bottleneck_chs // group_size
 
-        # TTNN forward pass
-        ttnn_output = ttnn_model(ttnn_input)
+        ttnn_model = TTRegNetBottleneck(
+            parameters=parameters, model_config=model_config, stride=stride, downsample=downsample, groups=groups
+        )
+        tt_image_input = ttnn.from_torch(
+            torch_input,
+            # self.torch_image_input.permute(0, 2, 3, 1),
+            dtype=ttnn.bfloat16,
+            mesh_mapper=inputs_mesh_mapper,
+        )
+        input_image_tensor = ttnn.to_device(tt_image_input, device)
+        tt_output = ttnn_model(input_image_tensor, device)
+        tt_torch_output = ttnn.to_torch(
+            tt_output,
+            device=device,
+            mesh_composer=output_mesh_composer,
+        )
+        expected_image_shape = torch_output.shape
+        tt_torch_output = torch.reshape(
+            tt_torch_output,
+            (expected_image_shape[0], expected_image_shape[2], expected_image_shape[3], expected_image_shape[1]),
+        )
+        tt_torch_output = torch.permute(tt_torch_output, (0, 3, 1, 2))
+        pcc_passed, pcc_message = check_with_pcc(torch_output, tt_torch_output, pcc=0.99)
 
-        # Convert back to torch for comparison
-        ttnn_output_torch = ttnn.to_torch(ttnn_output)
-
-        # PCC assertion
-        passes_pcc, pcc_value = comp_pcc(torch_output, ttnn_output_torch, pcc=0.99)
-
-        print(f"PyTorch output shape: {torch_output.shape}")
-        print(f"TTNN output shape: {ttnn_output_torch.shape}")
-        print(f"PCC value: {pcc_value:.6f}")
-        print(f"PCC test {'PASSED' if passes_pcc else 'FAILED'}")
-
-        assert passes_pcc, f"PCC test failed: {pcc_value:.6f} < 0.99"
-        assert torch_output.shape == ttnn_output_torch.shape, "Output shapes don't match"
+        logger.info(f"Image Output PCC: {pcc_message}")
+        assert pcc_passed, logger.error(f"PCC check failed - pcc_message: {pcc_message}")
 
         print("✓ RegNet bottleneck TTNN implementation matches PyTorch with PCC > 0.99")
 
