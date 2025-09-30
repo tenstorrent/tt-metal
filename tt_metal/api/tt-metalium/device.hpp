@@ -19,9 +19,11 @@
 #include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/allocator_types.hpp>
+
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include <tt_stl/span.hpp>
 
