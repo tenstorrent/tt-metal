@@ -105,6 +105,7 @@ class Conv2dConfiguration:
     output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
 
     sharding_strategy: ShardedStrategyConfiguration = AutoShardedStrategyConfiguration()
+    conv2d_slice_config: Optional[ttnn.Conv2dSliceConfig] = None
 
     math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     fp32_dest_acc_en: bool = False
@@ -389,19 +390,20 @@ class TtConv2d:
             "dtype": self.configuration.output_dtype,
             "device": self.device,
             "conv_config": self.conv2d_config,
+            "slice_config": self.configuration.conv2d_slice_config,
         }
 
     def __call__(self, x):
-        x, [self.weight, self.bias] = ttnn.conv2d(
+        [x, [h, w], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
-            return_output_dim=False,
+            return_output_dim=True,
             return_weights_and_bias=True,
             compute_config=self.compute_config,
             **self.get_conv2d_kwargs(),
         )
-        return x
+        return x, [h, w]
 
 
 class TtMaxPool2d:
