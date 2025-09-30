@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
@@ -294,6 +294,7 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_local_sync_address = 0;
     std::size_t edm_local_tensix_sync_address = 0;
     std::size_t edm_status_address = 0;
+    std::size_t notify_worker_of_read_counter_update_src_address = 0;
 
     // Performance telemetry buffer address (16B aligned)
     std::size_t perf_telemetry_buffer_address = 0;

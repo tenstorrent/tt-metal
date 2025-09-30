@@ -57,7 +57,7 @@ jobs:
             num_devices: 2
           - name: LoudBox Demo tests
             runner-label: BH-LoudBox
-            extra-tag: pipeline-functional
+            extra-tag: pipeline-perf
             num_devices: 8
     with:
       runner-label: ${{ matrix.test-group.runner-label }}

@@ -16,7 +16,7 @@ namespace ckernel {
  * Please refer to documentation for any_init.
  */
 
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = false>
 ALWI void log1p_tile_init() {
     MATH(SFPU_TWO_TEMPLATE_PARAM_INIT(log1p, sfpu::log1p_init, APPROX, fast_and_approx));
 }
@@ -35,7 +35,7 @@ ALWI void log1p_tile_init() {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = false>
 ALWI void log1p_tile(uint32_t idst) {
     MATH(SFPU_UNARY_NO_PARAM_KERNEL_LOG1P(log1p, RC, APPROX, fast_and_approx, idst));
 }

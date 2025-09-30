@@ -4,7 +4,7 @@
 
 #include "metal_soc_descriptor.h"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 #include <string>
 

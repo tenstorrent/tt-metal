@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include <vector>
 #include <cstdint>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 

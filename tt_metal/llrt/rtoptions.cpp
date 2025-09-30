@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 using std::vector;
@@ -26,18 +26,18 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "READ_DEBUG_DELAY",
     "WRITE_DEBUG_DELAY",
     "ATOMIC_DEBUG_DELAY",
-    "DISABLE_L1_DATA_CACHE",
+    "ENABLE_L1_DATA_CACHE",
 };
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
-static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
+constexpr auto TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
+constexpr auto TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
-static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
+constexpr auto TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 // Env variable to override the core grid configuration
-static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
+constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -535,17 +535,13 @@ void RunTimeOptions::ParseFeatureRiscvMask(
     if (env_var_str != nullptr) {
         feature_targets[feature].processors = hal.parse_processor_set_spec(env_var_str);
     } else {
-        // Default is all RISCVs enabled.
-        bool default_disabled = (feature == RunTimeDebugFeatures::RunTimeDebugFeatureDisableL1DataCache);
-        if (!default_disabled) {
-            auto& processors = feature_targets[feature].processors;
-            uint32_t num_core_types = hal.get_programmable_core_type_count();
-            for (uint32_t core_type_index = 0; core_type_index < num_core_types; ++core_type_index) {
-                auto core_type = hal.get_programmable_core_type(core_type_index);
-                uint32_t num_processors = hal.get_num_risc_processors(core_type);
-                for (uint32_t processor_index = 0; processor_index < num_processors; ++processor_index) {
-                    processors.add(core_type, processor_index);
-                }
+        auto& processors = feature_targets[feature].processors;
+        uint32_t num_core_types = hal.get_programmable_core_type_count();
+        for (uint32_t core_type_index = 0; core_type_index < num_core_types; ++core_type_index) {
+            auto core_type = hal.get_programmable_core_type(core_type_index);
+            uint32_t num_processors = hal.get_num_risc_processors(core_type);
+            for (uint32_t processor_index = 0; processor_index < num_processors; ++processor_index) {
+                processors.add(core_type, processor_index);
             }
         }
     }
