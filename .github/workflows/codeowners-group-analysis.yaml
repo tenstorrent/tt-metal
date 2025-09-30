@@ -92,8 +92,8 @@ jobs:
           if [ -n "$TEAMS" ]; then
             IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
             for team in "${TEAM_ARRAY[@]}"; do
-              # Remove @ prefix for API call
-              clean_team=$(echo "$team" | sed 's/^@//')
+                # Remove @org/ prefix for API call
+                clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
 
               # Get team members using GitHub API (using ORG_READ for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
