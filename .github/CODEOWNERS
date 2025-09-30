@@ -11,7 +11,7 @@ METALIUM_GUIDE.md @davorchap @marty1885 @tenstorrent/metalium-codeowners-large-c
 .github/workflows/galaxy-deepseek-tests-impl.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 .github/workflows/vllm-nightly-tests.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 .github/workflows/vllm-nightly-tests-impl.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
-.github/workflows/multi-host-physical.yaml @sjameelTT @aliuTT @cfjchu @omilyutin-tt @tenstorrent/metalium-codeowners-large-changes
+.github/workflows/multi-host-physical.yaml @sjameelTT @aliuTT @cfjchu @omilyutin-tt @tenstorrent/metalium-codeowners-large-changes @tenstorrent/metalium-developers-infra
 
 /infra/ @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
