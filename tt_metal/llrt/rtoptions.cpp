@@ -386,14 +386,9 @@ void RunTimeOptions::ParseInspectorEnv() {
         }
     }
 
-    const char* inspector_rpc_server_host_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_HOST");
-    if (inspector_rpc_server_host_str != nullptr) {
-        inspector_settings.rpc_server_host = std::string(inspector_rpc_server_host_str);
-    }
-
-    const char* inspector_rpc_server_port_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_PORT");
-    if (inspector_rpc_server_port_str != nullptr) {
-        inspector_settings.rpc_server_port = static_cast<uint16_t>(std::stoul(inspector_rpc_server_port_str));
+    const char* inspector_rpc_server_address_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS");
+    if (inspector_rpc_server_address_str != nullptr) {
+        inspector_settings.rpc_server_address = std::string(inspector_rpc_server_address_str);
     }
 
     const char* inspector_rpc_str = getenv("TT_METAL_INSPECTOR_RPC");
