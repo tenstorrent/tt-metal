@@ -35,7 +35,9 @@ def get_user_full_name(username):
         return clean_username
 
     # Try both tokens
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("ORG_READ_GITHUB_TOKEN") or ""
+    token = (
+        os.environ.get("GITHUB_TOKEN") or os.environ.get("ORG_READ_GITHUB_TOKEN") or os.environ.get("ORG_READ") or ""
+    )
 
     if not token:
         print(f"Warning: No token available for user lookup of {username}")

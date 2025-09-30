@@ -205,9 +205,9 @@ jobs:
           CREATE_NEW="${{ github.event.inputs.create-new-comment }}"
 
           if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
-            COMMENT="## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
+            COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
           else
-            COMMENT="## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Group Information:"
+            COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Group Information:"
 
             # Add teams with member information and approval status
             if [ -n "$TEAMS" ]; then
