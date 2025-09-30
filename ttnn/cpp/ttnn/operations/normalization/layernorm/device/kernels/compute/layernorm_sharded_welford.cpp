@@ -172,9 +172,9 @@ void MAIN {
     }
     DPRINT << "Done with partial" << ENDL();
     cb_push_back(cb_ex_partial, num_partial_tiles);
-    cb_wait_front(cb_ex_partial, num_partial_tiles);
-    tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
-    tt::compute::common::print_full_tile(cb_ex_partial, 1, true);
+    // cb_wait_front(cb_ex_partial, num_partial_tiles);
+    // tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
+    // tt::compute::common::print_full_tile(cb_ex_partial, 1, true);
     // cb_wait_front(cb_ex_partial, 2);
     //  DPRINT << "After first pack" << ENDL();
     //  tt::compute::common::print_full_tile(cb_ex_partial, 0);
@@ -211,18 +211,18 @@ void MAIN {
                 // Wait for 1 mean tile and 1 var tile
                 cb_wait_front(cb_ex_external, 2);
 
-                DPRINT << "external tiles:" << ENDL();
-                tt::compute::common::print_full_tile(cb_ex_external, 0, true);
-                tt::compute::common::print_full_tile(cb_ex_external, 1, true);
+                // DPRINT << "External mean:" << ENDL();
+                // tt::compute::common::print_full_tile(cb_ex_external, 0, true);
+
+                // DPRINT << "external tiles:" << ENDL();
+                // tt::compute::common::print_full_tile(cb_ex_external, 0, true);
+                // tt::compute::common::print_full_tile(cb_ex_external, 1, true);
                 // TODO RM: The last block may have a smaller num_reduce_tiles_per_block_h,
                 // pass in the last value as a CTA. Don't have this depend on block_w
-                const auto n_a = b * block_w;
+                const float n_a = b * block_w;
                 // TODO RM: This should use a runtime arg where
                 // only the last core in each row has a reduced width
-                const auto n_b = b == num_blocks_reduce - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
-                const auto n_ab = n_a + n_b;
-                const auto n_b_over_n_ab = n_b / n_ab;
-                const auto n_a_n_b_over_n_ab = n_a * n_b_over_n_ab;
+                const float n_b = b == num_blocks_reduce - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
 
                 // Copy accumulated mean (x_a) to dst0
                 copy_dest_values_init();
@@ -233,12 +233,15 @@ void MAIN {
                 binary_dest_reuse_tiles<ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                     cb_ex_external, mean_cb_idx, tmp_dst0);
 
+                DPRINT << "x_b - x_a: " << ENDL();
+                dprint_tensix_dest_reg<true>(tmp_dst0);
+
                 // DPRINT << "x_b - x_a: " << ENDL();
                 // dprint_tensix_dest_reg<true>(tmp_dst0);
 
                 // Fill dst1 with n_b / n_ab
                 fill_tile_init();
-                fill_tile(tmp_dst1, n_b_over_n_ab);
+                fill_tile(tmp_dst1, n_b / (n_a + n_b));
 
                 // Multiply delta by n_b / n_ab, store in dst1
                 // (delta remains in dst0)
@@ -255,7 +258,7 @@ void MAIN {
 
                 // Fill dst1 with n_a * n_b / n_ab
                 fill_tile_init();
-                fill_tile(tmp_dst1, n_a_n_b_over_n_ab);
+                fill_tile(tmp_dst1, n_a * n_b / (n_a + n_b));
 
                 // Multiply delta^2 by n_a * n_b / n_ab, store in dst0
                 mul_binary_tile_init();
@@ -289,6 +292,11 @@ void MAIN {
             fill_tile(tmp_dst0, W);
             div_binary_tile_init();
             div_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
+
+            DPRINT << "final mean:" << ENDL();
+            dprint_tensix_dest_reg<true>(mean_acc_dst);
+            DPRINT << "final var:" << ENDL();
+            dprint_tensix_dest_reg<true>(m2_acc_dst);
 
             // Compute 1/sqrt(Var[x] + eps).
             // This is what gets written and mcasted as var
