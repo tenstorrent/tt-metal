@@ -29,7 +29,7 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
 
 struct MorehSoftmaxOperation {
     struct operation_attributes_t {
-        uint32_t dim;
+        uint32_t dim{};
         const MorehSoftmaxOp op;
         const MorehSoftmaxOpParallelizationStrategy strategy;
         const MemoryConfig memory_config;
