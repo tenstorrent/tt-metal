@@ -1163,6 +1163,8 @@ private:
 
     }
 
+    std::vector<GoldenCsvEntry>::iterator fetch_corresponding_golden_entry(const BandwidthResultSummary& test_result);
+
     void generate_bandwidth_summary_csv() {
         // Bandwidth summary CSV file is generated separately from Bandwidth CSV because we need to wait for all multirun tests to complete
         // Generate detailed CSV filename
@@ -1191,7 +1193,6 @@ private:
         log_info(tt::LogTest, "Initialized summary CSV file: {}", summary_csv_file_path.string());
 
         // Write data rows
-        std::vector<GoldenCsvEntry>::iterator golden_it = golden_csv_entries_.begin();
         for (const auto& result : bandwidth_results_summary_) {
             // Convert vector of num_devices to a string representation
             std::string num_devices_str = convert_num_devices_to_string(result.num_devices);
@@ -1206,14 +1207,17 @@ private:
             for (double stat : result.statistics_vector) {
                 summary_csv_stream << "," << std::fixed << std::setprecision(6) << stat;
             }
-            // To write the acceptable tolerance for this set, iterate through the golden csv entries, which are already in the same order as the bandwidth summary.
+            // Find the corresponding golden entry for this test result
+            auto golden_it = fetch_corresponding_golden_entry(result);
             if (golden_it == golden_csv_entries_.end()) {
-                log_warning(tt::LogTest, "Golden CSV entry not found for test {}, putting 0 in summary CSV", result.test_name);
-                summary_csv_stream << "," << 0.0;
+                log_warning(
+                    tt::LogTest,
+                    "Golden CSV entry not found for test {}, putting tolerance of 1.0 in summary CSV",
+                    result.test_name);
+                summary_csv_stream << "," << 1.0;
             }
             else {
                 summary_csv_stream << "," << golden_it->tolerance_percent;
-                golden_it++;
             }
             summary_csv_stream << "\n";
         }
@@ -1334,6 +1338,7 @@ private:
                 comp_result.status = "FAIL";
             }
         } else {
+            log_warning(tt::LogTest, "Golden CSV entry not found for test {}", comp_result.test_name);
             comp_result.golden_bandwidth_GB_s = 0.0;
             comp_result.difference_percent = 0.0;
             comp_result.within_tolerance = false;
@@ -1341,7 +1346,8 @@ private:
         }
     }
 
-    bool golden_entry_matches_test_result(const BandwidthResultSummary& test_result, const GoldenCsvEntry& golden_result);
+    ComparisonResult create_comparison_result(
+        const BandwidthResultSummary& test_result, double test_result_avg_bandwidth);
 
     std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
 
@@ -1353,20 +1359,15 @@ private:
             return;
         }
         if (bandwidth_results_summary_.size() != golden_csv_entries_.size()) {
-            log_error(tt::LogTest, "Number of test results ({}) does not match number of golden entries ({})", bandwidth_results_summary_.size(), golden_csv_entries_.size());
-            return;
+            log_warning(
+                tt::LogTest,
+                "Number of test results ({}) does not match number of golden entries ({})",
+                bandwidth_results_summary_.size(),
+                golden_csv_entries_.size());
         }
 
-        // Benchmark tests are run in a fixed order. Therefore, simply iterate through the golden entries for comparisons
         for (int i = 0; i < bandwidth_results_summary_.size(); i++) {
             BandwidthResultSummary& test_result = bandwidth_results_summary_[i];
-            GoldenCsvEntry& golden_result = golden_csv_entries_[i];
-            // Verify that the current result matches the golden entry
-            if (!golden_entry_matches_test_result(test_result, golden_result)) {
-                log_error(tt::LogTest, "Test result {} and golden result {} do not match, has order been changed?", test_result.test_name, golden_result.test_name);
-                return;
-            }
-
             // Find Average bandwidth result for the test
             // Statistic name for average bandwidth is set in calculate_bandwidth_mean()
             auto bandwidth_stat_location = std::find(stat_names_.begin(), stat_names_.end(), "Avg Bandwidth (GB/s)");
@@ -1377,31 +1378,21 @@ private:
             int bandwidth_stat_index = std::distance(stat_names_.begin(), bandwidth_stat_location);
             double test_result_avg_bandwidth = test_result.statistics_vector[bandwidth_stat_index];
 
-            // Compare the test result with the golden entry
-            double acceptable_tolerance = golden_result.tolerance_percent;
-            double difference_percent = ((test_result_avg_bandwidth - golden_result.bandwidth_GB_s) / golden_result.bandwidth_GB_s) * 100.0;
-            bool within_tolerance = std::abs(difference_percent) <= acceptable_tolerance;
+            // Search for the corresponding golden entry for this test result
+            auto golden_it = fetch_corresponding_golden_entry(test_result);
 
-            // Store the results of this comparison
-            std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
-            ComparisonResult comp_result;
-            comp_result.test_name = test_result.test_name;
-            comp_result.ftype = test_result.ftype;
-            comp_result.ntype = test_result.ntype;
-            comp_result.topology = test_result.topology;
-            comp_result.num_devices = num_devices_str;
-            comp_result.num_links = test_result.num_links;
-            comp_result.packet_size = test_result.packet_size;
-            comp_result.num_iterations = test_result.num_iterations;
-            comp_result.current_bandwidth_GB_s = test_result_avg_bandwidth;
-            comp_result.golden_bandwidth_GB_s = golden_result.bandwidth_GB_s;
-            comp_result.difference_percent = difference_percent;
-            comp_result.within_tolerance = within_tolerance;
-            comp_result.status = within_tolerance ? "PASS" : "FAIL";
+            // Compare the test result with the golden entry
+            ComparisonResult comp_result = create_comparison_result(test_result, test_result_avg_bandwidth);
+            populate_comparison_result_bandwidth(test_result_avg_bandwidth, comp_result, golden_it);
             comparison_results_.push_back(comp_result);
 
-            if (!within_tolerance) {
-                std::string csv_format_string = generate_failed_test_format_string(test_result, test_result_avg_bandwidth, difference_percent, acceptable_tolerance);
+            if (!comp_result.within_tolerance) {
+                double acceptable_tolerance = 0.0;
+                if (golden_it != golden_csv_entries_.end()) {
+                    acceptable_tolerance = golden_it->tolerance_percent;
+                }
+                std::string csv_format_string = generate_failed_test_format_string(
+                    test_result, test_result_avg_bandwidth, comp_result.difference_percent, acceptable_tolerance);
                 all_failed_tests_.push_back(csv_format_string);
             }
         }

@@ -237,17 +237,6 @@ void TestContext::dump_raw_telemetry_csv(const TestConfig& config) {
     log_info(tt::LogTest, "Dumped raw telemetry to: {}", raw_telemetry_path.string());
 }
 
-bool TestContext::golden_entry_matches_test_result(const BandwidthResultSummary& test_result, const GoldenCsvEntry& golden_result) {
-    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
-    return test_result.test_name == golden_result.test_name
-        && test_result.ftype == golden_result.ftype
-        && test_result.ntype == golden_result.ntype
-        && test_result.topology == golden_result.topology
-        && num_devices_str == golden_result.num_devices
-        && test_result.num_links == golden_result.num_links
-        && test_result.packet_size == golden_result.packet_size;
-}
-
 // Converts vector of num_devices to a string representation eg. <2, 4> -> "[2, 4]"
 std::string TestContext::convert_num_devices_to_string(const std::vector<uint32_t>& num_devices) {
     std::string num_devices_str = "[";
@@ -259,6 +248,35 @@ std::string TestContext::convert_num_devices_to_string(const std::vector<uint32_
     }
     num_devices_str += "]";
     return num_devices_str;
+}
+
+std::vector<GoldenCsvEntry>::iterator TestContext::fetch_corresponding_golden_entry(
+    const BandwidthResultSummary& test_result) {
+    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
+    auto golden_it =
+        std::find_if(golden_csv_entries_.begin(), golden_csv_entries_.end(), [&](const GoldenCsvEntry& golden) {
+            return golden.test_name == test_result.test_name && golden.ftype == test_result.ftype &&
+                   golden.ntype == test_result.ntype && golden.topology == test_result.topology &&
+                   golden.num_devices == num_devices_str && golden.num_links == test_result.num_links &&
+                   golden.packet_size == test_result.packet_size;
+        });
+    return golden_it;
+}
+
+ComparisonResult TestContext::create_comparison_result(
+    const BandwidthResultSummary& test_result, double test_result_avg_bandwidth) {
+    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
+    ComparisonResult comp_result;
+    comp_result.test_name = test_result.test_name;
+    comp_result.ftype = test_result.ftype;
+    comp_result.ntype = test_result.ntype;
+    comp_result.topology = test_result.topology;
+    comp_result.num_devices = num_devices_str;
+    comp_result.num_links = test_result.num_links;
+    comp_result.packet_size = test_result.packet_size;
+    comp_result.num_iterations = test_result.num_iterations;
+    comp_result.current_bandwidth_GB_s = test_result_avg_bandwidth;
+    return comp_result;
 }
 
 // Creates common CSV format string for any failure case
