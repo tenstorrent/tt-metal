@@ -153,6 +153,7 @@ class Transformer:
             self._scale = self._head_dim**-0.5
             self._attention_dropout = 0.0  # Unused
 
+            # Set kernel compute config that maximize accuracy
             compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -321,18 +322,18 @@ class VisionTransformer:
         # torch_small_conv1_weights = torch.rand((out_channels, in_channels, 32, 32), dtype=torch.bfloat16)
         # small_conv1_weights = ttnn.from_torch(torch_small_conv1_weights, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        bias_tensor = ttnn.zeros(
-            (1, 1, 1, out_channels), dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
+        # bias_tensor = ttnn.zeros(
+        #     (1, 1, 1, out_channels), dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
+        # )
 
-        assert x.dtype == ttnn.bfloat16
-        assert self.conv1_weights.dtype == ttnn.bfloat16
-        assert bias_tensor.dtype == ttnn.bfloat16
+        print(f"weights.shape: {self.conv1_weights.shape}, weights.dtype: {self.conv1_weights.dtype}")
+        # print(f"bias.shape: {bias_tensor.shape}")
+        print(f"x.shape: {x.shape}, x.dtype: {x.dtype}")
 
         x = ttnn.conv2d(
             input_tensor=x,  # should always be named argument
             weight_tensor=self.conv1_weights,
-            bias_tensor=bias_tensor,
+            # bias_tensor=bias_tensor,
             in_channels=in_channels,
             out_channels=out_channels,
             batch_size=batch_size,
@@ -469,14 +470,6 @@ class CLIP:
 
         # LayerNorm
         x = ttnn.layer_norm(x, weight=self.ln_final_weights, bias=self.ln_final_bias)
-
-        # TODO: Change to TTNN
-        # text_projection = ttnn.transpose(self.text_projection, -2, -1)
-
-        print("encode_text: ")
-        print(f"x.shape: {x.shape}")
-        print(f"tokens.shape: {tokens.shape}")
-        print(f"self.text_projection.shape: {self.text_projection.shape}")
 
         torch_tokens = ttnn.to_torch(tokens)
         text_projection = ttnn.to_torch(self.text_projection)
