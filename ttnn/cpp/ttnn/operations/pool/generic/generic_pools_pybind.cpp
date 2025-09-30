@@ -128,12 +128,7 @@ void bind_max_pool2d_operation(py::module& module) {
                     dtype,
                     output_layout);
 
-                // Return tuple for return_indices=true, single tensor for return_indices=false
-                if (return_indices) {
-                    return py::make_tuple(result.at(0), result.at(1));
-                } else {
-                    return py::cast(result.at(0));
-                }
+                return result;
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
