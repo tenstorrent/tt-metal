@@ -143,7 +143,7 @@ def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: 
         return model_state_config_item
 
     raise ValueError(
-        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}"
+        f"Unsupported model and weight config items to merge: {model_state_config_item} and {weight_config_item}. Try recalculating cached weights."
     )
 
 

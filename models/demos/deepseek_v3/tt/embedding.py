@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     TypecastConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    MAX_BATCH_SIZE,
+    USERS_PER_ROW,
     even_int_div,
     find_largest_divisor,
     shard_and_save,
@@ -110,7 +110,7 @@ class Embedding(AbstractModule):
         num_sharding_cores = find_largest_divisor(num_width_shard_tiles, mesh_device.core_grid.num_cores)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                MAX_BATCH_SIZE,
+                USERS_PER_ROW,
                 num_width_shard_tiles * ttnn.TILE_SIZE,
             ),
             core_grid=ttnn.num_cores_to_corerangeset(

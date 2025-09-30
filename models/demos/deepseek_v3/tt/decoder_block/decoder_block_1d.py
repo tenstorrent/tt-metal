@@ -8,7 +8,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
-from models.demos.deepseek_v3.tt.decoder_block.decoder_block_base import DecoderBlockBase
+from models.demos.deepseek_v3.tt.decoder_block.decoder_block_1d_base import DecoderBlock1DBase
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -20,7 +20,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class DecoderBlock(DecoderBlockBase):
+class DecoderBlock1D(DecoderBlock1DBase):
     @classmethod
     def convert_mlp_weights(
         cls,
@@ -36,7 +36,6 @@ class DecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
         return NonExpert.prefill_model_config(hf_config, mesh_device)
 
@@ -45,7 +44,6 @@ class DecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
         return NonExpert.decode_model_config(hf_config, mesh_device)
 
@@ -55,7 +53,7 @@ class DecoderBlock(DecoderBlockBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         ccl: CCL,
-        is_padding_layer: tuple[bool, ...] | None = None,
+        is_padding_layer: tuple[bool, ...],
     ) -> ModelState:
         return NonExpert.create_state(hf_config, mesh_device, ccl)
 
@@ -64,7 +62,6 @@ class DecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         return {}
 
