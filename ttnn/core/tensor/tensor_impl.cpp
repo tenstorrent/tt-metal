@@ -400,7 +400,7 @@ void to_string_row_major(
 
         if (rank > 1) {
             to_string_row_major(
-                ss, buffer, shape, strides, index, buffer_offset + index * stride, rank - 1, dim + 1, use_scientific);
+                ss, buffer, shape, strides, index, buffer_offset + (index * stride), rank - 1, dim + 1, use_scientific);
         } else {
             print_datum(ss, buffer[buffer_offset + index], use_scientific);
         }

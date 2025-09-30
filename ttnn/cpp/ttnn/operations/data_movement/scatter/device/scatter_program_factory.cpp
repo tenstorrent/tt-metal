@@ -33,7 +33,7 @@ uint64_t ceil32(const uint64_t& number) {
 // ... minimized by ~20% to account for reserved memory
 uint32_t calculate_optimal_chunk_size(IDevice* device) {
     const auto l1_size_bytes = static_cast<double>(device->l1_size_per_core());
-    const auto optimal_chunk_size = (l1_size_bytes / 4.0 / 4.0) * 0.8 - 32.0;
+    const auto optimal_chunk_size = ((l1_size_bytes / 4.0 / 4.0) * 0.8) - 32.0;
     const auto clamped_chunk_size = std::max(optimal_chunk_size, 0.0);
     const auto integer_chunk_size = static_cast<uint64_t>(std::ceil(clamped_chunk_size));
     return ceil32(integer_chunk_size);
