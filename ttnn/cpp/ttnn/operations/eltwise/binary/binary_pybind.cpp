@@ -467,9 +467,9 @@ void bind_binary_unary_operation(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
+            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`. Supported only when both inputs are tensors.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`.
+            activations (List[str], optional): list of activation functions to apply to the output tensor{4}Defaults to `None`. Supported only when both inputs are tensors.
 
 
         Returns:
@@ -513,15 +513,13 @@ void bind_binary_unary_operation(
             [](const binary_operation_t& self,
                const ttnn::Tensor& input_tensor_a,
                const float scalar,
-               const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor_a, scalar, dtype, memory_config, output_tensor);
+                return self(input_tensor_a, scalar, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
             py::arg("input_b"),
             py::kw_only(),
-            py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
         },
@@ -566,15 +564,13 @@ void bind_binary_unary_operation(
             [](const binary_operation_t& self,
                const ttnn::Tensor& input_tensor_a,
                const int32_t scalar,
-               const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor_a, scalar, dtype, memory_config, output_tensor);
+                return self(input_tensor_a, scalar, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
             py::arg("input_b"),
             py::kw_only(),
-            py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
         });

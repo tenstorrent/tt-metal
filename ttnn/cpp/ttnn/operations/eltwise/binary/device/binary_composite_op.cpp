@@ -752,7 +752,6 @@ template <typename T>
 Tensor ExecuteRsub::invoke(
     const Tensor& input_tensor_a,
     const T& input_b,
-    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return ttnn::operations::unary::Rsub::invoke(input_tensor_a, input_b, memory_config, optional_output_tensor);
@@ -1110,14 +1109,12 @@ Tensor ExecuteBitwiseRightShift::invoke(
 template Tensor ExecuteRsub::invoke<float>(
     const Tensor& input_tensor_a,
     const float& input_b,
-    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor);
 
 template Tensor ExecuteRsub::invoke<int32_t>(
     const Tensor& input_tensor_a,
     const int32_t& input_b,
-    const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor);
 

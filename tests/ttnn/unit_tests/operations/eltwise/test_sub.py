@@ -141,7 +141,7 @@ def test_rsub_int32_full_range(input_shapes, scalar, device):
     torch_input_tensor = torch.cat([uniform_values, corner_cases])
     torch_input_tensor = torch_input_tensor[-num_elements:].reshape(input_shapes)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
     output = ttnn.rsub(input_tensor, scalar)
     golden_function = ttnn.get_golden_function(ttnn.rsub)

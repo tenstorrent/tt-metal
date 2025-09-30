@@ -77,7 +77,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     )
     out_tt = ttnn.from_torch(out, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cq_id = 0
-    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -644,7 +644,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     )
 
     cq_id = 0
-    ttnn_op(input_tensor_a, scalar, queue_id=cq_id, output_tensor=out_tt, use_legacy=False)
+    ttnn_op(input_tensor_a, scalar, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -690,7 +690,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, scalar, use_legacy=False)
+    output = ttnn_op(input_tensor_a, scalar)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
@@ -803,7 +803,7 @@ def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memo
         memory_config=memory_config,
     )
 
-    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32, use_legacy=False)
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
     tt_output_tensor = ttnn.to_torch(output)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
