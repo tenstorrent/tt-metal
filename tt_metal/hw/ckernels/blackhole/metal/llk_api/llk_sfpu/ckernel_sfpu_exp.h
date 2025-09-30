@@ -21,7 +21,7 @@ sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
  */
 sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
     sfpi::vInt exp = exexp(val);
-    sfpi::vInt man = exman8(val);
+    sfpi::vInt man = exman8(val);  // get mantissa with implicit bit (man in [1; 2])
     sfpi::vInt shift = exp - 23;
     man = sfpi::reinterpret<sfpi::vInt>(shft(sfpi::reinterpret<sfpi::vUInt>(man), shift));
     return man;
@@ -66,7 +66,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     sfpi::vInt exponential_part =
         exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent ( = 2**(integer part of val/ln2))
     sfpi::vInt fractional_part =
-        sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part that )
+        sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part, in [0; 1])
 
     // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 1]
     // This uses a 2nd degree polynomial adjustment of the fractional part
