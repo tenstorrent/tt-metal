@@ -178,9 +178,9 @@ static std::vector<Tensor> pool2d_invoke(
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
 
-            input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
+            input_tensor_padded = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         } else {
-            input_tensor_padded = input_tensor;
+            input_tensor_padded = input_tensor_flattened;
         }
 
         // Create target shape and apply sharding
@@ -190,11 +190,9 @@ static std::vector<Tensor> pool2d_invoke(
              input_tensor_shape[2],
              input_tensor_width_snapped_to_channels_alignment});
 
-        input_tensor_flattened = input_tensor_flattened.reshape(input_tensor_shape, input_padded_shape);
-
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
-        input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, sharded_mem_config, std::nullopt);
+        input_tensor_sharded = ttnn::to_memory_config(input_tensor_padded, sharded_mem_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
         TT_FATAL(
