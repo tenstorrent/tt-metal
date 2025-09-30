@@ -101,11 +101,25 @@ jobs:
                 TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
                 if [ -n "$TEAM_MEMBER_LOGINS" ]; then
                   TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
+                else
+                  TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
                 fi
-              else
-                # API call failed or insufficient permissions - use placeholder
-                echo "Warning: Could not fetch members for team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+              elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
+                # Team not found
+                echo "Warning: Team $clean_team not found (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:team-not-found|"
+              elif [ "$MEMBERS_HTTP_CODE" = "403" ]; then
+                # Insufficient permissions
+                echo "Warning: Insufficient permissions to access team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
                 TEAM_MEMBERS="$TEAM_MEMBERS$team:insufficient-permissions|"
+              elif [ "$MEMBERS_HTTP_CODE" = "401" ]; then
+                # Unauthorized
+                echo "Warning: Unauthorized access to team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:unauthorized|"
+              else
+                # Other error
+                echo "Warning: Failed to fetch members for team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:api-error|"
               fi
             done
           fi
@@ -163,7 +177,7 @@ jobs:
         id: analyze
         run: |
           # Run the dedicated Python script for CODEOWNERS analysis
-          python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
+          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ_GITHUB_TOKEN="${{ secrets.ORG_READ_GITHUB_TOKEN }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
         # The script writes directly to GITHUB_OUTPUT, so we don't need to capture stdout here
 
   post-comment:
@@ -206,6 +220,18 @@ jobs:
                     if [ "$team_owners" = "insufficient-permissions" ]; then
                       # Token doesn't have permission to read team members
                       team_members_info="Members: (insufficient token permissions)"
+                    elif [ "$team_owners" = "team-not-found" ]; then
+                      # Team doesn't exist
+                      team_members_info="Members: (team not found)"
+                    elif [ "$team_owners" = "unauthorized" ]; then
+                      # Unauthorized access
+                      team_members_info="Members: (unauthorized access)"
+                    elif [ "$team_owners" = "api-error" ]; then
+                      # Other API error
+                      team_members_info="Members: (API error)"
+                    elif [ "$team_owners" = "no-members" ]; then
+                      # Team exists but has no members
+                      team_members_info="Members: (no members)"
                     else
                       # For teams, we show all members since we can't easily get full names for team members
                       all_members=$(echo "$team_owners" | sed 's/,/, /g')

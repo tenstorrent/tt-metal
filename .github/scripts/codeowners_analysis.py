@@ -34,21 +34,40 @@ def get_user_full_name(username):
     if "/" in clean_username:
         return clean_username
 
+    # Try both tokens
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("ORG_READ_GITHUB_TOKEN") or ""
+
+    if not token:
+        print(f"Warning: No token available for user lookup of {username}")
+        return clean_username
+
     try:
         # Use GitHub API to get user information
         url = f"https://api.github.com/users/{clean_username}"
         req = urllib.request.Request(url)
-        req.add_header(
-            "Authorization", f'Bearer {os.environ.get("GITHUB_TOKEN", os.environ.get("ORG_READ_GITHUB_TOKEN", ""))}'
-        )
+        req.add_header("Authorization", f"Bearer {token}")
         req.add_header("Accept", "application/vnd.github.v3+json")
         req.add_header("User-Agent", "GitHub-Actions-CodeOwners-Analysis")
 
         with urllib.request.urlopen(req) as response:
-            user_data = json.loads(response.read().decode())
-            return user_data.get("name") or clean_username
-    except (HTTPError, KeyError, json.JSONDecodeError):
-        # If API call fails, return the username as fallback
+            if response.getcode() == 200:
+                user_data = json.loads(response.read().decode())
+                return user_data.get("name") or clean_username
+            else:
+                print(f"Warning: API returned {response.getcode()} for user {username}")
+                return clean_username
+    except HTTPError as e:
+        if e.code == 401:
+            print(f"Warning: Unauthorized access for user {username} (insufficient token permissions)")
+        elif e.code == 403:
+            print(f"Warning: Forbidden access for user {username} (token lacks user:read scope)")
+        elif e.code == 404:
+            print(f"Warning: User {username} not found")
+        else:
+            print(f"Warning: HTTP error {e.code} for user {username}")
+        return clean_username
+    except Exception as e:
+        print(f"Warning: Error getting name for {username}: {e}")
         return clean_username
 
 
