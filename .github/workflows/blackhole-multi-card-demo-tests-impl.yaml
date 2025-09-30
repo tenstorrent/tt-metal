@@ -80,6 +80,23 @@ jobs:
             pip install -r /work/models/tt_transformers/requirements.txt
           fi
           ${{ matrix.test-group.cmd }}
+      - name: Save environment data
+        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        timeout-minutes: 15
+        env:
+          ARCH_NAME: ${{ matrix.test-group.arch }}
+        run: python3 /work/.github/scripts/data_analysis/create_benchmark_with_environment_json.py
+
+      - name: Upload benchmark data
+        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -141,6 +158,24 @@ jobs:
             pip install -r /work/models/tt_transformers/requirements.txt
           fi
           ${{ matrix.test-group.cmd }}
+
+      - name: Save environment data
+        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        timeout-minutes: 15
+        env:
+          ARCH_NAME: ${{ matrix.test-group.arch }}
+        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+
+      - name: Upload benchmark data
+        if: ${{ contains(matrix.test-group.name, 'llama') && !cancelled() }}
+        uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+        with:
+          ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+          sftp-batchfile: /work/.github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+          username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+          hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+          path: /work
+
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
