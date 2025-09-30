@@ -660,18 +660,11 @@ class StableDiffusion3Pipeline:
 
                 # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
-                tt_latents = ttnn.experimental.all_gather_async(
-                    input_tensor=ttnn.unsqueeze(tt_latents_step_list[self.vae_submesh_idx], 0),
+                tt_latents = self.ccl_managers[self.vae_submesh_idx].all_gather(
+                    tt_latents_step_list[self.vae_submesh_idx],
                     dim=1,
-                    multi_device_global_semaphore=self.ccl_managers[self.vae_submesh_idx].get_ag_ping_pong_semaphore(
-                        self.dit_parallel_config.sequence_parallel.mesh_axis
-                    ),
-                    topology=ttnn.Topology.Linear,
-                    mesh_device=self.vae_device,
-                    cluster_axis=self.dit_parallel_config.sequence_parallel.mesh_axis,
-                    num_links=self.ccl_managers[self.vae_submesh_idx].num_links,
+                    mesh_axis=self.dit_parallel_config.sequence_parallel.mesh_axis,
                 )
-                tt_latents = ttnn.squeeze(tt_latents, 0)
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
@@ -736,11 +729,15 @@ class StableDiffusion3Pipeline:
             else:
                 latent_model_input = latent
 
-            return self.transformers[cfg_index](
+            spatial_out = self.transformers[cfg_index](
                 spatial=latent_model_input,
                 prompt=prompt,
                 pooled=pooled_projection,
                 timestep=timestep,
+            )
+
+            return self.ccl_managers[cfg_index].all_gather(
+                spatial_out, dim=1, mesh_axis=self.dit_parallel_config.sequence_parallel.mesh_axis
             )
 
         if traced and self._trace is None:

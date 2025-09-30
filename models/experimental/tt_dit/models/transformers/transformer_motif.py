@@ -295,7 +295,6 @@ class MotifTransformer(Module):
         # we keep the register tokens in the sequence
         # spatial = spatial[:, self.register_tokens.shape[1] :]
 
-        # spatial = self.ccl_manager.all_gather(spatial, dim=1, mesh_axis=sp_axis)
         spatial = self.ccl_manager.all_gather(spatial, dim=2, mesh_axis=tp_axis)
 
         # same as in SD3 but without norm and silu
