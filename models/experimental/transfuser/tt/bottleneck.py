@@ -148,6 +148,7 @@ class TTRegNetBottleneck:
         out, shape_ = self.conv1(device, x, x.shape)
 
         logger.info(f"conv2- 3x3 grouped convolution")
+        logger.info(f"{out.shape=}")
         # conv2: 3x3 grouped convolution
         out, shape_ = self.conv2(device, out, shape_)
 

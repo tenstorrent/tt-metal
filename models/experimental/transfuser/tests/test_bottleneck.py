@@ -102,7 +102,7 @@ def preprocess_parameters_for_ttnn(torch_model, device):
 )
 def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size):
     """Test RegNet bottleneck with PCC assertion."""
-    device = ttnn.open_device(device_id=0)
+    device = ttnn.open_device(device_id=0, l1_small_size=16384)
 
     try:
         # Create PyTorch model for reference
