@@ -926,6 +926,9 @@ async function run() {
         return ids.length ? ids.join(' ') : '';
       }; // create a function that takes in an array of owners and returns a string of owner mentions (as slack IDs)
 
+      // Cache for error snippets to avoid fetching the same run's errors multiple times
+      const errorSnippetsCache = new Map();
+
       // create a list of all the failing workflows with their owner information for slack messaging
       const failingItems = [];
       for (const [name, runs] of filteredGrouped.entries()) { // for each pipeline run in the filtered grouped map
@@ -938,7 +941,8 @@ async function run() {
         const latestFail = mainRuns.find(r => r.conclusion !== 'success');
         let owners = undefined;
         try {
-          const errs = await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 10); // get the error snippets for the latest failing run
+          const errs = await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 20); // get the error snippets for the latest failing run (fetch 20 to reuse later)
+          errorSnippetsCache.set(latestFail.id, errs); // cache the error snippets for reuse
           // Aggregate owners from snippets
           const ownerSet = new Map(); // ownerSet will contain the mappings from an owner's id and name to the owner object
           for (const e of (errs || [])) {
@@ -1055,7 +1059,15 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets from the latest failing run (item.run_id already contains the latest failing run)
-          item.error_snippets = item.run_id ? await fetchErrorSnippetsForRun(octokit, github.context, item.run_id, 20) : [];
+          // Reuse cached error snippets if available, otherwise fetch
+          if (item.run_id) {
+            item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(octokit, github.context, item.run_id, 20);
+            if (!errorSnippetsCache.has(item.run_id)) {
+              errorSnippetsCache.set(item.run_id, item.error_snippets);
+            }
+          } else {
+            item.error_snippets = [];
+          }
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
           // Mirror into the corresponding change entry
@@ -1106,7 +1118,15 @@ async function run() {
             item.first_failed_author_url = author.htmlUrl;
           }
           // Error snippets from the latest failing run (item.run_id already contains the latest failing run)
-          item.error_snippets = item.run_id ? await fetchErrorSnippetsForRun(octokit, github.context, item.run_id, 20) : [];
+          // Reuse cached error snippets if available, otherwise fetch
+          if (item.run_id) {
+            item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(octokit, github.context, item.run_id, 20);
+            if (!errorSnippetsCache.has(item.run_id)) {
+              errorSnippetsCache.set(item.run_id, item.error_snippets);
+            }
+          } else {
+            item.error_snippets = [];
+          }
           // Omit repeated errors (simplified)
           item.repeated_errors = [];
         }
