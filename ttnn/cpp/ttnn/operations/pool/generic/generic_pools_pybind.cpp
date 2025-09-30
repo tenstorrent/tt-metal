@@ -107,8 +107,8 @@ void bind_max_pool2d_operation(py::module& module) {
                bool reallocate_halo_output,
                bool return_indices,
                const DataType dtype,
-               const Layout output_layout) {
-                return self(
+               const Layout output_layout) -> py::object {
+                auto result = self(
                     input_tensor,
                     batch_size,
                     input_h,
@@ -127,6 +127,13 @@ void bind_max_pool2d_operation(py::module& module) {
                     return_indices,
                     dtype,
                     output_layout);
+
+                // Return single tensor or tuple based on vector size
+                if (result.size() == 1) {
+                    return py::cast(result[0]);
+                } else {
+                    return py::cast(result);
+                }
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
