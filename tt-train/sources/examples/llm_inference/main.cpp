@@ -35,7 +35,7 @@ int main(int argc, char **argv) {
     std::string prompt;
     std::string safetensors_path =
         "/home/ubuntu/.cache/huggingface/hub/models--gpt2/snapshots/607a30d783dfa663caf39e06633721c8d4cfcd7e/";
-    float temperature = 1.0F;
+    float temperature = 0.0F;
     uint32_t tokens_to_generate = 256;
 
     app.add_option("-c,--config", model_path, "Path to the LLM config")->default_val(model_path);
