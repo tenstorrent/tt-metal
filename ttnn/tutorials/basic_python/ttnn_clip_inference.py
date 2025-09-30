@@ -11,6 +11,8 @@ import math
 import numpy as np
 from PIL import Image
 from transformers import CLIPTokenizer, CLIPModel
+import requests
+from io import BytesIO
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
 
@@ -440,13 +442,14 @@ def main():
         def build_attention_mask(self):
             # lazily create causal attention mask, with full attention between the vision tokens
             # pytorch uses additive attention mask; fill with -inf
-
-            # TODO: Switch this to TTNN
-            mask = torch.empty(self.context_length, self.context_length)
-            mask.fill_(float("-inf"))
-            mask.triu_(1)  # zero out the lower diagonal
-
-            mask = ttnn.from_torch(mask, device=get_device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            mask = ttnn.full(
+                shape=[self.context_length, self.context_length],
+                fill_value=float("-inf"),
+                dtype=ttnn.bfloat16,
+                device=get_device(),
+                layout=ttnn.TILE_LAYOUT,
+            )
+            mask = ttnn.triu(mask, diagonal=1)
             return mask
 
         def encode_image(self, image):
