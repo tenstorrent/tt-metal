@@ -49,8 +49,31 @@ jobs:
             echo "pr-exists=false" >> $GITHUB_OUTPUT
           fi
 
-  analyze-codeowners:
+  get-reviews:
     needs: find-pr
+    if: needs.find-pr.outputs.pr-exists == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      approved-reviewers: ${{ steps.get-reviews.outputs.approved-reviewers }}
+    steps:
+      - name: Get PR reviews
+        id: get-reviews
+        run: |
+          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
+
+          # Get PR reviews using GitHub API
+          REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
+          REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API")
+
+          # Extract approved reviews (state: APPROVED)
+          APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' | tr '\n' ',' | sed 's/,$//')
+
+          echo "approved-reviewers=$APPROVED_REVIEWERS" >> $GITHUB_OUTPUT
+
+  analyze-codeowners:
+    needs: [find-pr, get-reviews]
     if: needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     outputs:
@@ -94,22 +117,6 @@ jobs:
       - name: Install codeowners package
         run: |
           pip install codeowners
-
-      - name: Get PR reviews
-        id: get-reviews
-        run: |
-          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
-
-          # Get PR reviews using GitHub API
-          REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
-          REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                           -H "Accept: application/vnd.github.v3+json" \
-                           "$REVIEWS_API")
-
-          # Extract approved reviews (state: APPROVED)
-          APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' | tr '\n' ',' | sed 's/,$//')
-
-          echo "approved-reviewers=$APPROVED_REVIEWERS" >> $GITHUB_OUTPUT
 
       - name: Analyze CODEOWNERS
         id: analyze
