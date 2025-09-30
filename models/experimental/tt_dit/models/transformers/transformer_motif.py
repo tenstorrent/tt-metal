@@ -142,10 +142,12 @@ class MotifTransformer(Module):
         tp_axis = parallel_config.tensor_parallel.mesh_axis
 
         raw_spatial_sequence_length = (latents_height // patch_size) * (latents_width // patch_size)
-        spatial_sequence_length = raw_spatial_sequence_length + register_token_num
+
+        self.spatial_sequence_length = raw_spatial_sequence_length + register_token_num
         self.spatial_sequence_padding = TransformerBlock.spatial_sequence_padding_length(
-            length=spatial_sequence_length, sp_factor=sp_factor
+            length=self.spatial_sequence_length, sp_factor=sp_factor
         )
+        self.padded_spatial_sequence_length = self.spatial_sequence_length + self.spatial_sequence_padding
 
         self.pos_embed = PatchEmbed(
             in_channels=in_channels,
@@ -205,13 +207,13 @@ class MotifTransformer(Module):
         )
 
         self.register_tokens = Parameter(
-            shape=[1, spatial_sequence_length + self.spatial_sequence_padding, inner_dim],
+            shape=[1, self.padded_spatial_sequence_length, inner_dim],
             device=mesh_device,
             mesh_mapping={sp_axis: 1, tp_axis: 2},
         )
 
         self.register_tokens_mask = Parameter(
-            shape=[1, spatial_sequence_length + self.spatial_sequence_padding, inner_dim],
+            shape=[1, self.padded_spatial_sequence_length, inner_dim],
             dtype=ttnn.bfloat4_b,
             device=mesh_device,
             mesh_mapping={sp_axis: 1, tp_axis: 2},
@@ -238,7 +240,7 @@ class MotifTransformer(Module):
         """Run the model forward.
 
         Args:
-            spatial: Tensor with shape [batch_size, spatial_sequence_length, channels].
+            spatial: Tensor with shape [batch_size, padded_spatial_sequence_length / sp_factor, channels].
             prompt: Tensor with shape [batch_size, prompt_sequence_length, joint_attention_dim].
             pooled: Tensor with shape [batch_size, pooled_projection_dim].
             timestep: Tensor with shape [batch_size, 1].
@@ -250,7 +252,7 @@ class MotifTransformer(Module):
         if len(timestep.shape) == 4:
             timestep = ttnn.squeeze(ttnn.squeeze(timestep, 0), 0)
 
-        batch_size, spatial_sequence_length, _ = spatial.shape
+        batch_size, _, _ = spatial.shape
         assert len(prompt.shape) == 3
         assert len(pooled.shape) == 2
         assert timestep.shape == [batch_size, 1]
@@ -283,7 +285,7 @@ class MotifTransformer(Module):
                 spatial=spatial,
                 prompt=prompt,
                 time_embed=time_embed_silu,
-                spatial_sequence_length=spatial_sequence_length,
+                spatial_sequence_length=self.spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
             )
 
@@ -312,11 +314,11 @@ class MotifTransformer(Module):
 
         tokens = state.pop("register_tokens", None)
         if tokens is not None:
-            mask = torch.zeros_like(tokens)
+            token_num, _ = tokens.shape
+            assert token_num == self.register_token_num
 
-            padding = (self.latents_height // self.patch_size) * (
-                self.latents_width // self.patch_size
-            ) + self.spatial_sequence_padding
+            mask = torch.zeros_like(tokens)
+            padding = self.padded_spatial_sequence_length - self.register_token_num
 
             state["register_tokens"] = torch.nn.functional.pad(tokens, (0, 0, 0, padding))
             state["register_tokens_mask"] = torch.nn.functional.pad(mask, (0, 0, 0, padding), value=1)
