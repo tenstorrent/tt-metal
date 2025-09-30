@@ -26,7 +26,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_chw(
 
     log_debug(tt::LogType::LogOp, "Running op with HW={}, C={}, shard_shape={}", HW, C, a.shard_spec()->shape);
 
-    TT_FATAL(C < TILE_HEIGHT, "C must be 32 or smaller");
+    TT_FATAL(C <= TILE_HEIGHT, "C must not exceed 32");
     TT_FATAL(
         tt::div_up(HW, a.shard_spec()->shape[0]) == input_cores.size(),
         "Mismatch between core grid and input/shard shapes");
