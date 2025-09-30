@@ -637,8 +637,8 @@ function findFirstFailInWindow(mainBranchRunsWindow) {
  * @param {Array<object>} scheduledMainRuns - Array of scheduled runs on main branch, sorted by date (newest first)
  * @param {object} context - GitHub Actions context
  * @returns {object} Object containing:
- *   - newestGoodSha: Short SHA of the last successful run (e.g., `a1b2c3d`)
- *   - newestBadSha: Short SHA of the earliest failing run (e.g., `e4f5g6h`)
+ *   - newestGoodSha: Short SHA of the most recent successful run (e.g., `a1b2c3d`)
+ *   - newestBadSha: Short SHA of the most recent failing run (e.g., `e4f5g6h`)
  */
 function findGoodBadCommits(scheduledMainRuns, context) {
   let newestGoodSha = EMPTY_VALUE;
@@ -649,12 +649,12 @@ function findGoodBadCommits(scheduledMainRuns, context) {
   for (const run of scheduledMainRuns) {
     if (!foundGood && run.conclusion === 'success') { // find the most recent successful run
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      newestGoodSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`; // set the last good sha to the short sha of the most recent successful run
+      newestGoodSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`; // set the newest good sha to the short sha of the most recent successful run
       foundGood = true;
     }
-    if (!foundBad && run.conclusion !== 'success') { // find the earliest failing run
+    if (!foundBad && run.conclusion !== 'success') { // find the most recent failing run
       const shortSha = run.head_sha.substring(0, SHA_SHORT_LENGTH);
-      newestBadSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`; // set the earliest bad sha to the short sha of the earliest failing run
+      newestBadSha = `[\`${shortSha}\`](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${run.head_sha})`; // set the newest bad sha to the short sha of the most recent failing run
       foundBad = true;
     }
     if (foundGood && foundBad) break; // break the loop if both good and bad runs are found
@@ -680,8 +680,8 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
       run: EMPTY_VALUE,
       pr: EMPTY_VALUE,
       title: EMPTY_VALUE,
-      lastGoodSha: EMPTY_VALUE,
-      earliestBadSha: EMPTY_VALUE
+      newestGoodSha: EMPTY_VALUE,
+      newestBadSha: EMPTY_VALUE
     };
   }
 
@@ -690,7 +690,7 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
   const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch'); // get the relevant main runs for finding good and bad commits
   // Alternative approach: include all runs on main branch
   // const mainRuns = mainBranchRuns;
-  const { lastGoodSha, earliestBadSha } = findGoodBadCommits(mainRuns, context); // find the newest good and bad commits
+  const { newestGoodSha, newestBadSha } = findGoodBadCommits(mainRuns, context); // find the newest good and bad commits
 
   return {
     status: lastMainRun.conclusion === 'success' ? SUCCESS_EMOJI : FAILURE_EMOJI,
@@ -698,8 +698,8 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
     run: `[Run](${lastMainRun.html_url})${lastMainRun.run_attempt > 1 ? ` (#${lastMainRun.run_attempt})` : ''}`, // get the run hyperlink for the latest main run
     pr: prInfo.prNumber, // get the PR number for the latest main run
     title: prInfo.prTitle, // get the PR title for the latest main run
-    lastGoodSha, // get the last good sha for the latest main run
-    earliestBadSha: lastMainRun.conclusion !== 'success' ? earliestBadSha : EMPTY_VALUE // if the last main run is successful, don't bother showing the most recent failure
+    newestGoodSha, // get the newest good sha for the latest main run
+    newestBadSha: lastMainRun.conclusion !== 'success' ? newestBadSha : EMPTY_VALUE // if the last main run is successful, don't bother showing the most recent failure
   };
 }
 
@@ -729,14 +729,14 @@ async function generateSummaryBox(grouped, github, context) {
     const workflowLink = getWorkflowLink(context, runs[0]?.path); // get the link to the workflow page that lists all the runs
     const runInfo = await getLastRunInfo(mainBranchRuns, github, context); // get the last run info for the workflow
 
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.earliestBadSha} | ${runInfo.lastGoodSha} |`; // build the row of the summary table
+    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.newestBadSha} | ${runInfo.newestGoodSha} |`; // build the row of the summary table
     rows.push(row);
   }
 
   return [
     '## Workflow Summary',
-    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Unique Success Rate | Retry Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Earliest Bad SHA | Last Good SHA |',
-    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|-------------------|----------|----------|---------|-----------|------------------|---------------|',
+    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Unique Success Rate | Retry Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Newest Bad SHA | Newest Good SHA |',
+    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|-------------------|----------|----------|---------|-----------|----------------|-----------------|',
     ...rows,
     ''  // Empty line for better readability
   ].join('\n'); // turn the array of rows into a single string so it can be rendered as a markdown table
@@ -783,8 +783,8 @@ async function buildReport(grouped, github, context) {
     '| Last Run | Link to the most recent run on main, with attempt number if applicable |',
     '| Last PR | Link to the PR associated with the most recent run, if any |',
     '| PR Title | Title of the PR associated with the most recent run, if any |',
-    '| Earliest Bad SHA | Short SHA of the earliest failing run on main (only shown if last run failed) |',
-    '| Last Good SHA | Short SHA of the last successful run on main |'
+    '| Newest Bad SHA | Short SHA of the most recent failing run on main (only shown if last run failed) |',
+    '| Newest Good SHA | Short SHA of the most recent successful run on main |'
   ].join('\n');
 }
 
