@@ -8,9 +8,10 @@
 
 namespace ttnn::operations::experimental::cnn {
 
-ttnn::Tensor ExecuteConvertToCHW::invoke(
-    const Tensor& a, const std::optional<MemoryConfig>& memory_config, const std::optional<DataType>& dtype) {
-    auto program = ConvertToCHW{memory_config.value_or(a.memory_config()), dtype.value_or(a.dtype())};
+ttnn::Tensor ExecuteConvertToCHW::invoke(const Tensor& a, const std::optional<DataType>& dtype) {
+    auto output_memory_config = infer_output_memory_config(a);
+
+    auto program = ConvertToCHW{output_memory_config, dtype.value_or(a.dtype())};
     return tt::tt_metal::operation::run(program, {a}, {}, {}).at(0);
 }
 

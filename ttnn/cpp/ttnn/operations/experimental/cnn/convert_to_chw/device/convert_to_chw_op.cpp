@@ -9,6 +9,35 @@
 
 namespace ttnn::operations::experimental::cnn {
 
+tt::tt_metal::MemoryConfig infer_output_memory_config(const Tensor& input_tensor) {
+    using namespace tt::constants;
+
+    TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded to infer output memory config");
+
+    const auto& input_shard_spec = input_tensor.memory_config().shard_spec().value();
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto C = input_shape[-1];
+
+    // Calculate output shard dimensions
+    // Input tensor: [1, 1, HW, C] with HEIGHT_SHARDED [shard_height, 32]
+    // Output tensor: [1, 1, C, HW] with WIDTH_SHARDED [C, shard_width_per_core]
+    //
+    // For HEIGHT_SHARDED input, HW is distributed across cores:
+    //   HW_per_core = shard_height (since we're height sharding the HW dimension)
+    // For WIDTH_SHARDED output, HW should still be distributed the same way:
+    //   output_shard_width = HW_per_core = shard_height
+    const auto input_shard_height = input_shard_spec.shape[0];
+    const auto output_shard_width = input_shard_height;  // HW dimension per core stays the same
+
+    // Create output shard spec with WIDTH_SHARDED layout
+    const std::array<uint32_t, 2> output_shard_shape = {C, output_shard_width};
+    auto output_shard_spec =
+        tt::tt_metal::ShardSpec(input_shard_spec.grid, output_shard_shape, input_shard_spec.orientation);
+
+    return tt::tt_metal::MemoryConfig(
+        tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED, input_tensor.memory_config().buffer_type(), output_shard_spec);
+}
+
 void ConvertToCHW::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     TT_FATAL(input_tensors.size() == 1, "Expected 1 input tensor");
