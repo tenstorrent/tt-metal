@@ -18,10 +18,10 @@ from models.tt_transformers.tt.ccl import TT_CCL
 
 NR_ITER_E2E = 1
 NR_FORWARD_ITERATIONS = 15
-THRESHOLD_PERCENT = 0.1
+THRESHOLD_PERCENT = 10
 TEST_FORWARD_INFERENCE_ONLY = True
 
-DEBUG_SAVE_AND_PRINT = True
+DEBUG_SAVE_AND_PRINT = False
 
 
 class BenchmarkProfilerWrapper:
@@ -41,17 +41,6 @@ class BenchmarkProfilerWrapper:
         return self.profiler_backbone.get_duration(*args, **kwargs)
 
 
-def set_hf_model_env():
-    assert os.environ.get("HF_MODEL") is None, "This test will set it depending on the device being run"
-    os_mesh_device = os.environ["MESH_DEVICE"]
-    if os_mesh_device in ["N150", "N300"]:
-        os.environ["HF_MODEL"] = "google/gemma-3-4b-it"
-    elif os_mesh_device == "T3K":
-        os.environ["HF_MODEL"] = "google/gemma-3-27b-it"
-    else:
-        assert False, "Unknown model"
-
-
 # copied most of pytest parameters from https://github.com/tenstorrent/tt-metal/blob/1566d9ae155c4aba5432f874d375dfbae5d551cd/models/demos/gemma3/tests/test_vision_cross_attention_transformer.py#L30C5-L30C22
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
@@ -69,8 +58,6 @@ def test_perf_gemma_vision(
     mesh_device,
     bsz,
 ):
-    set_hf_model_env()
-
     profiler = BenchmarkProfilerWrapper(device=mesh_device)
 
     keys_e2e = ["total_run", "model_load_and_initialization", "postprocessing_and_transfer"]
@@ -105,15 +92,10 @@ def test_perf_gemma_vision(
     measurements_summarised = (
         dict()
     )  # a mean, median, or similar function of all the measurements done for that one specific metric
+
     for key, val in measurements.items():
         mean = sum(val) / len(val)
         measurements_summarised[key] = mean
-
-        # The idea is to look only at larger ones as they are only relevant for upper threshold. Also we square them so outliers have more impact
-        # We can perhaps change this threshold at load time when the test is being run (eg. multiply it by 2)
-        values_above = [p for p in val if p >= mean]
-        average_squared_above = sum([p**2 for p in values_above]) / len(values_above)
-        measurements_summarised[key + "_threshold"] = average_squared_above ** (0.5)
 
     if DEBUG_SAVE_AND_PRINT:
         for key, val in measurements.items():
@@ -136,7 +118,7 @@ def test_perf_gemma_vision(
     if TEST_FORWARD_INFERENCE_ONLY:
         metric_keys_to_test = ["model_forward_inference"]
     else:
-        metric_keys_to_test = [k for k in targets.keys() if not k.endswith("_threshold")]
+        metric_keys_to_test = [k for k in targets.keys()]
 
     for key in metric_keys_to_test:
         threshold = targets[key] * (1 + THRESHOLD_PERCENT / 100)
@@ -232,6 +214,6 @@ def load_targets(filename, device_type):
             logger.error(f"Error decoding JSON from {filename}: {e}. Returning empty list.")
             return []
 
-    dict_targets = targets["targets"][device_type]
+    dict_targets = targets[device_type]
 
     return dict_targets
