@@ -107,8 +107,8 @@ void bind_max_pool2d_operation(py::module& module) {
                bool reallocate_halo_output,
                bool return_indices,
                const DataType dtype,
-               const Layout output_layout) -> py::object {
-                auto result = self(
+               const Layout output_layout) {
+                return self(
                     input_tensor,
                     batch_size,
                     input_h,
@@ -127,8 +127,6 @@ void bind_max_pool2d_operation(py::module& module) {
                     return_indices,
                     dtype,
                     output_layout);
-
-                return result;
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
