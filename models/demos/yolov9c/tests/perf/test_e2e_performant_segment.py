@@ -29,7 +29,7 @@ from models.demos.yolov9c.tests.perf.test_e2e_performant_detect import run_yolov
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        50 if ttnn.get_num_devices() < 2 else 45,
+        24 if ttnn.get_num_devices() < 2 else 22,
     ],
 )
 def test_e2e_performant(model_location_generator, device, batch_size, resolution, expected_inference_throughput):

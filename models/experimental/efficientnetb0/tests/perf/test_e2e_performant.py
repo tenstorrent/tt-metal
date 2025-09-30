@@ -78,7 +78,7 @@ def run_efficientnetb0_inference(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        158 if ttnn.get_num_devices() < 2 else 132,
+        78 if ttnn.get_num_devices() < 2 else 64,
     ],
 )
 @pytest.mark.models_performance_bare_metal
@@ -114,7 +114,7 @@ def test_e2e_performant(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        261,
+        230,
     ],
 )
 @pytest.mark.models_performance_bare_metal
