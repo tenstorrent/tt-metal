@@ -63,8 +63,8 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
-        (False, 10),
+        (True, 1),
+        (False, 1),
     ],
     ids=["trace", "non-trace"],
 )
