@@ -203,6 +203,9 @@ static Tensor reduce_impl(
             Tensor output_tensor = input_tensor_arg;
             for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
                 bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
+                // Only apply the scalar once when reducing dim-by-dim,
+                // otherwise the result will be scaled multiple times.
+                bool effective_scalar = i_dim == rank - 1 ? scalar : 1.0;
                 if (found) {
                     bool transpose = i_dim < rank - 2;
                     int reduce_dim = i_dim;
@@ -217,7 +220,7 @@ static Tensor reduce_impl(
                             /*keepdim=*/true,
                             memory_config,
                             compute_kernel_config,
-                            scalar,
+                            effective_scalar,
                             non_height_width_dims);
                     } else {
                         output_tensor = reduce_impl<ReduceType::Sum>(
@@ -226,7 +229,7 @@ static Tensor reduce_impl(
                             /*keepdim=*/true,
                             memory_config,
                             compute_kernel_config,
-                            scalar,
+                            effective_scalar,
                             non_height_width_dims);
                     }
                     if (transpose) {
