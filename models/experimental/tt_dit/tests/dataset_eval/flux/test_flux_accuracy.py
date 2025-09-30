@@ -14,7 +14,7 @@ from models.experimental.tt_dit.tests.dataset_eval.utils.fid_score import calcul
 from models.experimental.tt_dit.pipelines.flux1.pipeline_flux1 import Flux1Pipeline
 from models.experimental.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 import ttnn
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 from loguru import logger
 
 
@@ -43,8 +43,8 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "flux_test_results.json"
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
-        ("schnell", 1024, 1024, 1.0, 4),
-        # ("dev", 1024, 1024, 3.5, 28),
+        # ("schnell", 1024, 1024, 1.0, 4),
+        ("dev", 1024, 1024, 3.5, 28),
     ],
 )
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
@@ -95,6 +95,8 @@ def test_accuracy_flux(
 
     images = []
     for prompt in prompts:
+        logger.info(f"Processing prompt: {prompt}")
+        logger.info(f"Prompt number: {start_from + len(images) + 1}")
         negative_prompt = ""
 
         profiler.start("denoising_loop")
