@@ -382,7 +382,7 @@ static std::vector<float> strict_copy_linear(
 void load_model_from_safetensors(
     const std::filesystem::path& path, serialization::NamedParameters& parameters, const LlamaConfig& config) {
     // meta_style=true => NO Q/K unpermute (assumes interleaved layout already)
-    const bool meta_style = true;
+    const bool meta_style = false;
 
     std::set<std::string> used_parameters;
 
