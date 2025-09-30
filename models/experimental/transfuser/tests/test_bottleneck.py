@@ -140,14 +140,15 @@ def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size):
         ttnn_model = TTRegNetBottleneck(
             parameters=parameters, model_config=model_config, stride=stride, downsample=downsample, groups=groups
         )
-        tt_image_input = ttnn.from_torch(
+        tt_input = ttnn.from_torch(
             torch_input,
             # self.torch_image_input.permute(0, 2, 3, 1),
             dtype=ttnn.bfloat16,
             mesh_mapper=inputs_mesh_mapper,
         )
-        input_image_tensor = ttnn.to_device(tt_image_input, device)
-        tt_output = ttnn_model(input_image_tensor, device)
+        tt_input = ttnn.to_device(tt_input, device)
+        tt_input = ttnn.permute(tt_input, (0, 2, 3, 1))
+        tt_output = ttnn_model(tt_input, device)
         tt_torch_output = ttnn.to_torch(
             tt_output,
             device=device,

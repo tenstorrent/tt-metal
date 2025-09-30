@@ -5,6 +5,7 @@ import ttnn
 from models.experimental.transfuser.tt.utils import TTConv2D
 from typing import List
 from loguru import logger
+from models.experimental.transfuser.tt.bottleneck import TTRegNetBottleneck
 
 
 class TtTransfuserBackbone:
@@ -77,13 +78,13 @@ class TtTransfuserBackbone:
         stride: int,
         groups: int = 1,
         model_config=None,
-    ) -> List[RegNetBottleneck]:
+    ) -> List[TTRegNetBottleneck]:
         layers = []
 
         # First block (may have downsample)
         downsample = stride != 1 or self.inplanes != planes
         layers.append(
-            RegNetBottleneck(
+            TTRegNetBottleneck(
                 parameters=parameters["b1"],
                 model_config=model_config,
                 stride=stride,
@@ -97,7 +98,7 @@ class TtTransfuserBackbone:
         for block_num in range(1, blocks):
             block_name = f"b{block_num + 1}"
             layers.append(
-                RegNetBottleneck(
+                TTRegNetBottleneck(
                     parameters=parameters[block_name],
                     model_config=model_config,
                     stride=1,
