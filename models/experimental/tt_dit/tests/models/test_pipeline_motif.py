@@ -49,8 +49,8 @@ from ...pipelines.motif.pipeline_motif import (
 @pytest.mark.parametrize(
     "traced",
     [
-        # pytest.param(True, id="tracing_on"),
-        pytest.param(False, id="tracing_off"),
+        pytest.param(True, id="tracing_on"),
+        # pytest.param(False, id="tracing_off"),
     ],
 )
 def test_motif_pipeline(
