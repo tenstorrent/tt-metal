@@ -674,8 +674,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             use_two_stage_reduce = true;
         }
     }
-    TT_FATAL(!use_two_stage_reduce, "Two-stage layernorm reduce algorithm is not supported");
-
     uint32_t num_subblocks_w = block_wt / subblock_wt;
 
     // Get all storage cores
