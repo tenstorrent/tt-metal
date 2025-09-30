@@ -110,13 +110,6 @@ MeshEvent EnqueueRecordEvent(
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
     const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
-// Make the specified MeshCommandQueue record an event and notify the host when it completes.
-// Can be used for CQ to CQ and host to CQ synchronization.
-MeshEvent EnqueueRecordEventToHost(
-    MeshCommandQueue& mesh_cq,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);
 
