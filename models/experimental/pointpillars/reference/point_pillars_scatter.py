@@ -48,6 +48,7 @@ class PointPillarsScatter(nn.Module):
             indices = this_coors[:, 2] * self.nx + this_coors[:, 3]
             indices = indices.type(torch.long)
             voxels = voxel_features[batch_mask, :]
+            print("Torch voxels: ", voxels)
             voxels = voxels.t()
 
             # Now scatter the blob back to the canvas.

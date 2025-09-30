@@ -44,7 +44,8 @@ class TtPointPillarsScatter:
 
             voxels = ttnn.embedding(row_indices, voxel_features)
             voxels = ttnn.squeeze(voxels, dim=0)
-            voxels_t = ttnn.permute(voxels, (1, 0))  # PCC: 0.9999981845508428
+            print("TTNN voxels: ", voxels)
+            voxels_t = ttnn.permute(voxels, (1, 0))  # PCC: 0.9999956360712174
 
             canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
             indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
@@ -57,7 +58,7 @@ class TtPointPillarsScatter:
                 1,
                 expanded_indices,
                 voxels_t,
-            )
+            )  # PCC - 0.6725618478186925
 
             batch_canvas.append(canvas)
 
