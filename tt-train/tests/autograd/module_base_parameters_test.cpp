@@ -7,16 +7,16 @@
 #include <autograd/auto_context.hpp>
 #include <memory>
 
-#include "autograd/module_base.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
+#include "modules/module_base.hpp"
 #include "ops/unary_ops.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/sgd.hpp"
 
-class Model : public ttml::autograd::ModuleBase {
+class Model : public ttml::modules::ModuleBase {
     std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
     std::shared_ptr<ttml::modules::LinearLayer> m_fc2;
 
@@ -39,7 +39,7 @@ public:
     }
 };
 
-class ModelUnusedLayer : public ttml::autograd::ModuleBase {
+class ModelUnusedLayer : public ttml::modules::ModuleBase {
     std::shared_ptr<ttml::modules::LinearLayer> m_fc1;
     std::shared_ptr<ttml::modules::LinearLayer> m_fc2;
     std::shared_ptr<ttml::modules::LinearLayer> m_fc3;

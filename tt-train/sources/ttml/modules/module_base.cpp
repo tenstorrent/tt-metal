@@ -8,9 +8,9 @@
 #include <string>
 #include <unordered_set>
 
-namespace ttml::autograd {
+namespace ttml::modules {
 
-void ModuleBase::register_tensor(const TensorPtr& tensor_ptr, const std::string& name) {
+void ModuleBase::register_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name) {
     auto [_, is_inserted] = m_named_tensors.emplace(name, tensor_ptr);
     if (!is_inserted) {
         throw std::logic_error("Names of two tensors coincide");
@@ -27,7 +27,7 @@ void ModuleBase::register_module(const ModuleBasePtr& module_ptr, const std::str
     }
 }
 
-void ModuleBase::override_tensor(const TensorPtr& tensor_ptr, const std::string& name) {
+void ModuleBase::override_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name) {
     if (auto it = m_named_tensors.find(name); it != m_named_tensors.end()) {
         it->second = tensor_ptr;
     } else {
@@ -118,4 +118,4 @@ autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor, co
         "implemented");
 }
 
-}  // namespace ttml::autograd
+}  // namespace ttml::modules

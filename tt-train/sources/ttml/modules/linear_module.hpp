@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "modules/module_base.hpp"
 
 namespace ttml::modules {
 
-class LinearLayer : public autograd::ModuleBase {
+class LinearLayer : public ModuleBase {
 private:
     autograd::TensorPtr m_weight;
     autograd::TensorPtr m_bias;
