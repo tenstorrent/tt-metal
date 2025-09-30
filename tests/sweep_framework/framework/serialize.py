@@ -101,7 +101,8 @@ def deserialize(object):
                 return maybe_enum
         try:
             return eval(object)
-        except (SyntaxError, NameError):
+        except (SyntaxError, NameError) as e:
+            logger.debug(f"eval failed with {type(e).__name__}: {e}; returning str(object)")
             return str(object)
 
     except Exception as e:
