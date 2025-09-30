@@ -42,12 +42,16 @@ void MAIN {
     //     dprint_tensix_dest_reg(i);
     // }
 
+    fused_eltwise_binary_uninit();
+
     fused_eltwise_binary_reuse_dest_multiple_tiles(
         0);  // move first tile to srcA as the first operand (actually moves a single face in a tile, but tha't ok since
              // reduce currently works 4 times on the evry same face)
     fused_reduce_populate_ones();  // populate the first tile in dest with ones, overwritting the data from the previous
                                    // step (that's why we're doing it before the loop)
     // after that move the ones from dest to srcB as the second operand (srcB stays the same until the very end)
+
+    dprint_tensix_dest_reg(0);
 
     fused_reduce_init<REDUCE_OP, REDUCE_DIM>();  // initialize reduce operation, should also fill the first face(and the
                                                  // second one) of the dest with zeros, since the result is accumulated
@@ -64,10 +68,10 @@ void MAIN {
                             // since it's overwritten with ones
         }
 
-        dprint_tensix_dest_reg(0);  // print the result of the reduce operation, always in 0
+        // dprint_tensix_dest_reg(0);  // print the result of the reduce operation, always in 0
 
         // Perform the reduce operation on the current tile
-        fused_reduce_compute<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx);
+        fused_reduce_compute<REDUCE_OP, REDUCE_DIM>(reduce_dst_idx, 0, 0, 0, 0);
     }
 
     fused_reduce_clear_dvalid_after_for_loop();

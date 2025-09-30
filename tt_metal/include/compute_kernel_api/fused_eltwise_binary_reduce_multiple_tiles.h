@@ -125,11 +125,12 @@ ALWI void fused_reduce_init() {
 // PHASE 5: REDUCE OPERATION
 // =============================================================================
 template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
-ALWI void fused_reduce_compute(uint32_t idst) {
+ALWI void fused_reduce_compute(
+    uint32_t idst, uint32_t operandA, uint32_t operandB, uint32_t tile_index_a, uint32_t tile_index_b) {
     // 8. reduce operation (using srcA from dest reuse, cb_scaler used as dummy first param)
     // **FIXED: Use llk_math_reduce_fused which doesn't clear data valid flags**
     MATH((llk_math_reduce_fused<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(idst)));
-    UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
+    UNPACK((llk_unpack_AB_but_fused_so_no_mop(operandA, operandB, tile_index_a, tile_index_b)));
 }
 
 // =============================================================================
@@ -138,7 +139,12 @@ ALWI void fused_reduce_compute(uint32_t idst) {
 ALWI void fused_reduce_clear_dvalid_after_for_loop() { MATH((llk_math_reduce_clear_dvalid_after_for_loop())); }
 
 // =============================================================================
-// PHASE 6: REDUCE CLEANUP
+// PHASE 6A: ELTWISE BINARY CLEANUP
+// =============================================================================
+ALWI void fused_eltwise_binary_uninit() { MATH((_fused_eltwise_binary_uninit_())); }
+
+// =============================================================================
+// PHASE 6B: REDUCE CLEANUP
 // =============================================================================
 ALWI void fused_reduce_uninit() {
     // 9. reduce_uninit
