@@ -420,6 +420,9 @@ jobs:
               echo "pr-number<<EOF"
               echo "$PR_NUMBER"
               echo "EOF"
+              echo "team-members<<EOF"
+              echo "$TEAM_MEMBERS"
+              echo "EOF"
               echo "create-new<<EOF"
               echo "$CREATE_NEW"
               echo "EOF"
@@ -471,6 +474,14 @@ jobs:
 
       - name: Send notifications
         run: |
+          PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
+          TEAM_MEMBERS="${{ steps.generate-comment.outputs.team-members }}"
+          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
+          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals }}"
+          APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
+          PING_OWNERS="${{ steps.generate-comment.outputs.ping-owners }}"
+          SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
+
           echo "Generating ping message for pending owners..."
 
           # Get PR information
