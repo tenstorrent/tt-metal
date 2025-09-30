@@ -313,3 +313,33 @@ jobs:
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
         run: |
           echo "No new commits found since latest release. No RC release needed."
+
+  trigger-prod-after-rc-success:
+    needs: [build-test-publish, release-precheck, create-tag]
+    runs-on: ubuntu-latest
+    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+    steps:
+      - name: Wait for RC workflow completion
+        run: |
+          echo "RC build-test-publish completed successfully"
+          echo "RC was built on tag: ${{ needs.create-tag.outputs.version }}"
+          echo "Preparing to trigger prod release workflow on the same commit"
+      - name: Trigger prod release workflow on same commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Use the same tag/commit that was created for the RC release
+            const rcTag = '${{ needs.create-tag.outputs.version }}';
+            console.log(`Triggering prod release on same tag as RC: ${rcTag}`);
+
+            const result = await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'package-and-release.yaml',
+              ref: rcTag,
+              inputs: {
+                'release-type': 'prod',
+                'dry-run': 'false'
+              }
+            });
+            console.log('Triggered prod release workflow:', result.status);
