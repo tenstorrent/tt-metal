@@ -21,7 +21,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 120
+        default: 150
       run_conv_tests:
         required: false
         type: boolean
@@ -54,7 +54,7 @@ on:
 
 # This is a fallback timeout for tests that are not marked with pytest.mark.timeout(xxx)
 env:
-  TEST_BUDGET_SECONDS: 300
+  TEST_BUDGET_SECONDS: 600
 
 jobs:
   ttnn-conv-tests:

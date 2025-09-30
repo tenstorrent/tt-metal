@@ -2348,6 +2348,7 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 }
 
 void kernel_main() {
+    set_l1_data_cache<true>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
@@ -3012,5 +3013,6 @@ void kernel_main() {
     // make sure all the noc transactions are acked before re-init the noc counters
     teardown(termination_signal_ptr, edm_status_ptr, receiver_channel_0_trid_tracker, receiver_channel_1_trid_tracker);
 
+    set_l1_data_cache<false>();
     WAYPOINT("DONE");
 }
