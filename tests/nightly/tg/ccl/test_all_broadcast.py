@@ -2,12 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
-from loguru import logger
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
-from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_broadcast import run_all_broadcast_impl
 
 
