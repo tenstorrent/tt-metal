@@ -174,7 +174,7 @@ def test_ccl_ddr_smoke_test(
         (True, 1),
         (False, 1),
     ],
-    ids=["trace","non-trace"],
+    ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
     "device_params",
