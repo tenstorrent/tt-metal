@@ -100,7 +100,7 @@ class TimeTextProjection(Module):
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
 class MotifTransformer(Module):
     ENCODED_TEXT_DIM = 4096
-    SD3_LATENT_CHANNEL = 16
+    LATENT_CHANNELS = 16
 
     def __init__(
         self,
@@ -123,8 +123,8 @@ class MotifTransformer(Module):
     ) -> None:
         super().__init__()
 
-        in_channels = self.SD3_LATENT_CHANNEL
-        out_channels = self.SD3_LATENT_CHANNEL
+        in_channels = self.LATENT_CHANNELS
+        out_channels = self.LATENT_CHANNELS
         inner_dim = num_attention_heads * attention_head_dim
 
         self.patch_size = patch_size
