@@ -711,6 +711,18 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
 /**
  * Initiates an asynchronous write for a single packet with size <= NOC_MAX_BURST_SIZE (i.e. maximum packet size).
  * Refer to \a noc_async_write for more details.
+ *
+ * Return value: None
+ *
+ * | Argument                               | Description                                            | Type     | Valid Range                      | Required |
+ * |----------------------------------------|--------------------------------------------------------|----------|----------------------------------|----------|
+ * | src_local_l1_addr                      | Source address in local L1 memory                      | uint32_t | 0..1MB                           | True     |
+ * | dst_noc_addr                           | Encoding of the destination NOC location (x,y)+address | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | size                                   | Size of data transfer in bytes                         | uint32_t | 0..1MB                           | True     |
+ * | noc                                    | Which NOC to use for the transaction                   | uint8_t  | 0 or 1                           | False    |
+ * | vc                                     | Which VC to use for the transaction                    | uint8_t  | 0-3 (Unicast VCs)                | False    |
+ * | enable_noc_tracing (template argument) | NOC tracing enable                                     | bool     | true or false                    | False    |
+ * | posted (template argument)             | Whether the write is posted (i.e. no ack required)     | bool     | true or false                    | False    |
  */
 // clang-format on
 template <bool enable_noc_tracing = true, bool posted = false>
@@ -756,13 +768,15 @@ FORCE_INLINE void noc_async_write_one_packet(
  *
  * Return value: None
  *
- * | Argument                          | Description                                             | Type     | Valid Range                      | Required |
- * |-----------------------------------|---------------------------------------------------------|----------|----------------------------------|----------|
- * | src_local_l1_addr                 | Source address in local L1 memory                       | uint32_t | 0..1MB                           | True     |
- * | dst_noc_addr                      | Encoding of the destination NOC location (x,y)+address  | uint64_t | Results of \a get_noc_addr calls | True     |
- * | size                              | Size of data transfer in bytes                          | uint32_t | 0..1MB                           | True     |
- * | noc                               | Which NOC to use for the transaction                    | uint8_t  | 0 or 1                           | False    |
- * | max_page_size (template argument) | Maximum size of a single transaction in bytes           | uint32_t | Any uint32_t number              | False    |
+ * | Argument                               | Description                                             | Type     | Valid Range                      | Required |
+ * |----------------------------------------|---------------------------------------------------------|----------|----------------------------------|----------|
+ * | src_local_l1_addr                      | Source address in local L1 memory                       | uint32_t | 0..1MB                           | True     |
+ * | dst_noc_addr                           | Encoding of the destination NOC location (x,y)+address  | uint64_t | Results of \a get_noc_addr calls | True     |
+ * | size                                   | Size of data transfer in bytes                          | uint32_t | 0..1MB                           | True     |
+ * | noc                                    | Which NOC to use for the transaction                    | uint8_t  | 0 or 1                           | False    |
+ * | max_page_size (template argument)      | Maximum size of a single transaction in bytes           | uint32_t | Any uint32_t number              | False    |
+ * | enable_noc_tracing (template argument) | NOC tracing enable                                      | bool     | true or false                    | False    |
+ * | posted (template argument)             | Whether the write is posted (i.e. no ack required)      | bool     | true or false                    | False    |
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1, bool enable_noc_tracing = true, bool posted = false>
@@ -1123,15 +1137,17 @@ FORCE_INLINE void noc_async_read_page(
  *
  * Return value: None
  *
- * | Argument                     | Description                          | Data type | Valid range                                    | required |
- * |------------------------------|--------------------------------------|-----------|------------------------------------------------|----------|
- * | id                           | Page id                              | uint32_t  | Any uint32_t number                            | True     |
- * | addrgen                      | Address generator object             | AddrGen   | N/A                                            | True     |
- * | src_local_l1_addr            | Address in local L1 memory           | uint32_t  | 0..1MB                                         | True     |
- * | size                         | Size of data in bytes                | uint32_t  | 0..NOC_MAX_BURST_SIZE MB                       | False    |
- * | offset                       | Custom address offset                | uint32_t  | 0..1MB                                         | False    |
- * | noc                          | Which NOC to use for the transaction | uint8_t   | 0 or 1                                         | False    |
- * | AddrGen (template parameter) | Address generator class              | typename  | Any AddrGen class in \a dataflow_api_addrgen.h | True     |
+ * | Argument                                | Description                                             | Data type | Valid range                                    | required |
+ * |-----------------------------------------|---------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | id                                      | Page id                                                 | uint32_t  | Any uint32_t number                            | True     |
+ * | addrgen                                 | Address generator object                                | AddrGen   | N/A                                            | True     |
+ * | src_local_l1_addr                       | Address in local L1 memory                              | uint32_t  | 0..1MB                                         | True     |
+ * | size                                    | Size of data in bytes                                   | uint32_t  | 0..NOC_MAX_BURST_SIZE MB                       | False    |
+ * | offset                                  | Custom address offset                                   | uint32_t  | 0..1MB                                         | False    |
+ * | noc                                     | Which NOC to use for the transaction                    | uint8_t   | 0 or 1                                         | False    |
+ * | AddrGen (template parameter)            | Address generator class                                 | typename  | Any AddrGen class in \a dataflow_api_addrgen.h | True     |
+ * | enable_noc_tracing (template parameter) | NOC tracing enable                                      | bool      | true or false                                  | False    |
+ * | posted (template parameter)             | Whether the write is posted (i.e. no ack required)      | bool      | true or false                                  | False    |
  */
 // clang-format on
 template <typename AddrGen, bool enable_noc_tracing = true, bool posted = false>
@@ -1312,12 +1328,14 @@ FORCE_INLINE void noc_async_read_shard(
  *
  * Return value: None
  *
- * | Argument                   | Description                                      | Type           | Valid Range                                              | Required |
- * |----------------------------|--------------------------------------------------|----------------|----------------------------------------------------------|----------|
- * | shard_id                   | Row-major index of a shard in the sharded tensor | uint32_t       | Any uint32_t number                                      | True     |
- * | s                          | TensorAccessor object                            | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
- * | src_local_l1_addr          | Source address in local L1 memory                | uint32_t       | 0..1MB                                                   | True     |
- * | noc                        | Which NOC to use for the transaction             | uint8_t        | 0 or 1                                                   | False    |
+ * | Argument                    | Description                                        | Type           | Valid Range                                              | Required |
+ * |-----------------------------|----------------------------------------------------|----------------|----------------------------------------------------------|----------|
+ * | shard_id                    | Row-major index of a shard in the sharded tensor   | uint32_t       | Any uint32_t number                                      | True     |
+ * | s                           | TensorAccessor object                              | TensorAccessor | Any TensorAccessor object, refer to \a tensor_accessor.h | True     |
+ * | src_local_l1_addr           | Source address in local L1 memory                  | uint32_t       | 0..1MB                                                   | True     |
+ * | noc                         | Which NOC to use for the transaction               | uint8_t        | 0 or 1                                                   | False    |
+ * | DSpec (template parameter)  | DistributionSpec type                              | typename       | Any DistributionSpec object                              | False    |
+ * | posted (template parameter) | Whether the write is posted (i.e. no ack required) | bool           | true or false                                            | False    |
  */
 // clang-format on
 template <typename DSpec, bool posted = false>
