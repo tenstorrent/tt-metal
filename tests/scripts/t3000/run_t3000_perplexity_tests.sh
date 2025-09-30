@@ -69,8 +69,9 @@ run_t3000_mixtral8x7b_perplexity_tests() {
   echo "LOG_METAL: Running run_t3000_mixtral8x7b_perplexity_tests"
 
   # Mixtral8x7B perplexity tests
-  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_perplexity.py --timeout=3600 ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_topk.py --timeout=3600 ; fail+=$?
+  mixtral8x7=/mnt/MLPerf/huggingface/hub/models--mistralai--Mixtral-8x7B-v0.1/snapshots/fc7ac94680e38d7348cfa806e51218e6273104b0
+
+  pytest models/tt_transformers/demo/simple_text_demo.py::test_demo_text[wormhole_b0-8-device_params0-performance-ci-token-matching] --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
