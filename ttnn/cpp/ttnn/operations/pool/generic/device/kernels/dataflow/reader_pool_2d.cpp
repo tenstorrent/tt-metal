@@ -20,22 +20,6 @@
 #define FACE_WIDTH 16
 #define FACE_HEIGHT 16
 
-// Zero out a single page (where wr ptr points) for a given circular buffer.
-template <uint32_t cb_id>
-ALWI void zero_out_page() {
-    uint32_t page_size = get_local_cb_interface(cb_id).fifo_page_size;
-    const uint32_t num_zeros_reads = page_size / MEM_ZEROS_SIZE;
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t write_addr = get_write_ptr(cb_id);
-
-    noc_async_read_one_packet_set_state(zeros_noc_addr, MEM_ZEROS_SIZE);
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc_async_read_one_packet_with_state<true>(zeros_noc_addr, write_addr);
-        write_addr += MEM_ZEROS_SIZE;
-    }
-    noc_async_read_barrier();
-}
-
 // Fill an L1 buffer with the given val
 // WARNING: Use with caution as there's no memory protection. Make sure size is within limits
 ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unconditionally = true) {
@@ -139,9 +123,6 @@ ALWI void read_window_with_top_left_index(
             cb_reserve_back(in_idx_cb_id, 1);
         }
         uint32_t processed_sticks = 0;
-        if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-            zero_out_page<in_cb_id>();
-        }
         for (uint32_t h = 0; h < window_h; ++h) {
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
