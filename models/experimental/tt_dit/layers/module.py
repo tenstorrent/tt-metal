@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, overload
 
 import ttnn
 
@@ -213,12 +213,28 @@ class ModuleList(Module):
     def __len__(self) -> int:
         return len(self._children)
 
-    def __getitem__(self, idx: int) -> Module:
-        if idx < 0:
-            idx += len(self._children)
-        if idx < 0 or idx >= len(self._children):
-            raise IndexError
-        return self._children[str(idx)]
+    @overload
+    def __getitem__(self, key: int) -> Module: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> ModuleList: ...
+
+    def __getitem__(self, key: int | slice) -> Module | ModuleList:
+        n = len(self._children)
+
+        if isinstance(key, slice):
+            start, stop, step = key.indices(n)
+            return ModuleList(self._children[str(i)] for i in range(start, stop, step))
+
+        if isinstance(key, int):
+            if key < 0:
+                key += n
+            if key < 0 or key >= n:
+                raise IndexError
+            return self._children[str(key)]
+
+        msg = f"expected int or slice argument, got {key}"
+        raise ValueError(msg)
 
 
 class Parameter:
