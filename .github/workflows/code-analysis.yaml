@@ -61,7 +61,7 @@ jobs:
     outputs:
       approved-reviewers: ${{ steps.get-reviews.outputs.approved-reviewers }}
     steps:
-      - name: Get PR reviews
+      - name: Get PR reviews and team members
         id: get-reviews
         run: |
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
@@ -75,7 +75,33 @@ jobs:
           # Extract approved reviews (state: APPROVED)
           APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' | tr '\n' ',' | sed 's/,$//')
 
+          # Get team members for teams that need approval
+          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
+          TEAM_MEMBERS=""
+
+          if [ -n "$TEAMS" ]; then
+            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team in "${TEAM_ARRAY[@]}"; do
+              # Remove @ prefix for API call
+              clean_team=$(echo "$team" | sed 's/^@//')
+
+              # Get team members using GitHub API (requires org read scope)
+              MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$MEMBERS_API")
+
+              # Extract member logins
+              TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+
+              if [ -n "$TEAM_MEMBER_LOGINS" ] && [ "$TEAM_MEMBER_LOGINS" != "null" ]; then
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
+              fi
+            done
+          fi
+
           echo "approved-reviewers=$APPROVED_REVIEWERS" >> $GITHUB_OUTPUT
+          echo "team-members=${TEAM_MEMBERS}" >> $GITHUB_OUTPUT
 
   analyze-codeowners:
     needs: [find-pr, get-reviews]
@@ -141,6 +167,7 @@ jobs:
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
+          TEAM_MEMBERS="${{ needs.get-reviews.outputs.team-members }}"
           CREATE_NEW="${{ github.event.inputs.create-new-comment }}"
 
           if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
@@ -148,17 +175,42 @@ jobs:
           else
             COMMENT="## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Approval Status:"
 
-            # Add teams with approval status (teams show as pending since we can't check team membership easily)
+            # Add teams with detailed approval status and member information
             if [ -n "$TEAMS" ]; then
               IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
               for team in "${TEAM_ARRAY[@]}"; do
                 # Remove @ prefix for display
                 clean_team=$(echo "$team" | sed 's/^@//')
-                COMMENT="$COMMENT\n- ⏳ **$clean_team** (Team) - Pending"
+
+                # Check if any team member has approved
+                approved_members=""
+
+                # Check team members against approved reviewers
+                if [ -n "$TEAM_MEMBERS" ]; then
+                  # Find this team's members
+                  team_members_line=$(echo "$TEAM_MEMBERS" | grep "^$team:" | head -1)
+                  if [ -n "$team_members_line" ]; then
+                    team_owners=$(echo "$team_members_line" | cut -d':' -f2)
+                    IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+                    for member in "${MEMBERS_ARRAY[@]}"; do
+                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                        approved_members="$approved_members$member, "
+                      fi
+                    done
+                  fi
+                fi
+
+                if [ -n "$approved_members" ]; then
+                  # Remove trailing comma and space
+                  approved_members=$(echo "$approved_members" | sed 's/, $//')
+                  COMMENT="$COMMENT\n- ✅ **$clean_team** (Team) - Approved by: $approved_members"
+                else
+                  COMMENT="$COMMENT\n- ⏳ **$clean_team** (Team) - Pending"
+                fi
               done
             fi
 
-            # Add pattern groups with approval status
+            # Add pattern groups with detailed approval status and member information
             if [ -n "$INDIVIDUALS" ]; then
               # Individuals are now grouped by pattern: "pattern:owner1,owner2|pattern2:owner3,owner4"
               IFS='|' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
@@ -168,17 +220,18 @@ jobs:
                 owners=$(echo "$pattern_group" | cut -d':' -f2)
 
                 # Check if any owner in this pattern group has approved
-                approved=false
+                approved_owners=""
                 IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
                 for owner in "${OWNERS_ARRAY[@]}"; do
                   if echo "$APPROVED_REVIEWERS" | grep -q "$owner"; then
-                    approved=true
-                    break
+                    approved_owners="$approved_owners$owner, "
                   fi
                 done
 
-                if [ "$approved" = true ]; then
-                  COMMENT="$COMMENT\n- ✅ **$pattern** (Group) - Approved"
+                if [ -n "$approved_owners" ]; then
+                  # Remove trailing comma and space
+                  approved_owners=$(echo "$approved_owners" | sed 's/, $//')
+                  COMMENT="$COMMENT\n- ✅ **$pattern** (Group) - Approved by: $approved_owners"
                 else
                   COMMENT="$COMMENT\n- ⏳ **$pattern** (Group) - Pending"
                 fi
