@@ -15,6 +15,21 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
+#if defined(COMPILE_FOR_ERISC)
+#define ROUTING_PATH_BASE_1D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D
+// DUMMY
+#define ROUTING_TABLE_BASE 0
+#elif defined(COMPILE_FOR_IDLE_ERISC)
+#define ROUTING_PATH_BASE_1D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D
+#define ROUTING_TABLE_BASE MEM_IERISC_ROUTING_TABLE_BASE
+#else
+#define ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE_1D
+#define ROUTING_PATH_BASE_2D MEM_TENSIX_ROUTING_PATH_BASE_2D
+#define ROUTING_TABLE_BASE MEM_TENSIX_ROUTING_TABLE_BASE
+#endif
+
 using namespace tt::tt_fabric;
 
 namespace tt::tt_fabric {
@@ -236,21 +251,16 @@ bool fabric_set_unicast_route(
     volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id = MAX_NUM_MESHES) {
-    auto* routing_info =
-#if defined(COMPILE_FOR_ERISC)
-        reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_AERISC_FABRIC_ROUTING_PATH_BASE_2D);
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-        reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_IERISC_FABRIC_ROUTING_PATH_BASE_2D);
-#else
-        reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
+#if !defined(COMPILE_FOR_ERISC)
+    // ACTIVE_ETH doesn't have information yet
+    auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (routing_table->my_mesh_id != dst_mesh_id) {
         // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
         // inter-mesh routing: update dst_dev_id to be exit node dev id for the target mesh
         // ASSERT(dst_mesh_id < MAX_NUM_MESHES); // dst_mesh_id must be valid if specified
         // tt_l1_ptr exit_node_table_t* exit_node_table =
-        //     reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
+        //     reinterpret_cast<tt_l1_ptr exit_node_table_t*>(ROUTING_TABLE_BASE);
         // dst_dev_id = exit_node_table->nodes[dst_mesh_id];
     }
 #endif
@@ -301,19 +311,13 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
             return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
         }
     } else {
-        auto* routing_info =
 #if defined(COMPILE_FOR_ERISC)
-            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(
-                MEM_AERISC_FABRIC_ROUTING_PATH_BASE_1D);
-#elif defined(COMPILE_FOR_IDLE_ERISC)
-            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(
-                MEM_IERISC_FABRIC_ROUTING_PATH_BASE_1D);
-#else
-            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+        static_assert(!target_as_dev, "ACTIVE_ETH doesn't support device id based routing yet");
 #endif
+        auto* routing_info =
+            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(ROUTING_PATH_BASE_1D);
+        auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
         if constexpr (target_as_dev) {
-            tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-                reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
             uint16_t my_device_id = routing_table->my_device_id;
             uint16_t hops = my_device_id > target_num ? my_device_id - target_num : target_num - my_device_id;
             return routing_info->decode_route_to_buffer(hops, (volatile uint8_t*)&packet_header->routing_fields.value);
