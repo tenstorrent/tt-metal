@@ -34,6 +34,24 @@ FABRIC_CONFIGS = [
 
 LEAD_MODEL_SHARD_SPECS = [
     get_serializable_shard_specs(
+        input_shape=(32, 128),
+        input_cores=(2, 5),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(2, 5),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 1280]],
+    ),
+    get_serializable_shard_specs(
+        input_shape=(32, 160),
+        input_cores=(4, 6),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(5, 6),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 3584]],
+    ),
+    get_serializable_shard_specs(
         input_shape=(32, 64),
         input_cores=(4, 6),
         input_strategy="w",
@@ -51,6 +69,15 @@ LEAD_MODEL_SHARD_SPECS = [
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 3200]],
     ),
+    get_serializable_shard_specs(
+        input_shape=(32, 128),
+        input_cores=(7, 8),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(4, 4),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 7168]],
+    ),
 ]
 
 parameters = {
@@ -64,7 +91,6 @@ parameters = {
             [1, 1, 1, 32, 256],
             [2, 32, 256],
             [1, 1, 32, 16384],
-            [1, 1, 32, 2880],  # GPT-OSS 20B
         ],
         "dim": [0, 1, 2, 3, 4],
         "cluster_axis": [0, 1, None],
@@ -81,10 +107,14 @@ parameters = {
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 2880],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
-            [1, 1, 32, 1280],  # Qwen3 dim: 1 cluster_axis: 1
+            [1, 1, 32, 1280],  # Qwen3 dim: 1 cluster_axis: 1; Llama glx dim: 2 cluster_axis 1
             [1, 1, 32, 3200],  # Qwen3 dim: 3 cluster_axis: 1
+            [1, 1, 32, 3584],  # Llama Glx. dim:3 cluster_axis:1
+            [1, 1, 32, 7168],  # DeepSeek dim:3 cluster_axis 1
+            [1, 1, 32, 1536],  # DeepSeek dim:3 cluster_axis 1
+            [1, 32, 128, 576],  # DeepSeek dim: 1 cluster_axis 1
         ],
-        "dim": [2, 3],
+        "dim": [1, 2, 3],
         "cluster_axis": [0, 1],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
