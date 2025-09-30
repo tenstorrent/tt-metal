@@ -81,10 +81,7 @@ Fabric1DRoute fabric_1d_routing(
         const auto neighbor_coord = sender_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
 
         TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", sender_coord);
-        auto next_device = mesh_device->get_device(neighbor_coord.value());
-        const auto next_fabric_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(next_device->id());
-
-        TT_FATAL(next_device != nullptr, "Did not find next device");
+        const auto next_fabric_id = mesh_device->get_fabric_node_id(neighbor_coord.value());
         return next_fabric_id;
     };
 
@@ -110,7 +107,6 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     TT_FATAL(!input_tensor.is_sharded(), "Point to point does not yet support sharded configs");
 
     auto mesh_device = input_tensor.device();
-    const auto&& device_ids = mesh_device->get_device_ids();
 
     TT_FATAL(
         operation_attributes.send_coord != operation_attributes.receive_coord, "Can't send/receive to the same device");
@@ -201,8 +197,9 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
     auto sd_id = mesh_device->get_sub_device_ids().at(0);
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in p2p op");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    log_debug(tt::LogOp, "Synchronize devices in p2p op done");
 
     const auto& coords = tensor_coords.coords();
     for (const auto& c : use_coords) {
@@ -264,10 +261,10 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
             const auto& core = shared_variables.sender_cores.at(0);
 
             auto& reader_runtime_args = GetRuntimeArgs(program, send_unary_reader_kernel_id, core);
-            reader_runtime_args.at(0) = tensor_args.input_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+            reader_runtime_args.at(0) = tensor_args.input_tensor.buffer()->address();
 
             auto& writer_runtime_args = GetRuntimeArgs(program, send_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(0).mesh_buffer()->get_device_buffer(coord)->address();
+            writer_runtime_args.at(0) = tensor_return_value.at(0).buffer()->address();
             writer_runtime_args.at(8) = shared_variables.semaphore.address();
         }
 
@@ -279,11 +276,11 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
             const auto& core = shared_variables.receiver_cores.at(0);
 
             auto& reader_runtime_args = GetRuntimeArgs(program, receive_unary_reader_kernel_id, core);
-            reader_runtime_args.at(3) = tensor_return_value.at(0).mesh_buffer()->get_device_buffer(coord)->address();
+            reader_runtime_args.at(3) = tensor_return_value.at(0).buffer()->address();
             reader_runtime_args.at(7) = shared_variables.semaphore.address();
 
             auto& writer_runtime_args = GetRuntimeArgs(program, receive_unary_writer_kernel_id, core);
-            writer_runtime_args.at(0) = tensor_return_value.at(1).mesh_buffer()->get_device_buffer(coord)->address();
+            writer_runtime_args.at(0) = tensor_return_value.at(1).buffer()->address();
         }
     }
 };

@@ -176,9 +176,9 @@ void append_fabric_mux_connection_rt_args(
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -199,9 +199,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
         program,
         input_tensor,
         intermediate_tensor,
-        sender_device,
-        forward_device,
-        backward_device,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
         output_tensor,
         dim,
         num_links,
@@ -222,9 +222,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -245,9 +245,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             program,
             input_tensor,
             intermediate_tensor,
-            sender_device,
-            forward_device,
-            backward_device,
+            sender_device_coord,
+            forward_coord,
+            backward_coord,
             output_tensor,
             dim,
             num_links,
@@ -268,9 +268,9 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             program,
             input_tensor,
             intermediate_tensor,
-            sender_device,
-            forward_device,
-            backward_device,
+            sender_device_coord,
+            forward_coord,
+            backward_coord,
             output_tensor,
             dim,
             num_links,
@@ -293,9 +293,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -317,8 +317,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -350,10 +350,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [unicast_forward_args, unicast_backward_args] =
-        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
+        topology, sender_device_coord, forward_coord, backward_coord, ring_size - 1, ring_size - 1, mesh_device);
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -499,15 +499,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             mux_kernel_ids.push_back(mux_kernel_id);
 
             std::vector<uint32_t> mux_rt_args = {};
-            const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             if (dir) {  // forward
-                const auto dst_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                 mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                     src_node_id, dst_node_id, link, program, {mux_logical_core});
             } else {
-                const auto dst_node_id =
-                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                 mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                     src_node_id, dst_node_id, link, program, {mux_logical_core});
             }
@@ -775,9 +773,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
-    IDevice* sender_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& sender_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
@@ -851,8 +849,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        input_tensor.device()->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        sender_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -860,12 +858,18 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [unicast_forward_args, unicast_backward_args] =
-        ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [unicast_forward_args, unicast_backward_args] = ccl::get_forward_backward_line_unicast_configuration(
+        topology, sender_device_coord, forward_coord, backward_coord, mesh_device);
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [mcast_forward_args, mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, sender_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
+        topology,
+        sender_device_coord,
+        forward_coord,
+        backward_coord,
+        num_targets_forward,
+        num_targets_backward,
+        mesh_device);
 
     uint32_t num_cores_per_link =
         operations::experimental::ccl::detail::reduce_scatter_minimal_async_core_count_per_link(
@@ -984,7 +988,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     // Kernel Runtime Args
     uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range_set, 0);
     const uint32_t l1_unreserved_base_address =
-        sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
@@ -1008,7 +1012,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 mux_base_l1_address);
 
             const bool mux_connection_valid =
-                (dir && forward_device.has_value()) || (!dir && backward_device.has_value());
+                (dir && forward_coord.has_value()) || (!dir && backward_coord.has_value());
             if (mux_connection_valid) {
                 auto mux_kernel_id = tt::tt_metal::CreateKernel(
                     program,
@@ -1021,15 +1025,13 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                         .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
                 mux_kernel_ids.push_back(mux_kernel_id);
                 std::vector<uint32_t> mux_rt_args = {};
-                const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+                const auto src_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
                 if (dir) {  // forward
-                    const auto dst_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 } else {
-                    const auto dst_node_id =
-                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+                    const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
                     mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
                         src_node_id, dst_node_id, link, program, {mux_logical_core});
                 }

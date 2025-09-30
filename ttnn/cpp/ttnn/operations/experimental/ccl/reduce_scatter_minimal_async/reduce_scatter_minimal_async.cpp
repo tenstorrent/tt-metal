@@ -26,14 +26,7 @@ ttnn::Tensor composite_reduce_scatter(
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        const auto& mesh_view = mesh_device->get_view();
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
-    }
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
@@ -115,9 +108,12 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
+    log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
     if (composite_common::use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
+        log_debug(tt::LogOp, "DEBUG: using composite_reduce_scatter");
         return composite_reduce_scatter(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
+        log_debug(tt::LogOp, "DEBUG: using reduce_scatter_minimal_async");
         return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
             input_tensor,
             persistent_output_buffers,

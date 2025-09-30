@@ -48,9 +48,9 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
 tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
     const Tensor& buffer_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     Tensor& output_tensor,
     DataType output_dtype,
     const uint32_t num_links,
@@ -71,8 +71,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        target_device->id(),
+        "DEBUG: device coord: {}, is_first_chip: {}, is_last_chip: {}",
+        target_device_coord,
         is_first_chip,
         is_last_chip);
 
@@ -83,7 +83,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, true);
     auto [forward_args, backward_args] = ccl::get_forward_backward_line_mcast_configuration(
-        topology, target_device, forward_device, backward_device, num_targets_forward, num_targets_backward);
+        topology,
+        target_device_coord,
+        forward_coord,
+        backward_coord,
+        num_targets_forward,
+        num_targets_backward,
+        mesh_device);
 
     // Tensor Info
     [[maybe_unused]] const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -358,7 +364,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     // Kernel Runtime Args
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
-        CoreCoord drain_sync_core = target_device->worker_core_from_logical_core(core);
+        CoreCoord drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         uint32_t worker_num_tiles_to_read = output_tensor_pages_in_link[link];
 
         uint32_t input_first_core_tile_start_offset = input_tensor_tile_offset_per_link[link];
@@ -369,14 +375,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
         std::vector<uint32_t> output_tensor_cores_x;
         std::vector<uint32_t> output_tensor_cores_y;
         for (uint32_t i = input_cores_idx_per_link[link].first; i < input_cores_idx_per_link[link].second; i++) {
-            auto this_core = target_device->worker_core_from_logical_core(input_cores_vec[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
         }
         for (uint32_t i = output_cores_per_link * link;
              i < output_cores_per_link * link + num_output_cores_in_link[link];
              i++) {
-            auto this_core = target_device->worker_core_from_logical_core(output_cores_vec[i]);
+            auto this_core = mesh_device->worker_core_from_logical_core(output_cores_vec[i]);
             output_tensor_cores_x.push_back(this_core.x);
             output_tensor_cores_y.push_back(this_core.y);
         }
@@ -405,8 +411,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
         uint32_t num_mcast_cores = 0;
         for (const auto& range : output_corerangeset_per_link[link].ranges()) {
-            auto start_core = target_device->worker_core_from_logical_core(range.start_coord);
-            auto end_core = target_device->worker_core_from_logical_core(range.end_coord);
+            auto start_core = mesh_device->worker_core_from_logical_core(range.start_coord);
+            auto end_core = mesh_device->worker_core_from_logical_core(range.end_coord);
             num_mcast_cores += (end_core.x - start_core.x + 1) * (end_core.y - start_core.y + 1);
             bool mcast_range_contains_self =
                 start_core.x <= core.x && core.x <= end_core.x && start_core.y <= core.y && core.y <= end_core.y;
@@ -451,22 +457,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
-        writer_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_rt_args.push_back(forward_coord.has_value());
+        if (forward_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto forward_device_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
 
-        writer_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_device_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_rt_args.push_back(backward_coord.has_value());
+        if (backward_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto backward_device_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }

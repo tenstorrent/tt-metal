@@ -120,34 +120,26 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", mesh_coord);
     auto mesh_device = input_tensors[0].device();
-    ::ttnn::ccl::get_device_sender_receiver_config(
-        mesh_device->get_device(mesh_coord),
-        this->all_gather_async_struct.devices,
-        this->all_gather_async_struct.topology);
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
 
-    std::vector<IDevice*> devices_to_use = {};
-    devices_to_use = this->all_gather_async_struct.devices;
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
+        input_tensors[0], mesh_coord, this->all_gather_async_struct.cluster_axis);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < this->all_gather_async_struct.ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            } else if (this->all_gather_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(this->all_gather_async_struct.ring_size - 1);
-            }
-            if (i != this->all_gather_async_struct.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            } else if (this->all_gather_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
-            }
-        }
-    }
+    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0],
+        mesh_coord,
+        1,
+        this->all_gather_async_struct.topology,
+        this->all_gather_async_struct.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0],
+        mesh_coord,
+        -1,
+        this->all_gather_async_struct.topology,
+        this->all_gather_async_struct.cluster_axis);
 
     // Return the AllGatherMatmulAsync program with callbacks
     return all_gather_matmul_async_multi_core_with_workers(
@@ -158,8 +150,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
 
         /* All Gather Params */
         target_device,
-        forward_device,
-        backward_device,
+        mesh_coord,
+        forward_coord,
+        backward_coord,
         this->all_gather_async_struct.dim,
         this->all_gather_async_struct.num_links,
         this->all_gather_async_struct.ring_size,
@@ -262,7 +255,6 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
 
     /* AllGather setup */
     ttnn::AllGatherAsync all_gather_async_struct = ttnn::AllGatherAsync(
-        devices,
         dim,
         num_links,
         devices.size(),

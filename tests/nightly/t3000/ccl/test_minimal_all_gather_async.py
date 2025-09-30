@@ -743,3 +743,73 @@ def test_all_gather_async_interleaved_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        # Gather on dim 0
+        ([1, 1, 8, 4096], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "tt_training_test_one",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 3),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_all_gather_async_2x4(
+    mesh_device,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+    run_all_gather_impl(
+        submesh_device,
+        submesh_device.get_num_devices(),
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        cluster_axis=1,
+    )
