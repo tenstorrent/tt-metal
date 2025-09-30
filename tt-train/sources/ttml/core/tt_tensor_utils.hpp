@@ -13,6 +13,11 @@
 
 namespace ttml::core {
 
+// Inline helper function to check if tensor is distributed
+inline bool is_distributed_tensor(const tt::tt_metal::Tensor& tensor) {
+    return tensor.storage_type() == tt::tt_metal::StorageType::DEVICE && tensor.device_storage().coords.size() > 1;
+}
+
 void print_tensor_stats(const tt::tt_metal::Tensor& tensor, const std::string& name);
 
 tt::tt_metal::Tensor zeros_like(const tt::tt_metal::Tensor& tensor);
@@ -40,6 +45,15 @@ template <class VectorType = float, ttnn::DataType TensorType = ttnn::DataType::
 
 template <class T = float>
 [[nodiscard]] std::vector<T> to_vector(const tt::tt_metal::Tensor& tensor) {
+    if (is_distributed_tensor(tensor)) {
+        // This is a distributed tensor, use composer to gather all shards
+        const auto& device_storage = tensor.device_storage();
+        auto mesh_device = device_storage.get_device();
+        auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, 0);
+        auto [vec, shape] = composer->compose<T>(tensor);
+        return vec;
+    }
+    // For non-distributed tensors, use the standard method
     return tensor.to_vector<T>();
 }
 
@@ -57,8 +71,21 @@ template <class T = float, ttnn::DataType TensorType = ttnn::DataType::BFLOAT16>
         std::vector<T>(buffer_view.begin(), buffer_view.end()), shape, device, layout, mesh_mapper);
 }
 
+// Forward declaration for the composer version
+template <class T>
+[[nodiscard]] xt::xarray<T> to_xtensor(
+    const tt::tt_metal::Tensor& tensor, const ttnn::distributed::MeshToTensor& composer);
+
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
+    if (is_distributed_tensor(tensor)) {
+        // This is a distributed tensor
+        const auto& device_storage = tensor.device_storage();
+        auto mesh_device = device_storage.get_device();
+        auto composer = ttnn::distributed::concat_mesh_to_tensor_composer(*mesh_device, 0);
+        return to_xtensor<T>(tensor, *composer);
+    }
+    // For non-distributed tensors, use the direct tensor method to avoid redundant checks
     auto vec = tensor.to_vector<T>();
     const auto& shape = tensor.logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());

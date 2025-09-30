@@ -20,8 +20,10 @@
 #include "models/common/transformer_common.hpp"
 #include "models/distributed/gpt2.hpp"
 #include "models/distributed/llama.hpp"
+#include "models/distributed/qwen.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
+#include "models/qwen.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
@@ -178,7 +180,7 @@ void generate(
 
     auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
 
-    auto logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
+    // auto logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
 
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
@@ -205,7 +207,7 @@ void generate(
         // 'output' shape is presumably [batch=1, 1, seq_len, padded_vocab_size] or something similar
         auto output = run_model(model, prompt_tensor, mask_tensor);
         next_token_tensor = ttml::ttnn_fixed::sample(
-            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), logits_padding_mask);
+            output->get_value(), temperature, ttml::autograd::ctx().get_generator()(), std::nullopt);
 
         // The index of the last token in the "effective" input
         // (Your indexing may vary depending on how your model outputs are shaped)
@@ -222,7 +224,7 @@ void generate(
             next_token_id = prompt_tokens.back();
         }
 
-        // Append the new token
+        // Add the new token to the prompt
         prompt_tokens.push_back(next_token_id);
 
         // Decode and print
@@ -259,7 +261,7 @@ EvalConfig parse_eval_config(const YAML::Node &yaml_config) {
 
 struct TrainingConfig {
     std::string project_name;
-    std::string model_type;  // one of "gpt2", "llama"
+    std::string model_type;  // one of "gpt2", "llama", "qwen"
     uint32_t seed = 5489U;
     uint32_t model_save_interval = 500;
     uint32_t batch_size = 64;
@@ -280,7 +282,9 @@ struct TrainingConfig {
     std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
+    std::
+        variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig, ttml::models::qwen::QwenConfig>
+            transformer_config;
 
     // mpi config
     bool enable_mpi = false;
@@ -318,6 +322,8 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
         config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     } else if (config.model_type == "llama") {
         config.transformer_config = ttml::models::llama::read_config(training_config["transformer_config"]);
+    } else if (config.model_type == "qwen") {
+        config.transformer_config = ttml::models::qwen::read_config(training_config["transformer_config"]);
     } else {
         throw std::runtime_error("Unknown model type: " + config.model_type);
     }
@@ -680,6 +686,12 @@ int main(int argc, char **argv) {
                 } else {
                     return ttml::models::gpt2::create(arg);
                 }
+            } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, ttml::models::qwen::QwenConfig>) {
+                if (device_config.enable_tp) {
+                    return ttml::models::distributed::qwen::create(arg);
+                } else {
+                    return ttml::models::qwen::create(arg);
+                }
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -698,7 +710,9 @@ int main(int argc, char **argv) {
         }
         fmt::println("Saving model and exiting");
         ttml::serialization::MsgPackFile serializer;
-        std::string model_prefix = (config.model_type == "llama") ? "llama" : "transformer";
+        std::string model_prefix = (config.model_type == "llama")  ? "llama"
+                                   : (config.model_type == "qwen") ? "qwen"
+                                                                   : "transformer";
         ttml::serialization::write_module(serializer, model_prefix, model.get());
         serializer.serialize(save_and_exit_path);
         fmt::println("Model saved to {}", save_and_exit_path);
@@ -708,7 +722,9 @@ int main(int argc, char **argv) {
     // Load model parameters if in eval mode and model path exists
     if (is_eval && !config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
-        std::string model_name = (config.model_type == "llama") ? "llama" : "transformer";
+        std::string model_name = (config.model_type == "llama")  ? "llama"
+                                 : (config.model_type == "qwen") ? "qwen"
+                                                                 : "transformer";
         fmt::print("Loading model parameters\n");
         load_model_parameters(config.model_path, model, model_name);
         fmt::print("Model loaded\n");
@@ -781,7 +797,9 @@ int main(int argc, char **argv) {
         // otherwise proceed with normal loading training state if necessary
         if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
             fmt::print("Loading model from {}\n", config.model_path);
-            std::string model_name = (config.model_type == "llama") ? "llama" : "transformer";
+            std::string model_name = (config.model_type == "llama")  ? "llama"
+                                     : (config.model_type == "qwen") ? "qwen"
+                                                                     : "transformer";
             fmt::print("Loading training state\n");
             std::string optimizer_name = "adamw";
             load_training_state(config.model_path, model, scheduler, model_name, optimizer_name);

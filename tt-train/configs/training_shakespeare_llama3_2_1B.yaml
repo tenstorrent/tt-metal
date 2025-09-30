@@ -11,9 +11,9 @@ training_config:
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
-  use_clip_grad_norm: true
+  use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  tokenizer_path: "data/tinyllama-tokenizer.json" # using tinyllama tokenizer because the real Meta tokenizer is gated on HF.
+  tokenizer_path: "/home/ubuntu/.cache/huggingface/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08/tokenizer.json" # using tinyllama tokenizer because the real Meta tokenizer is gated on HF.
   tokenizer_type: "bpe"
   transformer_config:
     num_heads: 32
@@ -23,17 +23,22 @@ training_config:
     dropout_prob: 0.0
     num_blocks: 16
     vocab_size: 32000 # not using Meta vocab size (128256), see comment about tokenizer choice above.
-    max_sequence_length: 2048
+    max_sequence_length: 1024
     runner_type: memory_efficient
     theta: 500000.0
-
     rope_scaling:
-        scaling_factor: 32.0
-        high_freq_factor: 4.0
+        scaling_factor: 1.0
+        high_freq_factor: 32.0
         low_freq_factor: 1.0
         original_context_length: 8192
+
+
+# if you want to run as eval with weighgts from hugging face:
+# 1. Download weights from hugging face
+# 2. nano_gpt --safetensors /path/to/meta-llama/Llama3.2-1B/  -c configs/training_shakespeare_llama2_5_1B.yaml --eval 1
+
 eval_config:
   repetition_penalty: 1.0
-  temperature: 0.7
+  temperature: 0.0
   top_k: 50
   top_p: 1.0
