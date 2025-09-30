@@ -574,8 +574,7 @@ public:
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         const OptionalTensors& optional_output_tensors) const {
-        return this->validate_impl_(
-            this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
+        this->validate_impl_(this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
     }
 
     ComputedSpecs compute_output_specs(const Tensors& input_tensors, const OptionalTensors& output_tensors) const {
