@@ -89,7 +89,7 @@ Tensor AdaptiveMaxPool2DOp::invoke(
 
     // Since return_indices=false, the result variant should always contain a Tensor
     TT_FATAL(result.size() == 1, "Expected Tensor result when return_indices is false");
-    return result[0];
+    return result.at(0);
 }
 
 }  // namespace operations::experimental::adaptive_pool

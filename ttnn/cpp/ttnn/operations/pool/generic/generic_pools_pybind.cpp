@@ -128,13 +128,11 @@ void bind_max_pool2d_operation(py::module& module) {
                     dtype,
                     output_layout);
 
-                // Handle variant return type
-                if (result.size() > 1) {
-                    // auto mpwi_result = std::get<MaxPoolWithIndicesResult>(result);
-                    // return py::make_tuple(mpwi_result.output, mpwi_result.indices);
-                    return py::make_tuple(result[0], result[1]);
+                // Return tuple for return_indices=true, single tensor for return_indices=false
+                if (return_indices) {
+                    return py::make_tuple(result.at(0), result.at(1));
                 } else {
-                    return py::cast(result[0]);
+                    return py::cast(result.at(0));
                 }
             },
             py::arg("input_tensor"),

@@ -451,7 +451,7 @@ Tensor AvgPool2DOp::invoke(
 
     // Average pool always returns just the tensor, never indices
     // return std::get<Tensor>(result);
-    return result[0];
+    return result.at(0);
 }
 
 }  // namespace operations::pool
