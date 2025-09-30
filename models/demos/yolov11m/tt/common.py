@@ -101,8 +101,7 @@ class Yolov11Conv2D:
         
         # SIMPLIFIED OPTIMIZATION: Large tensors only, Wormhole only
         if estimated_memory_mb > 1.0:  # Large tensors requiring optimization
-            # Wormhole B0 configuration for large tensors
-            core_grid = ttnn.CoreGrid(y=8, x=8)  # 64 cores for Wormhole
+            # Use DRAM for large tensors to avoid L1 overflow
             output_memory_config = ttnn.DRAM_MEMORY_CONFIG
             
             # Use HEIGHT sharding for large tensors
@@ -116,18 +115,11 @@ class Yolov11Conv2D:
             )
             dynamic_conv_config.act_block_h_override = 32  # Small blocks for memory efficiency
             
-            # Program config for large tensor parallelization
-            program_config = ttnn.operations.conv.Conv2dProgramConfig(
-                core_grid=core_grid,
-                use_shallow_conv_variant=False,  # Full optimization for large tensors
-            )
-            
-            print(f"🔧 [CONV] Large tensor ({estimated_memory_mb:.1f}MB): 64 cores, HEIGHT sharded, DRAM")
+            print(f"🔧 [CONV] Large tensor ({estimated_memory_mb:.1f}MB): HEIGHT sharded, DRAM")
             
         else:  # Small tensors - use defaults
             output_memory_config = ttnn.L1_MEMORY_CONFIG
             dynamic_conv_config = self.conv_config  # Use original config
-            program_config = None
             print(f"🔧 [CONV] Small tensor ({estimated_memory_mb:.1f}MB): default config, L1")
         
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
@@ -150,7 +142,6 @@ class Yolov11Conv2D:
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
             memory_config=output_memory_config,
-            program_config=program_config,  # Use calculated program config
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
