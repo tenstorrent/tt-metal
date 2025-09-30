@@ -140,6 +140,20 @@ config = PipelineConfig(
 - **Queue Usage**: CQ0 for operations only, CQ1 for both input writes and output reads
 - **Requirements**: `dram_output_memory_config` for persistent output tensors, requires a minimum of two inputs for effective pipelining, complex event synchronization
 
+#### Transfer Only Mode
+```python
+config = PipelineConfig(
+    ...,
+    transfer_only_mode=True  # Skip all model operations
+)
+```
+- **Use when**: Testing theoretical maximum throughput by measuring pure memory transfer overhead
+- **Executor**: `TransferOnlyExecutor`
+- **Behavior**:
+  - Runs model **once** during compilation to determine output schema
+  - **Skips all model operations** during execution
+  - Only performs device transfers
+
 #### DRAM Memory Configuration
 Many pipeline configurations require memory configs for the persistent tensors that the pipeline automatically allocates and manages during execution. To automatically select optimal DRAM configs given your input shape, use the following utility:
 

@@ -16,6 +16,7 @@ from .executor import (
     MultiCQTracedModelOverlappedInputExecutor,
     MultiCQTracedModelPipelinedIOExecutor,
     TracedModelExecutor,
+    TransferOnlyExecutor,
 )
 
 
@@ -70,6 +71,7 @@ class PipelineConfig:
     use_trace: bool = True
     num_command_queues: int = 1
     all_transfers_on_separate_command_queue: bool = False
+    transfer_only_mode: bool = False
 
     def __str__(self):
         return (
@@ -77,6 +79,7 @@ class PipelineConfig:
             f"    use_trace: {self.use_trace}\n"
             f"    num_command_queues: {self.num_command_queues}\n"
             f"    all_transfers_on_separate_command_queue: {self.all_transfers_on_separate_command_queue}\n"
+            f"    transfer_only_mode: {self.transfer_only_mode}\n"
             f")"
         )
 
@@ -177,8 +180,20 @@ def create_pipeline_from_config(
 ):
     logger.debug(f"Creating pipeline from config:\n{config}")
 
-    executor = None
-    if config.num_command_queues == 1:
+    # If transfer_only_mode is enabled, use TransferOnlyExecutor regardless of other config
+    if config.transfer_only_mode:
+        logger.warning(
+            "⚠️  TRANSFER_ONLY_MODE ENABLED: Model operations will be skipped for throughput testing. "
+            "This mode only measures memory transfer overhead and produces dummy outputs. "
+            "Results are NOT functionally correct - use only for performance analysis!"
+        )
+        logger.debug("Creating TransferOnlyExecutor for transfer-only testing")
+        executor = TransferOnlyExecutor(
+            model,
+            device,
+            l1_input_memory_config=l1_input_memory_config,
+        )
+    elif config.num_command_queues == 1:
         if config.use_trace:
             if not dram_input_memory_config:
                 raise ValueError(
