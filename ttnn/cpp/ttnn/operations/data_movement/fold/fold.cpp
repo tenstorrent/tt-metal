@@ -14,7 +14,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn//operations/data_movement/sharded/reshard/reshard.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
 

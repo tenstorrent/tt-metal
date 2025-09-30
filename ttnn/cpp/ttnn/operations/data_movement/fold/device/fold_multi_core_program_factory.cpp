@@ -52,25 +52,12 @@ Fold::MultiCore::cached_program_t fold_multi_core(
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = CreateCircularBuffer(program, all_cores, dst_cb_config);
 
-    // Setup kernel
-    // Set build optimization level to Os. O2 was slower.
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
-        all_cores,
-        WriterDataMovementConfig({cb_src0_index, cb_dst0_index}, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
-
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
-        all_cores,
-        ReaderDataMovementConfig({cb_src0_index, cb_dst0_index}, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
-    std::vector<uint32_t> runtime_args = {
+    std::vector<uint32_t> compile_time_args = {
+        cb_src0_index,
+        cb_dst0_index,
         pixel_size,
         aligned_pixel_size,
         aligned_dst_pixel_size,
-        num_pixels,
-        num_dst_pixels,
         stride_w * aligned_pixel_size,
         width * aligned_pixel_size,
         stride_h,
@@ -80,11 +67,20 @@ Fold::MultiCore::cached_program_t fold_multi_core(
         pixels_per_dst_row * aligned_pixel_size,
         true,
     };
-    // Reader run-time args
-    SetRuntimeArgs(program, reader_kernel_id, all_cores, runtime_args);
-    runtime_args[12] = false;
-    // Writer run-time args
-    SetRuntimeArgs(program, writer_kernel_id, all_cores, runtime_args);
+    // Setup kernel
+    // Set build optimization level to Os. O2 was slower.
+    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
+        all_cores,
+        WriterDataMovementConfig(compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
+
+    compile_time_args[12] = false;  // is_reader = false for writer
+    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2s_row_major.cpp",
+        all_cores,
+        ReaderDataMovementConfig(compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::Os));
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, stride_h, stride_w, cb_src0, cb_dst0}};
 }
