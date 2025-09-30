@@ -826,6 +826,7 @@ void ProcessDeviceProfilerResults(
     ZoneScoped;
 
     if (!getDeviceProfilerState()) {
+        return;
     }
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
@@ -905,9 +906,6 @@ void ReadDeviceProfilerResults(
             return;
         } else if (state == ProfilerReadState::LAST_FD_READ) {
             profiler.setLastFDReadAsDone();
-        }
-        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-            Finish(device->command_queue(cq_id));
         }
     }
 
