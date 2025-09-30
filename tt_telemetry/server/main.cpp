@@ -64,37 +64,46 @@ static std::unordered_map<Value, Key> invert_map(const std::unordered_map<Key, V
     return inverse_map;
 }
 
-// Hash function for std::pair<uint32_t, uint32_t>
-struct PairHash {
-    std::size_t operator()(const std::pair<uint32_t, uint32_t>& p) const {
-        auto h1 = std::hash<uint32_t>{}(p.first);
-        auto h2 = std::hash<uint32_t>{}(p.second);
+// Hash function for std::tuple<std::string, uint32_t, uint32_t>
+struct StringUint32Uint32Hash {
+    std::size_t operator()(const std::tuple<std::string, uint32_t, uint32_t>& t) const {
+        auto h1 = std::hash<std::string>{}(std::get<0>(t));
+        auto h2 = std::hash<uint32_t>{}(std::get<1>(t));
+        auto h3 = std::hash<uint32_t>{}(std::get<2>(t));
         constexpr std::size_t hash_combine_prime = 0x9e3779b9;
-        return h1 ^ (h2 + hash_combine_prime + (h1 << 6) + (h1 >> 2));
+
+        // Combine the three hash values
+        std::size_t result = h1;
+        result ^= h2 + hash_combine_prime + (result << 6) + (result >> 2);
+        result ^= h3 + hash_combine_prime + (result << 6) + (result >> 2);
+        return result;
     }
 };
 
-static std::unordered_map<std::pair<uint32_t, uint32_t>, chip_id_t, PairHash>
-get_asic_location_and_tray_id_to_chip_id_mapping(
+static std::unordered_map<std::tuple<std::string, uint32_t, uint32_t>, chip_id_t, StringUint32Uint32Hash>
+get_host_name_and_asic_location_and_tray_id_to_chip_id_mapping(
     const std::unique_ptr<tt::umd::Cluster>& cluster, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
     const std::unordered_map<chip_id_t, uint64_t>& chip_id_to_unique_id =
         cluster->get_cluster_description()->get_chip_unique_ids();
     std::unordered_map<uint64_t, chip_id_t> unique_id_to_chip_id = invert_map(chip_id_to_unique_id);
-    std::unordered_map<std::pair<uint32_t, uint32_t>, chip_id_t, PairHash> asic_location_and_tray_id_to_chip_id;
+    std::unordered_map<std::tuple<std::string, uint32_t, uint32_t>, chip_id_t, StringUint32Uint32Hash>
+        host_name_and_asic_location_and_tray_id_to_chip_id;
     for (auto [unique_id, asic_descriptor] : psd.get_asic_descriptors()) {
-        TT_FATAL(unique_id_to_chip_id.count(*unique_id) == 0, "Cannot find chip ID for unique ID {}", *unique_id);
+        TT_FATAL(unique_id_to_chip_id.count(*unique_id) > 0, "Cannot find chip ID for unique ID {}", hex(*unique_id));
         chip_id_t chip_id = unique_id_to_chip_id[*unique_id];
 
-        std::pair<uint32_t, uint32_t> key = {*asic_descriptor.asic_location, *asic_descriptor.tray_id};
+        std::tuple<std::string, uint32_t, uint32_t> key = {
+            asic_descriptor.host_name, *asic_descriptor.asic_location, *asic_descriptor.tray_id};
         TT_FATAL(
-            asic_location_and_tray_id_to_chip_id.count(key) > 0,
-            "Duplicate key (asic_location={}, tray_id={}) found in mapping",
+            host_name_and_asic_location_and_tray_id_to_chip_id.count(key) == 0,
+            "Duplicate key (host_name={}, asic_location={}, tray_id={}) found in mapping",
+            asic_descriptor.host_name,
             *asic_descriptor.asic_location,
             *asic_descriptor.tray_id);
 
-        asic_location_and_tray_id_to_chip_id.insert({key, chip_id});
+        host_name_and_asic_location_and_tray_id_to_chip_id.insert({key, chip_id});
     }
-    return asic_location_and_tray_id_to_chip_id;
+    return host_name_and_asic_location_and_tray_id_to_chip_id;
 }
 
 static void process_fsd(const std::string& fsd_filename) {
@@ -134,10 +143,26 @@ static void process_fsd(const std::string& fsd_filename) {
     auto psd = tt::tt_metal::PhysicalSystemDescriptor(cluster, distributed_context, rtoptions);
 
     std::cout << std::endl;
+    std::cout << "ASIC Descriptors:" << std::endl;
+    std::cout << "-----------------" << std::endl;
     for (auto [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
         std::cout << hex(*asic_id) << ": unique_id=" << hex(*asic_descriptor.unique_id)
                   << ", asic_location=" << *asic_descriptor.asic_location << ", tray_id=" << asic_descriptor.tray_id
                   << std::endl;
+    }
+
+    auto host_name_and_asic_location_and_tray_id_to_chip_id =
+        get_host_name_and_asic_location_and_tray_id_to_chip_id_mapping(cluster, psd);
+    std::cout << std::endl;
+    std::cout << "ASICs:" << std::endl;
+    std::cout << "------" << std::endl;
+    for (auto [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
+        auto host_name = asic_descriptor.host_name;
+        auto asic_location = *asic_descriptor.asic_location;
+        auto tray_id = *asic_descriptor.tray_id;
+        chip_id_t chip_id = host_name_and_asic_location_and_tray_id_to_chip_id.at({host_name, asic_location, tray_id});
+        std::cout << "  " << host_name << " chip " << chip_id << ": asic_location=" << asic_location
+                  << ", tray_id=" << tray_id << std::endl;
     }
 }
 
