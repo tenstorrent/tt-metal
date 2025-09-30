@@ -1,37 +1,633 @@
-name: Test Slack Integration
+name: CodeOwners Group Analysis
 
 on:
   workflow_dispatch:
     inputs:
-      message:
-        description: 'Message to send to Slack'
-        required: false
-        default: 'Hello from GitHub Actions! This is a test message. 🚀'
+      branch:
+        description: 'Branch name to analyze (e.g., feature-branch-name)'
+        required: true
         type: string
+      create-new-comment:
+        description: 'Create a new comment instead of editing existing one'
+        required: false
+        default: false
+        type: boolean
+      ping-pending-owners:
+        description: 'Ping 2 random owners from pending approval groups'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
+  pull-requests: write
+  issues: write
 
 jobs:
-  test-slack:
+  find-pr:
+    runs-on: ubuntu-latest
+    outputs:
+      pr-number: ${{ steps.find-pr.outputs.pr-number }}
+      pr-exists: ${{ steps.find-pr.outputs.pr-exists }}
+    steps:
+      - name: Find PR for branch
+        id: find-pr
+        run: |
+          BRANCH="${{ github.event.inputs.branch }}"
+          echo "Looking for PR associated with branch: $BRANCH"
+
+          # Use GitHub API to find PR for the branch
+          API_URL="https://api.github.com/repos/${{ github.repository }}/pulls?head=${{ github.repository_owner }}:$BRANCH&state=open"
+
+          echo "API URL: $API_URL"
+
+          # Get PR data
+          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                         -H "Accept: application/vnd.github.v3+json" \
+                         "$API_URL")
+
+          # Extract PR number
+          PR_NUMBER=$(echo "$PR_DATA" | jq -r '.[0].number // empty')
+
+          if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
+            echo "Found PR #$PR_NUMBER for branch $BRANCH"
+            echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "pr-exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "No open PR found for branch $BRANCH"
+            echo "pr-number=" >> $GITHUB_OUTPUT
+            echo "pr-exists=false" >> $GITHUB_OUTPUT
+          fi
+
+  get-reviews:
+    needs: find-pr
+    if: needs.find-pr.outputs.pr-exists == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      approved-reviewers: ${{ steps.get-reviews.outputs.approved-reviewers }}
+    steps:
+      - name: Get PR reviews and team members
+        id: get-reviews
+        run: |
+          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
+
+          # Get PR reviews using GitHub API
+          REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
+          REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API" 2>/dev/null)
+
+          # Check if API call was successful
+          REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API")
+
+          # Extract approved reviews (state: APPROVED)
+          if [ "$REVIEWS_HTTP_CODE" = "200" ] && [ -n "$REVIEWS_DATA" ] && [ "$REVIEWS_DATA" != "null" ]; then
+            APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+          else
+            echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
+            APPROVED_REVIEWERS=""
+          fi
+
+          echo "approved-reviewers=$APPROVED_REVIEWERS" >> $GITHUB_OUTPUT
+
+  analyze-codeowners:
+    needs: [find-pr, get-reviews]
+    if: needs.find-pr.outputs.pr-exists == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      codeowners-groups: ${{ steps.analyze.outputs.codeowners-groups }}
+      codeowners-teams: ${{ steps.analyze.outputs.codeowners-teams }}
+      codeowners-individuals: ${{ steps.analyze.outputs.codeowners-individuals }}
+      changed-files: ${{ steps.analyze.outputs.changed-files }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR changed files
+        id: get-files
+        run: |
+          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
+
+          # Get all changed files using GitHub API (handle pagination)
+          rm -f changed_files.txt
+
+          PAGE=1
+          TOTAL_FILES=0
+          while true; do
+            FILES_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/files?per_page=100&page=$PAGE"
+            FILES_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                             -H "Accept: application/vnd.github.v3+json" \
+                             "$FILES_API")
+
+            # Check if we got any data
+            if [ -z "$FILES_DATA" ] || [ "$FILES_DATA" = "null" ] || [ "$FILES_DATA" = "[]" ]; then
+              break
+            fi
+
+            # Extract filenames from this page and append to file
+            PAGE_FILES=$(echo "$FILES_DATA" | jq -r '.[].filename' 2>/dev/null)
+            if [ -z "$PAGE_FILES" ] || [ "$PAGE_FILES" = "null" ]; then
+              break
+            fi
+
+            # Count files in this page
+            PAGE_COUNT=$(echo "$PAGE_FILES" | wc -l)
+            TOTAL_FILES=$((TOTAL_FILES + PAGE_COUNT))
+
+            # Append to file
+            echo "$PAGE_FILES" >> changed_files.txt
+
+            PAGE=$((PAGE + 1))
+
+            # Safety check to avoid infinite loop
+            if [ $PAGE -gt 10 ]; then
+              echo "Warning: Too many pages, stopping at page $PAGE"
+              break
+            fi
+          done
+
+          # Sort, remove duplicates and empty lines
+          if [ -f changed_files.txt ]; then
+            sort changed_files.txt | uniq | sed '/^$/d' > changed_files_sorted.txt
+            mv changed_files_sorted.txt changed_files.txt
+          fi
+
+          # Count files and show first few
+          FILE_COUNT=$(wc -l < changed_files.txt 2>/dev/null || echo 0)
+          echo "Found $FILE_COUNT changed files across $((PAGE-1)) pages (total from API: $TOTAL_FILES)"
+          echo "First 10 files:"
+          head -10 changed_files.txt
+
+          # Save files list for next step
+          {
+            echo "changed-files<<EOF"
+            cat changed_files.txt
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Install codeowners package
+        run: |
+          pip install codeowners
+
+      - name: Analyze CODEOWNERS
+        id: analyze
+        run: |
+          # Run the dedicated Python script for CODEOWNERS analysis
+          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ_GITHUB_TOKEN="${{ secrets.ORG_READ_GITHUB_TOKEN }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
+        # The script writes directly to GITHUB_OUTPUT, so we don't need to capture stdout here
+
+  post-comment:
+    needs: [find-pr, analyze-codeowners, get-reviews]
+    if: needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Send test message to Slack
-        uses: slackapi/slack-github-action@v1.26.0
-        with:
-          payload: |
-            {
-              "channel": "#codeowners-ping-checking",
-              "text": "${{ inputs.message }}",
-              "username": "GitHub Actions Bot",
-              "icon_emoji": ":robot_face:"
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-
-      - name: Confirm message sent
+      - name: Create approval requirements comment
         run: |
-          echo "✅ Test message sent to Slack!"
-          echo "Channel: #codeowners-ping-checking"
-          echo "Message: ${{ inputs.message }}"
+          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
+          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
+          INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals }}"
+          APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
+          CREATE_NEW="${{ github.event.inputs.create-new-comment }}"
+          PING_OWNERS="${{ github.event.inputs.ping-pending-owners }}"
+
+          # Get team members for teams that need approval
+          TEAM_MEMBERS=""
+          if [ -n "$TEAMS" ]; then
+            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team in "${TEAM_ARRAY[@]}"; do
+              # Remove @org/ prefix for API call
+              clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
+
+              # Get team members using GitHub API (using ORG_READ_GITHUB_TOKEN for org access)
+              MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$MEMBERS_API" 2>/dev/null)
+
+              # Check if API call was successful (HTTP 200)
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$MEMBERS_API")
+
+              if [ "$MEMBERS_HTTP_CODE" = "200" ] && [ -n "$MEMBERS_DATA" ] && [ "$MEMBERS_DATA" != "null" ]; then
+                # Extract member logins successfully
+                TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+                if [ -n "$TEAM_MEMBER_LOGINS" ]; then
+                  TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
+                else
+                  TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
+                fi
+              elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
+                # Team not found
+                echo "Warning: Team $clean_team not found (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:team-not-found|"
+              elif [ "$MEMBERS_HTTP_CODE" = "403" ]; then
+                # Insufficient permissions
+                echo "Warning: Insufficient permissions to access team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:insufficient-permissions|"
+              elif [ "$MEMBERS_HTTP_CODE" = "401" ]; then
+                # Unauthorized
+                echo "Warning: Unauthorized access to team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:unauthorized|"
+              else
+                # Other error
+                echo "Warning: Failed to fetch members for team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:api-error|"
+              fi
+            done
+          fi
+
+          # Collect pending and approved groups separately
+          PENDING_GROUPS=""
+          APPROVED_GROUPS=""
+          PENDING_COUNT=0
+          APPROVED_COUNT=0
+
+            # Display teams with member information and approval status
+            if [ -n "$TEAMS" ]; then
+              IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
+              for team in "${TEAM_ARRAY[@]}"; do
+                # Skip the large-changes team as requested
+                if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                  continue
+                fi
+
+                # Remove @ prefix for display
+                clean_team=$(echo "$team" | sed 's/^@//')
+
+                # Get team members
+                team_members_info=""
+                approved_members=""
+
+                # Check team members against approved reviewers
+                if [ -n "$TEAM_MEMBERS" ]; then
+                  # Find this team's members (extract just this team's entry)
+                  team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                  if [ -n "$team_members_entry" ]; then
+                    team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
+
+                    if [ "$team_owners" = "insufficient-permissions" ]; then
+                      # Token doesn't have permission to read team members
+                      team_members_info="Members: (insufficient token permissions)"
+                    elif [ "$team_owners" = "team-not-found" ]; then
+                      # Team doesn't exist
+                      team_members_info="Members: (team not found)"
+                    elif [ "$team_owners" = "unauthorized" ]; then
+                      # Unauthorized access
+                      team_members_info="Members: (unauthorized access)"
+                    elif [ "$team_owners" = "api-error" ]; then
+                      # Other API error
+                      team_members_info="Members: (API error)"
+                    elif [ "$team_owners" = "no-members" ]; then
+                      # Team exists but has no members
+                      team_members_info="Members: (no members)"
+                    else
+                      # Get full names for team members
+                      all_members=""
+                      IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+                      for member in "${MEMBERS_ARRAY[@]}"; do
+                        # Try to get full name for this team member
+                        member_name="$member"  # Default to username
+                        if [ -n "$member" ] && [ "$member" != " " ]; then
+                          # Get user info from GitHub API
+                          USER_API="https://api.github.com/users/$member"
+                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                         -H "Accept: application/vnd.github.v3+json" \
+                                         "$USER_API" 2>/dev/null)
+                          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                          if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                            member_name="$USER_NAME"
+                          fi
+                        fi
+                        all_members="$all_members$member_name, "
+                      done
+                      # Remove trailing comma and space
+                      all_members=$(echo "$all_members" | sed 's/, $//')
+                      team_members_info="Members: $all_members"
+
+                      # Check which members have approved
+                      for member in "${MEMBERS_ARRAY[@]}"; do
+                        if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                          # Get full name for approved member
+                          approved_name="$member"
+                          USER_API="https://api.github.com/users/$member"
+                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                         -H "Accept: application/vnd.github.v3+json" \
+                                         "$USER_API" 2>/dev/null)
+                          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                          if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                            approved_name="$USER_NAME"
+                          fi
+                          approved_members="$approved_members$approved_name, "
+                        fi
+                      done
+                    fi
+                  fi
+                fi
+
+                if [ -n "$approved_members" ]; then
+                  # Remove trailing comma and space
+                  approved_members=$(echo "$approved_members" | sed 's/, $//')
+                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | **Approved by:** $approved_members"
+                  APPROVED_COUNT=$((APPROVED_COUNT + 1))
+                else
+                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | **Pending approval**"
+                  PENDING_COUNT=$((PENDING_COUNT + 1))
+                fi
+              done
+            fi
+
+            # Add pattern groups with member information and approval status
+            if [ -n "$INDIVIDUALS" ]; then
+              # Individuals are now grouped by pattern: "pattern:username1|full_name1,username2|full_name2@@@pattern2:..."
+              IFS='@@@' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+              for pattern_group in "${PATTERN_GROUPS[@]}"; do
+                # Skip empty groups
+                [ -z "$pattern_group" ] && continue
+
+                # Split pattern:owners
+                pattern=$(echo "$pattern_group" | cut -d':' -f1)
+                owners=$(echo "$pattern_group" | cut -d':' -f2)
+
+                # Parse owners - each is username|full_name
+                all_owners=""
+                usernames=()
+                full_names=()
+
+                IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
+                for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                  # Split username|full_name
+                  username=$(echo "$owner_pair" | cut -d'|' -f1)
+                  full_name=$(echo "$owner_pair" | cut -d'|' -f2)
+
+                  usernames+=("$username")
+                  full_names+=("$full_name")
+                  all_owners="$all_owners$full_name, "
+                done
+
+                # Remove trailing comma and space
+                all_owners=$(echo "$all_owners" | sed 's/, $//')
+
+                # Check if any owner in this pattern group has approved
+                approved_owners=""
+                for i in "${!usernames[@]}"; do
+                  username="${usernames[$i]}"
+                  full_name="${full_names[$i]}"
+                  if echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                    approved_owners="$approved_owners$full_name, "
+                  fi
+                done
+
+                if [ -n "$approved_owners" ]; then
+                  # Remove trailing comma and space
+                  approved_owners=$(echo "$approved_owners" | sed 's/, $//')
+                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | **Approved by:** $approved_owners"
+                  APPROVED_COUNT=$((APPROVED_COUNT + 1))
+                else
+                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | **Pending approval**"
+                  PENDING_COUNT=$((PENDING_COUNT + 1))
+                fi
+              done
+            fi
+
+            # Combine pending groups first, then approved groups
+            if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
+              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
+            else
+              COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:$PENDING_GROUPS$APPROVED_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
+            fi
+
+          # Get existing comments to find if we should edit or create new
+          COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+          EXISTING_COMMENTS=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                                -H "Accept: application/vnd.github.v3+json" \
+                                "$COMMENTS_API")
+
+          # Find existing comment from this workflow (starts with CodeOwners Analysis or contains our marker)
+          # Get the most recent one by sorting by created_at descending
+          EXISTING_COMMENT_ID=$(echo "$EXISTING_COMMENTS" | jq -r "[.[] | select(.body | startswith(\"## CodeOwners\") or contains(\"CodeOwners-Workflow-Bot\"))] | sort_by(.created_at) | reverse | .[0].id")
+
+          if [ "$CREATE_NEW" = "true" ] || [ -z "$EXISTING_COMMENT_ID" ] || [ "$EXISTING_COMMENT_ID" = "null" ]; then
+            # Create new comment
+            echo "Creating new comment..."
+            curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": \"$COMMENT\"}" \
+              "$COMMENTS_API"
+          else
+            # Edit existing comment
+            echo "Updating existing comment (ID: $EXISTING_COMMENT_ID)..."
+            curl -s -X PATCH \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Content-Type: application/json" \
+              -d "{\"body\": \"$COMMENT\"}" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID"
+          fi
+
+          echo "Comment updated for PR #$PR_NUMBER"
+
+          # Generate ping message for pending owners (always show in logs, only post if requested)
+          echo "Generating ping message for pending owners..."
+
+          # Get PR information
+          PR_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER"
+          PR_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                         -H "Accept: application/vnd.github.v3+json" \
+                         "$PR_API")
+          PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+          PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
+          PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
+
+          # Collect 2 owners from EACH pending group, then deduplicate
+          TEMP_SELECTED_OWNERS=""
+
+          # Process pending teams - select up to 2 owners from each pending team
+          if [ -n "$TEAMS" ]; then
+            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team in "${TEAM_ARRAY[@]}"; do
+              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                continue
+              fi
+              if [ -n "$TEAM_MEMBERS" ]; then
+                team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                if [ -n "$team_members_entry" ]; then
+                  team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
+                  if [ "$team_owners" != "insufficient-permissions" ] && [ "$team_owners" != "team-not-found" ] && [ "$team_owners" != "unauthorized" ] && [ "$team_owners" != "api-error" ] && [ "$team_owners" != "no-members" ]; then
+                    IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+
+                    # Check if any member of this team has approved
+                    team_has_approval=false
+                    for member in "${MEMBERS_ARRAY[@]}"; do
+                      if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                        team_has_approval=true
+                        break
+                      fi
+                    done
+
+                    # Only select owners from pending teams
+                    if [ "$team_has_approval" = false ]; then
+                      # Collect unapproved members for this team
+                      TEAM_UNAPPROVED=""
+                      for member in "${MEMBERS_ARRAY[@]}"; do
+                        if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                          TEAM_UNAPPROVED="$TEAM_UNAPPROVED$member,"
+                        fi
+                      done
+                      TEAM_UNAPPROVED=$(echo "$TEAM_UNAPPROVED" | sed 's/,$//')
+
+                      # Select up to 2 owners from this pending team
+                      if [ -n "$TEAM_UNAPPROVED" ]; then
+                        IFS=',' read -ra TEAM_MEMBERS_ARRAY <<< "$TEAM_UNAPPROVED"
+                        TEAM_MEMBER_COUNT=${#TEAM_MEMBERS_ARRAY[@]}
+
+                        if [ $TEAM_MEMBER_COUNT -eq 1 ]; then
+                          # Only 1 member
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[0]},"
+                        elif [ $TEAM_MEMBER_COUNT -ge 2 ]; then
+                          # Select 2 random members
+                          RAND1=$((RANDOM % TEAM_MEMBER_COUNT))
+                          RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                          while [ $RAND2 -eq $RAND1 ]; do
+                            RAND2=$((RANDOM % TEAM_MEMBER_COUNT))
+                          done
+                          TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${TEAM_MEMBERS_ARRAY[$RAND1]},${TEAM_MEMBERS_ARRAY[$RAND2]},"
+                        fi
+                      fi
+                    fi
+                  fi
+                fi
+              fi
+            done
+          fi
+
+          # Process pending individual patterns - select up to 2 owners from each pending pattern
+          if [ -n "$INDIVIDUALS" ]; then
+            IFS='@@@' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+            for pattern_group in "${PATTERN_GROUPS[@]}"; do
+              [ -z "$pattern_group" ] && continue
+              pattern=$(echo "$pattern_group" | cut -d':' -f1)
+              owners=$(echo "$pattern_group" | cut -d':' -f2)
+              IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
+
+              # Check if any owner in this pattern has approved
+              pattern_has_approval=false
+              for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                username=$(echo "$owner_pair" | cut -d'|' -f1)
+                if echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                  pattern_has_approval=true
+                  break
+                fi
+              done
+
+              # Only select owners from pending patterns
+              if [ "$pattern_has_approval" = false ]; then
+                # Collect unapproved owners for this pattern
+                PATTERN_UNAPPROVED=""
+                for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                  username=$(echo "$owner_pair" | cut -d'|' -f1)
+                  if ! echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                    PATTERN_UNAPPROVED="$PATTERN_UNAPPROVED$username,"
+                  fi
+                done
+                PATTERN_UNAPPROVED=$(echo "$PATTERN_UNAPPROVED" | sed 's/,$//')
+
+                # Select up to 2 owners from this pending pattern
+                if [ -n "$PATTERN_UNAPPROVED" ]; then
+                  IFS=',' read -ra PATTERN_OWNERS_ARRAY <<< "$PATTERN_UNAPPROVED"
+                  PATTERN_OWNER_COUNT=${#PATTERN_OWNERS_ARRAY[@]}
+
+                  if [ $PATTERN_OWNER_COUNT -eq 1 ]; then
+                    # Only 1 owner
+                    TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[0]},"
+                  elif [ $PATTERN_OWNER_COUNT -ge 2 ]; then
+                    # Select 2 random owners
+                    RAND1=$((RANDOM % PATTERN_OWNER_COUNT))
+                    RAND2=$((RANDOM % PATTERN_OWNER_COUNT))
+                    while [ $RAND2 -eq $RAND1 ]; do
+                      RAND2=$((RANDOM % PATTERN_OWNER_COUNT))
+                    done
+                    TEMP_SELECTED_OWNERS="$TEMP_SELECTED_OWNERS${PATTERN_OWNERS_ARRAY[$RAND1]},${PATTERN_OWNERS_ARRAY[$RAND2]},"
+                  fi
+                fi
+              fi
+            done
+          fi
+
+          # Remove trailing comma and deduplicate the selected owners
+          TEMP_SELECTED_OWNERS=$(echo "$TEMP_SELECTED_OWNERS" | sed 's/,$//')
+          if [ -n "$TEMP_SELECTED_OWNERS" ]; then
+            # Sort and deduplicate
+            SELECTED_OWNERS=$(echo "$TEMP_SELECTED_OWNERS" | tr ',' '\n' | sort | uniq | tr '\n' ',' | sed 's/,$//')
+          else
+            SELECTED_OWNERS=""
+          fi
+
+            # Check if we have any owners to ping
+            if [ -n "$SELECTED_OWNERS" ]; then
+              # Get full names for selected owners and build ping message
+              PING_MESSAGE="Hi"
+              IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
+              OWNER_COUNT=${#SELECTED_ARRAY[@]}
+              for i in "${!SELECTED_ARRAY[@]}"; do
+                owner="${SELECTED_ARRAY[$i]}"
+                if [ -n "$owner" ]; then
+                  # Get user info
+                  USER_API="https://api.github.com/users/$owner"
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "$USER_API" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                    PING_MESSAGE="$PING_MESSAGE $USER_NAME [@$owner]"
+                  else
+                    PING_MESSAGE="$PING_MESSAGE [@$owner]"
+                  fi
+
+                  # Add comma if not the last owner
+                  if [ $((i + 1)) -lt $OWNER_COUNT ]; then
+                    PING_MESSAGE="$PING_MESSAGE,"
+                  fi
+                fi
+              done
+
+              # Get full name for PR author
+              PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"  # Default to what we got from PR API
+              if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
+                # Try to fetch full name from GitHub API
+                AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
+                AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                       -H "Accept: application/vnd.github.v3+json" \
+                                       "$AUTHOR_USER_API" 2>/dev/null)
+                AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                if [ -n "$AUTHOR_FULL_NAME" ] && [ "$AUTHOR_FULL_NAME" != "null" ]; then
+                  PR_AUTHOR_FULL_NAME="$AUTHOR_FULL_NAME"
+                fi
+              fi
+
+              PING_MESSAGE="$PING_MESSAGE, this PR **[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
+
+              if [ "$PING_OWNERS" = "true" ]; then
+                # Create new ping comment
+                echo "Creating ping comment..."
+                curl -s -X POST \
+                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"body\": \"$PING_MESSAGE\"}" \
+                  "$COMMENTS_API"
+                echo "Ping comment created for PR #$PR_NUMBER"
+              else
+                # Just output the ping message to workflow logs
+                echo "Ping message (not sent):"
+                echo "$PING_MESSAGE"
+              fi
+            else
+              echo "No pending owners to ping"
+            fi
