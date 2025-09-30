@@ -85,57 +85,7 @@ jobs:
             APPROVED_REVIEWERS=""
           fi
 
-          # Get team members for teams that need approval
-          TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
-          TEAM_MEMBERS=""
-
-          if [ -n "$TEAMS" ]; then
-            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
-            for team in "${TEAM_ARRAY[@]}"; do
-                # Remove @org/ prefix for API call
-                clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
-
-              # Get team members using GitHub API (using ORG_READ for org access)
-              MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
-                               -H "Accept: application/vnd.github.v3+json" \
-                               "$MEMBERS_API" 2>/dev/null)
-
-              # Check if API call was successful (HTTP 200)
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
-                               -H "Accept: application/vnd.github.v3+json" \
-                               "$MEMBERS_API")
-
-              if [ "$MEMBERS_HTTP_CODE" = "200" ] && [ -n "$MEMBERS_DATA" ] && [ "$MEMBERS_DATA" != "null" ]; then
-                # Extract member logins successfully
-                TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
-                if [ -n "$TEAM_MEMBER_LOGINS" ]; then
-                  TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
-                else
-                  TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
-                fi
-              elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
-                # Team not found
-                echo "Warning: Team $clean_team not found (HTTP $MEMBERS_HTTP_CODE)"
-                TEAM_MEMBERS="$TEAM_MEMBERS$team:team-not-found|"
-              elif [ "$MEMBERS_HTTP_CODE" = "403" ]; then
-                # Insufficient permissions
-                echo "Warning: Insufficient permissions to access team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
-                TEAM_MEMBERS="$TEAM_MEMBERS$team:insufficient-permissions|"
-              elif [ "$MEMBERS_HTTP_CODE" = "401" ]; then
-                # Unauthorized
-                echo "Warning: Unauthorized access to team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
-                TEAM_MEMBERS="$TEAM_MEMBERS$team:unauthorized|"
-              else
-                # Other error
-                echo "Warning: Failed to fetch members for team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
-                TEAM_MEMBERS="$TEAM_MEMBERS$team:api-error|"
-              fi
-            done
-          fi
-
           echo "approved-reviewers=$APPROVED_REVIEWERS" >> $GITHUB_OUTPUT
-          echo "team-members=${TEAM_MEMBERS}" >> $GITHUB_OUTPUT
 
   analyze-codeowners:
     needs: [find-pr, get-reviews]
@@ -201,8 +151,54 @@ jobs:
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals }}"
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
-          TEAM_MEMBERS="${{ needs.get-reviews.outputs.team-members }}"
           CREATE_NEW="${{ github.event.inputs.create-new-comment }}"
+
+          # Get team members for teams that need approval
+          TEAM_MEMBERS=""
+          if [ -n "$TEAMS" ]; then
+            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team in "${TEAM_ARRAY[@]}"; do
+              # Remove @org/ prefix for API call
+              clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
+
+              # Get team members using GitHub API (using ORG_READ for org access)
+              MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$MEMBERS_API" 2>/dev/null)
+
+              # Check if API call was successful (HTTP 200)
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$MEMBERS_API")
+
+              if [ "$MEMBERS_HTTP_CODE" = "200" ] && [ -n "$MEMBERS_DATA" ] && [ "$MEMBERS_DATA" != "null" ]; then
+                # Extract member logins successfully
+                TEAM_MEMBER_LOGINS=$(echo "$MEMBERS_DATA" | jq -r '.[].login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+                if [ -n "$TEAM_MEMBER_LOGINS" ]; then
+                  TEAM_MEMBERS="$TEAM_MEMBERS$team:$TEAM_MEMBER_LOGINS|"
+                else
+                  TEAM_MEMBERS="$TEAM_MEMBERS$team:no-members|"
+                fi
+              elif [ "$MEMBERS_HTTP_CODE" = "404" ]; then
+                # Team not found
+                echo "Warning: Team $clean_team not found (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:team-not-found|"
+              elif [ "$MEMBERS_HTTP_CODE" = "403" ]; then
+                # Insufficient permissions
+                echo "Warning: Insufficient permissions to access team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:insufficient-permissions|"
+              elif [ "$MEMBERS_HTTP_CODE" = "401" ]; then
+                # Unauthorized
+                echo "Warning: Unauthorized access to team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:unauthorized|"
+              else
+                # Other error
+                echo "Warning: Failed to fetch members for team $clean_team (HTTP $MEMBERS_HTTP_CODE)"
+                TEAM_MEMBERS="$TEAM_MEMBERS$team:api-error|"
+              fi
+            done
+          fi
 
           if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
             COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
