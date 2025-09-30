@@ -301,7 +301,7 @@ jobs:
             const result = await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'package-and-release.yaml',
+              workflow_id: '.github/workflows/package-and-release.yaml',
               ref: 'stable',
               inputs: {
                 'release-type': 'rc',
@@ -335,7 +335,7 @@ jobs:
             const result = await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'package-and-release.yaml',
+              workflow_id: '.github/workflows/package-and-release.yaml',
               ref: rcTag,
               inputs: {
                 'release-type': 'prod',
