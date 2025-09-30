@@ -1555,6 +1555,41 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
 
+Tensor fold_input_tensor_if_required(
+    const ttnn::Tensor& input_tensor,
+    MeshDevice* device,
+    uint32_t& input_height,
+    uint32_t& input_width,
+    uint32_t& in_channels,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4,
+    bool& mm_conv,
+    Conv2dConfig& conv_config) {
+    // Conv DRAM would fold the input tensor, but conv_config.enable_kernel_stride_folding would stil be true as weights
+    // also need to be folded.
+    if (conv_config.enable_kernel_stride_folding && (stride[0] > 1 || stride[1] > 1)) {
+        auto folding_result = compute_kernel_stride_folding_params(
+            input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
+        auto folded_input_tensor = fold_tensor(input_tensor, device, stride, kernel_size, padding_n4);
+        if (conv_config.deallocate_activation) {
+            auto tensor_to_deallocate = input_tensor;
+            tensor_to_deallocate.deallocate(true);
+        }
+
+        // Update the input tensor parameters to the folding result
+        input_height = folding_result.input_height;
+        input_width = folding_result.input_width;
+        in_channels = folding_result.in_channels;
+        stride = folding_result.stride;
+        kernel_size = folding_result.kernel_size;
+        mm_conv = folding_result.mm_conv;
+        return folded_input_tensor;
+    } else {
+        return input_tensor;
+    }
+}
+
 ttnn::Tensor fold_tensor(
     const ttnn::Tensor& tensor,
     MeshDevice* device,
