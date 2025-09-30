@@ -688,7 +688,7 @@ jobs:
               for i in "${!SELECTED_ARRAY[@]}"; do
                 owner="${SELECTED_ARRAY[$i]}"
                 if [ -n "$owner" ]; then
-                  # Use Slack mention format with GitHub username
+                  # Use Slack mention format - some usernames match Slack usernames
                   SLACK_MESSAGE="$SLACK_MESSAGE <@$owner>"
                   # Add comma if not the last owner
                   if [ $((i + 1)) -lt $OWNER_COUNT ]; then
