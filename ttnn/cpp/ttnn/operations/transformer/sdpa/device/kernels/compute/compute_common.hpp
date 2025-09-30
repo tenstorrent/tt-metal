@@ -83,7 +83,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
-    recip_tile_init();
+    recip_tile_init<false>();
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(in_cb);
 
@@ -91,7 +91,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         acquire_dst();
         copy_tile(in_cb, i, 0);
-        recip_tile(0, static_cast<int>(VectorMode::C));
+        recip_tile<false>(0, static_cast<int>(VectorMode::C));
         pack_tile(0, in_cb);
         release_dst();
     }

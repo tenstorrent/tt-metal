@@ -145,8 +145,8 @@ operation::ProgramWithCallbacks joint_sdpa(
                                                      : device->compute_with_storage_grid_size();
     bool exp_approx_mode =
         program_config.has_value()
-            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
-            : true;
+            ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : false)
+            : false;
 
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores = grid_size.x * grid_size.y;
