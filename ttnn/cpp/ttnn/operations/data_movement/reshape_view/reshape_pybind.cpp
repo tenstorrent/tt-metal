@@ -54,7 +54,7 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
             py::arg("padded_shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("pad_value") = std::nullopt},
+            py::arg("pad_value") = std::nullopt,
             py::arg("reshape_tile_mode") = ttnn::TileReshapeMapMode::CACHE},
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,

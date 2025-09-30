@@ -193,7 +193,7 @@ ttnn::Tensor reshape_tiled(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const MemoryConfig& memory_config,
-    const PadValue& pad_value) {
+    const PadValue& pad_value,
     const bool recreate_mapping_tensor) {
     // squeeze input tensor and requested shape to 3D
 
