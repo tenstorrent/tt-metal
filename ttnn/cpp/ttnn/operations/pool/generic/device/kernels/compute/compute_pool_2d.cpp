@@ -110,7 +110,6 @@ void MAIN {
         if constexpr (!pack_untilize_reinit) {
             const uint32_t output_faces =
                 last_tile_is_partial ? num_faces_in_last_output_tile : num_faces_in_output_tile;
-            DPRINT << "init output_faces: " << output_faces << ENDL();
             pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
         }
     }
@@ -135,7 +134,6 @@ void MAIN {
     }
 
     uint32_t tilize_stick_counter = 0;
-    DPRINT << "n sticks per core by nblocks: " << nsticks_per_core_by_nblocks << ENDL();
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -193,16 +191,12 @@ void MAIN {
                 cb_wait_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
                     {
-                        UNPACK(DeviceZoneScopedN("U TILIZE DATA"));
-                        MATH(DeviceZoneScopedN("M TILIZE DATA"));
                         tilize_init_short_with_dt_no_pack(idx_tmp_cb_id, curr_in_cb_id, topk_output_tiles);
                         pack_reconfig_data_format(curr_in_cb_id);
                         tilize_block_no_pack(curr_in_cb_id, topk_output_tiles, data_dst_idx, topk_cb_tile_idx);
                         tilize_uninit_with_dt_no_pack(curr_in_cb_id, idx_tmp_cb_id);
                     }
                     {
-                        UNPACK(DeviceZoneScopedN("U COPY IDX"));
-                        MATH(DeviceZoneScopedN("M COPY IDX"));
                         copy_tile_to_dst_init_short(idx_tmp_cb_id);
                         pack_reconfig_data_format(idx_tmp_cb_id);
                         copy_tile(idx_tmp_cb_id, topk_cb_tile_idx, index_dst_idx);
@@ -210,33 +204,25 @@ void MAIN {
                     }
 
                     {
-                        MATH(DeviceZoneScopedN("M REDUCE"));
                         if (first_c_block) {
                             max_reduce_with_indices_init();
                         }
                         pack_reconfig_data_format(curr_in_cb_id);
-                        UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id));
-                        // dprint_tensix_dest_reg(data_dst_idx);
                         max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
                     }
 
                     // update the current index column
                     if (last_c_block) {
                         if (current_idx_col + right_inc + kernel_w > in_w_padded) {
-                            UNPACK(DeviceZoneScopedN("U COPY INC"));
-                            MATH(DeviceZoneScopedN("M COPY INC"));
                             // we reached the edge, wrap down and to the left
                             current_idx_col = pad_l;
                             copy_tile(down_left_wrap_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
                         } else {
-                            UNPACK(DeviceZoneScopedN("U COPY INC"));
-                            MATH(DeviceZoneScopedN("M COPY INC"));
                             // we are still in the same row, move to the right
                             current_idx_col += right_inc;
                             copy_tile(right_inc_tmp_cb_id, topk_cb_tile_idx, inc_dst_idx);
                         }
 
-                        MATH(DeviceZoneScopedN("M ADD"));
                         add_int_tile_init();
                         add_uint16_tile(index_scratch_in_dst_idx, inc_dst_idx, index_scratch_out_dst_idx);
                     }
@@ -314,14 +300,7 @@ void MAIN {
                 //}
 
                 {
-                    UNPACK(DeviceZoneScopedN("U PACK UNTILIZE"));
-                    MATH(DeviceZoneScopedN("M PACK UNTILIZE"));
-                    PACK(DeviceZoneScopedN("P PACK UNTILIZE"));
                     pack_reconfig_data_format(out_cb_id);
-                    DPRINT << "output_faces: " << output_faces << ENDL();
-                    DPRINT << "num_out_sticks: " << num_out_sticks << ENDL();
-                    DPRINT << "TILE_C_DIM: " << TILE_C_DIM << ENDL();
-                    PACK(DPRINT << "output addr: " << 16 * get_local_cb_interface(out_cb_id).fifo_wr_ptr << ENDL());
                     pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
                         out_cb_id, 1, 0, num_out_sticks, output_faces);
                     pack_reconfig_data_format(out_idx_cb_id);
@@ -336,7 +315,6 @@ void MAIN {
                 //}
 
                 if (last_c_block) {
-                    PACK(DeviceZoneScopedN("P PACK TILE"));
                     tensix_sync();
                     PACK((llk_pack_hw_configure_disaggregated<false>(idx_tmp_cb_id)));
 #ifdef ARCH_BLACKHOLE
@@ -345,20 +323,18 @@ void MAIN {
 #endif
                     tensix_sync();
                     pack_tile<true>(index_scratch_out_dst_idx, idx_tmp_cb_id, topk_cb_tile_idx);
-
-                    // sync PACK and UNPACK here to indirectly sync MATH and UNPACK by forcing UNPACK to wait for
-                    // tile_regs_wait this is necessary to ensure MATH finishes incrementing indices before UNPACK
-                    // tilizes them again,
-                    // TODO why does tensix_sync not achieve this?
-                    cb_push_back(sync_cb_id, 1);
-                    cb_reserve_back(sync_cb_id, 1);
-                    cb_wait_front(sync_cb_id, 1);
-                    cb_pop_front(sync_cb_id, 1);
                 }
 
                 cb_push_back(out_cb_id, output_faces);
                 cb_push_back(out_idx_cb_id, output_faces);
                 tile_regs_release();
+
+                if (last_c_block) {
+                    cb_push_back(sync_cb_id, 1);
+                    cb_reserve_back(sync_cb_id, 1);
+                    cb_wait_front(sync_cb_id, 1);
+                    cb_pop_front(sync_cb_id, 1);
+                }
             }
         }
         if constexpr (!one_scalar_per_core) {
