@@ -99,12 +99,6 @@ jobs:
           install_wheel: true
           run_args: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
-      - name: Run covnet_mnist model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/convnet_mnist/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && ((matrix.test-info.arch == 'wormhole_b0' && matrix.test-info.model-group == 'other') || (matrix.test-info.arch == 'blackhole' && matrix.test-info.model-group == 'other_mlperf_required')) }}
       - name: Run bert_tiny model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
