@@ -113,14 +113,14 @@ The prefetcher leverages the spatial distribution of cores across the Tenstorren
 The prefetcher utilizes a reader-writer kernel architecture to efficiently stream data from DRAM to consumer cores:
 
 **1. DRAM Reader Kernel** (`reader_dram.cpp`)
-- Fetches data from DRAM banks into local triple-buffered circular buffer
+   - Fetches data from DRAM banks into local triple-buffered circular buffer
 - Each prefetcher core reads tensors from its assigned DRAM bank, processing each tensor block by block (block size and count are based on Matmul specifications)
-- **Transaction ID Management**: Uses NoC transaction IDs to coordinate DRAM reads with the triple-buffered circular buffer. The kernel maintains `curr_block_trid` to track which transaction ID to use for each block, rotating through IDs 1→2→3→1→... to map reads to different blocks.
+   - **Transaction ID Management**: Uses NoC transaction IDs to coordinate DRAM reads with the triple-buffered circular buffer. The kernel maintains `curr_block_trid` to track which transaction ID to use for each block, rotating through IDs 1→2→3→1→... to map reads to different blocks.
 
-For detailed implementation of DRAM reading optimizations and transaction ID management, see [Saturating_DRAM_bandwidth.md](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md).
+   For detailed implementation of DRAM reading optimizations and transaction ID management, see [Saturating_DRAM_bandwidth.md](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md).
 
 **2. L1 Writer Kernel** (`writer_l1.cpp`)
-- Transfers data from local CB to global CB (remote consumers)
+   - Transfers data from local CB to global CB (remote consumers)
 - Distributes each tensor block across multiple receiver cores
 - Currently only supports slicing the tensor block on the width dimension; for one prefetcher core that serves multiple receiver cores, each receiver core gets a slice of the block
 - Uses sender-side global CB operations (detailed in the next section)
@@ -362,6 +362,16 @@ DRAM reads execute ahead of Matmul computation, removing the DRAM bandwidth bott
 #### 5. Dynamic Page Size Flexibility
 - **Runtime Reconfiguration**: Unlike local CBs which are constrained to a single page size throughout their lifetime, global CBs support dynamic page size changes at runtime
 - **Multi-Tensor Support**: Different tensors with varying shapes, data formats (bfloat4_b, bfloat8_b, bfloat16), and tile sizes can be streamed through the same global CB without reallocation
+
+### Measured Performance Results
+
+On Wormhole 6U Galaxy hardware, the current prefetcher implementation achieves:
+
+- **DRAM Bandwidth**: 267 GB/s sustained throughput
+- **Utilization**: ~80% of the theoretical maximum (336 GB/s)
+
+**Future Performance Potential:**
+With further optimizations ([Future Works](#future-works) section), the prefetcher is projected to achieve close to 90% DRAM bandwidth utilization. However, these optimizations have not yet been integrated due to regressions observed on Llama models during testing. Further investigation is needed to understand the interaction between aggressive prefetching optimizations and overall model performance, as the end-to-end throughput depends on balanced performance across all operations, not just maximizing individual component utilization.
 
 This architecture enables efficient processing of large language models where weight tensors must be continuously streamed from DRAM to distributed compute cores with minimal latency and maximum throughput. The combination of spatial optimization, coarse-grained synchronization, asynchronous execution, and flexible page sizing creates a highly efficient and adaptable data streaming system.
 
