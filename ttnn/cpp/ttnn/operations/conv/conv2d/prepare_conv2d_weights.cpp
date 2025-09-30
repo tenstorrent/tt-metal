@@ -1131,7 +1131,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
 
     bool is_dram_conv = (dram_slice_config_.has_value() &&
                          dram_slice_config_.value().slice_type != Conv2dSliceConfig::SliceType::L1_FULL) ||
-                        (!dram_slice_config_.has_value() && input_memory_config.is_dram());
+                        (!dram_slice_config_.has_value() && !input_memory_config.is_l1());
 
     // Conv1D doesn't support DRAM
     is_dram_conv = is_dram_conv && !is_conv1d;
@@ -1247,7 +1247,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         conv_config.shard_layout = input_memory_config.memory_layout();
     }
 
-    const uint32_t input_channels_alignment = get_input_channels_alignment(
+    uint32_t input_channels_alignment = get_input_channels_alignment(
         conv_config.shard_layout.value(),
         input_layout,
         is_dram_conv ? BufferType::DRAM : BufferType::L1,
@@ -1278,6 +1278,49 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             true,
             true,
             conv_config.act_block_h_override);
+
+        auto [input_padded_shape, input_tensor_sharded_memory_config] = determine_input_memory_config(
+            conv_config.shard_layout.value(),
+            conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR,
+            batch_size,
+            ttnn::Shape({batch_size, input_height, input_width, in_channels}),
+            ttnn::Shape({batch_size, output_height, output_width, out_channels}),
+            mm_conv,
+            device->compute_with_storage_grid_size(),
+            input_layout,
+            BufferType::L1,
+            parallel_config,
+            conv_config.act_block_h_override);
+
+        opt_conv_op_block_config = get_opt_block_config(
+            mm_conv,
+            in_channels,
+            out_channels,
+            output_height,
+            output_width,
+            batch_size,
+            input_height,
+            input_width,
+            groups,
+            kernel_size,
+            stride,
+            dilation,
+            padding_n4,
+            device,
+            conv_config,
+            input_layout,
+            input_dtype,
+            conv_output_dtype,
+            compute_config,
+            input_tensor_sharded_memory_config,
+            has_bias);
+
+        input_channels_alignment = get_input_channels_alignment(
+            conv_config.shard_layout.value(),
+            input_layout,
+            BufferType::L1,
+            mm_conv,
+            input_tensor_sharded_memory_config);
     }
 
     ParallelConfig output_parallel_config = determine_output_parallel_config(

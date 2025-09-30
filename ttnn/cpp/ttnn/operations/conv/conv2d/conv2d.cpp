@@ -748,8 +748,8 @@ Result conv2d_L1(
 
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
-        input_tensor.layout(),
-        input_tensor.memory_config().buffer_type(),
+        input_tensor_post_tm.layout(),
+        input_tensor_post_tm.memory_config().buffer_type(),
         mm_conv,
         input_tensor_post_tm.memory_config());
     const uint32_t in_channels_padded = tt::round_up(
