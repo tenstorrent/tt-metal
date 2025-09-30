@@ -1931,6 +1931,8 @@ class ModelArgs:
             else:
                 self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
                 self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
+                self.name_dense = any(["dense" in layer_name for layer_name in state_dict.keys()])
+                self.name_ffn2 = any(["fc2" in layer_name for layer_name in state_dict.keys()])
                 state_dict = standardize_hf_keys(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
@@ -2629,7 +2631,7 @@ class ModelArgs:
             layer = model.model.layers[0].mlp
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(
-                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp)
+                convert_meta_to_hf(x, self.head_dim, fuse_mlp=self.fuse_mlp, name_ffn2=self.name_ffn2)
             )
             return layer
 
@@ -2807,7 +2809,13 @@ class HfAttentionWrapper:
             fuse_qkv = hasattr(self.attention, "qkv_proj")
         except:
             fuse_qkv = False
-        return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
+        try:
+            name_dense = hasattr(self.attention, "dense")
+        except:
+            name_dense = False
+        return self.attention.load_state_dict(
+            convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv=fuse_qkv, name_dense=name_dense)
+        )
 
     @property
     def cache_k(self):
@@ -2886,7 +2894,19 @@ class HfDecoderWrapper:
             fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+        try:
+            name_dense = hasattr(self.decoder.self_attn, "dense")
+        except:
+            name_dense = False
+        try:
+            name_ffn2 = hasattr(self.decoder.mlp, "fc2")
+        except:
+            name_ffn2 = False
+        return self.decoder.load_state_dict(
+            convert_meta_to_hf(
+                state_dict, self.head_dim, fuse_qkv, fuse_mlp, name_dense=name_dense, name_ffn2=name_ffn2
+            )
+        )
 
 
 class HfModelWrapper:
@@ -2921,7 +2941,19 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+        try:
+            name_dense = hasattr(self.model.model.layers[0].self_attn, "dense")
+        except:
+            name_dense = False
+        try:
+            name_ffn2 = hasattr(self.model.model.layers[0].mlp, "fc2")
+        except:
+            name_ffn2 = False
+        return self.model.load_state_dict(
+            convert_meta_to_hf(
+                state_dict, self.head_dim, fuse_qkv, fuse_mlp, name_dense=name_dense, name_ffn2=name_ffn2
+            )
+        )
 
     def eval(self):
         self.model.eval()
