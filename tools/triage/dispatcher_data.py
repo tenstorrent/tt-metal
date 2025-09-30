@@ -114,6 +114,24 @@ class DispatcherData:
         except:
             pass
 
+        # Go message states are constant values in the firmware elf, so we cache them
+        def empty_mem_reader(addr: int, size_bytes: int, elements_to_read: int) -> list[int]:
+            return []
+
+        def get_const_value(name) -> int:
+            value = mem_access(self._brisc_elf, name, empty_mem_reader)[3]
+            assert isinstance(value, int)
+            return value
+
+        self._go_message_states = {
+            get_const_value("RUN_MSG_INIT"): "INIT",
+            get_const_value("RUN_MSG_GO"): "GO",
+            get_const_value("RUN_MSG_DONE"): "DONE",
+            get_const_value("RUN_MSG_RESET_READ_PTR"): "RESET_READ_PTR",
+            get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
+        }
+        self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
+
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
         # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
@@ -146,20 +164,6 @@ class DispatcherData:
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
 
-        def get_const_value(name):
-            return mem_access(fw_elf, name, loc_mem_reader)[3]
-
-        # Go message states are constant values in the firmware elf, so we cache them
-        if not hasattr(self, "_go_message_states"):
-            self._go_message_states = {
-                get_const_value("RUN_MSG_INIT"): "INIT",
-                get_const_value("RUN_MSG_GO"): "GO",
-                get_const_value("RUN_MSG_DONE"): "DONE",
-                get_const_value("RUN_MSG_RESET_READ_PTR"): "RESET_READ_PTR",
-                get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
-            }
-            self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
-
         log_check(
             launch_msg_rd_ptr < self._launch_msg_buffer_num_entries,
             f"On device {location._device._id} at {location.to_user_str()}, launch message read pointer {launch_msg_rd_ptr} >= {self._launch_msg_buffer_num_entries}.",
@@ -176,7 +180,7 @@ class DispatcherData:
         go_message_index = -1
         go_data = -1
         preload = False
-        waypoint = None
+        waypoint = ""
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mem_access(
