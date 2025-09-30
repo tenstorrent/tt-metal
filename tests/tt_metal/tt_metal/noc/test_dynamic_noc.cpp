@@ -67,7 +67,7 @@ void build_and_run_program(
     uint32_t program2_semaphore1 = CreateSemaphore(program2, cr_set, 0);
 
     vector<uint32_t> compile_args = {MAX_LOOP, page_size, 2};
-    tt_metal::TensorAccessorArgs().append_to(compile_args);
+    tt_metal::TensorAccessorArgs::create_l1_interleaved().append_to(compile_args);
 
     auto brisc_kernel1 = CreateKernel(
         program1,
@@ -153,10 +153,8 @@ void build_and_run_program(
     }
     distributed::MeshWorkload workload1;
     distributed::MeshWorkload workload2;
-    distributed::AddProgramToMeshWorkload(
-        workload1, std::move(program1), distributed::MeshCoordinateRange(device->shape()));
-    distributed::AddProgramToMeshWorkload(
-        workload2, std::move(program2), distributed::MeshCoordinateRange(device->shape()));
+    workload1.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program1));
+    workload2.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program2));
 
     // This loop caches program1 and runs
     for (uint32_t i = 0; i < NUM_PROGRAMS; i++) {

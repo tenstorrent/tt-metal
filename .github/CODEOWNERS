@@ -204,6 +204,7 @@ tests/ttnn/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolut
 tests/ttnn/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/unit_tests/operations/data_movement/ @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @yugi957 @jvegaTT @tenstorrent/metalium-codeowners-large-changes
+tests/ttnn/unit_tests/operations/data_movement/test_slice_for_conv.py @tenstorrent/metalium-developers-convolutions @sjameelTT @ntarafdar @nardoTT @llongTT @amorrisonTT @yugi957 @tenstorrent/metalium-codeowners-large-changes
 /tests/ttnn/**/unit_tests/operations/fused/ @yugaoTT @bbradelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @tenstorrent/metalium-codeowners-large-changes
 /tests/ttnn/**/unit_tests/operations/reduce/ @bbradelTT @sjameelTT @nsorabaTT @vsureshTT @edwinleeTT @rmillerTT @aczajkowskiTT @jbbieniekTT @mgajewskiTT @nmauriceTT @tenstorrent/metalium-codeowners-large-changes
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
@@ -301,6 +302,7 @@ models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/m
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
+models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 
 # tracy

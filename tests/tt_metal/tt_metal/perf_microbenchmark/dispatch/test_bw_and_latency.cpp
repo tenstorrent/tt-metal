@@ -338,8 +338,8 @@ int main(int argc, char** argv) {
         if (page_size_as_runtime_arg_g) {
             tt_metal::SetRuntimeArgs(program, dm0, worker_g.start_coord, {page_size_g});
         }
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()));
+        mesh_workload.add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
 
         CoreCoord w = mesh_device->worker_core_from_logical_core(worker_g.start_coord);
         log_info(LogTest, "Master core: {}", w.str());

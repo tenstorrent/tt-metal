@@ -8,27 +8,6 @@
 
 namespace tt::tt_fabric {
 
-// Device-side decoder function for 1D routing (packed paths)
-template <>
-inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
-    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
-    if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
-        // Out of bounds - fill buffer with NOOPs/zeros
-        for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
-            out_route_buffer[i] = 0;
-        }
-        ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
-        return false;
-    }
-
-    const uint8_t* packed_route = &this->paths[dst_chip_id * SINGLE_ROUTE_SIZE];
-    // Copy packed data directly to output buffer
-    for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
-        out_route_buffer[i] = packed_route[i];
-    }
-    return true;
-}
-
 // Device-side compressed decoder function for 2D routing
 template <>
 inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
@@ -97,6 +76,27 @@ inline bool intra_mesh_routing_path_t<2, true>::decode_route_to_buffer(
 
     out_route_buffer[byte_index] = NOOP;
 
+    return true;
+}
+
+// Device-side decoder function for 1D routing (packed paths)
+template <>
+inline bool intra_mesh_routing_path_t<1, false>::decode_route_to_buffer(
+    uint16_t dst_chip_id, volatile uint8_t* out_route_buffer) const {
+    if (dst_chip_id >= MAX_CHIPS_LOWLAT) {
+        // Out of bounds - fill buffer with NOOPs/zeros
+        for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
+            out_route_buffer[i] = 0;
+        }
+        ASSERT(false);  // catched only watcher enabled. Otherwise make behavior consistent as returning false.
+        return false;
+    }
+
+    const uint8_t* packed_route = &this->paths[dst_chip_id * SINGLE_ROUTE_SIZE];
+    // Copy packed data directly to output buffer
+    for (uint16_t i = 0; i < SINGLE_ROUTE_SIZE; ++i) {
+        out_route_buffer[i] = packed_route[i];
+    }
     return true;
 }
 
