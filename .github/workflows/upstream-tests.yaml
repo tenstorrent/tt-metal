@@ -219,7 +219,6 @@ jobs:
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
       - in-service
-      - cloud-virtual-machine
       - pipeline-perf
     steps:
       - name: Run image
