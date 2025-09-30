@@ -1272,6 +1272,9 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         all_to_all_except_top_compute_compile_time_args.push_back(tile_width);
         all_to_all_except_top_compute_compile_time_args.push_back(K);
         all_to_all_except_top_compute_compile_time_args.push_back(last_tile_data_width);
+        not_all_to_all_compute_compile_time_args.push_back(tile_width);
+        not_all_to_all_compute_compile_time_args.push_back(K);
+        not_all_to_all_compute_compile_time_args.push_back(last_tile_data_width);
     }
     // compute kernel
     std::string compute_kernel_file;
