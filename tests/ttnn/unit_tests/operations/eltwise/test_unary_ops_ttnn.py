@@ -78,41 +78,43 @@ def test_unary_abs_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([100])),
+        (torch.Size([32, 64])),
+        (torch.Size([3, 128, 32])),
         (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
     ),
 )
-def test_unary_asin_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-
-    cq_id = 0
-    ttnn.asin(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.asin(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
 @pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
+    "torch_dtype, ttnn_dtype, pcc",
+    [
+        (torch.float32, ttnn.float32, 0.999),
+        (torch.bfloat16, ttnn.bfloat16, 0.999),
+        (torch.bfloat16, ttnn.bfloat8_b, 0.99),
+    ],
 )
-def test_unary_acos_ttnn(input_shapes, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
+@pytest.mark.parametrize(
+    "low, high",
+    [(-0.9, 0.9), (-1, 1), (-100, 100)],
+)
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [ttnn.asin, ttnn.acos],
+)
+def test_unary_inverse_trig_functions_ttnn(input_shapes, torch_dtype, ttnn_dtype, pcc, low, high, ttnn_op, device):
+    in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(low, high)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    cq_id = 0
-    ttnn.acos(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
-    golden_tensor = torch.acos(in_data)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    output_tensor = ttnn_op(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_op)
+    golden_tensor = golden_function(in_data, device=device)
+    ulp_threshold = 5
+    if high > 0.9 or low < -0.9:
+        ulp_threshold = 65
+    output_tensor = ttnn.to_torch(output_tensor)
+    if ttnn_dtype == ttnn.bfloat16 and low != -100:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=ulp_threshold)
+    assert_with_pcc(output_tensor, golden_tensor, pcc=pcc)
 
 
 @pytest.mark.parametrize(
