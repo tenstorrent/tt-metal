@@ -8,19 +8,10 @@ import ttnn
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 
 def sharded_concat(
     input_tensors, num_cores=64, dim=3, skip_S2I=True
 ):  # expected input tensors to be in fp16, RM, same (h*w)
-    if use_signpost:
-        signpost(header="sharded_concat")
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
 
     input_sharded_memory_configs = []
@@ -227,8 +218,6 @@ class TtBottleneck:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="BottleNeck")
         cv1, out_h, out_w = self.cv1(x)
         cv2, out_h, out_w = self.cv2(cv1)  # pass cv1
         ttnn.deallocate(cv1)
@@ -324,8 +313,6 @@ class TtC2f:
             )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="C2F")
         cv1_a, out_h_a, out_w_a = self.cv1_a(x)
         cv1_b, out_h_b, out_w_b = self.cv1_b(x)
 
@@ -370,8 +357,6 @@ class TtSppf:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="SPPF")
         cv1, out_h, out_w = self.cv1(x)
         p = 5 // 2
         y = [cv1]
@@ -438,8 +423,6 @@ class TtDetectCv2:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="DetectCv2")
         x, out_h, out_w = self.conv0(x)
         x, out_h, out_w = self.conv1(x)
         x, out_h, out_w = self.conv2(x)
@@ -455,8 +438,6 @@ class TtDFL:
         self.conv = TtConv(device, parameters, path, input_params, bfloat8=True, is_fused=False, is_detect_cv2=True)
 
     def __call__(self, x, c1=16):
-        if use_signpost:
-            signpost(header="DFL")
         b, _, a = x.shape
 
         x = ttnn.reshape(x, (b, 4, c1, a), memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -509,8 +490,6 @@ class TtDetect:
         )
 
     def __call__(self, x, nc=80, ch=(), reg_max=16):
-        if use_signpost:
-            signpost(header="Detect")
         nc = self.nc
         ch = self.ch
         nl = len(ch)
@@ -535,8 +514,6 @@ class TtDetect:
         box = ttnn.slice(x_cat, [0, 0, 0], [1, 64, x_cat.shape[2]], memory_config=ttnn.L1_MEMORY_CONFIG)
         cls = ttnn.slice(x_cat, [0, 64, 0], [1, 144, x_cat.shape[2]], memory_config=ttnn.L1_MEMORY_CONFIG)
         dfl = self.dfl_module(box)
-        if use_signpost:
-            signpost(header="ttnn_decode_bboxes")
         dbox = ttnn_decode_bboxes(self.device, dfl, anchors)
         dbox = dbox * strides
 
@@ -763,28 +740,22 @@ class TtDetectionModel:
         conv_0, out_h, out_w = self.conv_0(x)
         conv_1, out_h, out_w = self.conv_1(conv_0)
         ttnn.deallocate(conv_0)
-        if use_signpost:
-            signpost(header="start c2f_2")
         c2f_2, out_h, out_w = self.c2f_2(conv_1)
         ttnn.deallocate(conv_1)
         conv_3, out_h, out_w = self.conv_3(c2f_2)
         ttnn.deallocate(c2f_2)
-        if use_signpost:
-            signpost(header="start c2f_4")
+
         c2f_4, out_h, out_w = self.c2f_4(conv_3)
         ttnn.deallocate(conv_3)
         conv_5, out_h, out_w = self.conv_5(c2f_4)
-        if use_signpost:
-            signpost(header="start c2f_6")
+
         c2f_6, out_h, out_w = self.c2f_6(conv_5)
         ttnn.deallocate(conv_5)
         conv_7, out_h, out_w = self.conv_7(c2f_6)
-        if use_signpost:
-            signpost(header="start c2f_8")
+
         c2f_8, out_h, out_w = self.c2f_8(conv_7)
         ttnn.deallocate(conv_7)
-        if use_signpost:
-            signpost(header="start sppf_9")
+
         nine, out_h, out_w = self.sppf_9(c2f_8)
         ttnn.deallocate(c2f_8)
         sppf_9 = ttnn.to_layout(nine, ttnn.ROW_MAJOR_LAYOUT)
@@ -806,8 +777,7 @@ class TtDetectionModel:
         c2f_6 = ttnn.to_layout(c2f_6, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = sharded_concat([x, c2f_6])
         ttnn.deallocate(c2f_6)
-        if use_signpost:
-            signpost(header="start c2f_12")
+
         c2f_12, out_h, out_w = self.c2f_12(x)
         ttnn.deallocate(x)
         ttnn.deallocate(sppf_9)
@@ -835,8 +805,6 @@ class TtDetectionModel:
         ttnn.deallocate(c2f_4)
         ttnn.deallocate(c2f_12)
 
-        if use_signpost:
-            signpost(header="start c2f_15")
         c2f_15, out_h, out_w = self.c2f_15(x)
         ttnn.deallocate(x)
         conv_16, out_h, out_w = self.conv_16(c2f_15)
@@ -849,8 +817,7 @@ class TtDetectionModel:
 
         ttnn.deallocate(twelve)
         ttnn.deallocate(conv_16)
-        if use_signpost:
-            signpost(header="start c2f_18")
+
         c2f_18, out_h, out_w = self.c2f_18(x)
         ttnn.deallocate(x)
         conv_19, out_h, out_w = self.conv_19(c2f_18)
@@ -863,8 +830,7 @@ class TtDetectionModel:
         x = sharded_concat([conv_19, nine], skip_S2I=False)
         ttnn.deallocate(nine)
         ttnn.deallocate(conv_19)
-        if use_signpost:
-            signpost(header="start c2f_21")
+
         c2f_21, out_h, out_w = self.c2f_21(x)
         ttnn.deallocate(x)
         x = [fifteen, eighteen, c2f_21]

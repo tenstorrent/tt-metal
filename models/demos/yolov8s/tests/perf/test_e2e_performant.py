@@ -14,6 +14,13 @@ from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE
 from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 def run_yolov8s(
     device,
@@ -36,11 +43,17 @@ def run_yolov8s(
     input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
+    if use_signpost:
+        signpost(header="start")
+
     t0 = time.time()
     for _ in range(10):
         _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
+
+    if use_signpost:
+        signpost(header="stop")
 
     performant_runner.release()
     inference_time_avg = round((t1 - t0) / 10, 6)
