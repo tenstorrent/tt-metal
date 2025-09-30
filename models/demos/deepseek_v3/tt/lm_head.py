@@ -266,13 +266,10 @@ class LMHead(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         mesh_scatter(x, **cfg["mesh_scatter"])
-
-        print("running linear")
-        print(f"{x.shape=}, {cfg['linear']['input_tensor_b'].shape=}")
         output = ttnn.linear(x, **cfg["linear"])
 
-        # Debug print removed
         assert output.memory_config() == cfg["output_memory_config"]
+
         return output
 
     @classmethod
