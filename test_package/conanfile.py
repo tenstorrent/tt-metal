@@ -11,7 +11,7 @@ import os
 
 class TestPackageConan(ConanFile):
     settings = "os", "compiler", "build_type", "arch"
-    generators = "CMakeDeps"
+    generators = "CMakeDeps", "VirtualBuildEnv"
     test_type = "explicit"
 
     def requirements(self):

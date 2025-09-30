@@ -42,8 +42,8 @@ find_package(hwloc)
 if(TARGET hwloc::hwloc)
     add_library(hwloc ALIAS hwloc::hwloc)
     # conan-provided hwloc target include directories do not transfer correctly, need to
-    # set them explicitly in the consumer cmake script.
-    target_include_directories(hwloc::hwloc INTERFACE "${hwloc_INCLUDE_DIR}")
+    # set them explicitly in the consumer cmake script.hwloc_INCLUDE_DIR
+    target_include_directories(hwloc::hwloc INTERFACE "${}")
 endif()
 
 if(TARGET libnuma::libnuma)
