@@ -21,10 +21,10 @@ struct LayerNormDefaultProgramConfig {
 };
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t subblock_w;
-    std::size_t block_h;
-    std::size_t block_w;
-    bool inplace;
+    std::size_t subblock_w{};
+    std::size_t block_h{};
+    std::size_t block_w{};
+    bool inplace{};
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
 };
