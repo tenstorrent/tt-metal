@@ -85,9 +85,9 @@ jobs:
               # Remove @ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@//')
 
-              # Get team members using GitHub API (requires org read scope)
+              # Get team members using GitHub API (using ORG_READ_GITHUB_TOKEN for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API")
 
@@ -173,16 +173,17 @@ jobs:
           if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
             COMMENT="## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
           else
-            COMMENT="## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Approval Status:"
+            COMMENT="## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Group Information:"
 
-            # Add teams with detailed approval status and member information
+            # Add teams with member information and approval status
             if [ -n "$TEAMS" ]; then
               IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
               for team in "${TEAM_ARRAY[@]}"; do
                 # Remove @ prefix for display
                 clean_team=$(echo "$team" | sed 's/^@//')
 
-                # Check if any team member has approved
+                # Get team members
+                team_members_info=""
                 approved_members=""
 
                 # Check team members against approved reviewers
@@ -191,6 +192,11 @@ jobs:
                   team_members_line=$(echo "$TEAM_MEMBERS" | grep "^$team:" | head -1)
                   if [ -n "$team_members_line" ]; then
                     team_owners=$(echo "$team_members_line" | cut -d':' -f2)
+                    # For teams, we show all members since we can't easily get full names for team members
+                    all_members=$(echo "$team_owners" | sed 's/,/, /g')
+                    team_members_info="Members: $all_members"
+
+                    # Check which members have approved
                     IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
                     for member in "${MEMBERS_ARRAY[@]}"; do
                       if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
@@ -203,14 +209,14 @@ jobs:
                 if [ -n "$approved_members" ]; then
                   # Remove trailing comma and space
                   approved_members=$(echo "$approved_members" | sed 's/, $//')
-                  COMMENT="$COMMENT\n- ✅ **$clean_team** (Team) - Approved by: $approved_members"
+                  COMMENT="$COMMENT\n- ✅ **$clean_team** (Team) - $team_members_info | Approved by: $approved_members"
                 else
-                  COMMENT="$COMMENT\n- ⏳ **$clean_team** (Team) - Pending"
+                  COMMENT="$COMMENT\n- ⏳ **$clean_team** (Team) - $team_members_info | Pending approval"
                 fi
               done
             fi
 
-            # Add pattern groups with detailed approval status and member information
+            # Add pattern groups with member information and approval status
             if [ -n "$INDIVIDUALS" ]; then
               # Individuals are now grouped by pattern: "pattern:owner1,owner2|pattern2:owner3,owner4"
               IFS='|' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
@@ -218,6 +224,9 @@ jobs:
                 # Split pattern:owners
                 pattern=$(echo "$pattern_group" | cut -d':' -f1)
                 owners=$(echo "$pattern_group" | cut -d':' -f2)
+
+                # Format owners with full names (they should already be full names from the script)
+                all_owners=$(echo "$owners" | sed 's/,/, /g')
 
                 # Check if any owner in this pattern group has approved
                 approved_owners=""
@@ -231,9 +240,9 @@ jobs:
                 if [ -n "$approved_owners" ]; then
                   # Remove trailing comma and space
                   approved_owners=$(echo "$approved_owners" | sed 's/, $//')
-                  COMMENT="$COMMENT\n- ✅ **$pattern** (Group) - Approved by: $approved_owners"
+                  COMMENT="$COMMENT\n- ✅ **$pattern** (Group) - Members: $all_owners | Approved by: $approved_owners"
                 else
-                  COMMENT="$COMMENT\n- ⏳ **$pattern** (Group) - Pending"
+                  COMMENT="$COMMENT\n- ⏳ **$pattern** (Group) - Members: $all_owners | Pending approval"
                 fi
               done
             fi

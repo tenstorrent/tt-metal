@@ -108,9 +108,8 @@ def analyze_codeowners(changed_files_path, codeowners_path):
     pattern_groups_list = []
     for pattern, owners in pattern_groups.items():
         if owners:  # Only include patterns that have individuals
-            # Format: pattern:owner1,owner2,owner3 (owners without @ symbols for approval checking)
-            clean_owners = [owner.lstrip("@") for owner in sorted(owners)]
-            owners_str = ",".join(clean_owners)
+            # Format: pattern:owner1,owner2,owner3 (owners are already full names from get_user_full_name)
+            owners_str = ",".join(sorted(owners))
             pattern_groups_list.append(f"{pattern}:{owners_str}")
 
     individuals_list = "|".join(pattern_groups_list) if pattern_groups_list else ""
