@@ -4,6 +4,7 @@
 
 #include "fabric.hpp"
 
+#include <umd/device/types/arch.hpp>
 #include <variant>
 
 #include "erisc_datamover_builder.hpp"
@@ -315,6 +316,13 @@ void build_tt_fabric_program(
                 eth_direction,
                 has_tensix_extension);
             edm_builders.insert({eth_chan, edm_builder});
+
+            if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {
+                // Enable at an interval for stability
+                constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
+                edm_builder.set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
+                edm_builder.set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::INTERVAL);
+            }
 
             if (fabric_tensix_extension_enabled) {
                 // Only create tensix builder if this channel is not used by dispatch
