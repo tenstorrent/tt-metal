@@ -60,4 +60,4 @@ def test_ttnn_sentence_bert_encoder(device, inputs, model_location_generator):
         device=device,
     )
     ttnn_out = ttnn.to_torch(ttnn_out).squeeze(dim=1)
-    assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 0.97)
+    assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 0.96)

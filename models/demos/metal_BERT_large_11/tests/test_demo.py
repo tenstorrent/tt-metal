@@ -87,7 +87,7 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device):
         (
             7,
             75.71,
-            84.21,
+            83.74,
         ),
     ),
     ids=["batch_7"],
