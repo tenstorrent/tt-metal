@@ -61,10 +61,7 @@ class TTBasicBlock:
         # logger.debug(f"SSHARDING {gn_shard=}")
         out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
         logger.debug(f"BN1 output shape: {out.shape}")
-        # if not self.is_sliced:
-        out1 = ttnn.relu(out)
-        ttnn.deallocate(out)  # added for tracy pass
-        out = ttnn.move(out1)  # added for tracy pass
+        ttnn.relu(out, output_tensor=out)
 
         out, out_h, out_w = self.conv2(device, out)
         logger.debug(f"Conv2 output shape: {out.shape}")
