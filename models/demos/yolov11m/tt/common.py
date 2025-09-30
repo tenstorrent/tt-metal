@@ -53,12 +53,16 @@ class Yolov11Conv2D:
             activation_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
         # Add more activation types as needed
 
+        # DYNAMIC SHARDING: Choose optimal shard layout based on tensor characteristics  
+        # This will be updated per-operation based on tensor size
+        self.default_shard_layout = shard_layout
+        
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
+            shard_layout=shard_layout,  # Will be dynamically updated
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
-            reshard_if_not_optimal=True if self.reshard else False,
+            reshard_if_not_optimal=True,  # Always enable for optimal resharding
             activation=activation_param,
         )
         if config_override and "act_block_h" in config_override:
@@ -91,18 +95,41 @@ class Yolov11Conv2D:
         stride = [self.stride[0], self.stride[1]]
         padding = [self.padding[0], self.padding[1]]
 
-        # Calculate tensor size to determine if we need DRAM
+        # Calculate tensor size to determine if we need optimized configuration
         estimated_output_elements = batch_size * self.out_channels * input_height * input_width
         estimated_memory_mb = (estimated_output_elements * 2) / (1024 * 1024)  # bfloat16 = 2 bytes
         
-        # Use DRAM for large tensors to avoid L1 overflow
-        if estimated_memory_mb > 1.0:  # If > 1MB, use DRAM
+        # SIMPLIFIED OPTIMIZATION: Large tensors only, Wormhole only
+        if estimated_memory_mb > 1.0:  # Large tensors requiring optimization
+            # Wormhole B0 configuration for large tensors
+            core_grid = ttnn.CoreGrid(y=8, x=8)  # 64 cores for Wormhole
             output_memory_config = ttnn.DRAM_MEMORY_CONFIG
-            print(f"🔧 [CONV MEMORY] Using DRAM for conv output ({estimated_memory_mb:.1f}MB)")
-        else:
-            output_memory_config = ttnn.L1_MEMORY_CONFIG
-            print(f"🔧 [CONV MEMORY] Using L1 for conv output ({estimated_memory_mb:.1f}MB)")
             
+            # Use HEIGHT sharding for large tensors
+            dynamic_conv_config = ttnn.Conv2dConfig(
+                weights_dtype=self.conv_config.weights_dtype,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                deallocate_activation=self.conv_config.deallocate_activation,
+                enable_act_double_buffer=self.conv_config.enable_act_double_buffer,
+                reshard_if_not_optimal=True,
+                activation=self.conv_config.activation,
+            )
+            dynamic_conv_config.act_block_h_override = 32  # Small blocks for memory efficiency
+            
+            # Program config for large tensor parallelization
+            program_config = ttnn.operations.conv.Conv2dProgramConfig(
+                core_grid=core_grid,
+                use_shallow_conv_variant=False,  # Full optimization for large tensors
+            )
+            
+            print(f"🔧 [CONV] Large tensor ({estimated_memory_mb:.1f}MB): 64 cores, HEIGHT sharded, DRAM")
+            
+        else:  # Small tensors - use defaults
+            output_memory_config = ttnn.L1_MEMORY_CONFIG
+            dynamic_conv_config = self.conv_config  # Use original config
+            program_config = None
+            print(f"🔧 [CONV] Small tensor ({estimated_memory_mb:.1f}MB): default config, L1")
+        
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
@@ -116,13 +143,14 @@ class Yolov11Conv2D:
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
-            conv_config=self.conv_config,
+            conv_config=dynamic_conv_config,  # Use dynamic config
             groups=self.groups,
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
             memory_config=output_memory_config,
+            program_config=program_config,  # Use calculated program config
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
