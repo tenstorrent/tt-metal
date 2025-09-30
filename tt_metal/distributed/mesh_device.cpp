@@ -84,8 +84,6 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool();
-    } else if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
-        return create_boost_thread_pool(physical_devices.size());
     } else {
         return create_device_bound_thread_pool(physical_devices);
     }
