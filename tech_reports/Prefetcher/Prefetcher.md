@@ -110,7 +110,7 @@ The prefetcher acts as a **sender** in the global circular buffer setup, utilizi
 1. **DRAM Reader Kernel** (`reader_dram.cpp`)
    - Fetches data from DRAM banks into local triple-buffered circular buffer
    - Each prefetcher core reads tensors from it's assigned DRAM bank, each tensor is read in block by block (the size of a block and number of blocks is based on the Matmul side specification)
-   - **Transaction ID Management**: Uses NOC transaction IDs to coordinate DRAM reads with the triple-buffered circular buffer. The kernel maintains `curr_block_trid` to track which transaction ID to use for each block, rotating through IDs 1→2→3→1→... to map reads to different blocks.
+   - **Transaction ID Management**: Uses NoC transaction IDs to coordinate DRAM reads with the triple-buffered circular buffer. The kernel maintains `curr_block_trid` to track which transaction ID to use for each block, rotating through IDs 1→2→3→1→... to map reads to different blocks.
 
    For detailed implementation of DRAM reading optimizations and transaction ID management, see [Saturating_DRAM_bandwidth.md](../Saturating_DRAM_bandwidth/Saturating_DRAM_bandwidth.md).
 
@@ -126,7 +126,7 @@ The prefetcher acts as a **sender** in the global circular buffer setup, utilizi
    experimental::resize_remote_sender_cb_interface<true>(remote_cb_id, curr_block_size_per_receiver, noc);
    ```
    - This API is called each time before we switch to the next tensor. Since different tensors have different shapes and tile sizes and data formats, this caused each tensor having different block size. The global CB page size needs to be reconfigured for each tensor to match the block size that will be sent to each receiver core.
-   - For the detailed implementation, it updates the CB interface page size, adjusts read/write pointers to proper alignment, and if necessary, signals receivers over NOC about the configuration change.
+   - For the detailed implementation, it updates the CB interface page size, adjusts read/write pointers to proper alignment, and if necessary, signals receivers over NoC about the configuration change.
 
    **2. Flow Control (`remote_cb_reserve_back`)**
    ```cpp
@@ -149,7 +149,7 @@ The prefetcher acts as a **sender** in the global circular buffer setup, utilizi
    - This is the core data movement operation that actually transfers the tensor block from the prefetcher's local CB to each receiver core's portion of the global CB.
    - `block_height_in_pages` means the number of pages on the height dim of each tensor block. `coalesced_page_size` here is the pages that grouped together that can form one NoC writes. `coalesced_num_pages_per_row` means the number of NoC writes need to be performed for each row of the block.
    - functionality:
-     - Performs coalesced NOC writes to distribute block slices to each receiver core
+     - Performs coalesced NoC writes to distribute block slices to each receiver core
      - Each receiver gets a slice of the tensor block
      - Updates the sent page counters to signal receivers that new data is available
      - Handles wraparound in the circular buffer automatically
@@ -202,7 +202,7 @@ uint32_t num_receivers = l1_remote_cb_config_addr[1];            // Number of re
 uint32_t fifo_start_addr = l1_remote_cb_config_addr[2];          // Base address of circular buffer
 uint32_t fifo_size = l1_remote_cb_config_addr[3];               // Total size of circular buffer
 uint32_t fifo_ptr = l1_remote_cb_config_addr[4];                // Initial read/write pointer
-uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];      // Address containing NOC coordinates
+uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];      // Address containing NoC coordinates
 uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6]; // Address for page synchronization counters
 ```
 
@@ -215,7 +215,7 @@ RemoteSenderCBInterface& sender_cb_interface = get_remote_sender_cb_interface(cb
 sender_cb_interface.config_ptr = config_addr;                    // Pointer to L1 config
 sender_cb_interface.fifo_start_addr = fifo_start_addr;          // Buffer start address
 sender_cb_interface.fifo_wr_ptr = fifo_ptr;                     // Write pointer
-sender_cb_interface.receiver_noc_xy_ptr = remote_noc_xy_addr;   // Receiver NOC coordinates
+sender_cb_interface.receiver_noc_xy_ptr = remote_noc_xy_addr;   // Receiver NoC coordinates
 sender_cb_interface.aligned_pages_sent_ptr = aligned_pages_sent_addr; // Sent page counters
 sender_cb_interface.num_receivers = num_receivers;             // Number of receivers
 ```
@@ -226,7 +226,7 @@ RemoteReceiverCBInterface& receiver_cb_interface = get_remote_receiver_cb_interf
 receiver_cb_interface.config_ptr = config_addr;                 // Pointer to L1 config
 receiver_cb_interface.fifo_start_addr = fifo_start_addr;       // Buffer start address
 receiver_cb_interface.fifo_rd_ptr = fifo_ptr;                  // Read pointer
-receiver_cb_interface.sender_noc_x = sender_noc_x;             // Sender NOC coordinates
+receiver_cb_interface.sender_noc_x = sender_noc_x;             // Sender NoC coordinates
 receiver_cb_interface.sender_noc_y = sender_noc_y;
 receiver_cb_interface.aligned_pages_acked_ptr = aligned_pages_acked_addr; // Acked page counters
 ```
@@ -234,7 +234,7 @@ receiver_cb_interface.aligned_pages_acked_ptr = aligned_pages_acked_addr; // Ack
 **Key Initialization Steps:**
 1. **Configuration Reading**: Each core reads its role (sender/receiver) and parameters from L1
 2. **Interface Setup**: Appropriate CB interface structure is populated based on core role
-3. **NOC Coordinate Mapping**: NOC coordinates are extracted for remote communication
+3. **NoC Coordinate Mapping**: NoC coordinates are extracted for remote communication
 4. **Synchronization Setup**: Page counter addresses are configured for flow control
 5. **Initial Sizing**: The CB interface is sized with initial page size via `resize_remote_*_cb_interface`
 
@@ -253,11 +253,11 @@ When switching between tensors with different shapes or data formats, the global
 **The Problem Without Alignment:**
 If tensors are stored at non-aligned locations in the circular buffer, when the buffer wraps around to the top, a simple `cb_pop_front` operation on the consumer side will not land at the correct tensor boundary. The consumer would read from the middle of a tensor or across tensor boundaries, corrupting the data.
 
-**How It Works:**
+**Alignment:**
 1. **Before New Tensor**: The write pointer may be at an arbitrary location after the previous tensor
-2. **Alignment Step**: The pointer is advanced to the next page-aligned boundary that matches the new tensor's page size
+2. **Alignment Step**: The pointer is advanced to the next page-aligned address that matches the new tensor's page size, ie, (address - global CB start address) is always the multiple of current page size.
 3. **Tensor Storage**: The new tensor is stored starting at this aligned location
-4. **Wraparound Guarantee**: When the buffer wraps around, the consumer's `cb_pop_front` operations will correctly land at tensor boundaries
+4. **Wraparound**: When the buffer wraps around, the consumer's `cb_pop_front` operations will correctly land at tensor boundaries
 
 **Consumer Benefit:**
 With page alignment, the consumer (matmul core) can perform simple circular buffer operations without worrying about tensor boundaries. Each `cb_pop_front` operation moves exactly one "page" (tensor block), and wraparound automatically lands at the start of the next tensor.
@@ -271,180 +271,49 @@ The matmul operation serves as the consumer side of the global circular buffer, 
 
 ### Overview:
 
-Matmul cores act as **receivers** in the global CB system, consuming data streamed by the prefetcher:
+Matmul cores act as **receivers** in the global CB system, consuming data streamed by the prefetcher. Here is the diagram of a ring Matmul consisting of 4 cores, each core start at a different ring index. For example, core 0 strat at ring index 0 and iterate over the weight tensor in global CB with an order 0->1->2->3, core 1 strat at ring index 1 and iterate over the weight tensor in global CB with an order 1->2->3->0.
+
+![Matmul 1D Ring Example](images/matmul-1d-ring-example.png)
 
 
 ### Mechanism: Advanced Circular Buffer Management
 
 #### 1. Tensor Split Detection and Handling
 
-Large tensors may wrap around the circular buffer boundary. The matmul kernel detects and handles this automatically:
+For tensors that does not wrap around the global CB boundary, each block is allocated continuously for the tensor, and no special management are needed. For tensors that wrap around the global CB boundary, special pointer management are needed to make sure each core indexes into the global CB correclty. The matmul kernel detects and handles this automatically:
 
-```cpp
-FORCE_INLINE bool is_tensor_split(uint32_t cb_id, uint32_t tensor_size_bytes) {
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    uint32_t fifo_rd_ptr = local_cb.fifo_rd_ptr;
-    uint32_t fifo_limit = local_cb.fifo_limit;
-    // Check if tensor exceeds remaining buffer space
-    bool split = (fifo_limit - fifo_rd_ptr) < tensor_size_bytes / L1_ALIGNMENT;
-    return split;
-}
-```
+![Matmul 1D Ring Tensor Handling](images/matmul-1d-ring-tensor-handling.png)
 
-When a tensor split is detected, the kernel handles wraparound correctly:
+**Tensor Split Scenarios:**
 
-```cpp
-FORCE_INLINE void calculate_next_block_index_and_update_rd_ptr(
-    uint32_t cb_id, uint32_t num_blocks, uint32_t block_size_bytes,
-    uint32_t curr_block_index, uint32_t cb_start_addr, uint32_t rd_ptr_start_addr,
-    bool tensor_split, uint32_t* updated_block_index, uint32_t* updated_rd_ptr) {
+The image illustrates two critical scenarios the matmul kernel must handle:
 
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-    uint32_t next_block_index = curr_block_index + 1;
-    bool reach_limit = local_cb.fifo_rd_ptr == local_cb.fifo_limit;
-    bool last_block = curr_block_index == (num_blocks - 1);
+1. **Tensor Split Detected**: When the current read pointer position plus the tensor size exceeds the circular buffer boundary, a split is detected. This triggers wraparound logic to ensure correct block access.
 
-    if (tensor_split) {
-        if (reach_limit) {
-            local_cb.fifo_rd_ptr = cb_start_addr;  // Wrap to beginning
-            if (last_block) {
-                next_block_index = 0;
-                next_fifo_rd_ptr = rd_ptr_start_addr;
-            } else {
-                next_fifo_rd_ptr = cb_start_addr + block_size_bytes_aligned;
-            }
-        }
-        // ... additional wraparound logic
-    }
-}
-```
+2. **Ring Index Wraparound**: In a 1D ring topology, each core start at the Nth block, where N is their ring index. When tensor splits occur, the kernel must correctly calculate both the start block index, the next block index and the wrapped read pointer address. For exmple, core 3 in the diagram first start at block 3, the next block will require a jump back to the base tensor address, and after processing block 1, it will require a wrap around handling to the top of the global CB.
 
-#### 2. Ring Index Positioning
 
-Each matmul core in the 1D ring processes different blocks. The kernel automatically positions the read pointer to the correct starting location:
-
-```cpp
-FORCE_INLINE void update_rd_ptr_to_ring_index(
-    uint32_t cb_id, uint32_t block_size_bytes, uint32_t ring_index, bool tensor_split) {
-
-    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
-
-    if (tensor_split) {
-        // Handle wraparound for ring positioning
-        if ((local_cb.fifo_rd_ptr + ring_index * block_size_bytes / L1_ALIGNMENT) >= local_cb.fifo_limit) {
-            uint32_t fifo_size = local_cb.fifo_size;
-            uint32_t fifo_limit = local_cb.fifo_limit;
-            uint32_t fifo_start_addr = fifo_limit - fifo_size;
-            uint32_t fifo_size_skip_bytes = local_cb.fifo_rd_ptr - fifo_start_addr;
-
-            // Calculate wrapped position using modulo arithmetic
-            local_cb.fifo_rd_ptr = fifo_start_addr +
-                (fifo_size_skip_bytes + ring_index * block_size_bytes / L1_ALIGNMENT) % local_cb.fifo_size;
-        } else {
-            local_cb.fifo_rd_ptr += ring_index * block_size_bytes / L1_ALIGNMENT;
-        }
-    } else {
-        // Simple offset for non-split tensors
-        local_cb.fifo_rd_ptr += ring_index * block_size_bytes / L1_ALIGNMENT;
-    }
-}
-```
-
-#### 3. Compute Kernel Integration
-
-The compute kernel manages CB state throughout matmul execution:
-
-```cpp
-// From bmm_large_block_zm_fused_bias_activation_gathered.cpp
-#ifdef ENABLE_GLOBAL_CB
-    uint32_t in1_cb_start_addr = 0;
-    uint32_t in1_rd_ptr_start_addr = 0;
-    uint32_t curr_in1_block_index = 0;
-    bool in1_tensor_split = 0;
-
-    // Initialize CB interface state
-    UNPACK((in1_cb_start_addr = get_local_cb_start_addr(in1_cb_id)));
-    UNPACK((in1_rd_ptr_start_addr = get_local_cb_rd_ptr(in1_cb_id)));
-    UNPACK((curr_in1_block_index = ring_idx));
-    UNPACK((in1_tensor_split = is_tensor_split(in1_cb_id, in1_tensor_size_bytes)));
-
-    // Position to correct ring index
-    UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_idx, in1_tensor_split)));
-#endif
-
-for (uint32_t block = 0; block < num_blocks; block++) {
-    const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
-
-    // Wait for data from global CB
-    if constexpr (in1_is_dram) {
-        cb_wait_front(in1_cb_id, in1_block_num_tiles);
-    }
-
-    #ifdef ENABLE_GLOBAL_CB
-        // Calculate next block position in ring
-        UNPACK((calculate_next_block_index_and_update_rd_ptr(
-            in1_cb_id, num_blocks, in1_block_size_bytes,
-            curr_in1_block_index, in1_cb_start_addr, in1_rd_ptr_start_addr,
-            in1_tensor_split, &next_in1_block_index, &next_in1_rd_ptr_addr)));
-    #endif
-
-    // Perform matmul computation
-    // ... computation logic ...
-
-    #ifdef ENABLE_GLOBAL_CB
-        // Update state for next iteration
-        curr_in1_block_index = next_in1_block_index;
-        UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
-    #endif
-}
-
-#ifdef ENABLE_GLOBAL_CB
-    // Reset for next tensor in sequence
-    UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));
-    UNPACK((update_rd_ptr_to_ring_index(in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));
-#endif
-```
-
-#### 4. Synchronization and Flow Control
-
-The matmul system implements careful synchronization to ensure data availability and proper flow control:
-
-```cpp
-// Receiver-side flow control
-FORCE_INLINE void remote_cb_wait_front(uint32_t cb_id, uint32_t num_pages) {
-    RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(cb_id);
-    uint32_t len_bytes = num_pages * remote_cb.fifo_page_size;
-    uint32_t num_pages_wait = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-
-    // Wait for sender (prefetcher) to provide enough data
-    volatile tt_l1_ptr uint32_t* pages_acked_ptr = /* ... */;
-    volatile tt_l1_ptr uint32_t* pages_sent_ptr = /* ... */;
-
-    do {
-        invalidate_l1_cache();
-        pages_acked = *pages_acked_ptr;
-        pages_sent = *pages_sent_ptr;
-        num_pages_recv = pages_sent - pages_acked;
-    } while (num_pages_recv < num_pages_wait);
-}
-
-// Signal completion to sender
-FORCE_INLINE void remote_cb_pop_front(uint32_t cb_id, uint32_t num_pages, uint8_t noc) {
-    RemoteReceiverCBInterface& remote_cb = get_remote_receiver_cb_interface(cb_id);
-    // ... update read pointer ...
-
-    uint32_t num_aligned_pages = len_bytes / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
-    detail::update_pages_acked(remote_cb, num_aligned_pages, noc, false, write_at_cmd_buf);
-}
-```
-
+#### 2. Synchronization and Flow Control
+Since each core starts at a different block index, it is neccessary to let Matmul wait for the entire tensor to arrive in global CB before performing any computations. This is because prefetcher is not aware of the out-of-order accessing of tensor blocks, and the `pages_sent` credit is in-order for each block. Performing any computations before the full tensor arrives might cause the use of garbage data. It is also the same case for Matmul pop out the tensor in global CB only after all the blocks are processed, as `pages_ack` is also in-order for each block, and a premature ack can invalidate the wrong block index and cause block overwritten.
+ 
 ### Performance Benefits
 
 The prefetcher + matmul integration provides several key performance advantages:
 
 1. **Weight Prefetching**: DRAM reads ahead of Matmul execution, removing the DRAM bandwidth limitation
-2. **High Bandwidth Utilization**: Coalesced NOC writes maximize memory bandwidth
-3. **Minimal Synchronization**: Only sync per tensor block
-4. **Persistent State**: Continuous streaming across multiple program executions
+2. **High Bandwidth Utilization**: Coalesced NoC writes and use of transaction IDs to maximize memory bandwidth
+3. **Minimal Synchronization**: For prefetcher, only sending credit per block, and for Matmul only sending ack per tensor to minimize the synchronization cost. 
 
 This architecture enables efficient processing of large language models where weight tensors must be continuously streamed from DRAM to distributed compute cores with minimal latency and maximum throughput.
+
+### Future Works
+
+There are several optimizations can be adopted by prefetcher:
+
+1. **Skip NoC Counter Update**: Currently we rely on updating `posted` / `non-posted` NoC counters after issuing a NoC write, and flush on the NoC transaction to make sure the current packet left L1, this can cause dozens of cycles stalling, and updating the NoC counters also cost a few cycles. One other way to workaround this issue is to use transaction IDs for the NoC writes, similar to how it is done for DRAM reads. Instead of flushing the current block, we can flush on the transaction ID for the previous block.
+
+1. **Use Stream Registers**: Currently we use L1 for `pages_sent` and `pages_ack`, and accessing L1 has worse latency compared to accessing stream registers. We should be able to switch to stream registers for the send/receive credits.
+
+2. **Pause Prefetching**: Currently prefetcher will send data whenever there is space available in global CB, and this can cause NoC congestion if there are other ops using the same NoC and cause slow down. It would be benificial for some cases to pause the prefetcher from consuming the NoC bandwidth and let the other ops run faster. A scratch location in L1 or a stream register can be used for sending this signal to prefetcher from other ops, and prefetcher will enter a while loop until that signal is cleared.
+
+
