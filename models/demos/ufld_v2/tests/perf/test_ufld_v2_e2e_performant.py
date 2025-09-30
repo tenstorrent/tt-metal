@@ -65,7 +65,7 @@ def run_ufldv2_e2e(
 @pytest.mark.parametrize(
     "expected_inference_throughput",
     [
-        364 if ttnn.get_num_devices() < 2 else 312,
+        364 if ttnn.get_num_devices() < 2 else 317,
     ],
 )
 def test_ufldv2_e2e_performant(device, batch_size, model_location_generator, expected_inference_throughput):
