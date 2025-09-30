@@ -1499,7 +1499,6 @@ std::pair<Conv2dSliceConfig, Conv2dConfig> determine_conv2d_slice_config(
             params,
             return_slice_config);
     }
-    log_info(tt::LogOp, "Conv2D DRAM Auto slice config is {}", return_slice_config);
     return {return_slice_config, conv_config};
 }
 

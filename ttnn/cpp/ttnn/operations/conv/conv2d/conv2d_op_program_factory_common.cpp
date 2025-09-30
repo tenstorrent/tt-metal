@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
-#include <tt-logger/tt-logger.hpp>
 #include <tuple>
 #include <umd/device/types/arch.hpp>
 #include <unordered_map>
@@ -323,7 +322,6 @@ std::vector<CBInfo> get_cb_info(
         .data_format = conv_input_df});
 
     TT_FATAL(cb_info.size() == num_cbs, "Expected info for {} cbs  by got {}!", num_cbs, cb_info.size());
-    log_info(tt::LogOp, "Conv2D CB Info: {} ", cb_info);
     return cb_info;
 }
 
