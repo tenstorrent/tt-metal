@@ -43,58 +43,94 @@ sfpi_inline sfpi::vInt _float_to_int32_exp21f_(sfpi::vFloat val) {
 template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     sfpi::vFloat y = sfpi::vConst0;
-    // Intermediary values can overflow if abs(val) is above 88.5f, which leads to output increasing again instead
-    // of staying at 0 (or becoming finite on large inputs). This overflow happens when `| log2(e) * val | > 127.0f`,
-    // which correspond to `|val| > 88.5f`
-    // Intermediary values can overflow if values exceeds 88.72283935546875 or -88.72283172607421875
-    // To prevent this, we clamp -88.5 < x < 89
-    // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
-    sfpi::vFloat threshold_high = sfpi::vFloat(89);
-    sfpi::vFloat threshold_low = sfpi::vFloat(-88.5);
-    vec_min_max(threshold_low, val);
-    vec_min_max(val, threshold_high);
-
-    // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
-    // z = (bias + x * factor * N_m; where:
-    // factor = 0x00b8aa3b (computed through log(e))
-    // bias = 0x3f800000
-    //
-    // Fundamentally, this computes exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
-    // - z_i = trunc(x / ln2) (integer part)
-    // - z_f = x/ln2 - trunc(x/ln2) (fractional part)
-    sfpi::vInt z = _float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
-    sfpi::vInt exponential_part =
-        exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent ( = 2**(integer part of val/ln2))
-    sfpi::vInt fractional_part =
-        sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part, in [0; 1])
-
-    // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 1]
-    // This uses a 2nd degree polynomial adjustment of the fractional part
-    constexpr float POLY_D1 = 0.40196114e-7f;
-    constexpr int POLY_D2 = 0xf94ee7;
-    constexpr int POLY_D3 = 0x560e;
-
-    // Compute polynomial through Horner's method
-    sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
-    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + fractional_part, 0);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + fractional_part, 0);
-    d2 = d1 * d2;
-
-    // Compute 2**(adjusted fractional part) through float -> int conversion
-    fractional_part = _float_to_int32_exp21f_(d2 * d3);
-
-    // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
-    exponential_part = sfpi::reinterpret<sfpi::vInt>(
-        sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(fractional_part), exponential_part));  // restore exponent
-
-    y = sfpi::reinterpret<sfpi::vFloat>(exponential_part);
-
     if constexpr (!is_fp32_dest_acc_en) {
-        // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
-        // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
-        // rather than 81 (which would have been correct).
-        // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest-even.
+        // Intermediary values can overflow if abs(val) is above 88.5f, which leads to output increasing again instead
+        // of staying at 0 (or becoming finite on large inputs). This overflow happens when `| log2(e) * val | > 127.0f`,
+        // which correspond to `|val| > 88.5f`
+        // Intermediary values can overflow if values exceeds 88.72283935546875 or -88.72283172607421875
+        // To prevent this, we clamp -88.5 < x < 89
+        // (thresholds values are rounded to bf16, as it does not change result but only requires one SFPLOADI vs. two)
+        sfpi::vFloat threshold_high = sfpi::vFloat(89);
+        sfpi::vFloat threshold_low = sfpi::vFloat(-88.5);
+        vec_min_max(threshold_low, val);
+        vec_min_max(val, threshold_high);
+
+        // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
+        // z = (bias + x * factor * N_m; where:
+        // factor = 0x00b8aa3b (computed through log(e))
+        // bias = 0x3f800000
+        //
+        // Fundamentally, this computes exp(x) = 2**(x / ln2) = 2**(x_i) * 2**(x_f) where
+        // - z_i = trunc(x / ln2) (integer part)
+        // - z_f = x/ln2 - trunc(x/ln2) (fractional part)
+        sfpi::vInt z = _float_to_int32_exp21f_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+        sfpi::vInt exponential_part =
+            exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract exponent ( = 2**(integer part of val/ln2))
+        sfpi::vInt fractional_part =
+            sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa ( = leftover part, in [0; 1])
+
+        // To refine approximation of 2**(x_f), we use an approximation of 2**x on [0; 1]
+        // This uses a 2nd degree polynomial adjustment of the fractional part
+        constexpr float POLY_D1 = 0.40196114e-7f;
+        constexpr int POLY_D2 = 0xf94ee7;
+        constexpr int POLY_D3 = 0x560e;
+
+        // Compute polynomial through Horner's method
+        sfpi::vFloat d1 = sfpi::vFloat(POLY_D1);
+        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(POLY_D2) + fractional_part, 0);
+        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(POLY_D3) + fractional_part, 0);
+        d2 = d1 * d2;
+
+        // Compute 2**(adjusted fractional part) through float -> int conversion
+        fractional_part = _float_to_int32_exp21f_(d2 * d3);
+
+        // Recombined exponent and mantissa: this is equivalent to 2**(x_i) * 2**(x_f)
+        exponential_part = sfpi::reinterpret<sfpi::vInt>(
+            sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(fractional_part), exponential_part));  // restore exponent
+
+        y = sfpi::reinterpret<sfpi::vFloat>(exponential_part);
+
         y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+    } else {
+        v_if(val > -87.3f) {
+            // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
+            // z = (bias + x * factor * N_m; where:
+            // factor = 0x00b8aa3b (computed through log(e))
+            // bias = 0x3f800000
+            sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+            sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
+            sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
+
+            //---exp 61f algorithm---
+
+            // Normalize mantissa field into a fractional value in [0,1)
+            sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.1920929e-7f);
+
+            // Degree-6 polynomial coefficients
+            constexpr float C0 = 1.0000000018f;
+            constexpr float C1 = 0.69314699f;
+            constexpr float C2 = 0.24022982f;
+            constexpr float C3 = 0.055483369f;
+            constexpr float C4 = 0.0096788315f;
+            constexpr float C5 = 0.001243946f;
+            constexpr float C6 = 0.0002170391f;
+
+            // Evaluate polynomial using Horner’s rule
+            sfpi::vFloat poly =
+                ((((((sfpi::vFloat(C6) * frac + sfpi::vFloat(C5)) * frac + sfpi::vFloat(C4)) * frac +
+                    sfpi::vFloat(C3)) *
+                       frac +
+                   sfpi::vFloat(C2)) *
+                      frac +
+                  sfpi::vFloat(C1)) *
+                     frac +
+                 sfpi::vFloat(C0));
+
+            // Restore exponent
+            zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
+            y = sfpi::reinterpret<sfpi::vFloat>(zii);
+        }
+        v_endif;
     }
 
     return y;
