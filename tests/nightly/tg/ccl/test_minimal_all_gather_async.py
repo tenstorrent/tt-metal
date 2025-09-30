@@ -140,7 +140,7 @@ def test_all_gather_async(
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 @pytest.mark.parametrize("mesh_device", [(4, 1)], indirect=True)
-def test_all_gather_async(
+def test_all_gather_async_blackhole(
     mesh_device,
     num_devices,
     ag_output_shape,
@@ -173,6 +173,94 @@ def test_all_gather_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@pytest.mark.parametrize("num_links", [1], ids=["1links"])
+@pytest.mark.parametrize(
+    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        (8, [8, 1, 1, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "gather_dim_3",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        # (True, 10),
+        (False, 1),
+    ],
+    ids=[
+        # "perf",
+        "check"
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "trace_region_size": 190112,
+            },
+            ttnn.Topology.Linear,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize("chunks_per_sync", [20])
+@pytest.mark.parametrize("num_workers_per_link", [2])
+@pytest.mark.parametrize("num_buffers_per_channel", [2])
+@pytest.mark.parametrize("mesh_device", [(8, 8)], indirect=True)
+def test_all_gather_async_big_mesh(
+    mesh_device,
+    num_devices,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+    chunks_per_sync,
+    num_workers_per_link,
+    num_buffers_per_channel,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    run_all_gather_impl(
+        submesh_device,
+        num_devices,
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=None,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
