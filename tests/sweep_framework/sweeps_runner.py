@@ -185,7 +185,7 @@ def get_timeout(test_module_name):
             if TIMEOUT_KEY in line:
                 try:
                     timeout = int(line.split("=")[-1].strip())
-                except:
+                except (ValueError, IndexError):
                     break
     return timeout
 
