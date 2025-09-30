@@ -65,9 +65,9 @@ def analyze_codeowners(changed_files_path, codeowners_path):
 
     co = CodeOwners(codeowners_content)
 
-    # Collect all owners from matching lines
+    # Parse CODEOWNERS file - collect patterns and their owners
+    pattern_groups = {}  # pattern -> set of owners
     team_groups = set()
-    individual_owners = set()
 
     for file_path in changed_files:
         matching_lines = list(co.matching_lines(file_path))
@@ -82,22 +82,38 @@ def analyze_codeowners(changed_files_path, codeowners_path):
             )
 
             # Use only the owners from the most specific match
-            if len(best_match) >= 2:
+            if len(best_match) >= 3:
                 owners_list = best_match[0]  # First element is the owners list
+                pattern = best_match[2]  # Third element is the pattern
+
+                if pattern not in pattern_groups:
+                    pattern_groups[pattern] = set()
+
                 for owner_type, owner in owners_list:
-                    if owner_type in ["USERNAME", "EMAIL"]:
-                        # This is an individual - get full name
-                        full_name = get_user_full_name(owner)
-                        individual_owners.add(full_name)
-                    elif owner_type == "TEAM":
+                    if owner_type == "TEAM":
                         # This is a team
                         team_groups.add(owner)
+                    elif owner_type in ["USERNAME", "EMAIL"]:
+                        # This is an individual - get full name and add to pattern group
+                        full_name = get_user_full_name(owner)
+                        pattern_groups[pattern].add(full_name)
         else:
             print(f"No matches found for {file_path}")
 
-    # Create output - use full names instead of @usernames
+    # Create output - teams are separate, individuals are grouped by pattern
     teams_list = ",".join(sorted(team_groups))
-    individuals_list = ",".join(sorted(individual_owners))
+
+    # For individuals, we need to group them by their patterns
+    # Each pattern becomes a "group" that requires approval from any of its members
+    pattern_groups_list = []
+    for pattern, owners in pattern_groups.items():
+        if owners:  # Only include patterns that have individuals
+            # Format: pattern:owner1,owner2,owner3 (owners without @ symbols for approval checking)
+            clean_owners = [owner.lstrip("@") for owner in sorted(owners)]
+            owners_str = ",".join(clean_owners)
+            pattern_groups_list.append(f"{pattern}:{owners_str}")
+
+    individuals_list = "|".join(pattern_groups_list) if pattern_groups_list else ""
 
     # Combine all groups
     if teams_list and individuals_list:
@@ -107,7 +123,7 @@ def analyze_codeowners(changed_files_path, codeowners_path):
     else:
         all_groups = individuals_list
 
-    print(f"Found {len(team_groups)} team groups and {len(individual_owners)} individual owners")
+    print(f"Found {len(team_groups)} team groups and {len(pattern_groups)} pattern groups")
     print(f"Teams: {teams_list}")
     print(f"Individuals: {individuals_list}")
 
