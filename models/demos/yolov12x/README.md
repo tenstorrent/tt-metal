@@ -25,6 +25,8 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
 
 - For `640x640`, end-2-end perf is `14` FPS :
 
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov12x/tests/perf/test_e2e_performant.py#L69) for the e2e perf from the code.
+
   ```
   pytest --disable-warnings models/demos/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
@@ -32,6 +34,8 @@ pytest --disable-warnings models/demos/yolov12x/tests/pcc/test_ttnn_yolov12x.py:
 #### Multi Device (DP=2, N300):
 
 - For `640x640`, end-2-end perf is `27` FPS :
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov12x/tests/perf/test_e2e_performant.py#L98) for the e2e perf from the code.
 
   ```
   pytest --disable-warnings models/demos/yolov12x/tests/perf/test_e2e_performant.py::test_e2e_performant_dp

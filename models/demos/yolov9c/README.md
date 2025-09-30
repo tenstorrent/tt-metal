@@ -79,22 +79,34 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 ### Model performant running with Trace+2CQ
 #### Single Device (BS=1):
 - For `640x640` - `Segmentation`, end-2-end perf is `51` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py#L32) for the e2e perf from the code.
+
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant
   ```
 
 - For `640x640` - `Detection`, end-2-end perf is `82` FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py#L84) for the e2e perf from the code.
+
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant
   ```
 
 #### Multi Device (DP=2, n300):
 - For `640x640` - `Segmentation`, end-2-end perf is `92` FPS.
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py#L64) for the e2e perf from the code.
+
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_segment.py::test_e2e_performant_dp
   ```
 
 - For `640x640` - `Detection`, end-2-end perf is `142` FPS.
+
+Note: Check [here](https://github.com/tenstorrent/tt-metal/blob/punith/add_assert_e2e/models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py#L116) for the e2e perf from the code.
+
   ```bash
   pytest models/demos/yolov9c/tests/perf/test_e2e_performant_detect.py::test_e2e_performant_dp
   ```
