@@ -28,71 +28,101 @@
 namespace tt::tt_metal::inspector {
 
 std::string get_python_callstack() {
-#ifdef HAS_PYTHON_HEADERS
     // Try to get Python callstack if we're called from Python
-    // Use dlsym to check if Python is actually loaded at runtime
+    // Use dlsym to dynamically load Python functions at runtime
+    // This avoids linking against Python libraries for pure C++ builds
+
+    // Function pointers for Python API
     static auto* py_is_initialized = (int (*)())dlsym(RTLD_DEFAULT, "Py_IsInitialized");
+    if (!py_is_initialized || !py_is_initialized()) {
+        return "";  // Python not available
+    }
 
-    if (py_is_initialized && py_is_initialized()) {
-        PyGILState_STATE gstate = PyGILState_Ensure();
+#ifdef HAS_PYTHON_HEADERS
+    // Define types for Python API functions we need
+    using PyGILState_Ensure_t = PyGILState_STATE (*)();
+    using PyGILState_Release_t = void (*)(PyGILState_STATE);
+    using PyEval_GetFrame_t = PyFrameObject* (*)();
+    using PyFrame_GetCode_t = PyCodeObject* (*)(PyFrameObject*);
+    using PyFrame_GetBack_t = PyFrameObject* (*)(PyFrameObject*);
+    using PyFrame_GetLineNumber_t = int (*)(PyFrameObject*);
+    using PyUnicode_AsUTF8_t = const char* (*)(PyObject*);
+    using Py_DECREF_t = void (*)(PyObject*);
 
-        PyFrameObject* frame = PyEval_GetFrame();
-        if (frame != nullptr) {
-            // Traverse up the stack to find the first user frame
-            // Skip internal frames from site-packages and ttnn/decorators.py
-            while (frame != nullptr) {
-                PyCodeObject* code = PyFrame_GetCode(frame);
-                if (code != nullptr) {
-                    PyObject* filename_obj = code->co_filename;
-                    if (filename_obj && PyUnicode_Check(filename_obj)) {
-                        const char* filename = PyUnicode_AsUTF8(filename_obj);
-                        if (filename) {
-                            std::string filename_str(filename);
-                            // Skip internal frames
-                            if (filename_str.find("site-packages") == std::string::npos &&
-                                filename_str.find("ttnn/decorators.py") == std::string::npos &&
-                                filename_str.find("ttnn/api") == std::string::npos &&
-                                filename_str.find("_ttnn.so") == std::string::npos) {
-                                // Get line number
-                                int lineno = PyFrame_GetLineNumber(frame);
+    // Load Python API functions dynamically
+    static auto* dyn_PyGILState_Ensure = (PyGILState_Ensure_t)dlsym(RTLD_DEFAULT, "PyGILState_Ensure");
+    static auto* dyn_PyGILState_Release = (PyGILState_Release_t)dlsym(RTLD_DEFAULT, "PyGILState_Release");
+    static auto* dyn_PyEval_GetFrame = (PyEval_GetFrame_t)dlsym(RTLD_DEFAULT, "PyEval_GetFrame");
+    static auto* dyn_PyFrame_GetCode = (PyFrame_GetCode_t)dlsym(RTLD_DEFAULT, "PyFrame_GetCode");
+    static auto* dyn_PyFrame_GetBack = (PyFrame_GetBack_t)dlsym(RTLD_DEFAULT, "PyFrame_GetBack");
+    static auto* dyn_PyFrame_GetLineNumber = (PyFrame_GetLineNumber_t)dlsym(RTLD_DEFAULT, "PyFrame_GetLineNumber");
+    static auto* dyn_PyUnicode_AsUTF8 = (PyUnicode_AsUTF8_t)dlsym(RTLD_DEFAULT, "PyUnicode_AsUTF8");
+    static auto* dyn_Py_DecRef = (Py_DECREF_t)dlsym(RTLD_DEFAULT, "Py_DecRef");
 
-                                // Try to make path relative from tests/ or ttnn/ directory
-                                std::filesystem::path filepath(filename_str);
-                                std::string relative_path = filepath.filename().string();
+    // Check if all required functions are available
+    if (!dyn_PyGILState_Ensure || !dyn_PyGILState_Release || !dyn_PyEval_GetFrame || !dyn_PyFrame_GetCode ||
+        !dyn_PyFrame_GetBack || !dyn_PyFrame_GetLineNumber || !dyn_PyUnicode_AsUTF8 || !dyn_Py_DecRef) {
+        return "";  // Some Python functions not available
+    }
 
-                                auto tests_pos = filename_str.find("/tests/");
-                                auto ttnn_pos = filename_str.find("/ttnn/");
-                                if (tests_pos != std::string::npos) {
-                                    relative_path = filename_str.substr(tests_pos + 1);
-                                } else if (ttnn_pos != std::string::npos) {
-                                    relative_path = filename_str.substr(ttnn_pos + 1);
-                                } else {
-                                    relative_path = filepath.filename().string();
-                                }
+    PyGILState_STATE gstate = dyn_PyGILState_Ensure();
 
-                                std::stringstream ss;
-                                ss << relative_path << ":" << lineno;
+    PyFrameObject* frame = dyn_PyEval_GetFrame();
+    if (frame != nullptr) {
+        // Traverse up the stack to find the first user frame
+        // Skip internal frames from site-packages and ttnn/decorators.py
+        while (frame != nullptr) {
+            PyCodeObject* code = dyn_PyFrame_GetCode(frame);
+            if (code != nullptr) {
+                PyObject* filename_obj = code->co_filename;
+                if (filename_obj) {
+                    const char* filename = dyn_PyUnicode_AsUTF8(filename_obj);
+                    if (filename) {
+                        std::string filename_str(filename);
+                        // Skip internal frames
+                        if (filename_str.find("site-packages") == std::string::npos &&
+                            filename_str.find("ttnn/decorators.py") == std::string::npos &&
+                            filename_str.find("ttnn/api") == std::string::npos &&
+                            filename_str.find("_ttnn.so") == std::string::npos) {
+                            // Get line number
+                            int lineno = dyn_PyFrame_GetLineNumber(frame);
 
-                                Py_DECREF(code);
-                                PyGILState_Release(gstate);
-                                return ss.str();
+                            // Try to make path relative from tests/ or ttnn/ directory
+                            std::filesystem::path filepath(filename_str);
+                            std::string relative_path = filepath.filename().string();
+
+                            auto tests_pos = filename_str.find("/tests/");
+                            auto ttnn_pos = filename_str.find("/ttnn/");
+                            if (tests_pos != std::string::npos) {
+                                relative_path = filename_str.substr(tests_pos + 1);
+                            } else if (ttnn_pos != std::string::npos) {
+                                relative_path = filename_str.substr(ttnn_pos + 1);
+                            } else {
+                                relative_path = filepath.filename().string();
                             }
+
+                            std::stringstream ss;
+                            ss << relative_path << ":" << lineno;
+
+                            dyn_Py_DecRef((PyObject*)code);
+                            dyn_PyGILState_Release(gstate);
+                            return ss.str();
                         }
                     }
-                    Py_DECREF(code);
                 }
+                dyn_Py_DecRef((PyObject*)code);
+            }
 
-                // Move to the next frame
-                PyFrameObject* prev_frame = frame;
-                frame = PyFrame_GetBack(frame);
-                if (frame == prev_frame) {
-                    break;  // Avoid infinite loop
-                }
+            // Move to the next frame
+            PyFrameObject* prev_frame = frame;
+            frame = dyn_PyFrame_GetBack(frame);
+            if (frame == prev_frame) {
+                break;  // Avoid infinite loop
             }
         }
-
-        PyGILState_Release(gstate);
     }
+
+    dyn_PyGILState_Release(gstate);
 #endif
     return "";  // Return empty string if Python callstack not available
 }
