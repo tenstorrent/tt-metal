@@ -12,32 +12,74 @@ on:
       docker-image:
         required: true
         type: string
+      models-to-run:
+        required: false
+        type: string
+        default: "all"
 
 jobs:
+  create-test-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      test_matrix: ${{ steps.ctm.outputs.test_matrix }}
+      test_matrix_count: ${{ steps.ctm.outputs.test_matrix_count }}
+    steps:
+      - id: ctm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Define all available test groups with their full configuration
+          ALL_TEST_GROUPS='[
+            {
+              "name": "WH N300 pgm dispatch nightly",
+              "arch": "wormhole_b0",
+              "runs-on": ["cloud-virtual-machine", "N300", "in-service"],
+              "run-args": "mkdir -p generated/test_reports\\n./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json\\n./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py pgm_bench.json",
+              "timeout": 15
+            },
+            {
+              "name": "WH N300 dispatch bandwidth nightly",
+              "arch": "wormhole_b0",
+              "runs-on": ["cloud-virtual-machine", "N300", "in-service"],
+              "run-args": "mkdir -p generated/test_reports\\n./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json\\n# We should not fail the job for now as this benchmark is not yet stable\\n./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true",
+              "timeout": 15
+            }
+          ]'
+
+          SEL='${{ inputs.models-to-run }}'
+          echo "SEL raw: ${SEL}"
+          echo "${SEL}" | jq -e type && echo "Looks like valid JSON" || echo "Not JSON"
+
+          # ---- Filter test groups based on selection ----
+          if [ -z "${SEL}" ] || [ "${SEL}" = "all" ]; then
+            # Keep all test groups
+            FILTERED_MATRIX="${ALL_TEST_GROUPS}"
+          else
+            if echo "${SEL}" | jq -e type >/dev/null 2>&1; then
+              # already JSON; expect an array of strings
+              SEL_ARR="$(echo "${SEL}" | jq -c '.')"
+              FILTERED_MATRIX=$(jq --argjson sel "$SEL_ARR" '[.[] | select(.name as $name | $sel | index($name))]' <<< "$ALL_TEST_GROUPS")
+            else
+              echo "Not supported input format"
+              exit 1
+            fi
+          fi
+
+          echo "test_matrix=$(echo $FILTERED_MATRIX | tr -d '\n')" >> "$GITHUB_OUTPUT"
+
+          FILTERED_COUNT="$(jq 'length' <<< "${FILTERED_MATRIX}")"
+          echo "test_matrix_count=${FILTERED_COUNT}" >> "$GITHUB_OUTPUT"
+
   fd-frequent:
+    needs: create-test-matrix
+    if: ${{ needs.create-test-matrix.outputs.test_matrix_count != '0' }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group:
-          - name: "WH N300 pgm dispatch nightly"
-            arch: wormhole_b0
-            runs-on: ["cloud-virtual-machine", "N300", "in-service"]
-            run-args: |
-              mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch --benchmark_out_format=json --benchmark_out=pgm_bench.json
-              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_pgm_dispatch_perf_ci.py pgm_bench.json
-            timeout: 15
-          - name: "WH N300 dispatch bandwidth nightly"
-            arch: wormhole_b0
-            runs-on: ["cloud-virtual-machine", "N300", "in-service"]
-            run-args: |
-              mkdir -p generated/test_reports
-              ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json
-              # We shouldn't fail the job for now as this benchmark is not yet stable
-              ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true
-            timeout: 15
+        test-group: ${{ fromJSON(needs.create-test-matrix.outputs.test_matrix) }}
     name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO

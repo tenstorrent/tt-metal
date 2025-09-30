@@ -2,6 +2,11 @@ name: "(Single-card) Device perf regressions"
 
 on:
   workflow_dispatch:
+    inputs:
+      models-to-run:
+        description: "List of requested models as JSON array, for example: [\"yolov11\", \"resnet50\", \"mamba\"]. Default is 'all'"
+        default: "all"
+        type: string
   schedule:
     - cron: "0 2,7,10,14,17,20,23 * * *"
   workflow_call:
@@ -24,3 +29,4 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      models-to-run: ${{ inputs.models-to-run }}
