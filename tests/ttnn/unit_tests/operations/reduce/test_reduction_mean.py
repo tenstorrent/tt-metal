@@ -53,7 +53,6 @@ def test_mean_scaling(device, shape, dim, keepdim):
 @pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, [0, 1], [2, 3], [0, 1, 2]])
 @pytest.mark.parametrize("scalar", [2.0])
-@pytest.mark.skip("reducing across some dimensions do not apply scalar correctly #29721")
 def test_mean_scaling_factor(device, shape, dim, scalar):
     torch_input_tensor = torch.ones(shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, dtype=torch.bfloat16)
