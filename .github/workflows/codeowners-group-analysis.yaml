@@ -677,36 +677,47 @@ jobs:
                 echo "$PING_MESSAGE"
               fi
 
-              # Send Slack notification if requested
-              if [ "$SEND_SLACK" = "true" ]; then
-                echo "Sending ping notification to Slack..."
+            # Send Slack notification if requested
+            if [ "$SEND_SLACK" = "true" ]; then
+              echo "Sending ping notification to Slack..."
 
-                # Create Slack message with proper mentions
-                SLACK_MESSAGE="Hi"
-                IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
-                OWNER_COUNT=${#SELECTED_ARRAY[@]}
-                for i in "${!SELECTED_ARRAY[@]}"; do
-                  owner="${SELECTED_ARRAY[$i]}"
-                  if [ -n "$owner" ]; then
-                    SLACK_MESSAGE="$SLACK_MESSAGE <@$owner>"
-                    # Add comma if not the last owner
-                    if [ $((i + 1)) -lt $OWNER_COUNT ]; then
-                      SLACK_MESSAGE="$SLACK_MESSAGE,"
-                    fi
+              # Create Slack message with proper mentions and formatting
+              SLACK_MESSAGE="Hi"
+              IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
+              OWNER_COUNT=${#SELECTED_ARRAY[@]}
+              for i in "${!SELECTED_ARRAY[@]}"; do
+                owner="${SELECTED_ARRAY[$i]}"
+                if [ -n "$owner" ]; then
+                  # Get user info for full name
+                  USER_API="https://api.github.com/users/$owner"
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                 -H "Accept: application/vnd.github.v3+json" \
+                                 "$USER_API" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                    SLACK_MESSAGE="$SLACK_MESSAGE $USER_NAME"
+                  else
+                    SLACK_MESSAGE="$SLACK_MESSAGE $owner"
                   fi
-                done
+                  # Add comma if not the last owner
+                  if [ $((i + 1)) -lt $OWNER_COUNT ]; then
+                    SLACK_MESSAGE="$SLACK_MESSAGE,"
+                  fi
+                fi
+              done
 
-                SLACK_MESSAGE="$SLACK_MESSAGE, this PR *[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)* by $PR_AUTHOR_FULL_NAME needs your approval/review to merge this."
+              # Use Slack hyperlink format: <URL|Text>
+              SLACK_MESSAGE="$SLACK_MESSAGE, this PR <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|*$PR_TITLE*> by $PR_AUTHOR_FULL_NAME needs your approval/review to merge this."
 
-                # Send to Slack using bot token
-                curl -s -X POST \
-                  -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
-                  -H "Content-Type: application/json" \
-                  -d "{\"channel\": \"C09HT5VSXRB\", \"text\": \"$SLACK_MESSAGE\"}" \
-                  "https://slack.com/api/chat.postMessage"
+              # Send to Slack using bot token
+              curl -s -X POST \
+                -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+                -H "Content-Type: application/json" \
+                -d "{\"channel\": \"C09HT5VSXRB\", \"text\": \"$SLACK_MESSAGE\"}" \
+                "https://slack.com/api/chat.postMessage"
 
-                echo "Slack notification sent to #codeowners-ping-checking"
-              fi
-            else
-              echo "No pending owners to ping"
+              echo "Slack notification sent to #codeowners-ping-checking"
             fi
+          else
+            echo "No pending owners to ping"
+          fi
