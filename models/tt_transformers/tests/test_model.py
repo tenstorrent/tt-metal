@@ -142,7 +142,6 @@ def test_model_inference(
             "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
             "llama32_90b": 0.9759,
             "Mistral-7B": 0.95 if mode_accuracy else 0.95,
-            "Qwen2.5-7B": 0.95 if mode_accuracy else 0.95,
         }[model_name]
 
         final_k_cache_pcc = {
@@ -153,7 +152,6 @@ def test_model_inference(
             "llama31_70b": 0.9997,
             "llama32_90b": 0.9995,
             "Mistral-7B": 0.68,
-            "Qwen2.5-7B": 0.999,
         }[model_name]
         final_v_cache_pcc = {
             "llama32_1b": 0.9996,
@@ -163,7 +161,6 @@ def test_model_inference(
             "llama31_70b": 0.9997,
             "llama32_90b": 0.9996,
             "Mistral-7B": 0.68,
-            "Qwen2.5-7B": 0.999,
         }[model_name]
 
         quick_iterations = {
@@ -174,7 +171,6 @@ def test_model_inference(
             "llama31_70b": 6,
             "llama32_90b": 6,
             "Mistral-7B": 2,
-            "Qwen2.5-7B": 2,
         }[model_name]
 
         iterations = quick_iterations
@@ -193,7 +189,14 @@ def test_model_inference(
             or any(
                 [
                     f"{state_dict_prefix}{name}" in k
-                    for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
+                    for name in [
+                        "tok_embeddings.weight",
+                        "norm.weight",
+                        "output.weight",
+                        "tok_embeddings.bias",
+                        "norm.bias",
+                        "output.bias",
+                    ]
                 ]
             )
         )
