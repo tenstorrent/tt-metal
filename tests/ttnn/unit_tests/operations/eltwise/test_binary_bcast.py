@@ -1071,7 +1071,7 @@ def test_inplace_binary_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
     ),
 )
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
-def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):
+def test_inplace_binary_with_scalar(a_shape, scalar, ttnn_fn, device):  # This test is failing for le ge
     torch.manual_seed(0)
 
     ttnn_op = getattr(ttnn, ttnn_fn)
