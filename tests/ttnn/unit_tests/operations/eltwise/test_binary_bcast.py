@@ -3772,11 +3772,11 @@ def rand_bf16_gen_dtype(shape, device, *, min=0, max=1, dtype, memory_config=ttn
     "a_shape, b_shape",
     (
         # row bcast
-        (torch.Size([5, 1, 64, 128]), torch.Size([5, 1, 1, 128])),
-        (torch.Size([5, 1, 1, 128]), torch.Size([5, 1, 64, 128])),
+        (torch.Size([5, 10, 640, 128]), torch.Size([5, 10, 1, 128])),
+        (torch.Size([5, 10, 1, 128]), torch.Size([5, 10, 640, 128])),
         # row col mixed bcast
-        (torch.Size([5, 1, 64, 1]), torch.Size([5, 1, 1, 128])),
-        (torch.Size([5, 1, 1, 128]), torch.Size([5, 1, 64, 1])),
+        (torch.Size([5, 10, 640, 1]), torch.Size([5, 10, 1, 128])),
+        (torch.Size([5, 10, 1, 128]), torch.Size([5, 10, 640, 1])),
     ),
 )
 def test_binary_sfpu_row_bcast(a_shape, b_shape, device):

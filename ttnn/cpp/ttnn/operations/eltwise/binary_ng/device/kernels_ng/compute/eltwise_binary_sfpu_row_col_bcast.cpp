@@ -100,9 +100,8 @@ ALWI void process_tile(
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
-
         cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
+        cb_pop_front(cb_llk_post, num_tiles_per_cycle);
     }
     cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);
 }
