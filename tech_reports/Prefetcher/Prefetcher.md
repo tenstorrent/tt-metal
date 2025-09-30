@@ -6,6 +6,7 @@
 - [Sub-Devices: Concept and Usage](#sub-devices-concept-and-usage)
 - [Prefetcher Architecture](#prefetcher-architecture)
 - [Matmul 1D Ring Integration](#matmul-1d-ring-integration)
+- [Future Works](#future-works)
 
 ## Problem with Reading from DRAM
 
@@ -306,7 +307,7 @@ The prefetcher + matmul integration provides several key performance advantages:
 
 This architecture enables efficient processing of large language models where weight tensors must be continuously streamed from DRAM to distributed compute cores with minimal latency and maximum throughput.
 
-### Future Works
+## Future Works
 
 There are several optimizations can be adopted by prefetcher:
 
@@ -315,5 +316,7 @@ There are several optimizations can be adopted by prefetcher:
 1. **Use Stream Registers**: Currently we use L1 for `pages_sent` and `pages_ack`, and accessing L1 has worse latency compared to accessing stream registers. We should be able to switch to stream registers for the send/receive credits.
 
 2. **Pause Prefetching**: Currently prefetcher will send data whenever there is space available in global CB, and this can cause NoC congestion if there are other ops using the same NoC and cause slow down. It would be benificial for some cases to pause the prefetcher from consuming the NoC bandwidth and let the other ops run faster. A scratch location in L1 or a stream register can be used for sending this signal to prefetcher from other ops, and prefetcher will enter a while loop until that signal is cleared.
+
+3. **Switch Allocation Strategy**: Currently we only use the aligned allocation strategy, which introduced gaps in-between the tensors, we should allow the switch between compacted allocation and aligned allocation, as in some cases users might want to remove the gaps and handle pointer update manually.
 
 
