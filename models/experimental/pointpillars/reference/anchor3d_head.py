@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 from torch import nn as nn
 
-from models.experimental.functional_pointpillars.reference.point_pillars_utils import (
+from models.experimental.pointpillars.reference.point_pillars_utils import (
     Anchor3DRangeGenerator,
     DeltaXYZWLHRBBoxCoder,
     multi_apply,

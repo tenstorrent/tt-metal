@@ -6,11 +6,11 @@ from typing import List, Optional
 
 import ttnn
 
-from models.experimental.functional_pointpillars.tt.ttnn_hard_vfe import TtHardVFE
-from models.experimental.functional_pointpillars.tt.ttnn_point_pillars_scatter import TtPointPillarsScatter
-from models.experimental.functional_pointpillars.tt.ttnn_second import TtSECOND
-from models.experimental.functional_pointpillars.tt.ttnn_fpn import TtFPN
-from models.experimental.functional_pointpillars.tt.ttnn_anchor3d_head import TtAnchor3DHead
+from models.experimental.pointpillars.tt.ttnn_hard_vfe import TtHardVFE
+from models.experimental.pointpillars.tt.ttnn_point_pillars_scatter import TtPointPillarsScatter
+from models.experimental.pointpillars.tt.ttnn_second import TtSECOND
+from models.experimental.pointpillars.tt.ttnn_fpn import TtFPN
+from models.experimental.pointpillars.tt.ttnn_anchor3d_head import TtAnchor3DHead
 from mmengine.structures import InstanceData
 
 import math

@@ -6,11 +6,11 @@ from typing import List, Optional, Sequence, Dict
 from torch import Tensor
 from torch import nn as nn
 
-from models.experimental.functional_pointpillars.reference.hard_vfe import HardVFE
-from models.experimental.functional_pointpillars.reference.point_pillars_scatter import PointPillarsScatter
-from models.experimental.functional_pointpillars.reference.second import SECOND
-from models.experimental.functional_pointpillars.reference.fpn import FPN
-from models.experimental.functional_pointpillars.reference.anchor3d_head import Anchor3DHead
+from models.experimental.pointpillars.reference.hard_vfe import HardVFE
+from models.experimental.pointpillars.reference.point_pillars_scatter import PointPillarsScatter
+from models.experimental.pointpillars.reference.second import SECOND
+from models.experimental.pointpillars.reference.fpn import FPN
+from models.experimental.pointpillars.reference.anchor3d_head import Anchor3DHead
 from mmengine.structures import InstanceData
 
 
