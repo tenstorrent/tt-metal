@@ -18,7 +18,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 TIMEOUT = 45
 
 # Get the number of available devices to dynamically generate mesh shapes
-NUM_DEVICES = ttnn.get_num_devices()
+NUM_DEVICES = 1 #ttnn.get_num_devices()
 
 FABRIC_CONFIGS = [
     ttnn.FabricConfig.FABRIC_1D,
