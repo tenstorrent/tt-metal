@@ -518,12 +518,14 @@ def main():
             # Extract features at the end-of-sequence token position and apply text projection
             # Currently falling back to PyTorch for argmax operation
             torch_tokens = ttnn.to_torch(tokens)
-            text_projection = ttnn.to_torch(self.text_projection)
             torch_x = ttnn.to_torch(x)
 
-            torch_x = torch_x[torch.arange(torch_x.shape[0]), torch_tokens.argmax(dim=-1)] @ text_projection.t()
+            torch_selected_features = torch_x[torch.arange(torch_x.shape[0]), torch_tokens.argmax(dim=-1)]
 
-            return ttnn.from_torch(torch_x, device=get_device(), layout=ttnn.TILE_LAYOUT)
+            x = ttnn.from_torch(torch_selected_features, device=get_device(), layout=ttnn.TILE_LAYOUT)
+            x = ttnn.matmul(x, self.text_projection, transpose_b=True)
+
+            return x
 
         def forward(self, image, tokens):
             text_features = self.encode_text(tokens)
