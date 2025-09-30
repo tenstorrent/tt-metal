@@ -278,17 +278,19 @@ Notes:
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // --- Mesh trace capture & replay ---
-    auto mesh_workload = Dist::MeshWorkload();
+    auto sender_workload = Dist::MeshWorkload();
+    auto receiver_workload = Dist::MeshWorkload();
+    Dist::AddProgramToMeshWorkload(sender_workload, std::move(sender_prog), Dist::MeshCoordinateRange(src_coord));
+    Dist::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_prog), Dist::MeshCoordinateRange(dst_coord));
 
-    Dist::AddProgramToMeshWorkload(mesh_workload, std::move(sender_prog), Dist::MeshCoordinateRange(src_coord));
-    Dist::AddProgramToMeshWorkload(mesh_workload, std::move(receiver_prog), Dist::MeshCoordinateRange(dst_coord));
-
-    // 1) Warm-up outside capture so loads/routes happen before tracing
-    Dist::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/true);
+    // 1) Warm-up each workload (receiver first so it's ready, then sender)
+    Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
+    Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
     // 2) Capture p.trace_iters enqueues back-to-back
     auto trace_id = Dist::BeginTraceCapture(mesh.get(), mcq.id());
     for (uint32_t i = 0; i < p.trace_iters; ++i) {
-        Dist::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/false);
+        Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
+        Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
     }
     Dist::EndTraceCapture(mesh.get(), mcq.id(), trace_id);
     // 3) Replay measured section
