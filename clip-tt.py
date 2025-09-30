@@ -437,13 +437,14 @@ class CLIP:
     def build_attention_mask(self):
         # lazily create causal attention mask, with full attention between the vision tokens
         # pytorch uses additive attention mask; fill with -inf
-
-        # TODO: Switch this to TTNN
-        mask = torch.empty(self.context_length, self.context_length)
-        mask.fill_(float("-inf"))
-        mask.triu_(1)  # zero out the lower diagonal
-
-        mask = ttnn.from_torch(mask, device=get_device(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        mask = ttnn.full(
+            shape=[self.context_length, self.context_length],
+            fill_value=float("-inf"),
+            dtype=ttnn.bfloat16,
+            device=get_device(),
+            layout=ttnn.TILE_LAYOUT,
+        )
+        mask = ttnn.triu(mask, diagonal=1)
         return mask
 
     def encode_image(self, image):
@@ -471,6 +472,11 @@ class CLIP:
 
         # TODO: Change to TTNN
         # text_projection = ttnn.transpose(self.text_projection, -2, -1)
+
+        print("encode_text: ")
+        print(f"x.shape: {x.shape}")
+        print(f"tokens.shape: {tokens.shape}")
+        print(f"self.text_projection.shape: {self.text_projection.shape}")
 
         torch_tokens = ttnn.to_torch(tokens)
         text_projection = ttnn.to_torch(self.text_projection)
