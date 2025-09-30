@@ -3,17 +3,17 @@
 @@ -95,13 +95,13 @@
      return __VA_ARGS__();                                                   \
    }
- 
+
 -namespace detail {
 +namespace disp_detail {
- 
+
  inline at::ScalarType scalar_type(at::ScalarType s) {
    return s;
  }
- 
+
 -} // namespace detail
-+} // namespace disp_detail 
- 
++} // namespace disp_detail
+
  // The AT_DISPATCH_* family of macros provides the ability to
  // conveniently generate specializations of a kernel over all of the
 @@ -195,7 +195,7 @@
