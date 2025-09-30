@@ -219,10 +219,10 @@ bool single_core_binary(
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
 
-    constexpr uint32_t repeat_times = 4;
     std::vector<bfloat16> input1_values;
 
-    std::vector<float> repeat_values = {5.0f, 7.0f, 9.0f, 11.0f};
+    std::vector<float> repeat_values = {5.0f, 7.0f, 9.0f, 11.0f, 13.0f, 15.0f, 17.0f, 19.0f};
+    const uint32_t repeat_times = repeat_values.size();
 
     for (uint32_t i = 0; i < repeat_times; i++) {
         for (uint32_t j = 0; j < 1024; j++) {
@@ -231,20 +231,42 @@ bool single_core_binary(
     }
 
     std::vector<bfloat16> input0_values;
-    for (uint32_t i = 0; i < 16; i++) {
-        input0_values.push_back(bfloat16(1.0f));
+    std::vector<float> input0_pattern_values = {1.0f, 2.0f, 3.0f, 4.0f};
+    const uint32_t input0_pattern_times = input0_pattern_values.size();
+
+    // For each tile, add pattern values followed by zeros
+    for (uint32_t i = 0; i < input0_pattern_times; i += 2) {
+        // Add 16 values of the pattern value F0
+        for (uint32_t j = 0; j < 16; j++) {
+            input0_values.push_back(bfloat16(input0_pattern_values[i]));
+        }
+        // Add 240 zeros
+        for (uint32_t j = 0; j < 240; j++) {
+            input0_values.push_back(bfloat16(0.0f));
+        }
+
+        // Add 16 values of the pattern value F1
+        for (uint32_t j = 0; j < 16; j++) {
+            input0_values.push_back(bfloat16(input0_pattern_values[i + 1]));
+        }
+        // Add 240 zeros
+        for (uint32_t j = 0; j < 240; j++) {
+            input0_values.push_back(bfloat16(0.0f));
+        }
+
+        // Fill remaining space in this tile with zeros (512 zeros)
+        for (uint32_t j = 0; j < 512; j++) {
+            input0_values.push_back(bfloat16(0.0f));
+        }
     }
-    for (uint32_t i = 0; i < 240; i++) {
-        input0_values.push_back(bfloat16(0.0f));
-    }
-    for (uint32_t i = 0; i < 16; i++) {
-        input0_values.push_back(bfloat16(2.0f));
-    }
-    for (uint32_t i = 0; i < 240; i++) {
-        input0_values.push_back(bfloat16(0.0f));
-    }
-    for (uint32_t i = 0; i < 512; i++) {
-        input0_values.push_back(bfloat16(0.0f));
+
+    // Print input0_values in rows of 16
+    std::cout << "input0_values in rows of 16:" << std::endl;
+    for (size_t i = 0; i < input0_values.size(); i += 16) {
+        for (size_t j = i; j < std::min(i + 16, input0_values.size()); ++j) {
+            std::cout << static_cast<float>(input0_values[j]) << " ";
+        }
+        std::cout << std::endl;
     }
 
     // Result will be input0_values - input1_values in bcasted manner
@@ -360,7 +382,7 @@ bool single_core_binary(
 }  // namespace unit_tests::compute::binary
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
-    uint32_t repeat_tiles = 4;
+    uint32_t repeat_tiles = 8;
 
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::LoFi); i++) {
         if (i == 1) {

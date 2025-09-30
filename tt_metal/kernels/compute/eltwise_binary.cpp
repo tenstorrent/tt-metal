@@ -29,40 +29,47 @@ void MAIN {
     UNPACK((DPRINT << "per_core_block_cnt: " << per_core_block_cnt << ENDL()));
     UNPACK((DPRINT << "per_core_block_size: " << per_core_block_size << ENDL()));
 
-    constexpr uint32_t reuse_a_times = 4;
-    constexpr uint32_t num_a_tiles = 1;
+    constexpr uint32_t input_b_size = 8;
+    constexpr uint32_t input_a_size = 2;
+
+    constexpr uint32_t BLOCK_SIZE = 8;
 
     binary_op_init_common(cb_inp0, cb_inp1, cb_out0);
+    // UNPACK((DPRINT << "Inited common OP " <<  ENDL()));
     sub_bcast_row_tile_init();
+    // UNPACK((DPRINT << "Inited bcast row sub OP " <<  ENDL()));
 
     // for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-    cb_wait_front(cb_inp0, num_a_tiles);
-    cb_wait_front(cb_inp1, reuse_a_times);
-    cb_reserve_back(cb_out0, reuse_a_times);
+    cb_wait_front(cb_inp0, input_a_size);
+    cb_wait_front(cb_inp1, input_b_size);
+    cb_reserve_back(cb_out0, input_b_size);
+    // UNPACK((DPRINT << "Reserved CBs " <<  ENDL()));
 
     tile_regs_acquire();
-    // for (uint32_t i = 0; i < per_core_block_size; ++i) {
-    sub_bcast_row_tile(cb_inp0, cb_inp1, 0, 0, 0 /*dst_index*/);
-    // dprint_tensix_dest_reg<true>(2);
-    // }
+    // sub_bcast_row_tile(cb_inp0, cb_inp1, 0, 0, 0 /*dst_index*/);
+
+    // UNPACK((DPRINT << "calling sub_bcast_row_block " <<  ENDL()));
+
+    sub_bcast_row_block<BLOCK_SIZE>(cb_inp0, cb_inp1, 0, 0, 4, 0 /*dst_index*/);
+
     tile_regs_commit();
 
     tile_regs_wait();
-    for (uint32_t i = 0; i < reuse_a_times; ++i) {
+    for (uint32_t i = 0; i < input_b_size; ++i) {
         pack_tile(i, cb_out0);
     }
         tile_regs_release();
 
-        for (uint32_t i = 0; i < reuse_a_times; ++i) {
+        for (uint32_t i = 0; i < input_b_size; ++i) {
             for (uint32_t j = 0; j < 10000; j++) {
                 TTI_NOP;
             }
             PACK((tt::compute::common::print_full_tile(cb_out0, i)));
         }
 
-        cb_pop_front(cb_inp0, num_a_tiles);
-        cb_pop_front(cb_inp1, reuse_a_times);
-        cb_push_back(cb_out0, reuse_a_times);
+        cb_pop_front(cb_inp0, input_a_size);
+        cb_pop_front(cb_inp1, input_b_size);
+        cb_push_back(cb_out0, input_b_size);
         // }
 }
 }  // namespace NAMESPACE

@@ -248,12 +248,34 @@ ALWI void sub_bcast_row_tiles_hw_configure(uint32_t icb0, uint32_t icb1, uint32_
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 }
 
+// Init function that should be called before sub_bcast_row_tile or sub_bcast_row_block
+// Sets up replay buffers and MOPs for unpacker and math threads
 ALWI void sub_bcast_row_tile_init() {
     UNPACK((llk_unpack_bcastA_B_init()));
     MATH((llk_math_eltwise_sub_bcast_row_init()));
 }
 
 ALWI void sub_bcast_row_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint dst_index) {
-    UNPACK((llk_unpack_bcastA_B(icb0, icb1, 0, 0)));
+    UNPACK((llk_unpack_bcastA_B(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary_sub_bcast_row(dst_index)));
+}
+
+/*
+
+    in1_start_index - starting index in in1 CB
+    in1_stride - stride between in1 tiles
+    dst_start_index - starting index in dst reg
+
+    sub_bcast_row_block<4>(in0, int1, 0,0,4,0);
+
+*/
+template <uint32_t block_size = 4>
+ALWI void sub_bcast_row_block(
+    uint32_t icb0, uint32_t icb1, uint32_t itile_start0, uint32_t itile_start1, uint32_t in1_stride, uint dst_index) {
+    for (uint32_t i = 0; i < block_size / 4; ++i) {
+        DPRINT << "sub_bcast_row_tile params: icb0=" << icb0 << ", icb1=" << icb1 << ", itile0=" << (itile_start0 + i)
+               << ", itile1=" << (itile_start1 + i * in1_stride) << ", dst_index=" << (dst_index + block_size * i)
+               << ENDL();
+        sub_bcast_row_tile(icb0, icb1, itile_start0 + i, itile_start1 + i * in1_stride, dst_index + 4 * i);
+    }
 }
