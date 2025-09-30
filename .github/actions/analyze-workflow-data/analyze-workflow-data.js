@@ -1154,6 +1154,7 @@ async function run() {
       }
     }
 
+    // upload the changes json to the artifact space
     const outputDir = process.env.GITHUB_WORKSPACE || process.cwd();
     const statusChangesPath = path.join(outputDir, 'workflow-status-changes.json');
     fs.writeFileSync(statusChangesPath, JSON.stringify(changes));
@@ -1163,11 +1164,9 @@ async function run() {
     let regressionsSection = '';
     let stayedFailingSection = '';
     try {
-      const parsed = Array.isArray(changes) ? changes : [];
-      const regressionsItems = parsed.filter(item => item.change === 'success_to_fail');
-      const stayedFailingItems = parsed.filter(item => item.change === 'stayed_failing');
-      if (regressionsItems.length > 0) {
-        const lines = regressionsItems.map(it => {
+      // Use the already-enriched regressedDetails and stayedFailingDetails arrays directly
+      if (regressedDetails.length > 0) {
+        const lines = regressedDetails.map(it => {
           const base = it.workflow_url ? `- [${it.name}](${it.workflow_url})` : `- ${it.name}`;
           if (it.first_failed_run_url) {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
@@ -1181,20 +1180,20 @@ async function run() {
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml, ''].join('\n');
             if (it.no_success_in_window) {
-              const latestLink = it.latest_failed_run_url ? ` | Latest failing run: [Run](${it.latest_failed_run_url}) ${it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : ''} ${it.latest_failed_head_short ? `[\\\`${it.latest_failed_head_short}\\"](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})` : ''}` : '';
+              const latestLink = it.run_url ? ` | Latest failing run: [Run](${it.run_url}) ${it.created_at ? new Date(it.created_at).toISOString() : ''} ${it.commit_short ? `[\\\`${it.commit_short}\\"](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})` : ''}` : '';
               return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLink}`, errorsList].filter(Boolean).join('\n');
             }
             // Include commits between success and failure
             let commitsList = '';
             const commitsHtml = renderCommitsTable(it.commits_between || []);
             commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml, ''].join('\n');
-            const latestWhenIso = it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : '';
-            const latestShaShort = it.latest_failed_head_short || (it.latest_failed_head_sha ? it.latest_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
-            const latestShaLink = (latestShaShort && it.latest_failed_head_sha)
-              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})`
+            const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
+            const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+            const latestShaLink = (latestShaShort && it.commit_sha)
+              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})`
               : '';
-            const latestLine = it.latest_failed_run_url
-              ? `\n  - Latest failing run: [Run](${it.latest_failed_run_url}) ${latestWhenIso}${latestShaLink}`
+            const latestLine = it.run_url
+              ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
               : '';
             return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
@@ -1204,8 +1203,8 @@ async function run() {
       } else {
         regressionsSection = ['','## Regressions (Pass → Fail)','- None',''].join('\n');
       }
-      if (stayedFailingItems.length > 0) {
-        const lines = stayedFailingItems.map(it => {
+      if (stayedFailingDetails.length > 0) {
+        const lines = stayedFailingDetails.map(it => {
           const base = it.workflow_url ? `- [${it.name}](${it.workflow_url})` : `- ${it.name}`;
           if (it.first_failed_run_url) {
             const sha = it.first_failed_head_short || (it.first_failed_head_sha ? it.first_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
@@ -1216,13 +1215,13 @@ async function run() {
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
             if (it.no_success_in_window) {
-              const latestWhenIso = it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : '';
-              const latestShaShort = it.latest_failed_head_short || (it.latest_failed_head_sha ? it.latest_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
-              const latestShaLink = (latestShaShort && it.latest_failed_head_sha)
-                ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})`
+              const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
+              const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+              const latestShaLink = (latestShaShort && it.commit_sha)
+                ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})`
                 : '';
-              const latestLine = it.latest_failed_run_url
-                ? ` | Latest failing run: [Run](${it.latest_failed_run_url}) ${latestWhenIso}${latestShaLink}`
+              const latestLine = it.run_url
+                ? ` | Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
                 : '';
               return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList].filter(Boolean).join('\n');
             }
@@ -1230,13 +1229,13 @@ async function run() {
             let commitsList = '';
             const commitsHtml2 = renderCommitsTable(it.commits_between || []);
             commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2, ''].join('\n');
-            const latestWhenIso = it.latest_failed_created_at ? new Date(it.latest_failed_created_at).toISOString() : '';
-            const latestShaShort = it.latest_failed_head_short || (it.latest_failed_head_sha ? it.latest_failed_head_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
-            const latestShaLink = (latestShaShort && it.latest_failed_head_sha)
-              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.latest_failed_head_sha})`
+            const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
+            const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+            const latestShaLink = (latestShaShort && it.commit_sha)
+              ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})`
               : '';
-            const latestLine = it.latest_failed_run_url
-              ? `\n  - Latest failing run: [Run](${it.latest_failed_run_url}) ${latestWhenIso}${latestShaLink}`
+            const latestLine = it.run_url
+              ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
               : '';
             return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
           }
