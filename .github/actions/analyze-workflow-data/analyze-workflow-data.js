@@ -915,6 +915,8 @@ async function run() {
     // Generate primary report
     const mainReport = await buildReport(filteredGrouped, octokit, github.context);
 
+    // END OF BASIC ANALYZE STEP
+
     // Optional: Build Slack-ready alert message for all failing workflows with owner mentions
     let alertAllMessage = '';
     if (alertAll && failedWorkflows.length > 0) {
@@ -926,9 +928,9 @@ async function run() {
 
       // create a list of all the failing workflows with their owner information for slack messaging
       const failingItems = [];
-      for (const [name, runs] of filteredGrouped.entries()) {
+      for (const [name, runs] of filteredGrouped.entries()) { // for each pipeline run in the filtered grouped map
         const mainRuns = runs
-          .filter(r => r.head_branch === 'main')
+          .filter(r => r.head_branch === 'main') // filter the runs by the main branch
           .sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); //iterate through the runs and sort them by date within the window
         if (!mainRuns[0] || mainRuns[0].conclusion === 'success') continue; // if the latest run on main is not failing, continue
         // Try to attach owners from the first failing run's label via snippets; fallback to job name
@@ -936,9 +938,9 @@ async function run() {
         const latestFail = mainRuns.find(r => r.conclusion !== 'success');
         let owners = undefined;
         try {
-          const errs = await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 10);
+          const errs = await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 10); // get the error snippets for the latest failing run
           // Aggregate owners from snippets
-          const ownerSet = new Map();
+          const ownerSet = new Map(); // ownerSet will contain the mappings from an owner's id and name to the owner object
           for (const e of (errs || [])) {
             if (Array.isArray(e.owner)) {
               for (const o of e.owner) {
@@ -947,22 +949,22 @@ async function run() {
                 ownerSet.set(key, o);
               }
             }
-          }
+          } // this deduplicates owner lists within snippets and make sures owners with the same name but different ids are seen differently
           owners = Array.from(ownerSet.values());
         } catch (_) { /* ignore */ }
         // Fallback: try to resolve owners from the workflow name
         if (!owners || owners.length === 0) {
           owners = findOwnerForLabel(name);
         }
-        const ownerMentions = mention(owners) || '(no owner found)';
-        const wfUrl = getWorkflowLink(github.context, runs[0]?.path);
-        failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}`.trim());
+        const ownerMentions = mention(owners) || '(no owner found)'; // get the slack IDs of the owners
+        const wfUrl = getWorkflowLink(github.context, runs[0]?.path); // get the workflow url link for the pipeline run (can use any run to get the workflow link)
+        failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}`.trim()); // the run is failing because if it wasn't the for loop would have continued earlier
       }
       if (failingItems.length) {
         alertAllMessage = [
           '*Alerts: failing workflows on main*',
           ...failingItems
-        ].join('\n');
+        ].join('\n'); // building part of the slack message
       }
     }
 
@@ -974,7 +976,7 @@ async function run() {
       const latest = mainBranchRuns[0];
       if (!latest) return null;
       return latest.conclusion === 'success' ? 'success' : 'failure';
-    };
+    }; // compute the latest conclusion of the pipeline run
     const computeLatestRunInfo = (runs) => {
       const mainBranchRuns = runs
         .filter(r => r.head_branch === 'main')
@@ -982,41 +984,42 @@ async function run() {
       const latest = mainBranchRuns[0];
       if (!latest) return null;
       return { id: latest.id, url: latest.html_url, created_at: latest.created_at, head_sha: latest.head_sha, path: latest.path };
-    };
+    }; // get the latest run info for the pipeline run
 
     const allNames = new Set([
       ...Array.from(filteredGrouped.keys()),
       ...Array.from(filteredPreviousGrouped.keys())
-    ]);
+    ]); // create a set of all the pipeline names
 
     const changes = [];
     const regressedDetails = [];
     const stayedFailingDetails = [];
-    for (const name of allNames) {
-      const currentRuns = filteredGrouped.get(name);
-      const previousRuns = filteredPreviousGrouped.get(name);
-      if (!currentRuns || !previousRuns) continue; // require data on both sides
-      const current = computeLatestConclusion(currentRuns);
-      const previous = computeLatestConclusion(previousRuns);
-      if (!current || !previous) continue;
+    for (const name of allNames) { // for each pipeline name in the set of all the pipeline names
+      const currentRuns = filteredGrouped.get(name); // get the current runs for the pipeline name
+      const previousRuns = filteredPreviousGrouped.get(name); // get the previous runs for the pipeline name
+      if (!currentRuns || !previousRuns) continue; // require data on both sides (could be problematic if a pipeline is added to the config after the first run)
+      const current = computeLatestConclusion(currentRuns); // compute the latest conclusion of the current runs
+      const previous = computeLatestConclusion(previousRuns); // compute the latest conclusion of the previous runs
+      if (!current || !previous) continue; // if the current or previous runs are not found, continue
 
       let change;
+      // determine the change in the pipeline run
       if (previous === 'success' && current === 'success') change = 'stayed_succeeding';
       else if (previous !== 'success' && current !== 'success') change = 'stayed_failing';
       else if (previous !== 'success' && current === 'success') change = 'fail_to_success';
       else if (previous === 'success' && current !== 'success') change = 'success_to_fail';
 
-      if (change) {
-        const info = computeLatestRunInfo(currentRuns);
-        const workflowUrl = info?.path ? getWorkflowLink(github.context, info.path) : undefined;
-        const aggregateRunUrl = `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/actions/runs/${github.context.runId}`;
-        const commitUrl = info?.head_sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${info.head_sha}` : undefined;
-        const commitShort = info?.head_sha ? info.head_sha.substring(0, 7) : undefined;
-        changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at, workflow_url: workflowUrl, workflow_path: info?.path, aggregate_run_url: aggregateRunUrl, commit_sha: info?.head_sha, commit_short: commitShort, commit_url: commitUrl });
-        if (change === 'success_to_fail' && info) {
+      if (change) { // if the change is found, compute the latest run info for the current runs
+        const info = computeLatestRunInfo(currentRuns); // get the run info for the latest run on the current runs
+        const workflowUrl = info?.path ? getWorkflowLink(github.context, info.path) : undefined; // get the workflow url link for the pipeline run (can use any run to get the workflow link)
+        const aggregateRunUrl = `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/actions/runs/${github.context.runId}`; // get the specific link to the aggregate workflow data run that's executing this script right now
+        const commitUrl = info?.head_sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${info.head_sha}` : undefined; // get the commit url link for the latest pipeline run
+        const commitShort = info?.head_sha ? info.head_sha.substring(0, 7) : undefined; // get the short sha of the latest pipeline run
+        changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at, workflow_url: workflowUrl, workflow_path: info?.path, aggregate_run_url: aggregateRunUrl, commit_sha: info?.head_sha, commit_short: commitShort, commit_url: commitUrl }); // push the change into the changes array
+        if (change === 'success_to_fail' && info) { // if the change is a success to fail, push the change into the regressed details array
           regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, workflow_path: info.path, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
         }
-        else if (change === 'stayed_failing' && info) {
+        else if (change === 'stayed_failing' && info) { // if the change is a stayed failing, push the change into the stayed failing details array
           stayedFailingDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, workflow_path: info.path, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
         }
       }
