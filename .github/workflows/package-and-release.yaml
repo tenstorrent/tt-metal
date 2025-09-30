@@ -148,7 +148,7 @@ jobs:
 
 
   create-changelog:
-    needs: [create-tag, build-test-publish]
+    needs: [create-tag]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
@@ -201,7 +201,7 @@ jobs:
 
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-test-publish]
+    needs: [create-tag, create-release-notes]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
