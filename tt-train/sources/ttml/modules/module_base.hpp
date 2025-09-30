@@ -7,10 +7,10 @@
 #include <map>
 #include <memory>
 
+#include "autograd/tensor.hpp"
 #include "serialization/serializable.hpp"
-#include "tensor.hpp"
 
-namespace ttml::autograd {
+namespace ttml::modules {
 
 enum class RunMode { TRAIN, EVAL };
 
@@ -26,14 +26,14 @@ private:
     // special case for weight tying in transformers
     // for model save and load we need to make sure that stored/loaded name is the same between different runs
     // unordered_map does not guarantee the order of iteration
-    std::map<std::string, TensorPtr> m_named_tensors;
+    std::map<std::string, autograd::TensorPtr> m_named_tensors;
     std::map<std::string, ModuleBasePtr> m_named_modules;
 
 protected:
     void create_name(const std::string& name);
-    void register_tensor(const TensorPtr& tensor_ptr, const std::string& name);
+    void register_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name);
     void register_module(const ModuleBasePtr& module_ptr, const std::string& name);
-    void override_tensor(const TensorPtr& tensor_ptr, const std::string& name);
+    void override_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name);
     void override_module(const ModuleBasePtr& module_ptr, const std::string& name);
 
 public:
@@ -58,4 +58,4 @@ public:
         const autograd::TensorPtr& tensor, const autograd::TensorPtr& other);
 };
 
-}  // namespace ttml::autograd
+}  // namespace ttml::modules

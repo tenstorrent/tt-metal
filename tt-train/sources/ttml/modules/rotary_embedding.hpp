@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "autograd/module_base.hpp"
+#include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
 
 namespace ttml::modules {
-class RotaryEmbedding : public autograd::ModuleBase {
+class RotaryEmbedding : public ModuleBase {
 private:
     ops::RotaryEmbeddingParams m_rope_params;
 

@@ -41,10 +41,10 @@ private:
     uint32_t get_blocks_to_load() const;
 
     RunnerType runner_type = RunnerType::Default;
-    std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
+    std::shared_ptr<ttml::modules::ModuleBase> tok_emb;
     std::vector<std::shared_ptr<ModuleBase>> blocks;
     std::shared_ptr<ModuleBase> ln_fc;
-    std::shared_ptr<ttml::autograd::ModuleBase> fc;
+    std::shared_ptr<ttml::modules::ModuleBase> fc;
     ops::RotaryEmbeddingParams rope_params;
 
     uint32_t embedding_dim{};

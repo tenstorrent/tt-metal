@@ -86,7 +86,6 @@ autograd::TensorPtr cross_entropy_loss(
 
     auto links = autograd::get_links(prediction);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-
     return out;
 }
 

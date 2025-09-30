@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
+#include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
 
 namespace ttml::modules {
@@ -19,7 +19,7 @@ struct GQAConfig {
     bool bias_linears{false};
 };
 
-class GroupedQueryAttention : public ttml::autograd::ModuleBase {
+class GroupedQueryAttention : public ttml::modules::ModuleBase {
 private:
     uint32_t m_embedding_dim{};
     uint32_t m_num_heads{};

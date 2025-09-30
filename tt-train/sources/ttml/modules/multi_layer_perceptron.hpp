@@ -6,8 +6,8 @@
 
 #include <vector>
 
-#include "autograd/module_base.hpp"
 #include "modules/linear_module.hpp"
+#include "modules/module_base.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules {
@@ -18,7 +18,7 @@ struct MultiLayerPerceptronParameters {
     uint32_t output_features{};
 };
 
-class MultiLayerPerceptron : public autograd::ModuleBase {
+class MultiLayerPerceptron : public ModuleBase {
 private:
     std::vector<std::shared_ptr<LinearLayer>> m_layers;
 
