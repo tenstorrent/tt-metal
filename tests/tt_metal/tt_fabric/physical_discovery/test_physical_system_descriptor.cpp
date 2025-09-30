@@ -24,7 +24,7 @@ namespace physical_discovery {
 
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
-    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     constexpr bool using_mock_cluster_descriptor = false;
     constexpr bool run_discovery = true;
