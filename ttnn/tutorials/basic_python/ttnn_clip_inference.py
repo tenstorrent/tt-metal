@@ -243,9 +243,6 @@ def main():
                     scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
                 )
 
-                # Apply dropout if needed (currently disabled)
-                # attn_weights = ttnn.experimental.dropout(attn_weights, self._attention_dropout)
-
                 # Apply attention weights to values
                 attn_output = ttnn.matmul(attn_weights, v)
 
@@ -366,18 +363,11 @@ def main():
             # Note: ttnn.conv2d requires row-major layout for weight tensor
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-            old_memory_config = x.memory_config()
             out_channels = 768
-            in_channels = 3
-
-            bias_tensor = ttnn.zeros(
-                (1, 1, 1, out_channels), dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
 
             x = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self.conv1_weights,
-                bias_tensor=bias_tensor,
                 in_channels=in_channels,
                 out_channels=out_channels,
                 batch_size=batch_size,
@@ -450,8 +440,7 @@ def main():
             x = ttnn.layer_norm(x[:, 0, :], weight=self.ln_post_weights, bias=self.ln_post_bias)
 
             if self.proj is not None:
-                self.proj = ttnn.transpose(self.proj, 0, 1)
-                x = ttnn.matmul(x, self.proj)
+                x = ttnn.matmul(x, self.proj, transpose_b=True)
 
             return x
 
@@ -544,9 +533,7 @@ def main():
             # Cosine similarity as logits
             logit_scale = math.exp(self.logit_scale)
 
-            text_features_t = ttnn.transpose(text_features, 0, 1)
-
-            # logit_scale * image_features @ text_features.t()
+            # Compute `logit_scale * image_features @ text_features.t()`
             logits_per_image = ttnn.matmul(logit_scale * image_features, text_features, transpose_b=True)
             logits_per_text = ttnn.transpose(logits_per_image, 0, 1)
 
