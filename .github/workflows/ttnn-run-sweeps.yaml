@@ -553,6 +553,10 @@ on:
         description: "Upload sweep results to Superset?"
         type: boolean
         default: true
+      skip_on_timeout:
+        description: "Skip tests on timeout instead of failing?"
+        type: boolean
+        default: true
   schedule:
     - cron: "0 4 * * 4" # This cron schedule runs the workflow at 4:00 AM UTC on Thursdays (Wednesday 11 PM EST)
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (Friday 9 PM PST)
@@ -737,7 +741,12 @@ jobs:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (single sweep)
-        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
+        run: |
+          SKIP_ON_TIMEOUT_FLAG=""
+          if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          fi
+          python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
       - name: Upload sweep results
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
@@ -813,18 +822,24 @@ jobs:
         run: |
           BATCH="${{ matrix.batch }}"
 
+          # Set skip-on-timeout flag based on input (default to true for scheduled runs)
+          SKIP_ON_TIMEOUT_FLAG=""
+          if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+          fi
+
           # Check if batch contains colon (suite-specific execution)
           if [[ "$BATCH" == *":"* ]]; then
             MODULE_NAME="${BATCH%:*}"
             SUITE_NAME="${BATCH#*:}"
             # Suite-specific execution doesn't need nightly restriction
-            python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
+            python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
           else
             # Regular batch execution
             if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
-              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary --skip-on-timeout
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
             else
-              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+              python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary $SKIP_ON_TIMEOUT_FLAG
             fi
           fi
       - name: Compute artifact suffix
