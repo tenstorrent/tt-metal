@@ -377,7 +377,9 @@ FORCE_INLINE void send_next_data(
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
-    pkt_header->src_ch_id = sender_channel_index;
+    if constexpr (!skip_src_ch_id_update) {
+        pkt_header->src_ch_id = sender_channel_index;
+    }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
@@ -1736,8 +1738,9 @@ void run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
-
-        receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+        if constexpr (!skip_src_ch_id_update) {
+            receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+        }
         uint32_t hop_cmd;
         bool can_send_to_all_local_chip_receivers;
         if constexpr (is_2d_fabric) {
@@ -1853,9 +1856,14 @@ void run_receiver_channel_step_impl(
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_completion) {
+            uint8_t src_ch_id;
+            if constexpr (skip_src_ch_id_update) {
+                src_ch_id = receiver_channel_pointers.get_src_chan_id();
+            } else {
+                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+            }
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender,
-                receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
+                receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
         }
@@ -1956,6 +1964,10 @@ void run_fabric_edm_main_loop(
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<NUM_RECEIVER_CHANNELS - 1>();
     receiver_channel_pointers_ch0.reset();
     receiver_channel_pointers_ch1.reset();
+    if constexpr (skip_src_ch_id_update) {
+        receiver_channel_pointers_ch0.set_src_chan_id(BufferIndex{0}, remote_worker_sender_channel);
+        receiver_channel_pointers_ch1.set_src_chan_id(BufferIndex{0}, remote_vc1_sender_channel);
+    }
 
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
         initialize_array<NUM_SENDER_CHANNELS, bool, false>();

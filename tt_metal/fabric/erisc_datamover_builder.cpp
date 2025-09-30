@@ -118,6 +118,15 @@ uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction
     return is_2D_routing ? direction : 0;
 }
 
+uint32_t get_vc1_connected_sender_channel(Topology topology) {
+    if (topology == tt::tt_fabric::Topology::Ring) {
+        return FabricEriscDatamoverConfig::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
+    } else if (topology == tt::tt_fabric::Topology::Torus) {
+        return FabricEriscDatamoverConfig::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
+    }
+    return 0;  // invalid
+}
+
 uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
     uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
     // if without vc1, return worker channel, otherwise return vc1 channel
@@ -1237,6 +1246,22 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     size_t receiver_channel_num_buffers =
         this->dateline_connection ? this->receiver_channels_num_buffers[1] : this->receiver_channels_num_buffers[0];
 
+    const auto remote_routing_direction =
+        control_plane.get_forwarding_direction(this->peer_fabric_node_id, this->local_fabric_node_id);
+
+    uint32_t remote_worker_sender_channel = 0;
+    uint32_t remote_vc1_sender_channel = 0;
+    bool skip_src_ch_id_update = false;
+    // when there is no remote router paired with current router, don't care about skip_src_ch_id_update and set it to
+    // false
+    if (remote_routing_direction.has_value()) {
+        skip_src_ch_id_update = this->has_tensix_extension;
+        auto remote_eth_direction = control_plane.routing_direction_to_eth_direction(remote_routing_direction.value());
+        remote_worker_sender_channel = get_worker_connected_sender_channel(remote_eth_direction, topology);
+        remote_vc1_sender_channel =
+            this->dateline_connection ? remote_worker_sender_channel : get_vc1_connected_sender_channel(topology);
+    }
+
     bool update_pkt_hdr_on_rx_ch = true;
     bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
                                            tt::tt_fabric::FabricTensixConfig::DISABLED;
@@ -1286,7 +1311,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
-        vc1_has_different_downstream_dest};
+        vc1_has_different_downstream_dest,
+        this->has_tensix_extension};
 
     const std::vector<uint32_t> main_args_part2 = {
         config.skip_receiver_channel_1_connection,
@@ -1388,6 +1414,13 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // Add first part of main arguments to ct_args
     ct_args.insert(ct_args.end(), main_args_part1.begin(), main_args_part1.end());
+
+    // Conditionally add remote channel info when skip_src_ch_id_update is true
+    // (these values are used to initialize src channel IDs once, rather than updating them dynamically)
+    if (skip_src_ch_id_update) {
+        ct_args.push_back(remote_vc1_sender_channel);
+        ct_args.push_back(remote_worker_sender_channel);
+    }
 
     // insert the sender channel num buffers
     ct_args.insert(
