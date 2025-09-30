@@ -285,10 +285,15 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     return output_tensors;
 }
 
+// Each core needs to process multiple of (stride_h * input_width) rows to ensure that
+// the fold operation can be performed locally and do not need to read from remote cores.
+// This function checks if the current shard height is divisible by (stride_h * input_width).
+// If not, it calculates an optimal number of cores and corresponding shard height
+// to enable efficient fold computation across the tensor dimensions.
 Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t stride_w) {
     ttnn::Shape input_shape = input.logical_shape();
     uint32_t input_width = input_shape[2];
-    uint32_t pixels_per_compute_row = stride_h * stride_w * input_width;
+    uint32_t pixels_per_compute_row = stride_h * input_width;
     uint32_t current_shard_height = input.shard_spec().value().shape[0];
     const CoreCoord& compute_grid_size = input.device()->compute_with_storage_grid_size();
     if (current_shard_height % pixels_per_compute_row != 0) {
@@ -300,10 +305,7 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
             num_cores--;
         }
 
-        // Ensure we use at least 1 core
-        if (num_cores == 0) {
-            num_cores = 1;
-        }
+        TT_ASSERT(num_cores != 0, "Could not find suitable number of cores for resharing the input tensor");
 
         uint32_t optimal_shard_height = tt::round_up(total_height / num_cores, pixels_per_compute_row);
 
