@@ -137,7 +137,7 @@ jobs:
         id: analyze
         run: |
           # Run the dedicated Python script for CODEOWNERS analysis
-          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ="${{ secrets.ORG_READ }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
+          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ_GITHUB_TOKEN="${{ secrets.ORG_READ_GITHUB_TOKEN }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
         # The script writes directly to GITHUB_OUTPUT, so we don't need to capture stdout here
 
   post-comment:
@@ -161,14 +161,14 @@ jobs:
               # Remove @org/ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@[^\/]*\///')
 
-              # Get team members using GitHub API (using ORG_READ for org access)
+              # Get team members using GitHub API (using ORG_READ_GITHUB_TOKEN for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API" 2>/dev/null)
 
               # Check if API call was successful (HTTP 200)
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API")
 
@@ -315,25 +315,7 @@ jobs:
               done
             fi
 
-            COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient.\n\n---\n**Token Status:**"
-          fi
-
-          # Add token status information
-          if [ -n "$APPROVED_REVIEWERS" ]; then
-            COMMENT="$COMMENT\n- ✅ **PR Reviews**: Successfully fetched approved reviewers"
-          else
-            COMMENT="$COMMENT\n- ⚠️ **PR Reviews**: Could not fetch approved reviewers"
-          fi
-
-          if [ -n "$TEAM_MEMBERS" ]; then
-            # Check if team members were successfully fetched
-            if echo "$TEAM_MEMBERS" | grep -q "insufficient-permissions\|team-not-found\|unauthorized\|api-error"; then
-              COMMENT="$COMMENT\n- ⚠️ **Team Members**: Some teams could not be accessed (check token permissions)"
-            else
-              COMMENT="$COMMENT\n- ✅ **Team Members**: Successfully fetched team member information"
-            fi
-          else
-            COMMENT="$COMMENT\n- ⚠️ **Team Members**: No team member information available"
+            COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient."
           fi
 
           # Get existing comments to find if we should edit or create new
