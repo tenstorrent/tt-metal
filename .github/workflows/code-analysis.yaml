@@ -95,6 +95,22 @@ jobs:
         run: |
           pip install codeowners
 
+      - name: Get PR reviews
+        id: get-reviews
+        run: |
+          PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
+
+          # Get PR reviews using GitHub API
+          REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
+          REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                           -H "Accept: application/vnd.github.v3+json" \
+                           "$REVIEWS_API")
+
+          # Extract approved reviews (state: APPROVED)
+          APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' | tr '\n' ',' | sed 's/,$//')
+
+          echo "approved-reviewers=$APPROVED_REVIEWERS" >> $GITHUB_OUTPUT
+
       - name: Analyze CODEOWNERS
         id: analyze
         run: |
@@ -103,7 +119,7 @@ jobs:
         # The script writes directly to GITHUB_OUTPUT, so we don't need to capture stdout here
 
   post-comment:
-    needs: [find-pr, analyze-codeowners]
+    needs: [find-pr, analyze-codeowners, get-reviews]
     if: needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -112,31 +128,37 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
           INDIVIDUALS="${{ needs.analyze-codeowners.outputs.codeowners-individuals }}"
+          APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
 
           if [ -z "$TEAMS" ] && [ -z "$INDIVIDUALS" ]; then
             COMMENT="## CodeOwners Analysis\n\nNo specific codeowners found for the changed files in this PR.\n\n**Required Approvals:** At least one maintainer approval is required."
           else
-            COMMENT="## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Required Groups:"
+            COMMENT="## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Approval Status:"
 
-            # Add teams (without @ symbols)
+            # Add teams with approval status (teams show as pending since we can't check team membership easily)
             if [ -n "$TEAMS" ]; then
               IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
               for team in "${TEAM_ARRAY[@]}"; do
-                # Remove @ prefix and format team name
+                # Remove @ prefix for display
                 clean_team=$(echo "$team" | sed 's/^@//')
-                COMMENT="$COMMENT\n- **$clean_team** (Team)"
+                COMMENT="$COMMENT\n- ⏳ **$clean_team** (Team) - Pending"
               done
             fi
 
-            # Add individuals (full names without @ symbols)
+            # Add individuals with approval status
             if [ -n "$INDIVIDUALS" ]; then
               IFS=',' read -ra INDIVIDUAL_ARRAY <<< "$INDIVIDUALS"
               for individual in "${INDIVIDUAL_ARRAY[@]}"; do
-                COMMENT="$COMMENT\n- **$individual** (Individual)"
+                # Check if this individual has approved
+                if echo "$APPROVED_REVIEWERS" | grep -q "$individual"; then
+                  COMMENT="$COMMENT\n- ✅ **$individual** (Individual) - Approved"
+                else
+                  COMMENT="$COMMENT\n- ⏳ **$individual** (Individual) - Pending"
+                fi
               done
             fi
 
-            COMMENT="$COMMENT\n### Approval Rules:\n- ✅ **One approval from each group is sufficient**\n- ✅ Groups can approve in any order\n- ❌ **All members of a group must approve** ❌\n\nThis ensures proper review coverage across different areas while avoiding unnecessary bottlenecks."
+            COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient."
           fi
 
           # Post comment to PR
