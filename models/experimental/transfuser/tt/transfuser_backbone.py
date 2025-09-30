@@ -5,6 +5,7 @@ import ttnn
 from models.experimental.transfuser.tt.utils import TTConv2D
 from models.experimental.transfuser.tt.bottleneck import RegNetBottleneck
 from typing import List
+from loguru import logger
 
 
 class TtTransfuserBackbone:
@@ -15,7 +16,8 @@ class TtTransfuserBackbone:
         model_config,
         # layer_optimisations=neck_optimisations,
     ) -> None:
-        print(f"{parameters=}")
+        self.inplanes = 32
+        # print(f"{parameters=}")
         self.conv1 = TTConv2D(
             kernel_size=3,
             stride=2,
@@ -140,21 +142,26 @@ class TtTransfuserBackbone:
 
     def __call__(self, image_x, lidar_x, device):
         # Process image input
+        logger.info(f"image_encoder_conv1")
         image_x = self.normalize_imagenet_ttnn(image_x)
         image_x = ttnn.permute(image_x, (0, 2, 3, 1))
         image_out, image_shape = self.conv1(device, image_x, image_x.shape)
         # Reshape to spatial dimensions: 80 * 352 = 28160
         # out = ttnn.reshape(out, (1, 80, 352, 32))
         # out = ttnn.permute(out, (0, 3, 1, 2))
-
+        logger.info(f"lidar_encoder_conv1")
         # Process lidar input
         lidar_x = ttnn.permute(lidar_x, (0, 2, 3, 1))
         lidar_out, lidar_shape = self.lidar_conv1(device, lidar_x, lidar_x.shape)
 
+        logger.info(f"image_encoder_layer1")
+        image_out = ttnn.reshape(image_out, (1, 80, 352, 32))
         # Process layer1 blocks
         for block in self.image_layer1:
             image_out = block(image_out, device)
 
+        logger.info(f"lidar_encoder_layer1")
+        lidar_out = ttnn.reshape(lidar_out, (1, 128, 128, 32))
         for block in self.lidar_layer1:
             lidar_out = block(lidar_out, device)
 

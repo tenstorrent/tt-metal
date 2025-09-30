@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from loguru import logger
 from models.experimental.transfuser.tt.utils import TTConv2D
 
 
@@ -18,6 +19,7 @@ class RegNetBottleneck:
         self.downsample = downsample
         self.groups = groups
         self.model_config = model_config
+        # print(parameters)
 
         # conv1: 1x1 convolution
         self.conv1 = TTConv2D(
@@ -35,6 +37,7 @@ class RegNetBottleneck:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
+            is_reshape=False,
         )
 
         # conv2: 3x3 grouped convolution
@@ -46,6 +49,7 @@ class RegNetBottleneck:
             kernel_fidelity=model_config,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             groups=groups,
+            act_block_h=32,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             deallocate_activation=True,
@@ -54,6 +58,7 @@ class RegNetBottleneck:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
+            # is_reshape=True,
         )
 
         # SE Module
@@ -132,33 +137,45 @@ class RegNetBottleneck:
 
     def __call__(self, x, device):
         identity = x
-
+        logger.info(f"conv1- 1x1 convolution")
         # conv1: 1x1 expansion
-        out, _ = self.conv1(device, x, x.shape)
+        out, shape_ = self.conv1(device, x, x.shape)
 
+        logger.info(f"conv2- 3x3 grouped convolution")
         # conv2: 3x3 grouped convolution
-        out, _ = self.conv2(device, out, out.shape)
+        out, shape_ = self.conv2(device, out, shape_)
 
         # SE Module
+        logger.info(f"SE module")
+        logger.info(f"reduce mean")
         # Global average pooling
-        se_out = ttnn.global_avg_pool2d(out)
-        se_out, _ = self.se_fc1(device, se_out, se_out.shape)
-        se_out, _ = self.se_fc2(device, se_out, se_out.shape)
+        out = ttnn.reshape(out, shape_)
+        se_out = ttnn.mean(out, dim=[1, 2], keepdim=True)
+        shape_ = se_out.shape
+
+        logger.info(f"SE fc1")
+        se_out, shape_ = self.se_fc1(device, se_out, shape_)
+
+        logger.info(f"SE fc2")
+        se_out, shape_ = self.se_fc2(device, se_out, shape_)
         se_out = ttnn.sigmoid(se_out)
 
         # Apply SE scaling
         out = ttnn.multiply(out, se_out)
+        shape_ = out.shape
 
         # conv3: 1x1 projection
-        out, _ = self.conv3(device, out, out.shape)
+        out, shape_ = self.conv3(device, out, shape_)
 
         # Handle downsample
         if self.downsample_layer is not None:
-            identity, _ = self.downsample_layer(device, identity, identity.shape)
+            print(f"{identity.shape=}")
+            identity, shape_ = self.downsample_layer(device, identity, identity.shape)
 
         # Residual connection
-        if identity.shape != out.shape:
-            identity = ttnn.reshape(identity, out.shape)
+        if identity.shape != shape_:
+            identity = ttnn.reshape(identity, shape_)
+        out = ttnn.reshape(out, shape_)
 
         out = ttnn.add(out, identity)
         out = ttnn.relu(out)  # Final ReLU activation

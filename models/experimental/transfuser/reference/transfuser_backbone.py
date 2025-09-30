@@ -271,7 +271,7 @@ class TransfuserBackbone(nn.Module):
 
         return p2, p3, p4, p5
 
-    def forward(self, image, lidar, velocity):
+    def forward(self, image, lidar, velocity, return_intermediates=False):
         """
         Image + LiDAR feature fusion using transformers
         Args:
@@ -279,7 +279,7 @@ class TransfuserBackbone(nn.Module):
             lidar_list (list): list of input LiDAR BEV
             velocity (tensor): input velocity from speedometer
         """
-
+        intermediates = {}
         if self.image_encoder.normalize:
             image_tensor = normalize_imagenet(image)
         else:
@@ -296,16 +296,16 @@ class TransfuserBackbone(nn.Module):
         lidar_features = self.lidar_encoder._model.act1(lidar_features)
         lidar_features = self.lidar_encoder._model.maxpool(lidar_features)
         # print(self.image_encoder.features.layer1)
-        print(self.image_encoder.features.layer1)
+        # print(self.image_encoder.features.layer1)
         image_features = self.image_encoder.features.layer1(image_features)
         lidar_features = self.lidar_encoder._model.layer1(lidar_features)
 
+        return image_features, lidar_features
         # Image fusion at (B, 72, 40, 176)
         # Lidar fusion at (B, 72, 64, 64)
         image_embd_layer1 = self.avgpool_img(image_features)
         lidar_embd_layer1 = self.avgpool_lidar(lidar_features)
 
-        return image_features, lidar_features
         image_features_layer1, lidar_features_layer1 = self.transformer1(image_embd_layer1, lidar_embd_layer1, velocity)
         image_features_layer1 = F.interpolate(
             image_features_layer1,
