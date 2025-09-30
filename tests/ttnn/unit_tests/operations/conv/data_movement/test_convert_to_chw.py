@@ -10,7 +10,7 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 @pytest.mark.parametrize("input_data_type", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("C", [1, 2, 4])
+@pytest.mark.parametrize("C", [1, 2, 8, 16, 32])
 @pytest.mark.parametrize(
     "HW, core_grid",
     (
@@ -48,7 +48,7 @@ def test_convert_to_chw(device, C, HW, core_grid, input_data_type):
 
 
 @pytest.mark.parametrize("input_data_type", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("C", [1, 2, 4])
+@pytest.mark.parametrize("C", [1, 2, 8, 16, 32])
 @pytest.mark.parametrize(
     "HW, core_grid, padded_sharded_dim",
     (
