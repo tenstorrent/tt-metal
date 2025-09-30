@@ -156,34 +156,6 @@ The prefetcher acts as a **sender** in the global circular buffer setup, utilizi
      - Handles wraparound in the circular buffer automatically
 
 
-```cpp
-// Core prefetcher flow in writer_l1.cpp
-for (uint32_t layer = 0; layer < num_layers; layer++) {
-    for (uint32_t t = 0; t < num_tensors; t++) {
-        // Resize remote CB interface for current tensor
-        experimental::resize_remote_sender_cb_interface<true>(
-            remote_cb_id, curr_block_size_per_receiver, noc);
-
-        for (uint32_t block = 0; block < num_blocks; ++block) {
-            // Wait for local data from DRAM reader
-            cb_wait_front(local_cb_id, max_block_num_tiles);
-
-            // Reserve space on all receiver cores
-            experimental::remote_cb_reserve_back(remote_cb_id, 1);
-
-            // Push data to receivers with coalesced writes
-            experimental::remote_cb_push_back_and_write_pages<skip_ptr_update>(
-                remote_cb_id, local_cb_addr, 1,
-                curr_block_height_in_tiles, curr_coalesced_num_pages,
-                curr_coalesced_page_size, noc);
-
-            // pop out local CB, signal reader core buffer is empty
-            cb_pop_front(local_cb_id, max_block_num_tiles);
-        }
-    }
-}
-```
-
 ### Inside of Global CB
 This section describes the kernel side implementation of global CB, config structures, data transfer, synchronization, etc.
 
@@ -277,9 +249,55 @@ Matmul cores act as **receivers** in the global CB system, consuming data stream
 ![Matmul 1D Ring Example](images/matmul-1d-ring-example.png)
 
 
-### Mechanism: Advanced Circular Buffer Management
+### Receiver-Side Operations
 
-#### 1. Tensor Split Detection and Handling
+Matmul cores consume data from the global circular buffer using two fundamental operations that implement flow control and synchronization.
+
+#### 1. Wait for Data Availability (`remote_cb_wait_front`)
+```cpp
+experimental::remote_cb_wait_front(remote_cb_id, num_pages);
+```
+Before consuming data from the global CB, the receiver must ensure that the prefetcher has sent the required pages. This prevents reading garbage or incomplete data.
+
+**Flow Control Mechanism:**
+- Checks the credit counters (pages_sent vs pages_acked) to determine how many pages are available
+- Blocks until the sender has sent enough pages for consumption
+- Implements backpressure by coordinating with sender's `remote_cb_reserve_back`
+
+**Functionality:**
+- Calculates the total number of pages needed, accounting for potential wraparound in the circular buffer
+- Polls the `pages_sent` counter (written by sender) and compares it with local `pages_acked` counter
+- Blocks in a busy-wait loop until `(pages_sent - pages_acked) >= num_pages_wait`
+- Handles wraparound scenarios where the requested data exceeds the circular buffer boundary
+
+#### 2. Release Consumed Data (`remote_cb_pop_front`)
+```cpp
+experimental::remote_cb_pop_front(remote_cb_id, num_pages, noc);
+```
+After consuming data from the global CB, the receiver must signal the sender that the space is now available for reuse. This implements the flow control mechanism that prevents the sender from overwriting data the receiver hasn't processed yet.
+
+**Flow Control Mechanism:**
+- Updates the read pointer and sends ack to the sender
+- Enables the sender's `remote_cb_reserve_back` to unblock when waiting for free space
+
+**Functionality:**
+- Advances the `fifo_rd_ptr` by the number of pages consumed, handling wraparound if necessary
+- Calculates the total number of pages to acknowledge (accounting for buffer wraparound)
+- Sends ack to the sender's `pages_acked` counter, signaling that this space is now free
+
+### Advanced Circular Buffer Management
+
+#### 1. Synchronization Requirements for Ring Topology
+
+Since each core in the ring starts at a different block index, special synchronization is required:
+
+**Wait for Full Tensor Before Computation:**
+It is necessary to let Matmul wait for the entire tensor to arrive in global CB before performing any computations. This is because the prefetcher is not aware of the out-of-order accessing of tensor blocks, and the `pages_sent` credit is in-order for each block. Performing any computations before the full tensor arrives might cause the use of garbage data.
+
+**Release Full Tensor After Computation:**
+Matmul must pop out the tensor in global CB only after all the blocks are processed, as `pages_ack` is also in-order for each block, and a premature ack can invalidate the wrong block index and cause block overwritten.
+
+#### 2. Tensor Split Detection and Handling
 
 For tensors that does not wrap around the global CB boundary, each block is allocated continuously for the tensor, and no special management are needed. For tensors that wrap around the global CB boundary, special pointer management are needed to make sure each core indexes into the global CB correclty. The matmul kernel detects and handles this automatically:
 
@@ -293,17 +311,13 @@ The image illustrates two critical scenarios the matmul kernel must handle:
 
 2. **Ring Index Wraparound**: In a 1D ring topology, each core start at the Nth block, where N is their ring index. When tensor splits occur, the kernel must correctly calculate both the start block index, the next block index and the wrapped read pointer address. For exmple, core 3 in the diagram first start at block 3, the next block will require a jump back to the base tensor address, and after processing block 1, it will require a wrap around handling to the top of the global CB.
 
-
-#### 2. Synchronization and Flow Control
-Since each core starts at a different block index, it is neccessary to let Matmul wait for the entire tensor to arrive in global CB before performing any computations. This is because prefetcher is not aware of the out-of-order accessing of tensor blocks, and the `pages_sent` credit is in-order for each block. Performing any computations before the full tensor arrives might cause the use of garbage data. It is also the same case for Matmul pop out the tensor in global CB only after all the blocks are processed, as `pages_ack` is also in-order for each block, and a premature ack can invalidate the wrong block index and cause block overwritten.
- 
 ### Performance Benefits
 
 The prefetcher + matmul integration provides several key performance advantages:
 
 1. **Weight Prefetching**: DRAM reads ahead of Matmul execution, removing the DRAM bandwidth limitation
 2. **High Bandwidth Utilization**: Coalesced NoC writes and use of transaction IDs to maximize memory bandwidth
-3. **Minimal Synchronization**: For prefetcher, only sending credit per block, and for Matmul only sending ack per tensor to minimize the synchronization cost. 
+3. **Minimal Synchronization**: For prefetcher, only sending credit per block, and for Matmul only sending ack per tensor to minimize the synchronization cost.
 
 This architecture enables efficient processing of large language models where weight tensors must be continuously streamed from DRAM to distributed compute cores with minimal latency and maximum throughput.
 
@@ -318,5 +332,3 @@ There are several optimizations can be adopted by prefetcher:
 2. **Pause Prefetching**: Currently prefetcher will send data whenever there is space available in global CB, and this can cause NoC congestion if there are other ops using the same NoC and cause slow down. It would be benificial for some cases to pause the prefetcher from consuming the NoC bandwidth and let the other ops run faster. A scratch location in L1 or a stream register can be used for sending this signal to prefetcher from other ops, and prefetcher will enter a while loop until that signal is cleared.
 
 3. **Switch Allocation Strategy**: Currently we only use the aligned allocation strategy, which introduced gaps in-between the tensors, we should allow the switch between compacted allocation and aligned allocation, as in some cases users might want to remove the gaps and handle pointer update manually.
-
-
