@@ -1016,10 +1016,10 @@ async function run() {
         const commitUrl = info?.head_sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${info.head_sha}` : undefined; // get the commit url link for the latest pipeline run
         const commitShort = info?.head_sha ? info.head_sha.substring(0, 7) : undefined; // get the short sha of the latest pipeline run
         changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at, workflow_url: workflowUrl, workflow_path: info?.path, aggregate_run_url: aggregateRunUrl, commit_sha: info?.head_sha, commit_short: commitShort, commit_url: commitUrl }); // push the change into the changes array
-        if (change === 'success_to_fail' && info) { // if the change is a success to fail, push the change into the regressed details array
+        if (change === 'success_to_fail' && info) { // if the change is a success to fail, push the change into the regressed details array. Each item represents a pipeline with its latest failing run.
           regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, workflow_path: info.path, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
         }
-        else if (change === 'stayed_failing' && info) { // if the change is a stayed failing, push the change into the stayed failing details array
+        else if (change === 'stayed_failing' && info) { // if the change is a stayed failing, push the change into the stayed failing details array. this is for the latest run
           stayedFailingDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, workflow_path: info.path, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
         }
       }
@@ -1030,38 +1030,22 @@ async function run() {
       .filter(r => r.head_branch === 'main')
       .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-    // Helper to get up to N most-recent failing runs (excluding successes) from a run list
-  const getRecentFailingRuns = (runs, limit = 1) => {
-      return runs
-        .filter(r => r.head_branch === 'main' && r.conclusion !== 'success')
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-        .slice(0, limit);
-    };
-
     // Enrich regressions with first failing run within the window
     for (const item of regressedDetails) {
       try {
-        const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
-        const res = findFirstFailInWindow(windowRuns);
+        const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []); // get the main window runs for the pipeline name
+        const res = findFirstFailInWindow(windowRuns); // find the first failing run in the window (oldest failing run)
         if (res && res.run) {
+          // set the first failed run id, url, created at, head sha, and head short for the pipeline run
           item.first_failed_run_id = res.run.id;
           item.first_failed_run_url = res.run.html_url;
           item.first_failed_created_at = res.run.created_at;
           item.first_failed_head_sha = res.run.head_sha;
           item.first_failed_head_short = res.run.head_sha ? res.run.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
-          item.no_success_in_window = !!res.noSuccessInWindow;
+          item.no_success_in_window = !!res.noSuccessInWindow; // explicitely cast to a boolean
           if (!res.noSuccessInWindow && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
             // Get commits between boundary success and first failing run (inclusive of failing run)
-            item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
-          }
-          // Also capture the latest failing run in the window
-          const latestFailRun = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]);
-          if (latestFailRun) {
-            item.latest_failed_run_id = latestFailRun.id;
-            item.latest_failed_run_url = latestFailRun.html_url;
-            item.latest_failed_created_at = latestFailRun.created_at;
-            item.latest_failed_head_sha = latestFailRun.head_sha;
-            item.latest_failed_head_short = latestFailRun.head_sha ? latestFailRun.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
+            item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha); // get the commits between the boundary success and the first failing run
           }
           // Commit author enrichment is now superseded by commits_between list; keep top-level for convenience if present
           if (item.first_failed_head_sha) {
@@ -1070,10 +1054,8 @@ async function run() {
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
           }
-          // Error snippets for the first failing run (best-effort)
-          // Use the most recent failing run instead of the first in-window failure
-          const latestFail = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]) || { id: item.first_failed_run_id };
-          item.error_snippets = latestFail?.id ? await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 20) : [];
+          // Error snippets from the latest failing run (item.run_id already contains the latest failing run)
+          item.error_snippets = item.run_id ? await fetchErrorSnippetsForRun(octokit, github.context, item.run_id, 20) : [];
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
           // Mirror into the corresponding change entry
@@ -1092,11 +1074,6 @@ async function run() {
               commits_between: item.commits_between || [],
               error_snippets: item.error_snippets || [],
               repeated_errors: item.repeated_errors || [],
-              latest_failed_run_id: item.latest_failed_run_id,
-              latest_failed_run_url: item.latest_failed_run_url,
-              latest_failed_created_at: item.latest_failed_created_at,
-              latest_failed_head_sha: item.latest_failed_head_sha,
-              latest_failed_head_short: item.latest_failed_head_short,
             });
           }
         }
@@ -1121,15 +1098,6 @@ async function run() {
           if (!item.no_success_in_window && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
             item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
           }
-          // Also capture latest failing run in window
-          const latestFailRun2 = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]);
-          if (latestFailRun2) {
-            item.latest_failed_run_id = latestFailRun2.id;
-            item.latest_failed_run_url = latestFailRun2.html_url;
-            item.latest_failed_created_at = latestFailRun2.created_at;
-            item.latest_failed_head_sha = latestFailRun2.head_sha;
-            item.latest_failed_head_short = latestFailRun2.head_sha ? latestFailRun2.head_sha.substring(0, SHA_SHORT_LENGTH) : undefined;
-          }
           // Commit author of the first failed in-window (optional)
           if (item.first_failed_head_sha) {
             const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
@@ -1137,9 +1105,8 @@ async function run() {
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
           }
-          // Use the most recent failing run instead of the first in-window failure
-          const latestFail2 = (getRecentFailingRuns(filteredGrouped.get(item.name) || [], 1)[0]) || { id: item.first_failed_run_id };
-          item.error_snippets = latestFail2?.id ? await fetchErrorSnippetsForRun(octokit, github.context, latestFail2.id, 20) : [];
+          // Error snippets from the latest failing run (item.run_id already contains the latest failing run)
+          item.error_snippets = item.run_id ? await fetchErrorSnippetsForRun(octokit, github.context, item.run_id, 20) : [];
           // Omit repeated errors (simplified)
           item.repeated_errors = [];
         }
@@ -1159,11 +1126,6 @@ async function run() {
             commits_between: item.commits_between || [],
             error_snippets: item.error_snippets || [],
             repeated_errors: item.repeated_errors || [],
-            latest_failed_run_id: item.latest_failed_run_id,
-            latest_failed_run_url: item.latest_failed_run_url,
-            latest_failed_created_at: item.latest_failed_created_at,
-            latest_failed_head_sha: item.latest_failed_head_sha,
-            latest_failed_head_short: item.latest_failed_head_short,
           });
         }
       }
