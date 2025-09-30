@@ -19,6 +19,28 @@
 #define TILE_HEIGHT 32
 #define TILE_WIDTH 32
 
+void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -135,15 +157,23 @@ void MAIN {
                 reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
             }
 
+            if (n == 0) {
+                tensix_sync();
+                dprint_tensix_dest_reg(0);
+                tensix_sync();
+                // dprint_tensix_dest_reg(1);
+            }
+
             cb_pop_front(curr_in_cb_id, 1);
 
             tile_regs_commit();
             tile_regs_wait();
 
             // Pack output directly to row-major format (no tiling needed for grid sample)
-            if (n == 0 || n == 1) {
+            if (n == 0) {
+                tensix_sync();
                 dprint_tensix_dest_reg(0);
-                dprint_tensix_dest_reg(1);
+                tensix_sync();
             }
 
             if (last_c_block) {

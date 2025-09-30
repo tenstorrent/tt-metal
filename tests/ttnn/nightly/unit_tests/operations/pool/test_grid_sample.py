@@ -506,7 +506,7 @@ def test_grid_sample_sharded_batched(
 
     input_shape_nhwc = [batch_size, height, width, channels]
 
-    torch_input_nchw = torch.ones(input_shape, dtype=torch.float32) * 5
+    torch_input_nchw = torch.ones(input_shape, dtype=torch.float32) * 7
     torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1

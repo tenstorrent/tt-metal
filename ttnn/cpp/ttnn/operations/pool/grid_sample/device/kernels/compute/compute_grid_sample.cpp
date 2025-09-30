@@ -38,6 +38,28 @@ void tilize_in(uint32_t in_cb_id, uint32_t in_block_w, uint32_t in_num_subblocks
     }
 }
 
+void print_tile(uint32_t cb_idx, uint32_t tile_idx, bool untilize = false) {
+    DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_idx,
+                      tile_idx,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 namespace NAMESPACE {
 
 void MAIN {
@@ -130,6 +152,8 @@ void MAIN {
 
             tilize_in(curr_in_cb_id, tiles_to_reduce, 1, tilized_input_cb_id);
 
+            UNPACK(print_tile(tilized_input_cb_id, 0, true);)
+
             tile_regs_acquire();
 
             tensix_sync();
@@ -142,8 +166,14 @@ void MAIN {
                 // REDUCE_OP is expected to come from add_define
                 // reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
 
-                reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(
-                    tilized_input_cb_id, curr_scalar_cb_id, math_tile_idx, 0, math_tile_idx);
+                reduce_tile(tilized_input_cb_id, curr_scalar_cb_id, math_tile_idx, 0, math_tile_idx);
+            }
+
+            if (n == 0) {
+                tensix_sync();
+                dprint_tensix_dest_reg(0);
+                tensix_sync();
+                // dprint_tensix_dest_reg(1);
             }
 
             // DPRINT << "Reduce math completed\n";
@@ -163,7 +193,7 @@ void MAIN {
 
             pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
 
-            if (n == 0 || n == 1) {
+            if (n == 0) {
                 // tensix_sync();
                 dprint_tensix_dest_reg(0);
                 // tensix_sync();
@@ -184,7 +214,7 @@ void MAIN {
     }
     // Clean up reduce operation
     // reduce_uninit();
-    DPRINT << "Kernel done\n";
+    // DPRINT << "Kernel done\n";
 }
 
 }  // namespace NAMESPACE
