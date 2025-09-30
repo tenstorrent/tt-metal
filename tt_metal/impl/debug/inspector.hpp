@@ -17,7 +17,7 @@ class MeshWorkloadImpl;
 
 namespace inspector {
 class Data;
-class RpcServer;
+class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
 }
 
 class Inspector {

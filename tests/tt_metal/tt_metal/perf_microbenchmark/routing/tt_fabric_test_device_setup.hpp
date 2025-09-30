@@ -43,6 +43,7 @@ enum class TestWorkerType : uint8_t { SENDER, RECEIVER };
 
 struct TestWorker {
 public:
+    virtual ~TestWorker() = default;
     TestWorker(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_kernel_src(const std::string_view& kernel_src);
     void create_kernel(
@@ -65,6 +66,7 @@ protected:
 
 struct TestSender : TestWorker {
 public:
+    ~TestSender() override = default;
     TestSender(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSenderConfig config);
     void add_sync_config(TestTrafficSenderConfig sync_config);
@@ -91,6 +93,7 @@ public:
 
 struct TestReceiver : TestWorker {
 public:
+    ~TestReceiver() override = default;
     TestReceiver(
         CoreCoord logical_core,
         TestDevice* test_device_ptr,
