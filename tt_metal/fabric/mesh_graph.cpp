@@ -18,6 +18,9 @@
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+
+#include <google/protobuf/text_format.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
 #include "fake_mesh_graph_descriptor.hpp"
 
 // Implementation of hash function for port_id_t
@@ -193,6 +196,13 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
 }
 
 void MeshGraph::test_protobuf(const std::string& mesh_graph_desc_file_path) {
+    proto::MeshGraphDescriptor proto_mgd;
+    google::protobuf::TextFormat::Parser parser;
+
+    parser.AllowUnknownField(true);
+    parser.AllowUnknownExtension(true);
+
+    TT_FATAL(parser.ParseFromString(mesh_graph_desc_file_path, &proto_mgd), "Failed to parse mesh graph descriptor");
     fake_mesh_graph_descriptor(mesh_graph_desc_file_path);
 }
 
