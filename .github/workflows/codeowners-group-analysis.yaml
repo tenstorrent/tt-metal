@@ -205,10 +205,19 @@ jobs:
           else
             COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n### Group Information:"
 
-            # Add teams with member information and approval status
+            # Collect pending and approved groups separately
+            PENDING_GROUPS=""
+            APPROVED_GROUPS=""
+
+            # Display teams with member information and approval status
             if [ -n "$TEAMS" ]; then
               IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
               for team in "${TEAM_ARRAY[@]}"; do
+                # Skip the large-changes team as requested
+                if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                  continue
+                fi
+
                 # Remove @ prefix for display
                 clean_team=$(echo "$team" | sed 's/^@//')
 
@@ -239,15 +248,43 @@ jobs:
                       # Team exists but has no members
                       team_members_info="Members: (no members)"
                     else
-                      # For teams, we show all members since we can't easily get full names for team members
-                      all_members=$(echo "$team_owners" | sed 's/,/, /g')
+                      # Get full names for team members
+                      all_members=""
+                      IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+                      for member in "${MEMBERS_ARRAY[@]}"; do
+                        # Try to get full name for this team member
+                        member_name="$member"  # Default to username
+                        if [ -n "$member" ] && [ "$member" != " " ]; then
+                          # Get user info from GitHub API
+                          USER_API="https://api.github.com/users/$member"
+                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+                                         -H "Accept: application/vnd.github.v3+json" \
+                                         "$USER_API" 2>/dev/null)
+                          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                          if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                            member_name="$USER_NAME"
+                          fi
+                        fi
+                        all_members="$all_members$member_name, "
+                      done
+                      # Remove trailing comma and space
+                      all_members=$(echo "$all_members" | sed 's/, $//')
                       team_members_info="Members: $all_members"
 
                       # Check which members have approved
-                      IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
                       for member in "${MEMBERS_ARRAY[@]}"; do
                         if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
-                          approved_members="$approved_members$member, "
+                          # Get full name for approved member
+                          approved_name="$member"
+                          USER_API="https://api.github.com/users/$member"
+                          USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
+                                         -H "Accept: application/vnd.github.v3+json" \
+                                         "$USER_API" 2>/dev/null)
+                          USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                          if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                            approved_name="$USER_NAME"
+                          fi
+                          approved_members="$approved_members$approved_name, "
                         fi
                       done
                     fi
@@ -257,9 +294,9 @@ jobs:
                 if [ -n "$approved_members" ]; then
                   # Remove trailing comma and space
                   approved_members=$(echo "$approved_members" | sed 's/, $//')
-                  COMMENT="$COMMENT\n- ✅ **$clean_team** (Team) - $team_members_info | Approved by: $approved_members"
+                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$clean_team** (Team) - $team_members_info | Approved by: $approved_members"
                 else
-                  COMMENT="$COMMENT\n- ⏳ **$clean_team** (Team) - $team_members_info | Pending approval"
+                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$clean_team** (Team) - $team_members_info | Pending approval"
                 fi
               done
             fi
@@ -308,12 +345,15 @@ jobs:
                 if [ -n "$approved_owners" ]; then
                   # Remove trailing comma and space
                   approved_owners=$(echo "$approved_owners" | sed 's/, $//')
-                  COMMENT="$COMMENT\n- ✅ **$pattern** (Group) - Members: $all_owners | Approved by: $approved_owners"
+                  APPROVED_GROUPS="$APPROVED_GROUPS\n- ✅ **$pattern** (Group) - Members: $all_owners | Approved by: $approved_owners"
                 else
-                  COMMENT="$COMMENT\n- ⏳ **$pattern** (Group) - Members: $all_owners | Pending approval"
+                  PENDING_GROUPS="$PENDING_GROUPS\n- ⏳ **$pattern** (Group) - Members: $all_owners | Pending approval"
                 fi
               done
             fi
+
+            # Combine pending groups first, then approved groups
+            COMMENT="$COMMENT$PENDING_GROUPS$APPROVED_GROUPS"
 
             COMMENT="$COMMENT\n\n**Note:** At least one approval from each group is sufficient."
           fi
