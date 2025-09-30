@@ -190,7 +190,8 @@ jobs:
     if: needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Create approval requirements comment
+      - name: Generate comment data
+        id: generate-comment
         run: |
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
@@ -253,28 +254,28 @@ jobs:
           PENDING_COUNT=0
           APPROVED_COUNT=0
 
-            # Display teams with member information and approval status
-            if [ -n "$TEAMS" ]; then
-              IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
-              for team in "${TEAM_ARRAY[@]}"; do
-                # Skip the large-changes team as requested
-                if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
-                  continue
-                fi
+          # Display teams with member information and approval status
+          if [ -n "$TEAMS" ]; then
+            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team in "${TEAM_ARRAY[@]}"; do
+              # Skip the large-changes team as requested
+              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                continue
+              fi
 
-                # Remove @ prefix for display
-                clean_team=$(echo "$team" | sed 's/^@//')
+              # Remove @ prefix for display
+              clean_team=$(echo "$team" | sed 's/^@//')
 
-                # Get team members
-                team_members_info=""
-                approved_members=""
+              # Get team members
+              team_members_info=""
+              approved_members=""
 
-                # Check team members against approved reviewers
-                if [ -n "$TEAM_MEMBERS" ]; then
-                  # Find this team's members (extract just this team's entry)
-                  team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
-                  if [ -n "$team_members_entry" ]; then
-                    team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
+              # Check team members against approved reviewers
+              if [ -n "$TEAM_MEMBERS" ]; then
+                # Find this team's members (extract just this team's entry)
+                team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                if [ -n "$team_members_entry" ]; then
+                  team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
 
                     if [ "$team_owners" = "insufficient-permissions" ]; then
                       # Token doesn't have permission to read team members
@@ -407,6 +408,35 @@ jobs:
               COMMENT="<!-- CodeOwners-Workflow-Bot -->\n## CodeOwners Group Analysis\n\nThis PR requires approval from **one member of each** of the following groups:\n\n**Summary:** $PENDING_COUNT pending groups, $APPROVED_COUNT approved groups\n\n### Group Information:$PENDING_GROUPS$APPROVED_GROUPS\n\n**Note:** At least one approval from each group is sufficient."
             fi
 
+            # Output comment for next step
+            {
+              echo "comment<<EOF"
+              echo "$COMMENT"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+
+            # Output other data for next steps
+            {
+              echo "pr-number<<EOF"
+              echo "$PR_NUMBER"
+              echo "EOF"
+              echo "create-new<<EOF"
+              echo "$CREATE_NEW"
+              echo "EOF"
+              echo "ping-owners<<EOF"
+              echo "$PING_OWNERS"
+              echo "EOF"
+              echo "send-slack<<EOF"
+              echo "$SEND_SLACK"
+              echo "EOF"
+            } >> $GITHUB_OUTPUT
+
+      - name: Post comment to PR
+        run: |
+          PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
+          COMMENT="${{ steps.generate-comment.outputs.comment }}"
+          CREATE_NEW="${{ steps.generate-comment.outputs.create-new }}"
+
           # Get existing comments to find if we should edit or create new
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
           EXISTING_COMMENTS=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -439,7 +469,8 @@ jobs:
 
           echo "Comment updated for PR #$PR_NUMBER"
 
-          # Generate ping message for pending owners (always show in logs, only post if requested)
+      - name: Send notifications
+        run: |
           echo "Generating ping message for pending owners..."
 
           # Get PR information
