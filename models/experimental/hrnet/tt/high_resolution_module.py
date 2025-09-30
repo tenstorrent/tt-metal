@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 import logging
 
@@ -13,7 +14,7 @@ from models.experimental.hrnet.hrnet_utils import create_batchnorm
 logger = logging.getLogger(__name__)
 
 
-class TtInterpolate(nn.Module):
+class TtInterpolate(LightweightModule):
     def __init__(self, scale_factor, mode):
         super(TtInterpolate, self).__init__()
         self.scale_factor = scale_factor
@@ -24,7 +25,7 @@ class TtInterpolate(nn.Module):
         return out
 
 
-class TtHighResolutionModule(nn.Module):
+class TtHighResolutionModule(LightweightModule):
     def __init__(
         self,
         num_branches,

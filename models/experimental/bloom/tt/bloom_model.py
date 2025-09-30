@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import math
 from functools import partial
@@ -304,7 +305,7 @@ def build_alibi_tensor(attention_mask: torch.Tensor, num_heads: int, dtype: torc
 #         )
 
 
-class TtBloomModel(torch.nn.Module):
+class TtBloomModel(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 

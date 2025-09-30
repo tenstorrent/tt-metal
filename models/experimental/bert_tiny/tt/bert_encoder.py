@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 import ttnn
 from typing import Optional
 from models.experimental.bert_tiny.tt.bert_layer import TtBertlayer
 
 
-class TtBertencoder(nn.Module):
+class TtBertencoder(LightweightModule):
     def __init__(
         self,
         config,

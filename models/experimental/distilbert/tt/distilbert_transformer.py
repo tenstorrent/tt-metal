@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple, Union
 import torch.nn as nn
 
@@ -17,7 +18,7 @@ class TtBaseModelOutput:
     attentions: Optional[Tuple[ttnn.Tensor]] = None
 
 
-class TtTransformer(nn.Module):
+class TtTransformer(LightweightModule):
     def __init__(self, config, state_dict=None, base_address="", device=None):
         super().__init__()
         self.config = config

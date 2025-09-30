@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2d
 
 
-class TtEfficientnetSqueezeExcitation(torch.nn.Module):
+class TtEfficientnetSqueezeExcitation(LightweightModule):
     """
     This block implements the Squeeze-and-Excitation block from https://arxiv.org/abs/1709.01507 (see Fig. 1).
     Parameters ``activation``, and ``scale_activation`` correspond to ``delta`` and ``sigma`` in eq. 3.
@@ -17,8 +17,8 @@ class TtEfficientnetSqueezeExcitation(torch.nn.Module):
     Args:
         input_channels (int): Number of channels in the input image
         squeeze_channels (int): Number of squeeze channels
-        activation (Callable[..., torch.nn.Module], optional): ``delta`` activation. Default: ``torch.nn.SiLU``
-        scale_activation (Callable[..., torch.nn.Module]): ``sigma`` activation. Default: ``torch.nn.Sigmoid``
+        activation (Callable[..., LightweightModule], optional): ``delta`` activation. Default: ``torch.nn.SiLU``
+        scale_activation (Callable[..., LightweightModule]): ``sigma`` activation. Default: ``torch.nn.Sigmoid``
     """
 
     def __init__(
