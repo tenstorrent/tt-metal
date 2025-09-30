@@ -319,7 +319,7 @@ int main(int argc, char** argv) {
         auto mesh_workload = tt_metal::distributed::MeshWorkload();
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+        mesh_workload.add_program(device_range, std::move(program));
         auto start = std::chrono::high_resolution_clock::now();
         tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
         tt_metal::distributed::Finish(device->mesh_command_queue());
