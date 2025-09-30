@@ -53,26 +53,23 @@ void SGDFused::step() {
             continue;
         }
         auto gradients = theta_ptr->get_grad();
-        auto param_in = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
-        auto param_out = param_in;
+        auto param = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
 
-        std::optional<ttnn::Tensor> momentum;
+        std::optional<ttnn::Tensor> momentum_buffer;
 
         if (auto it = m_momentum.find(name); it != m_momentum.end()) {
-            momentum = it->second->get_value(autograd::PreferredPrecision::FULL);
+            momentum_buffer = it->second->get_value(autograd::PreferredPrecision::FULL);
         }
 
         ttml::metal::sgd_fused(
-            param_in,
+            param,
             gradients,
             m_config.lr,
             m_config.momentum,
             m_config.dampening,
             m_config.weight_decay,
             m_config.nesterov,
-            param_out,
-            momentum,
-            momentum);
+            momentum_buffer);
     }
     m_steps++;
 }
