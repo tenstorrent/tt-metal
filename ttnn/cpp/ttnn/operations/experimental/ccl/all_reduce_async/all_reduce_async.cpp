@@ -114,7 +114,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         ttnn::ccl::get_active_physical_devices(input_tensor).size());
 
     auto padded_tensor = input_tensor;
-    auto initial_shape = input_tensor.padded_shape();
+    auto initial_shape = input_tensor.logical_shape();
     // force RS+AG by using dim 3 after padding
     // temporary before adding support for RS dim 2
     if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
@@ -197,7 +197,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         barrier_semaphores[1]);
     scattered_tensor.deallocate();
     // slice to inital shape if needed using slice
-    if (gathered.padded_shape() != initial_shape) {
+    if (gathered.logical_shape() != initial_shape) {
         ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
@@ -228,7 +228,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
     uint32_t dim = finding_scatter_dim(input_tensor.padded_shape(), input_tensor.layout(), devices.size());
     auto padded_tensor = input_tensor;
-    auto initial_shape = input_tensor.padded_shape();
+    auto initial_shape = input_tensor.logical_shape();
     // force RS+AG by using dim 3 after padding
     // temporary before adding support for RS dim 2
     if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
@@ -312,7 +312,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         barrier_semaphores[1]);
     scattered_tensor.deallocate();
     // slice to inital shape if needed using slice
-    if (gathered.padded_shape() != initial_shape) {
+    if (gathered.logical_shape() != initial_shape) {
         ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
