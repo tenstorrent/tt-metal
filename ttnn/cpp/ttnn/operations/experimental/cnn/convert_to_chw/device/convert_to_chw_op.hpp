@@ -9,8 +9,6 @@
 
 namespace ttnn::operations::experimental::cnn {
 
-tt::tt_metal::MemoryConfig infer_output_memory_config(const Tensor& input_tensor);
-
 struct ConvertToCHW {
     tt::tt_metal::MemoryConfig memory_config;
     tt::tt_metal::DataType dtype;
