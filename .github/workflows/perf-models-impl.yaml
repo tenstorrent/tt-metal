@@ -67,7 +67,8 @@ jobs:
             "vovnet": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/experimental/vovnet/tests/perf/ -m models_performance_bare_metal"},
             "yolov12x": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov12x/tests/perf/ -m models_performance_bare_metal"},
             "ufld_v2": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/ufld_v2/tests/perf/ -m models_performance_bare_metal"},
-            "efficientnetb0": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal"}
+            "efficientnetb0": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal"},
+            "yolov10x": {"model-group": "other_magic_env", "timeout": 45, "archs": ["wormhole_b0", "blackhole"], "commands": "pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal"}
           }'
 
           # Architecture-specific configuration mapping

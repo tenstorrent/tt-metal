@@ -131,7 +131,7 @@ jobs:
             },
             "yolov8": {
               "device_perf_model_name": "yolov8",
-              "commands": "pytest models/demos/yolov8x/tests/perf -m models_device_performance_bare_metal\npytest models/demos/yolov8s/tests/perf -m models_device_performance_bare_metal\n# Skip for #27008\n# pytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal",
+              "commands": "pytest models/demos/yolov8x/tests/perf -m models_device_performance_bare_metal\npytest models/demos/yolov8s/tests/perf -m models_device_performance_bare_metal\npytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal",
               "supported_configs": ["civ2-set2"]
             },
             "yolov7": {
