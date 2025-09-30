@@ -15,7 +15,7 @@ struct PlusOneOperation {
     static ttnn::Tensor invoke(
         const Tensor& input_tensor,
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-        const bool& skip_negative_entries = false);
+        bool skip_negative_entries = false);
 };
 
 }  // namespace operations::experimental

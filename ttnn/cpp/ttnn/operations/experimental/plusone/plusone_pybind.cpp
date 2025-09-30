@@ -42,7 +42,7 @@ void bind_experimental_plusone_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<CoreRangeSet>& sub_core_grids,
-               const bool& skip_negative_entries) { return self(input_tensor, sub_core_grids, skip_negative_entries); },
+               bool skip_negative_entries) { return self(input_tensor, sub_core_grids, skip_negative_entries); },
             py::arg("input_tensor").noconvert(),
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("skip_negative_entries") = false});
