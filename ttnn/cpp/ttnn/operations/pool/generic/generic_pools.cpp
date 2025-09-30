@@ -252,7 +252,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     if (return_indices) {
         Shape spatial_shape({1, input_h, input_w, 1});
 
-        // Create indices tensor with UINT32 since repeat operation requires it
+        // Create the index tensor
         Tensor indices_hw = ttnn::index_all<uint16_t>(
             spatial_shape,
             spatial_shape,  // No padding needed for spatial-only shape
