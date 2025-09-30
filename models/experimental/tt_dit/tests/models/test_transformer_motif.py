@@ -26,7 +26,7 @@ from ...utils.tensor import bf16_tensor, to_torch
         pytest.param((2, 4), (2, 1), False, 1, id="2x1sp1tp0"),  # sp=1 tp=2
         pytest.param((2, 4), (2, 2), True, 1, id="2x2sp0tp1"),  # sp=2 tp=2
         pytest.param((2, 4), (2, 4), True, 1, id="2x4sp0tp1"),  # sp=2 tp=4
-        pytest.param((2, 4), (2, 4), False, 1, id="2x4sp1tp0"),  # sp=4 tp=2
+        # pytest.param((2, 4), (2, 4), False, 1, id="2x4sp1tp0"),  # sp=4 tp=2  # writing cache halts the computer
         pytest.param((4, 8), (4, 4), True, 4, id="4x4sp0tp1"),  # sp=4 tp=4
     ],
     indirect=["mesh_device"],
