@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 from typing import List, Tuple, Union, Optional, Sequence
 import torch
 from torch import Tensor
