@@ -13,9 +13,11 @@ Description:
     Read important variables from fast dispatch kernels.
 """
 
+from dataclasses import dataclass
 from triage import ScriptConfig, triage_field, run_script
-from check_per_device import dataclass, run as get_check_per_device
-from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
+from run_checks import run as get_run_checks
+from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
+from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
 from ttexalens.device import Device
@@ -24,7 +26,9 @@ from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
 
 
-script_config = ScriptConfig(depends=["check_per_device", "dispatcher_data"])
+script_config = ScriptConfig(
+    depends=["run_checks", "dispatcher_data", "elfs_cache"],
+)
 
 
 @dataclass
@@ -42,7 +46,7 @@ class DumpWaitGlobalsData:
     is_h_variant: int | None = triage_field("is_h_variant")
 
 
-def _read_symbol_value(elf_obj: object, symbol: str, mem_reader) -> int | None:
+def _read_symbol_value(elf_obj: ParsedElfFile, symbol: str, mem_reader) -> int | None:
     """Resolve and read an integer symbol value from the kernel ELF using the provided mem_reader.
 
     Returns None if the symbol cannot be read.
@@ -61,26 +65,21 @@ def _get_mem_reader(location: OnChipCoordinate, risc_name: str):
         return ELF.get_mem_reader(location)
 
 
-def _read_wait_globals(
+def read_wait_globals(
     location: OnChipCoordinate,
-    device: Device,
     risc_name: str,
-    dispatcher_core_data: DispatcherCoreData,
-    elf_cache: dict[str, object],
+    dispatcher_data: DispatcherData,
+    elf_cache: ElfsCache,
 ) -> DumpWaitGlobalsData | None:
     """Read wait globals and related constants from the current kernel at this core.
 
     Returns a populated DumpWaitGlobalsData if any relevant values were found; otherwise None.
     """
     # If no kernel loaded, nothing to read
+    dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
     if dispatcher_core_data.kernel_path is None:
         return None
-
-    # Parse and cache kernel elf
-    if dispatcher_core_data.kernel_path not in elf_cache:
-        elf_cache[dispatcher_core_data.kernel_path] = parse_elf(
-            dispatcher_core_data.kernel_path, location._device._context
-        )
+    assert dispatcher_core_data.kernel_name is not None
 
     kernel_elf = elf_cache[dispatcher_core_data.kernel_path]
     mem_reader = _get_mem_reader(location, risc_name)
@@ -113,8 +112,6 @@ def _read_wait_globals(
         wait_stream_value = read_word_from_device(
             location,
             stream_addr0 + stream_stride_bytes * last_wait_stream,
-            device.id(),
-            device._context,
         )
 
     if last_wait_count is not None and stream_width is not None:
@@ -146,39 +143,16 @@ def _read_wait_globals(
     )
 
 
-def dump_wait_globals(
-    device: Device,
-    dispatcher_data: DispatcherData,
-    context: Context,
-) -> list[DumpWaitGlobalsData]:
-    """Collect wait globals from supported blocks across all RISCs on the device."""
-    blocks_to_test = ["functional_workers", "eth"]
-    result: list[DumpWaitGlobalsData] = []
-    elf_cache: dict[str, object] = {}
-
-    for block_to_test in blocks_to_test:
-        for location in device.get_block_locations(block_to_test):
-            noc_block = device.get_block(location)
-
-            # We support only idle eth blocks for now
-            if noc_block.block_type == "eth" and noc_block not in device.idle_eth_blocks:
-                continue
-
-            for risc_name in noc_block.risc_names:
-                dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
-                data = _read_wait_globals(location, device, risc_name, dispatcher_core_data, elf_cache)
-                if data is None:
-                    continue
-                result.append(data)
-
-    return result
-
-
 def run(args, context: Context):
     """Entry point for triage framework."""
-    check_per_device = get_check_per_device(args, context)
+    run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
-    return check_per_device.run_check(lambda device: dump_wait_globals(device, dispatcher_data, context))
+    elfs_cache = get_elfs_cache(args, context)
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    return run_checks.run_per_core_check(
+        lambda location, risc_name: read_wait_globals(location, risc_name, dispatcher_data, elfs_cache),
+        block_filter=BLOCK_TYPES_TO_CHECK,
+    )
 
 
 if __name__ == "__main__":

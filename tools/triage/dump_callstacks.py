@@ -246,6 +246,7 @@ def dump_callstacks(
                 # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
                 callstack = [CallstackEntry()]
             else:
+                assert gdb_server is not None and process_ids is not None
                 callstack = get_gdb_callstack(
                     location, risc_name, dispatcher_core_data, gdb_server.server.port, process_ids
                 )

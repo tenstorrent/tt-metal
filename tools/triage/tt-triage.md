@@ -4,11 +4,11 @@
 
 # Running tt-triage
 
-You can run `tt-triage` by executing `scripts/debugging_scripts/tt-triage.py`.
+You can run `tt-triage` by executing `tools/tt-triage.py`.
 
 # Script discovery
 
-`tt-triage` will search for scripts in the `scripts/debugging_scripts` directory. It will attempt to load all scripts and look for the following signature:
+`tt-triage` will search for scripts in the `tools/triage` directory. It will attempt to load all scripts and look for the following signature:
 1. The script must define a global variable `script_config` of type `ScriptConfig`.
 2. The script must define a `run` method with two arguments: `(args, context)`. `args` contains the parsed arguments for all scripts. `context` is a ttexalens `Context` object.
 
@@ -120,7 +120,7 @@ If you set `disabled` to `True`, your script will not be executed (and all scrip
 
 ## Additional pip requirements
 
-If your `tt-triage` script requires extra Python libraries, add the package name (and version if needed) to `scripts/debugging_scripts/requirements.txt`.
+If your `tt-triage` script requires extra Python libraries, add the package name (and version if needed) to `tools/triage/requirements.txt`.
 After updating `requirements.txt`, also update `triage.py` in the section "Check if requirements are installed" to ensure your dependency is checked and installed automatically.
 
 ## Enabling standalone script execution
@@ -144,4 +144,4 @@ if __name__ == "__main__":
     run_script()
 ```
 
-If you don't want to execute your script directly, you can still do so by running: `scripts/debugging_scripts/tt-triage.py --run=your_script`. You can append more `--run=<selected_script>` arguments to run multiple
+If you don't want to execute your script directly, you can still do so by running: `tools/tt-triage.py --run=your_script`. You can append more `--run=<selected_script>` arguments to run multiple

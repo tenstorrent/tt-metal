@@ -312,6 +312,9 @@ models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/
 # tracy
 tools/tracy/ @mo-tenstorrent @sagarwalTT @tenstorrent/metalium-codeowners-large-changes
 
+# tt-triage
+tools/triage/ @tt-vjovanovic @adjordjevic-TT @miacim @tenstorrent/metalium-codeowners-large-changes
+
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 docs/source/ttnn/ @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @aczajkowskiTT @tenstorrent/metalium-codeowners-large-changes
