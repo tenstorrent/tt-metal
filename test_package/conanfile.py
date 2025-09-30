@@ -26,7 +26,7 @@ class TestPackageConan(ConanFile):
 
     def build(self):
         cmake = CMake(self)
-        cmake.configure()
+        cmake.configure(cli_args=["-DCMAKE_FIND_DEBUG_MODE=ON", "--graphviz=build-visual.dot"])
         cmake.build()
 
     def generate(self):
