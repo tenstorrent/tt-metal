@@ -86,10 +86,13 @@ def analyze_codeowners(changed_files_path, codeowners_path):
 
     co = CodeOwners(codeowners_content)
 
-    # Parse CODEOWNERS file - collect patterns and their owners
+    # Parse CODEOWNERS file - find all unique patterns that match changed files
+    # and collect their owners
     pattern_groups = {}  # pattern -> set of (username, full_name) tuples
     team_groups = set()
+    processed_patterns = set()  # Track patterns we've already processed
 
+    # First pass: find all unique patterns that match any changed files
     for file_path in changed_files:
         matching_lines = list(co.matching_lines(file_path))
         if matching_lines:
@@ -107,19 +110,23 @@ def analyze_codeowners(changed_files_path, codeowners_path):
                 owners_list = best_match[0]  # First element is the owners list
                 pattern = best_match[2]  # Third element is the pattern
 
-                if pattern not in pattern_groups:
-                    pattern_groups[pattern] = set()
+                # Only process this pattern if we haven't seen it before
+                if pattern not in processed_patterns:
+                    processed_patterns.add(pattern)
 
-                for owner_type, owner in owners_list:
-                    if owner_type == "TEAM":
-                        # This is a team
-                        team_groups.add(owner)
-                    elif owner_type in ["USERNAME", "EMAIL"]:
-                        # This is an individual - get full name and store both username and full name
-                        full_name = get_user_full_name(owner)
-                        # Store as tuple: (username, full_name)
-                        username = owner[1:] if owner.startswith("@") else owner  # Remove @ prefix if present
-                        pattern_groups[pattern].add((username, full_name))
+                    if pattern not in pattern_groups:
+                        pattern_groups[pattern] = set()
+
+                    for owner_type, owner in owners_list:
+                        if owner_type == "TEAM":
+                            # This is a team
+                            team_groups.add(owner)
+                        elif owner_type in ["USERNAME", "EMAIL"]:
+                            # This is an individual - get full name and store both username and full name
+                            full_name = get_user_full_name(owner)
+                            # Store as tuple: (username, full_name)
+                            username = owner[1:] if owner.startswith("@") else owner  # Remove @ prefix if present
+                            pattern_groups[pattern].add((username, full_name))
         else:
             print(f"No matches found for {file_path}")
 
