@@ -95,14 +95,14 @@ jobs:
               # Remove @ prefix for API call
               clean_team=$(echo "$team" | sed 's/^@//')
 
-              # Get team members using GitHub API (using WILDER_PAT for org access)
+              # Get team members using GitHub API (using ORG_READ for org access)
               MEMBERS_API="https://api.github.com/orgs/tenstorrent/teams/$clean_team/members"
-              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.WILDER_PAT }}" \
+              MEMBERS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API" 2>/dev/null)
 
               # Check if API call was successful (HTTP 200)
-              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.WILDER_PAT }}" \
+              MEMBERS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.ORG_READ }}" \
                                -H "Accept: application/vnd.github.v3+json" \
                                "$MEMBERS_API")
 
@@ -187,7 +187,7 @@ jobs:
         id: analyze
         run: |
           # Run the dedicated Python script for CODEOWNERS analysis
-          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" WILDER_PAT="${{ secrets.WILDER_PAT }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
+          GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}" ORG_READ="${{ secrets.ORG_READ }}" python3 .github/scripts/codeowners_analysis.py changed_files.txt .github/CODEOWNERS
         # The script writes directly to GITHUB_OUTPUT, so we don't need to capture stdout here
 
   post-comment:
