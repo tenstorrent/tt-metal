@@ -8,17 +8,12 @@
 #include <tt_stl/concepts.hpp>
 #include <array>
 #include <atomic>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
-#include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <ostream>
 #include <tuple>
-#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -106,14 +101,12 @@ struct ShardSpecBuffer {
     DeviceAddr num_pages() const;
 };
 
-struct BufferConfig {
+struct InterleavedBufferConfig {
     IDevice* device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
 };
-
-using InterleavedBufferConfig = BufferConfig;
 
 // copied from above instead of using inheritance such that we can use
 // designator constructor
