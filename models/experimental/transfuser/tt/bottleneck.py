@@ -21,7 +21,7 @@ class TTRegNetBottleneck:
         self.model_config = model_config
         # print(parameters)
 
-        print(parameters)
+        # print(parameters)
         # conv1: 1x1 convolution
         self.conv1 = TTConv2D(
             kernel_size=1,
@@ -65,6 +65,7 @@ class TTRegNetBottleneck:
         )
 
         # SE Module
+        print(parameters["se"]["fc1"])
         self.se_fc1 = TTConv2D(
             kernel_size=1,
             stride=1,

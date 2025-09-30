@@ -4,6 +4,7 @@ import torch
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
 
 from models.experimental.transfuser.reference.transfuser_backbone import TransfuserBackbone
+from models.experimental.transfuser.reference.bottleneck import Bottleneck
 from models.experimental.transfuser.reference.common import Conv2d
 
 
@@ -49,11 +50,11 @@ def custom_preprocessor(
             parameters["image_encoder"]["features"] = {}
             parameters["image_encoder"]["features"]["conv1"] = {}
             parameters["image_encoder"]["features"]["conv1"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["image_encoder"]["features"]["conv1"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             # Lidar encoder conv1
             if hasattr(model, "lidar_encoder") and hasattr(model.lidar_encoder, "_model"):
@@ -64,11 +65,11 @@ def custom_preprocessor(
                 parameters["lidar_encoder"]["_model"] = {}
                 parameters["lidar_encoder"]["_model"]["conv1"] = {}
                 parameters["lidar_encoder"]["_model"]["conv1"]["weight"] = ttnn.from_torch(
-                    lidar_weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                    lidar_weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
                 )
                 lidar_bias = lidar_bias.reshape((1, 1, 1, -1))
                 parameters["lidar_encoder"]["_model"]["conv1"]["bias"] = ttnn.from_torch(
-                    lidar_bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                    lidar_bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
                 )
         # layer1 preprocessing for image encoder
         if hasattr(model.image_encoder.features, "layer1"):
@@ -82,44 +83,44 @@ def custom_preprocessor(
             weight, bias = fold_batch_norm2d_into_conv2d(b1_block.conv1.conv, b1_block.conv1.bn)
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv1"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv1"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv1"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # conv2 (3x3 grouped convolution)
             weight, bias = fold_batch_norm2d_into_conv2d(b1_block.conv2.conv, b1_block.conv2.bn)
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv2"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv2"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv2"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # conv3 (1x1 convolution)
             weight, bias = fold_batch_norm2d_into_conv2d(b1_block.conv3.conv, b1_block.conv3.bn)
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv3"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv3"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["image_encoder"]["features"]["layer1"]["b1"]["conv3"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # SE module
             parameters["image_encoder"]["features"]["layer1"]["b1"]["se"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b1"]["se"]["fc1"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b1"]["se"]["fc1"]["weight"] = ttnn.from_torch(
-                b1_block.se.fc1.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                b1_block.se.fc1.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             parameters["image_encoder"]["features"]["layer1"]["b1"]["se"]["fc2"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b1"]["se"]["fc2"]["weight"] = ttnn.from_torch(
-                b1_block.se.fc2.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                b1_block.se.fc2.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # Downsample
@@ -127,11 +128,11 @@ def custom_preprocessor(
                 weight, bias = fold_batch_norm2d_into_conv2d(b1_block.downsample.conv, b1_block.downsample.bn)
                 parameters["image_encoder"]["features"]["layer1"]["b1"]["downsample"] = {}
                 parameters["image_encoder"]["features"]["layer1"]["b1"]["downsample"]["weight"] = ttnn.from_torch(
-                    weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                    weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
                 )
                 bias = bias.reshape((1, 1, 1, -1))
                 parameters["image_encoder"]["features"]["layer1"]["b1"]["downsample"]["bias"] = ttnn.from_torch(
-                    bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                    bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
                 )
 
             # 2nd bottleneck (no downsample)
@@ -144,44 +145,44 @@ def custom_preprocessor(
             weight, bias = fold_batch_norm2d_into_conv2d(b2_block.conv1.conv, b2_block.conv1.bn)
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv1"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv1"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv1"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # conv2 (3x3 grouped convolution)
             weight, bias = fold_batch_norm2d_into_conv2d(b2_block.conv2.conv, b2_block.conv2.bn)
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv2"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv2"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv2"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # conv3 (1x1 convolution)
             weight, bias = fold_batch_norm2d_into_conv2d(b2_block.conv3.conv, b2_block.conv3.bn)
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv3"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv3"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["image_encoder"]["features"]["layer1"]["b2"]["conv3"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # SE module
             parameters["image_encoder"]["features"]["layer1"]["b2"]["se"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b2"]["se"]["fc1"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b2"]["se"]["fc1"]["weight"] = ttnn.from_torch(
-                b2_block.se.fc1.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                b2_block.se.fc1.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             parameters["image_encoder"]["features"]["layer1"]["b2"]["se"]["fc2"] = {}
             parameters["image_encoder"]["features"]["layer1"]["b2"]["se"]["fc2"]["weight"] = ttnn.from_torch(
-                b2_block.se.fc2.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                b2_block.se.fc2.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
         #  layer1 preprocessing for lidar encoder
@@ -196,44 +197,44 @@ def custom_preprocessor(
             weight, bias = fold_batch_norm2d_into_conv2d(b1_block.conv1.conv, b1_block.conv1.bn)
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv1"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv1"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv1"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # conv2 (3x3 grouped convolution)
             weight, bias = fold_batch_norm2d_into_conv2d(b1_block.conv2.conv, b1_block.conv2.bn)
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv2"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv2"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv2"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # conv3 (1x1 convolution)
             weight, bias = fold_batch_norm2d_into_conv2d(b1_block.conv3.conv, b1_block.conv3.bn)
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv3"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv3"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["conv3"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # SE module
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["se"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["se"]["fc1"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["se"]["fc1"]["weight"] = ttnn.from_torch(
-                b1_block.se.fc1.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                b1_block.se.fc1.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["se"]["fc2"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["se"]["fc2"]["weight"] = ttnn.from_torch(
-                b1_block.se.fc2.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                b1_block.se.fc2.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # Downsample
@@ -242,11 +243,11 @@ def custom_preprocessor(
                     weight, bias = fold_batch_norm2d_into_conv2d(b1_block.downsample.conv, b1_block.downsample.bn)
                     parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["downsample"] = {}
                     parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["downsample"]["weight"] = ttnn.from_torch(
-                        weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                        weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
                     )
                     bias = bias.reshape((1, 1, 1, -1))
                     parameters["lidar_encoder"]["_model"]["layer1"]["b1"]["downsample"]["bias"] = ttnn.from_torch(
-                        bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                        bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
                     )
 
             # 2nd bottleneck for lidar
@@ -257,45 +258,94 @@ def custom_preprocessor(
             weight, bias = fold_batch_norm2d_into_conv2d(b2_block.conv1.conv, b2_block.conv1.bn)
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv1"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv1"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv1"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # conv2 (3x3 grouped convolution)
             weight, bias = fold_batch_norm2d_into_conv2d(b2_block.conv2.conv, b2_block.conv2.bn)
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv2"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv2"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv2"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # conv3 (1x1 convolution)
             weight, bias = fold_batch_norm2d_into_conv2d(b2_block.conv3.conv, b2_block.conv3.bn)
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv3"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv3"]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             bias = bias.reshape((1, 1, 1, -1))
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["conv3"]["bias"] = ttnn.from_torch(
-                bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
 
             # SE module
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["se"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["se"]["fc1"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["se"]["fc1"]["weight"] = ttnn.from_torch(
-                b2_block.se.fc1.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                b2_block.se.fc1.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["se"]["fc2"] = {}
             parameters["lidar_encoder"]["_model"]["layer1"]["b2"]["se"]["fc2"]["weight"] = ttnn.from_torch(
-                b2_block.se.fc2.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                b2_block.se.fc2.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
             )
+    elif isinstance(model, Bottleneck):
+        # Handle standalone Bottleneck model
+        print(f"Processing Bottleneck model: {model}")
+
+        # conv1 (1x1 convolution)
+        weight, bias = fold_batch_norm2d_into_conv2d(model.conv1.conv, model.conv1.bn)
+        parameters["conv1"] = {}
+        parameters["conv1"]["conv"] = {}
+        parameters["conv1"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        bias = bias.reshape((1, 1, 1, -1))
+        parameters["conv1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+
+        # conv2 (3x3 grouped convolution)
+        weight, bias = fold_batch_norm2d_into_conv2d(model.conv2.conv, model.conv2.bn)
+        parameters["conv2"] = {}
+        parameters["conv2"]["conv"] = {}
+        parameters["conv2"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        bias = bias.reshape((1, 1, 1, -1))
+        parameters["conv2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+
+        # conv3 (1x1 convolution)
+        weight, bias = fold_batch_norm2d_into_conv2d(model.conv3.conv, model.conv3.bn)
+        parameters["conv3"] = {}
+        parameters["conv3"]["conv"] = {}
+        parameters["conv3"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        bias = bias.reshape((1, 1, 1, -1))
+        parameters["conv3"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+
+        # SE module
+        parameters["se"] = {}
+        parameters["se"]["fc1"] = {}
+        parameters["se"]["fc1"]["weight"] = ttnn.from_torch(
+            model.se.fc1.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+        parameters["se"]["fc2"] = {}
+        parameters["se"]["fc2"]["weight"] = ttnn.from_torch(
+            model.se.fc2.weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+        )
+
+        # Downsample
+        if hasattr(model, "downsample") and model.downsample is not None:
+            weight, bias = fold_batch_norm2d_into_conv2d(model.downsample[0], model.downsample[1])
+            parameters["downsample"] = []
+            parameters["downsample"].append({})
+            parameters["downsample"][0]["weight"] = ttnn.from_torch(
+                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
+            )
+            bias = bias.reshape((1, 1, 1, -1))
+            parameters["downsample"][0]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
     return parameters
 
 
