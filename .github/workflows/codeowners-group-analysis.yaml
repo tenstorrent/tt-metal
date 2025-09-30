@@ -218,10 +218,10 @@ jobs:
 
                 # Check team members against approved reviewers
                 if [ -n "$TEAM_MEMBERS" ]; then
-                  # Find this team's members
-                  team_members_line=$(echo "$TEAM_MEMBERS" | grep "^$team:" | head -1)
-                  if [ -n "$team_members_line" ]; then
-                    team_owners=$(echo "$team_members_line" | cut -d':' -f2)
+                  # Find this team's members (extract just this team's entry)
+                  team_members_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+                  if [ -n "$team_members_entry" ]; then
+                    team_owners=$(echo "$team_members_entry" | cut -d':' -f2)
 
                     if [ "$team_owners" = "insufficient-permissions" ]; then
                       # Token doesn't have permission to read team members
