@@ -123,13 +123,12 @@ jobs:
         with:
           commands: pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
-      # issue: https://github.com/tenstorrent/tt-metal/issues/27745
-      # - name: Run yolov10x model_perf test
-      #   timeout-minutes: ${{ matrix.test-info.timeout }}
-      #   uses: ./.github/actions/single-card-perf-test
-      #   with:
-      #     commands: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
-      #  if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov10x model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run sentence_bert model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
