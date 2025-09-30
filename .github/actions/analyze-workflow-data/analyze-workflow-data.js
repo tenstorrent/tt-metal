@@ -917,6 +917,9 @@ async function run() {
 
     // END OF BASIC ANALYZE STEP
 
+    // Cache for error snippets to avoid fetching the same run's errors multiple times
+    const errorSnippetsCache = new Map();
+
     // Optional: Build Slack-ready alert message for all failing workflows with owner mentions
     let alertAllMessage = '';
     if (alertAll && failedWorkflows.length > 0) {
@@ -925,9 +928,6 @@ async function run() {
         const ids = arr.map(o => (o && o.id) ? `<@${o.id}>` : '').filter(Boolean);
         return ids.length ? ids.join(' ') : '';
       }; // create a function that takes in an array of owners and returns a string of owner mentions (as slack IDs)
-
-      // Cache for error snippets to avoid fetching the same run's errors multiple times
-      const errorSnippetsCache = new Map();
 
       // create a list of all the failing workflows with their owner information for slack messaging
       const failingItems = [];
@@ -1072,7 +1072,7 @@ async function run() {
           item.repeated_errors = [];
           // Mirror into the corresponding change entry
           const changeRef = changes.find(c => c.name === item.name && c.change === 'success_to_fail');
-          if (changeRef) {
+          if (changeRef) { // update the change entry with the regression information (this is what gets uploaded as an artifact)
             Object.assign(changeRef, {
               first_failed_run_id: item.first_failed_run_id,
               first_failed_run_url: item.first_failed_run_url,
@@ -1095,10 +1095,10 @@ async function run() {
     }
 
     // Enrich stayed failing with first failing run within the window
-    for (const item of stayedFailingDetails) {
+    for (const item of stayedFailingDetails) { // basically the same as the regressed details, but for stayed failing
       try {
         const windowRuns = getMainWindowRuns(filteredGrouped.get(item.name) || []);
-        const res = findFirstFailInWindow(windowRuns);
+        const res = findFirstFailInWindow(windowRuns); // get the oldest failing run in the window, that hopefully came after some successes
         if (res && res.run) {
           item.first_failed_run_id = res.run.id;
           item.first_failed_run_url = res.run.html_url;
