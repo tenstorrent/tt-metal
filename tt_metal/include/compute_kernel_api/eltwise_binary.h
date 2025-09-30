@@ -249,11 +249,11 @@ ALWI void sub_bcast_row_tiles_hw_configure(uint32_t icb0, uint32_t icb1, uint32_
 }
 
 ALWI void sub_bcast_row_tile_init() {
-    UNPACK((llk_unpack_AB_sub_bcast_row_init<>()));
-    MATH((llk_math_eltwise_sub_bcast_row_init<>()));
+    UNPACK((llk_unpack_bcastA_B_init()));
+    MATH((llk_math_eltwise_sub_bcast_row_init()));
 }
 
 ALWI void sub_bcast_row_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint dst_index) {
-    UNPACK((llk_unpack_AB_sub_bcast_row<>(icb0, icb1, 0, 0)));
-    MATH((llk_math_eltwise_binary_sub_bcast_row<>(dst_index)));
+    UNPACK((llk_unpack_bcastA_B(icb0, icb1, 0, 0)));
+    MATH((llk_math_eltwise_binary_sub_bcast_row(dst_index)));
 }

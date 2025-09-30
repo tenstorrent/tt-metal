@@ -143,13 +143,9 @@ inline void llk_unpack_AB_sub_bcast_row_hw_configure(
         num_faces);
 }
 
-template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB_sub_bcast_row_init() {
-    _llk_unpack_AB_sub_bcast_row_init<BType>();
-}
+inline void llk_unpack_bcastA_B_init() { _llk_unpack_bcastA_B_init_(); }
 
-template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_AB_sub_bcast_row(
+inline void llk_unpack_bcastA_B(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
     const std::uint32_t tile_index_a,
@@ -166,6 +162,6 @@ inline void llk_unpack_AB_sub_bcast_row(
     DPRINT << "Unpack A address: " << address_a << " Unpack B address: " << address_b << ENDL();
 
     WAYPOINT("UABW");
-    _llk_unpack_AB_sub_bcast_row_<BType>(address_a, address_b);
+    _llk_unpack_bcastA_B_(address_a, address_b);
     WAYPOINT("UABD");
 }

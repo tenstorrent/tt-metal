@@ -219,26 +219,35 @@ bool single_core_binary(
     //                      Stimulus Generation
     ////////////////////////////////////////////////////////////////////////////
 
-    constexpr uint32_t repeat_tiles = 2;
-    std::vector<float> values_to_repeat = {
-        1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};  // Specify which numbers to repeat
+    constexpr uint32_t repeat_times = 4;
+    std::vector<bfloat16> input1_values;
 
-    std::vector<bfloat16> input0_values;
+    std::vector<float> repeat_values = {5.0f, 7.0f, 9.0f, 11.0f};
 
-    // for (uint32_t j = 0; j < repeat_tiles; j++) {
-    for (const auto& value : values_to_repeat) {
-        for (size_t i = 0; i < 16; i++) {
-            input0_values.push_back(bfloat16(value));
-        }
-        for (size_t i = 0; i < 240; i++) {
-            input0_values.push_back(bfloat16(0.0f));
+    for (uint32_t i = 0; i < repeat_times; i++) {
+        for (uint32_t j = 0; j < 1024; j++) {
+            input1_values.push_back(bfloat16(repeat_values[i]));
         }
     }
-    // }
 
-    // Create a vector of 1024 bfloat16 values (all 5s)
+    std::vector<bfloat16> input0_values;
+    for (uint32_t i = 0; i < 16; i++) {
+        input0_values.push_back(bfloat16(1.0f));
+    }
+    for (uint32_t i = 0; i < 240; i++) {
+        input0_values.push_back(bfloat16(0.0f));
+    }
+    for (uint32_t i = 0; i < 16; i++) {
+        input0_values.push_back(bfloat16(2.0f));
+    }
+    for (uint32_t i = 0; i < 240; i++) {
+        input0_values.push_back(bfloat16(0.0f));
+    }
+    for (uint32_t i = 0; i < 512; i++) {
+        input0_values.push_back(bfloat16(0.0f));
+    }
 
-    std::vector<bfloat16> input1_values(1024 * repeat_tiles, bfloat16(5.0f));
+    // Result will be input0_values - input1_values in bcasted manner
 
     // Pack the bfloat16 values into uint32_t
     std::vector<uint32_t> packed_input0 = pack_vector<uint32_t, bfloat16>(input0_values);
@@ -281,7 +290,7 @@ bool single_core_binary(
             }
         });
 
-    std::vector<bfloat16> golden(input0.size());
+    std::vector<bfloat16> golden(input1.size());
     std::transform(
         input2.begin(), input2.end(), temp_golden.begin(), golden.begin(), [&](const bfloat16& lhs, const float& rhs) {
             // acc_to_dest accumulates dest value with binary output, for all binary operations
@@ -351,7 +360,7 @@ bool single_core_binary(
 }  // namespace unit_tests::compute::binary
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
-    uint32_t repeat_tiles = 2;
+    uint32_t repeat_tiles = 4;
 
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::LoFi); i++) {
         if (i == 1) {

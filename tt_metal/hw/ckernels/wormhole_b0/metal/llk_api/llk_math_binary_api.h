@@ -86,33 +86,6 @@ inline void llk_math_eltwise_binary(
 /*************************************************************************
  * LLK sub_bcast_row_tile unpacker implementation for SDPA
  *************************************************************************/
+inline void llk_math_eltwise_sub_bcast_row_init() { _llk_math_eltwise_binary_sub_bcast_row_init_(); }
 
-template <
-    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWSUB,
-    BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    int MATH_FIDELITY_DESC = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_sub_bcast_row_init() {
-    _llk_math_eltwise_binary_sub_bcast_row_init_<
-        eltwise_binary_type,
-        src_b_bcast_type,
-        MATH_FIDELITY_DESC,
-        binary_reuse_dest>();
-}
-
-template <
-    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWSUB,
-    BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    DstSync Dst = DstSync::SyncHalf,
-    bool is_fp32_dest_acc_en = false,
-    int NUM_FIDELITY_PHASES = 0,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
-inline void llk_math_eltwise_binary_sub_bcast_row(uint dst_index) {
-    _llk_math_eltwise_binary_sub_bcast_row<
-        eltwise_binary_type,
-        src_b_bcast_type,
-        Dst,
-        is_fp32_dest_acc_en,
-        NUM_FIDELITY_PHASES,
-        binary_reuse_dest>(dst_index);
-}
+inline void llk_math_eltwise_binary_sub_bcast_row(uint dst_index) { _llk_math_eltwise_binary_sub_bcast_row(dst_index); }
