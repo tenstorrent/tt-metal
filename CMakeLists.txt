@@ -289,6 +289,9 @@ if(BUILD_TELEMETRY)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tt_telemetry)
 endif()
 
+# Build cpp models here
+add_subdirectory(models)
+
 ############################################################################################################################
 # Install targets for build artifacts and pybinds
 #   If built with Tracy, cannot install 'all' since it will pick up install targets from Tracy
