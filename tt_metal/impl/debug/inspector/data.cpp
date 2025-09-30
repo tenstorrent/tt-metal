@@ -19,9 +19,8 @@ Data::Data()
     const auto& rtoptions = MetalContext::instance().rtoptions();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
         try {
-            auto host = rtoptions.get_inspector_rpc_server_host();
-            auto port = rtoptions.get_inspector_rpc_server_port();
-            rpc_server_controller.start(host, port);
+            auto address = rtoptions.get_inspector_rpc_server_address();
+            rpc_server_controller.start(address);
 
             // Connect callbacks that we want to respond to
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
