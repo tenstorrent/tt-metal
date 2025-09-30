@@ -69,11 +69,20 @@ class TtnnYoloV11:
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
         x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        
+        # Move to DRAM before conv5 to avoid L1 overflow with bfloat16
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv5(self.device, x)
         x = self.c3k2_3(self.device, x)
         x6 = x
+        
+        # Move to DRAM before conv6 to handle large feature maps
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv6(self.device, x)
         x = self.c3k2_4(self.device, x)
+        
+        # Move to DRAM before SPPF (Spatial Pyramid Pooling) - typically memory intensive
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.sppf(self.device, x)
         x = self.c2psa(self.device, x)
         x10 = x
