@@ -160,7 +160,7 @@ class Bottleneck(nn.Module):
         out_chs: int,
         stride: int = 1,
         dilation: Tuple[int, int] = (1, 1),
-        bottle_ratio: float = 1,
+        bottle_ratio: float = 1.0,
         group_size: int = 1,
         se_ratio: float = 0.25,
         downsample: str = "conv1x1",
@@ -221,84 +221,3 @@ class Bottleneck(nn.Module):
             x = self.drop_path(x) + self.downsample(shortcut)
         x = self.act3(x)
         return x
-
-
-# Example usage
-# if __name__ == "__main__":
-#    model = Bottleneck(in_chs=64, out_chs=256, stride=2, group_size=8)
-#    x = torch.randn(1, 64, 56, 56)
-#    output = model(x)
-#    print(f"Input: {x.shape}, Output: {output.shape}")
-
-# dimensions
-if __name__ == "__main__":
-    model = Bottleneck(in_chs=64, out_chs=256, stride=2, group_size=8)
-    x = torch.randn(1, 64, 56, 56)
-
-    print("=== RegNet Bottleneck Architecture Test ===")
-    print(f"Input: {x.shape}")
-
-    # Print model architecture
-    print("\n=== Model Architecture ===")
-    print(model)
-
-    # Print parameter count
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"\nTotal parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
-
-    # Test forward pass with intermediate outputs
-    print("\n=== Forward Pass Details ===")
-    with torch.no_grad():
-        shortcut = x
-        print(f"Original input: {x.shape}")
-
-        # Conv1 (1x1 reduction)
-        x1 = model.conv1(x)
-        print(f"After conv1 (1x1): {x1.shape}")
-
-        # Conv2 (3x3 grouped conv)
-        x2 = model.conv2(x1)
-        print(f"After conv2 (3x3 grouped): {x2.shape}")
-
-        # SE Module (RegNet's key difference - SE after conv2)
-        x_se = model.se(x2)
-        print(f"After SE module: {x_se.shape}")
-
-        # Conv3 (1x1 expansion, no activation)
-        x3 = model.conv3(x_se)
-        print(f"After conv3 (1x1, no act): {x3.shape}")
-
-        # Downsample shortcut if needed
-        if model.downsample is not None:
-            shortcut_out = model.downsample(shortcut)
-            print(f"Shortcut downsampled: {shortcut_out.shape}")
-        else:
-            shortcut_out = shortcut
-            print(f"Shortcut (identity): {shortcut_out.shape}")
-
-        # Add residual connection
-        x_residual = model.drop_path(x3) + shortcut_out
-        print(f"After residual addition: {x_residual.shape}")
-
-        # Final activation
-        output = model.act3(x_residual)
-        print(f"Final output: {output.shape}")
-
-    # Verify RegNet-specific properties
-    print("\n=== RegNet Architecture Verification ===")
-    bottleneck_chs = int(round(256 * 1.0))  # bottle_ratio = 1.0
-    groups = bottleneck_chs // 8  # group_size = 8
-    print(f"Bottleneck channels: {bottleneck_chs}")
-    print(f"Groups for conv2: {groups}")
-    print(f"SE ratio: 0.25 (SE channels: {int(round(64 * 0.25))})")
-    print(f"Stride: 2 (spatial downsampling)")
-
-    # Test SE module specifically
-    print(f"\n=== SE Module Test ===")
-    if hasattr(model.se, "fc1"):
-        print(f"SE fc1: {model.se.fc1.in_channels} -> {model.se.fc1.out_channels}")
-        print(f"SE fc2: {model.se.fc2.in_channels} -> {model.se.fc2.out_channels}")
-    else:
-        print("SE module is Identity (se_ratio = 0)")
