@@ -17,7 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
 from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import (
     run_single_pytorch_test,
 )
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull
+from models.common.utility_functions import is_wormhole_b0
 
 shapes = [
     [[1, 1, 32, 32]],  # Single core
@@ -590,7 +590,6 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("round_off_method", ["floor"])
-    @skip_for_grayskull("#ToDo: GS implementation needs to be done for Floor")
     def test_run_eltwise_round_off_ops(
         self,
         round_off_method,
@@ -646,7 +645,6 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_grayskull("#ToDo: GS implementation needs to be done for remainder op")
     def test_run_unary_remainder(
         self,
         input_shapes,
@@ -677,7 +675,6 @@ class TestEltwiseUnary:
             ttnn_op=True,
         )
 
-    @skip_for_grayskull("#ToDo: GS implementation needs to be done for fmod op")
     def test_run_eltwise_unary_fmod(
         self,
         input_shapes,
@@ -868,7 +865,6 @@ class TestEltwiseUnary:
         )
 
     @pytest.mark.parametrize("weight", [-0.5, 1.0, 0.5])
-    @skip_for_grayskull()
     def test_run_eltwise_prelu(
         self,
         input_shapes,
@@ -1188,7 +1184,6 @@ class TestEltwiseUnary:
             test_args,
         )
 
-    @skip_for_grayskull("Softplus kernel not currently available for GS")
     @pytest.mark.parametrize("beta", [1.0, 5.0])
     @pytest.mark.parametrize("threshold", [10.0, 20.0])
     def test_run_eltwise_softplus(

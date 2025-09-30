@@ -93,7 +93,6 @@ constexpr bool is_associative(BinaryOpType op) {
 
 // Tensor - Scalar
 inline Tensor binary_impl(
-    QueueId queue_id,
     BinaryOpType binary_op_type,
     const ttnn::Tensor& lhs,
     const float rhs,
@@ -102,42 +101,41 @@ inline Tensor binary_impl(
     const std::optional<Tensor>& output = std::nullopt) {
     auto output_tensor = lhs;
     if (binary_op_type == BinaryOpType::GT) {
-        output_tensor = ttnn::gt_unary(queue_id, lhs, rhs, memory_config, output);
+        output_tensor = ttnn::gt_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::LT) {
-        output_tensor = ttnn::lt_unary(queue_id, lhs, rhs, memory_config, output);
+        output_tensor = ttnn::lt_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::NE) {
-        output_tensor = ttnn::ne_unary(queue_id, lhs, rhs, memory_config, output);
+        output_tensor = ttnn::ne_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::GE) {
-        output_tensor = ttnn::ge_unary(queue_id, lhs, rhs, memory_config, output);
+        output_tensor = ttnn::ge_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::LE) {
-        output_tensor = ttnn::le_unary(queue_id, lhs, rhs, memory_config, output);
+        output_tensor = ttnn::le_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::EQ) {
-        output_tensor = ttnn::eq_unary(queue_id, lhs, rhs, memory_config, output);
+        output_tensor = ttnn::eq_unary(lhs, rhs, memory_config, output);
     } else {
         TT_THROW("Unsupported operation");
     }
     if (dtype.has_value()) {
-        output_tensor = ttnn::typecast(queue_id, output_tensor, *dtype, std::nullopt, output);
+        output_tensor = ttnn::typecast(output_tensor, *dtype, std::nullopt, output);
     }
     return output_tensor;
 }
 
 // Scalar - Tensor
 inline Tensor binary_impl(
-    QueueId queue_id,
     BinaryOpType binary_op_type,
     const float lhs,
     const ttnn::Tensor& rhs,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt) {
     if (binary_op_type == BinaryOpType::GE) {
-        return ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+        return ttnn::gez(ttnn::sub_sfpu(lhs, rhs, memory_config), memory_config, output);
     }
     if (binary_op_type == BinaryOpType::LE) {
-        return ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+        return ttnn::lez(ttnn::sub_sfpu(lhs, rhs, memory_config), memory_config, output);
     }
     if (binary_op_type == BinaryOpType::EQ) {
-        return ttnn::eqz(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+        return ttnn::eqz(ttnn::sub_sfpu(lhs, rhs, memory_config), memory_config, output);
     }
 
     TT_THROW("Unsupported operation");
@@ -359,9 +357,7 @@ bool is_legacy_only(
     const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
 
     if (detail::any_non_llk_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
-        detail::any_subtile_broadcasted_block_format(lhs, rhs) or
-        detail::any_non_height_sharded_w_bcast(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output) or
-        detail::any_sharded_scalar(lhs, rhs)) {
+        detail::any_subtile_broadcasted_block_format(lhs, rhs) or detail::any_uneven(lhs, rhs, output)) {
         TT_FATAL(
             lhs_activations.size() <= 1,
             "lhs_activations support maximum of 1 for legacy-only configuration; Override with use_legacy=False "
@@ -403,7 +399,6 @@ template bool is_legacy_only<int32_t>(
 namespace detail {
 
 inline auto invoke_binary_ng(
-    QueueId queue_id,
     const Tensor& lhs,
     const auto& rhs,
     BinaryOpType binary_op_type,
@@ -424,11 +419,10 @@ inline auto invoke_binary_ng(
         if constexpr (requires { detail::preprocess_inputs(binary_op_type, lhs, rhs); }) {
             auto [a, b] = detail::preprocess_inputs(binary_op_type, lhs, rhs);
 
-            return ttnn::prim::binary(
-                queue_id, a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
+            return ttnn::prim::binary(a, b, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
         } else {
             return ttnn::prim::binary(
-                queue_id, lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
+                lhs, rhs, binary_op_type, dtype, memory_config, output, activations, lhs_activation);
         }
     }
 
@@ -461,7 +455,6 @@ inline auto invoke_binary_ng(
         }
 
         auto result = ttnn::prim::binary_ng(
-            queue_id,
             input_a,
             input_b,
             binary_op_type,
@@ -487,7 +480,6 @@ inline auto invoke_binary_ng(
             output_preallocated and typecast_out ? ttnn::typecast(*output, DataType::BFLOAT16) : output;
 
         Tensor result = ttnn::prim::binary_ng(
-            queue_id,
             input_a,
             input_b,
             binary_op_type,
@@ -506,7 +498,6 @@ inline auto invoke_binary_ng(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperation<binary_op_type>::invoke(
-    QueueId queue_id,
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype,
@@ -517,7 +508,6 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     return detail::invoke_binary_ng(
-        queue_id,
         lhs,
         rhs,
         binary_op_type,
@@ -532,7 +522,6 @@ Tensor BinaryOperation<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperation<binary_op_type>::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& dtype,
@@ -543,7 +532,6 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     return detail::invoke_binary_ng(
-        queue_id,
         lhs,
         rhs,
         binary_op_type,
@@ -558,7 +546,6 @@ Tensor BinaryOperation<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
-    QueueId queue_id,
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype,
@@ -569,7 +556,6 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     return detail::invoke_binary_ng(
-        queue_id,
         lhs,
         rhs,
         binary_op_type,
@@ -584,7 +570,6 @@ Tensor RelationalBinary<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& lhs,
     const float rhs,
     const std::optional<const DataType>& dtype,
@@ -598,12 +583,11 @@ Tensor RelationalBinary<binary_op_type>::invoke(
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
                          (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
         {
-            return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, dtype, memory_config, output);
+            return detail::binary_impl(binary_op_type, lhs, rhs, dtype, memory_config, output);
         }
     }
 
     return detail::invoke_binary_ng(
-        queue_id,
         lhs,
         rhs,
         binary_op_type,
@@ -618,18 +602,16 @@ Tensor RelationalBinary<binary_op_type>::invoke(
 // scalar - tensor combination not available on Pytorch for this op
 template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
-    QueueId queue_id,
     const float lhs,
     const ttnn::Tensor& rhs,
     const std::optional<const DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    return detail::binary_impl(DefaultQueueId, binary_op_type, lhs, rhs, memory_config, output);
+    return detail::binary_impl(binary_op_type, lhs, rhs, memory_config, output);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceRelationalBinary<binary_op_type>::invoke(
-    QueueId queue_id,
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -637,21 +619,11 @@ Tensor InplaceRelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return RelationalBinary<binary_op_type>::invoke(
-        queue_id,
-        lhs,
-        rhs,
-        std::nullopt,
-        std::nullopt,
-        lhs,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy);
+        lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceRelationalBinary<binary_op_type>::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& lhs,
     const float rhs,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -659,21 +631,11 @@ Tensor InplaceRelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return RelationalBinary<binary_op_type>::invoke(
-        queue_id,
-        lhs,
-        rhs,
-        std::nullopt,
-        std::nullopt,
-        lhs,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy);
+        lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceLogicalBinary<binary_op_type>::invoke(
-    QueueId queue_id,
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -681,21 +643,11 @@ Tensor InplaceLogicalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperation<binary_op_type>::invoke(
-        queue_id,
-        lhs,
-        rhs,
-        std::nullopt,
-        std::nullopt,
-        lhs,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy);
+        lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryOperation<binary_op_type>::invoke(
-    QueueId queue_id,
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -703,21 +655,11 @@ Tensor InplaceBinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperation<binary_op_type>::invoke(
-        queue_id,
-        lhs,
-        rhs,
-        std::nullopt,
-        std::nullopt,
-        lhs,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy);
+        lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryOperation<binary_op_type>::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& lhs,
     const float rhs,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
@@ -725,21 +667,11 @@ Tensor InplaceBinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperation<binary_op_type>::invoke(
-        queue_id,
-        lhs,
-        rhs,
-        std::nullopt,
-        std::nullopt,
-        lhs,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy);
+        lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperationSfpu<binary_op_type>::invoke(
-    QueueId queue_id,
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype,
@@ -750,7 +682,6 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return detail::invoke_binary_ng(
-        queue_id,
         lhs,
         rhs,
         binary_op_type,
@@ -765,7 +696,6 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperationAddalpha<binary_op_type>::invoke(
-    QueueId queue_id,
     const Tensor& lhs,
     const Tensor& rhs,
     float alpha,
@@ -773,12 +703,11 @@ Tensor BinaryOperationAddalpha<binary_op_type>::invoke(
     const std::optional<Tensor>& output) {
     SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
     return BinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
-        queue_id, lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
+        lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
 }
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
-    QueueId queue_id,
     const Tensor& lhs,
     const Tensor& rhs,
     float alpha,
@@ -786,7 +715,7 @@ Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
     const std::optional<Tensor>& output) {
     SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
     return BinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
-        queue_id, lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
+        lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
 }
 
 template struct BinaryOperation<BinaryOpType::ADD>;

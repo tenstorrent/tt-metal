@@ -7,11 +7,11 @@ from loguru import logger
 
 import torch
 import pytest
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
-from models.utility_functions import skip_for_blackhole, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
@@ -125,6 +125,7 @@ def run_conv(
     throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
     enable_activation_reuse=False,
     config_tensors_in_dram=False,
+    custom_pcc=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -328,21 +329,24 @@ def run_conv(
 
     ref = torch.permute(ref, (0, 2, 3, 1))
 
-    if not fp32_accum:
-        pcc = 0.985
-        if input_channels * filter_height * filter_width > 10000:
-            pcc = 0.97
-    elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
-        pcc = 0.996
+    if custom_pcc is not None:
+        pcc = custom_pcc
     else:
-        pcc = 0.997
+        if not fp32_accum:
+            pcc = 0.985
+            if input_channels * filter_height * filter_width > 10000:
+                pcc = 0.97
+        elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
+            pcc = 0.996
+        else:
+            pcc = 0.997
 
-    # Check if activation is tanh
-    is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
-    if is_tanh:
-        # Scale down PCC for tanh.
-        # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
-        pcc = pcc * 0.99
+        # Check if activation is tanh
+        is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
+        if is_tanh:
+            # Scale down PCC for tanh.
+            # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
+            pcc = pcc * 0.99
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
@@ -895,7 +899,6 @@ def test_conv_ws(
     enable_act_double_buffer,
     enable_weights_double_buffer,
 ):
-    print("Device Core Grid:", device.core_grid)
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
@@ -3523,6 +3526,7 @@ def test_conv2d_sdxl_refiner(
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
+@pytest.mark.timeout(120)
 def test_conv2d_vae_sdxl(
     device,
     torch_tensor_map,
@@ -4558,11 +4562,13 @@ def test_conv2d_ch_split_dram_panoptic(
         (768, 32),  # input 8x2 vs 8x4 output
     ),
 )
+@pytest.mark.parametrize("transpose_shard", [False, True])
 def test_conv_bs_grid(
     device,
     torch_tensor_map,
     output_channels,
     input_channels,
+    transpose_shard,
 ):
     run_conv(
         device,
@@ -4583,9 +4589,61 @@ def test_conv_bs_grid(
         None,
         shard_layout=BS,
         has_bias=False,
-        input_dtype=ttnn.bfloat16
+        input_dtype=ttnn.bfloat16,
+        transpose_shards=transpose_shard,
     )
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "output_channels, input_channels",
+    (
+        (128, 128),  # larger input 8x8 vs 8x4
+        (256, 128),  # equal grids 8x8
+        (32, 128),  # single output column 8x1
+    ),
+)
+@pytest.mark.parametrize("transpose_shard", [False, True])
+def test_conv_bs_grid_pre_sharded(
+    device,
+    torch_tensor_map,
+    output_channels,
+    input_channels,
+    transpose_shard,
+):
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
+
+    input_height = input_width = 32
+    batch = 1
+    sharded_cfg = ttnn.create_sharded_memory_config(
+        shape=(1, 1, batch * input_height * input_width, input_channels),
+        core_grid=ttnn.CoreGrid(x=8, y=8),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR if not transpose_shard else ttnn.ShardOrientation.COL_MAJOR,
+    )
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.HiFi4,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        3,
+        3,
+        1,
+        1,
+        0,
+        None,
+        shard_layout=BS,
+        has_bias=False,
+        input_dtype=ttnn.bfloat16,
+        sharded_cfg=sharded_cfg,
+    )
 
 # fmt: off
 @pytest.mark.parametrize("enable_activation_reuse", [False, True])
@@ -4674,7 +4732,8 @@ def test_conv2d_activation_reuse(
         enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
         input_dtype = input_dtype,
         enable_activation_reuse=enable_activation_reuse,
-        config_tensors_in_dram=config_in_dram
+        config_tensors_in_dram=config_in_dram,
+        custom_pcc=0.999
     )
 
 
@@ -4729,6 +4788,8 @@ def test_conv2d_activation_reuse_unet_conv_group_4(
 
     # Get device grid size and create core range set based on num_cores
     grid_size = device.compute_with_storage_grid_size()
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
+        pytest.skip("Test is not supported on n300 (8,7) grid")
 
     # Use ttnn's built-in function to create core range set with row-wise allocation
     input_core_range_set = ttnn.num_cores_to_corerangeset(

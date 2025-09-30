@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -96,6 +96,11 @@ public:
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
+    // This is used to track the current thread's command queue id stack
+    using CommandQueueIdStack = std::vector<uint8_t>;
+    CommandQueueIdStack& get_command_queue_id_stack_for_thread();
+    const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
@@ -166,6 +171,11 @@ private:
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
+
+    // We are using a thread_local to allow each thread to have its own command queue id stack.
+    // This not only allows consumers to set active command queue for a thread
+    // but to also easily push/pop ids to temporarily change the current cq id.
+    static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being

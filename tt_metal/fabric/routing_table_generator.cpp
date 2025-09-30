@@ -11,8 +11,9 @@
 #include <ostream>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
@@ -48,15 +49,21 @@ RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_
     const auto& inter_mesh_connectivity = this->mesh_graph->get_inter_mesh_connectivity();
     this->intra_mesh_table_.resize(intra_mesh_connectivity.size());
     this->inter_mesh_table_.resize(intra_mesh_connectivity.size());
+    this->exit_node_lut_.resize(intra_mesh_connectivity.size());
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
         this->intra_mesh_table_[mesh_id_val].resize(intra_mesh_connectivity[mesh_id_val].size());
         this->inter_mesh_table_[mesh_id_val].resize(intra_mesh_connectivity[mesh_id_val].size());
+        this->exit_node_lut_[mesh_id_val].resize(intra_mesh_connectivity[mesh_id_val].size());
         for (auto& devices_in_mesh : this->intra_mesh_table_[mesh_id_val]) {
             // intra_mesh_table[mesh_id][chip_id] holds a vector of ports to route to other chips in the mesh
             devices_in_mesh.resize(intra_mesh_connectivity[mesh_id_val].size());
         }
         for (auto& devices_in_mesh : this->inter_mesh_table_[mesh_id_val]) {
             // inter_mesh_table[mesh_id][chip_id] holds a vector of ports to route to other meshes
+            devices_in_mesh.resize(intra_mesh_connectivity.size());
+        }
+        for (auto& devices_in_mesh : this->exit_node_lut_[mesh_id_val]) {
+            // exit_node_lut_[mesh_id][chip_id] holds exit chip per destination mesh
             devices_in_mesh.resize(intra_mesh_connectivity.size());
         }
     }
@@ -224,13 +231,16 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 if (dst_mesh_id == src_mesh_id) {
                     // inter mesh table entry from mesh to itself
                     this->inter_mesh_table_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = RoutingDirection::C;
+                    this->exit_node_lut_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = src_chip_id;
                     continue;
                 }
                 auto& candidate_paths = paths[dst_mesh_id_val];
                 std::uint32_t min_load = std::numeric_limits<std::uint32_t>::max();
                 std::uint32_t min_distance = std::numeric_limits<std::uint32_t>::max();
-                if (candidate_paths.size() == 0) {
+                if (candidate_paths.empty()) {
                     this->inter_mesh_table_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = RoutingDirection::NONE;
+                    this->exit_node_lut_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] =
+                        std::numeric_limits<chip_id_t>::max();
                     continue;
                 }
                 // TODO: This exit_chip_id doesn't make sense since it is always chip 0
@@ -238,7 +248,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                 MeshId next_mesh_id = candidate_paths[0][1].second;
                 for (auto& path : candidate_paths) {
                     // First element is itself, second is next mesh
-                    TT_ASSERT(path.size() > 0, "Expecting at least two entries in path");
+                    TT_ASSERT(!path.empty(), "Expecting at least two entries in path");
                     chip_id_t candidate_exit_chip_id = path[1].first;  // first element is the first hop to target mesh
                     MeshId candidate_next_mesh_id = path[1].second;
                     if (candidate_exit_chip_id == src_chip_id) {
@@ -296,10 +306,17 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                     //    }
                     //  }
                 }
+                this->exit_node_lut_[src_mesh_id_val][src_chip_id][dst_mesh_id_val] = exit_chip_id;
                 mesh_to_exit_nodes_[dst_mesh_id].push_back(FabricNodeId(MeshId{src_mesh_id}, exit_chip_id));
             }
         }
     }
+}
+
+void RoutingTableGenerator::load_intermesh_connections(const AnnotatedIntermeshConnections& intermesh_connections) {
+    this->mesh_graph->load_intermesh_connections(intermesh_connections);
+    this->generate_intermesh_routing_table(
+        this->mesh_graph->get_inter_mesh_connectivity(), this->mesh_graph->get_intra_mesh_connectivity());
 }
 
 void RoutingTableGenerator::print_routing_tables() const {
@@ -343,5 +360,24 @@ const std::vector<FabricNodeId>& RoutingTableGenerator::get_exit_nodes_routing_t
         return it->second;
     }
     TT_THROW("No exit nodes found for mesh_id {}", *mesh_id);
+}
+
+FabricNodeId RoutingTableGenerator::get_exit_node_from_mesh_to_mesh(
+    MeshId src_mesh_id, chip_id_t src_chip_id, MeshId dst_mesh_id) const {
+    TT_FATAL(*src_mesh_id < this->exit_node_lut_.size(), "src_mesh_id out of range");
+    TT_FATAL(src_chip_id < this->exit_node_lut_[*src_mesh_id].size(), "src_chip_id out of range");
+    TT_FATAL(*dst_mesh_id < this->exit_node_lut_[*src_mesh_id][src_chip_id].size(), "dst_mesh_id out of range");
+
+    chip_id_t exit_chip = this->exit_node_lut_[*src_mesh_id][src_chip_id][*dst_mesh_id];
+    if (src_mesh_id == dst_mesh_id) {
+        return FabricNodeId(src_mesh_id, src_chip_id);
+    }
+    TT_FATAL(
+        exit_chip != std::numeric_limits<chip_id_t>::max(),
+        "No exit chip mapped from M{}D{} to M{}",
+        *src_mesh_id,
+        src_chip_id,
+        *dst_mesh_id);
+    return FabricNodeId(src_mesh_id, exit_chip);
 }
 }  // namespace tt::tt_fabric

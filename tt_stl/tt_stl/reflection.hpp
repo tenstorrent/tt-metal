@@ -510,7 +510,8 @@ struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
 void visit_object_of_type(auto&& callback, T&& object) {
-    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -648,7 +649,8 @@ struct transform_object_of_type_t;
 
 template <typename object_t, typename T>
 auto transform_object_of_type(auto&& callback, T&& object) {
-    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -1233,6 +1235,13 @@ inline hash_t hash_objects(hash_t seed, const Types&... args) noexcept {
 template <typename... Types>
 inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
     return detail::hash_objects(DEFAULT_SEED, args...);
+}
+
+// Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
+template <typename T>
+void hash_combine(std::size_t& seed, const T& value) {
+    std::hash<T> hasher;
+    seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
 
 }  // namespace hash

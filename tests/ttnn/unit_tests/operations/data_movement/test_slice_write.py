@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,10 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_grayskull
+from models.common.utility_functions import is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.test_utils import round_up
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 import math
 import random
 
@@ -31,18 +31,44 @@ def _rand_shape(dim_size, choices=(8, 16, 32, 64, 128, 256)):
     return ret
 
 
-def _rand_slice_params(shape):
+def _rand_slice_params(
+    shape,
+    *,
+    max_stride_per_dim=None,  # e.g. [8, 4, 4, 1] or None -> clamp to dim size
+    allow_last_dim_stride=True,  # keep last dim stride=1 if False
+    always_nonempty=True,  # guarantee at least one element per dim
+):
     begins, ends, strides = [], [], []
     ndim = len(shape)
+
     for dim, size in enumerate(shape):
-        s = 1  # stride always 1
-        # pick a random start < size
+        assert size > 0, "All dims must be > 0"
+
+        # ----- begin & end (positive stride case) -----
+        # choose a start < size
         b = random.randint(0, size - 1)
-        # choose a random end > b, ≤ size
-        e = random.randint(b + 1, size)
+
+        if always_nonempty:
+            # ensure at least one element: need e > b
+            e = random.randint(b + 1, size)
+        else:
+            # allow empty slices too (rare); still keep e in [0..size]
+            # bias toward non-empty
+            if random.random() < 0.9 and b + 1 <= size:
+                e = random.randint(b + 1, size)
+            else:
+                e = random.randint(0, size)
+
+        # ----- stride -----
+        if (dim == ndim - 1) and not allow_last_dim_stride:
+            s = 1
+        else:
+            s = random.randint(1, e - b)
+
         begins.append(b)
         ends.append(e)
         strides.append(s)
+
     return begins, ends, strides
 
 
@@ -68,9 +94,8 @@ def offset_increment_tensor(shape, offset=0, dtype=torch.int32, step=1):
     ).reshape(shape)
 
 
-@skip_for_blackhole("Fails on Blackhole. Issue #28021")
 @pytest.mark.parametrize("rank", range(1, 9))  # 1D … 8D
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_write_nd(rank, layout, device):
     base_seed = 2005
     random.seed(base_seed)
@@ -83,7 +108,7 @@ def test_slice_write_nd(rank, layout, device):
 
     # Destination and source (match slice shape)
     torch_out_ref = torch.zeros(shape, dtype=torch.bfloat16)
-    torch_src = offset_increment_tensor(torch_out_ref[slices].shape, dtype=torch.bfloat16)
+    torch_src = torch.full(torch_out_ref[slices].shape, 1, dtype=torch.bfloat16)
 
     # PyTorch ground truth
     torch_out_ref[slices] = torch_src

@@ -108,19 +108,22 @@
 #define MEM_TENSIX_ROUTING_TABLE_BASE (MEM_NOC_COUNTER_BASE + MEM_NOC_COUNTER_L1_SIZE)
 #define MEM_TENSIX_ROUTING_TABLE_SIZE 784
 
-// Tensix fabric connection metadata for workers
-#define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
-#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 656        // sizeof(tensix_fabric_connections_l1_info_t)
-#define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 400  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
-
 #define ROUTING_PATH_SIZE_1D 64
 // 2D uncompressed size is too large to fit in L1 memory
-#define COMPRESSED_ROUTING_PATH_SIZE_1D 0
-#define COMPRESSED_ROUTING_PATH_SIZE_2D 512
-#define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
+#define COMPRESSED_ROUTING_PATH_SIZE_1D 0    // sizeof(intra_mesh_routing_path_t<1, true>)
+#define COMPRESSED_ROUTING_PATH_SIZE_2D 512  // sizeof(intra_mesh_routing_path_t<2, true>)
+#define MEM_TENSIX_ROUTING_PATH_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
 #define MEM_TENSIX_ROUTING_PATH_BASE_1D MEM_TENSIX_ROUTING_PATH_BASE
 #define MEM_TENSIX_ROUTING_PATH_BASE_2D (MEM_TENSIX_ROUTING_PATH_BASE + ROUTING_PATH_SIZE_1D)
 #define MEM_TENSIX_ROUTING_PATH_SIZE (ROUTING_PATH_SIZE_1D + COMPRESSED_ROUTING_PATH_SIZE_2D)
+
+#define MEM_TENSIX_EXIT_NODE_TABLE_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
+#define MEM_TENSIX_EXIT_NODE_TABLE_SIZE 1024  // sizeof(exit_node_table_t)
+
+// Tensix fabric connection metadata for workers
+#define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_EXIT_NODE_TABLE_BASE + MEM_TENSIX_EXIT_NODE_TABLE_SIZE)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 656        // sizeof(tensix_fabric_connections_l1_info_t)
+#define MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO 400  // offsetof(tensix_fabric_connections_l1_info_t, read_write)
 
 // Packet header pool sizing constants
 #define PACKET_HEADER_MAX_SIZE 64
@@ -129,7 +132,7 @@
 
 // Packet header pool for fabric networking
 // Size: 64 * 6 * 2 * 2 = 1536
-#define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_ROUTING_PATH_BASE + MEM_TENSIX_ROUTING_PATH_SIZE)
+#define MEM_PACKET_HEADER_POOL_BASE (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 #define MEM_PACKET_HEADER_POOL_SIZE (PACKET_HEADER_MAX_SIZE * NUM_PACKET_HEADERS)
 #if (MEM_PACKET_HEADER_POOL_BASE % 16 != 0) || (MEM_PACKET_HEADER_POOL_SIZE % 16 != 0)
 #error "Packet header pool base and size must be 16-byte aligned"
@@ -137,6 +140,7 @@
 
 // Read-only reserved memory boundary for watcher checks
 #define MEM_MAP_READ_ONLY_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_OFFSET_OF_ALIGNED_INFO)
+// Read-write reserved memory boundary for watcher checks
 #define MEM_MAP_END (MEM_PACKET_HEADER_POOL_BASE + MEM_PACKET_HEADER_POOL_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address
@@ -192,8 +196,6 @@
 // This is now the maximum size available for your application
 #define MEM_ERISC_MAX_SIZE MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE
 
-// For your static assert, use the base of the lowest reserved section
-#define MEM_ERISC_TOP MEM_ERISC_FABRIC_ROUTER_CONFIG_BASE
 // Common Misc
 #define MEM_RETRAIN_COUNT_ADDR 0x7CC10
 #define MEM_RETRAIN_FORCE_ADDR 0x1EFC
@@ -256,12 +258,6 @@
 
 #define MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_AERISC_MAP_END
 #define MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH (MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE)
-
-// Used for Lite Fabric. Otherwise, Kernel config begins after MEM_AERISC_MAP_END and user data goes here.
-// Don't overwrite the scratch area. It's needed for initialization on cores over ethernet
-#define MEM_AERISC_LITE_FABRIC_CONFIG \
-    (MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH + MEM_ERISC_LOCAL_SIZE + MEM_ERISC_KERNEL_CONFIG_SIZE)
-#define MEM_AERISC_LITE_FABRIC_CONFIG_SIZE 73728
 
 #define MEM_AERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE
 #define MEM_SUBORDINATE_AERISC_STACK_MIN_SIZE MEM_ERISC_STACK_MIN_SIZE

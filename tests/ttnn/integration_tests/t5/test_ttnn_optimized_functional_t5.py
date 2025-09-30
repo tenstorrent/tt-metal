@@ -8,7 +8,7 @@ import torch
 import transformers
 
 from models.demos.grayskull.t5.tt import ttnn_optimized_functional_t5 as functional_t5
-from models.utility_functions import torch_random, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import torch_random, is_wormhole_b0, is_blackhole
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 

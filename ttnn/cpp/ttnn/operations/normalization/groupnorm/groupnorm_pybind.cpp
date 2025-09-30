@@ -57,7 +57,8 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                 num_out_blocks (int, optional): Defaults to `None`.
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
                 negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB's used in the sharded version of the kernel by overlapping the CB's used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).
-
+                use_welford (bool, optional): Defaults to `False`. If `True`, the Welford's algorithm is used to compute the mean and variance.
+                reciprocals (ttnn.Tensor, optional): Defaults to `None`. FP32 tensor containing pre-computed reciprocal values. Only valid when use_welford is True. Must be sharded to L1 memory in each core.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -69,34 +70,33 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - TILE, ROW_MAJOR
-
+                      - TILE, ROW_MAJOR
 
                 .. list-table:: weight (gamma) and bias (beta)
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 .. list-table:: input_mask
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16, BFLOAT8_B
-                        - TILE
+                      - TILE
 
                 .. list-table:: output_tensor
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - TILE, ROW_MAJOR
+                      - TILE, ROW_MAJOR
 
             Limitations:
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
@@ -253,6 +253,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("input_mask") = std::nullopt,
             py::arg("weight") = std::nullopt,
             py::arg("bias") = std::nullopt,
+            py::arg("reciprocals") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
@@ -260,7 +261,8 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("output_layout") = std::nullopt,
             py::arg("num_out_blocks") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("negative_mask") = std::nullopt});
+            py::arg("negative_mask") = std::nullopt,
+            py::arg("use_welford") = false});
 }
 void bind_normalization_group_norm(py::module& module) { bind_normalization_group_norm_operation(module); }
 

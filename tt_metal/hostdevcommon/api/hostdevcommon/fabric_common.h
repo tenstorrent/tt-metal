@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -117,8 +117,13 @@ struct __attribute__((packed)) compressed_route_2d_t {
 
 static_assert(sizeof(compressed_route_2d_t) == 2, "2D route must be 2 bytes");
 
+static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
+static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
+static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
+static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
+
 template <uint8_t dim, bool compressed>
-struct __attribute__((packed)) routing_path_t {
+struct __attribute__((packed)) intra_mesh_routing_path_t {
     static_assert(dim == 1 || dim == 2, "dim must be 1 or 2");
 
     // For 1D: Create LowLatencyPacketHeader pattern
@@ -136,11 +141,6 @@ struct __attribute__((packed)) routing_path_t {
     static const uint8_t WRITE_AND_FORWARD_WEST = 0b0010;
     static const uint8_t WRITE_AND_FORWARD_NORTH = 0b0100;
     static const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
-
-    static const uint16_t MAX_CHIPS_LOWLAT_1D = 16;
-    static const uint16_t MAX_CHIPS_LOWLAT_2D = 256;
-    static const uint16_t SINGLE_ROUTE_SIZE_1D = 4;
-    static const uint16_t SINGLE_ROUTE_SIZE_2D = 32;
 
     // Compressed routing uses much smaller encoding
     // 1D: 0 byte (num_hops passed from caller is the compressed info)
@@ -172,10 +172,15 @@ struct __attribute__((packed)) routing_path_t {
 #endif
 };
 // 16 chips * 4 bytes = 64
-static_assert(sizeof(routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
-static_assert(sizeof(routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
+static_assert(sizeof(intra_mesh_routing_path_t<1, false>) == 64, "1D uncompressed routing path must be 64 bytes");
+static_assert(sizeof(intra_mesh_routing_path_t<1, true>) == 0, "1D compressed routing path must be 0 bytes");
 // 256 chips * 2 bytes = 512
-static_assert(sizeof(routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
+static_assert(sizeof(intra_mesh_routing_path_t<2, true>) == 512, "2D compressed routing path must be 512 bytes");
+
+struct exit_node_table_t {
+    // Lookup table: nodes[mesh_id] returns the exit chip_id for that mesh
+    std::uint8_t nodes[MAX_NUM_MESHES];  // 1024 meshes * 1 byte = 1024 bytes
+};
 
 struct tensix_routing_l1_info_t {
     // TODO: https://github.com/tenstorrent/tt-metal/issues/28534

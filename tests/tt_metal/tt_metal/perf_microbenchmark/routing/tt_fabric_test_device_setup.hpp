@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -499,7 +499,7 @@ inline std::vector<uint32_t> TestDevice::generate_fabric_connection_args(
 }
 
 inline void TestDevice::create_sync_kernel() {
-    log_info(tt::LogTest, "creating sync kernel on node: {}", fabric_node_id_);
+    log_debug(tt::LogTest, "creating sync kernel on node: {}", fabric_node_id_);
 
     // TODO: fetch these dynamically
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
@@ -572,7 +572,7 @@ inline void TestDevice::create_sync_kernel() {
 
     // create sync kernel with local args
     sync_sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
-    log_info(tt::LogTest, "created sync kernel on core: {}", sync_core);
+    log_debug(tt::LogTest, "created sync kernel on core: {}", sync_core);
 }
 
 inline void TestDevice::create_sender_kernels() {
@@ -652,7 +652,7 @@ inline void TestDevice::create_sender_kernels() {
 
         // create kernel with local args
         sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
-        log_info(tt::LogTest, "created sender kernel on core: {}", core);
+        log_debug(tt::LogTest, "created sender kernel on core: {}", core);
     }
 }
 
@@ -690,12 +690,12 @@ inline void TestDevice::create_receiver_kernels() {
 
         receiver.create_kernel(
             coord_, ct_args, rt_args, local_args, receiver_memory_map_->get_local_args_address(), {});
-        log_info(tt::LogTest, "created receiver kernel on core: {}", core);
+        log_debug(tt::LogTest, "created receiver kernel on core: {}", core);
     }
 }
 
 inline void TestDevice::create_kernels() {
-    log_info(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
+    log_debug(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
     // create sync kernels
     if (global_sync_) {
         this->create_sync_kernel();

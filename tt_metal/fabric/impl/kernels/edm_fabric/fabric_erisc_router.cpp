@@ -750,7 +750,7 @@ FORCE_INLINE void receiver_forward_packet(
     uint8_t transaction_id) {
     constexpr bool ENABLE_STATEFUL_NOC_APIS =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
-        true;
+        !FORCE_ALL_PATHS_TO_USE_SAME_NOC && true;
 #else
         false;
 #endif
@@ -1601,7 +1601,8 @@ void run_sender_channel_step_impl(
                 // instead because these connections will be read/write counter based instead
                 local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
                 if (channel_connection_established) {
-                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
+                    local_sender_channel_worker_interface
+                        .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
                 } else {
                     local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
                     // If not connected, we update the read counter in L1 as well so the next connecting worker
@@ -1623,7 +1624,8 @@ void run_sender_channel_step_impl(
                     .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>();
             } else {
                 if (channel_connection_established) {
-                    local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
+                    local_sender_channel_worker_interface
+                        .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
                 } else {
                     ASSERT(
                         local_sender_channel_worker_interface.local_write_counter.counter >
@@ -2153,7 +2155,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[0]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[0],
-                get_credits_init_val<0>());
+                get_credits_init_val<0>(),
+                notify_worker_of_read_counter_update_src_address);
     }
     {
         auto connection_live_semaphore_ptr =
@@ -2166,7 +2169,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[1]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[1],
-                get_credits_init_val<1>());
+                get_credits_init_val<1>(),
+                notify_worker_of_read_counter_update_src_address);
     }
 #ifdef FABRIC_2D
     {
@@ -2180,7 +2184,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[2]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[2],
-                get_credits_init_val<2>());
+                get_credits_init_val<2>(),
+                notify_worker_of_read_counter_update_src_address);
     }
     {
         auto connection_live_semaphore_ptr =
@@ -2193,7 +2198,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[3]),
                 reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                 sender_channel_ack_cmd_buf_ids[3],
-                get_credits_init_val<3>());
+                get_credits_init_val<3>(),
+                notify_worker_of_read_counter_update_src_address);
     }
 #endif
     if constexpr (NUM_SENDER_CHANNELS == 3 || NUM_SENDER_CHANNELS == 5) {
@@ -2212,7 +2218,8 @@ void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
                         local_sender_flow_control_semaphores[VC1_SENDER_CHANNEL]),
                     reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
                     sender_channel_ack_cmd_buf_ids[VC1_SENDER_CHANNEL],
-                    get_credits_init_val<VC1_SENDER_CHANNEL>());
+                    get_credits_init_val<VC1_SENDER_CHANNEL>(),
+                    notify_worker_of_read_counter_update_src_address);
         }
     }
 }
@@ -2327,18 +2334,21 @@ FORCE_INLINE void teardown(
 
 void initialize_state_for_txq1_active_mode() {
     eth_enable_packet_mode(receiver_txq_id);
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        *reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counter_addrs[i]) = 0;
-        *reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counter_addrs[i]) = 0;
-    }
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
-        *reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counter_ptrs[i]) = 0;
-        *reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counter_ptrs[i]) = 0;
+        reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
+        reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)[i] = 0;
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
 }
+void initialize_state_for_txq1_active_mode_sender_side() {
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
+        reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
+    }
+}
 
 void kernel_main() {
+    set_l1_data_cache<true>();
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
@@ -2347,6 +2357,9 @@ void kernel_main() {
         constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
+        }
+        if constexpr (is_sender_channel_serviced[0]) {
+            initialize_state_for_txq1_active_mode_sender_side();
         }
     }
 
@@ -2698,7 +2711,7 @@ void kernel_main() {
                     receiver_channel_forwarding_data_cmd_buf_ids[0],
                     receiver_channel_forwarding_sync_cmd_buf_ids[0]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
-                if constexpr (NUM_ACTIVE_ERISCS == 1) {
+                if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc0[edm_index]
                         .template setup_edm_noc_cmd_buf<
                             tt::tt_fabric::edm_to_downstream_noc,
@@ -2751,7 +2764,7 @@ void kernel_main() {
             // If there is only one active erisc, then it is guaranteed we are the receiver channel
             // servicing core. Otherwise, in multi-erisc mode, this initialization happens later due
             // to a noc dependency. See the comment for the initialization that happens later in multi-erisc mode.
-            if constexpr (NUM_ACTIVE_ERISCS == 1) {
+            if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                 downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
                     tt::tt_fabric::edm_to_downstream_noc,
                     tt::tt_fabric::forward_and_local_write_noc_vc>();
@@ -2869,6 +2882,12 @@ void kernel_main() {
         }
     }
 
+    // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
+    // for connection.
+    if constexpr (num_downstream_tensix_connections) {
+        wait_for_notification((uint32_t)edm_local_tensix_sync_ptr_addr, num_downstream_tensix_connections);
+    }
+
     if constexpr (is_2d_fabric) {
         uint32_t has_downstream_edm = has_downstream_edm_vc0_buffer_connection & 0xF;
         uint32_t edm_index = 0;
@@ -2917,17 +2936,19 @@ void kernel_main() {
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
         // single erisc mode
-        for (size_t edm_index = 0; edm_index < NUM_USED_RECEIVER_CHANNELS_VC0; edm_index++) {
-            downstream_edm_noc_interfaces_vc0[edm_index]
-                .template setup_edm_noc_cmd_buf<
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc>();
-        }
-        if constexpr (enable_deadlock_avoidance) {
-            if (has_downstream_edm_vc1_buffer_connection) {
-                downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
-                    tt::tt_fabric::edm_to_downstream_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc>();
+        if constexpr (!FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
+            for (size_t edm_index = 0; edm_index < NUM_USED_RECEIVER_CHANNELS_VC0; edm_index++) {
+                downstream_edm_noc_interfaces_vc0[edm_index]
+                    .template setup_edm_noc_cmd_buf<
+                        tt::tt_fabric::edm_to_downstream_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+            }
+            if constexpr (enable_deadlock_avoidance) {
+                if (has_downstream_edm_vc1_buffer_connection) {
+                    downstream_edm_noc_interface_vc1.template setup_edm_noc_cmd_buf<
+                        tt::tt_fabric::edm_to_downstream_noc,
+                        tt::tt_fabric::forward_and_local_write_noc_vc>();
+                }
             }
         }
     }
@@ -2992,5 +3013,6 @@ void kernel_main() {
     // make sure all the noc transactions are acked before re-init the noc counters
     teardown(termination_signal_ptr, edm_status_ptr, receiver_channel_0_trid_tracker, receiver_channel_1_trid_tracker);
 
+    set_l1_data_cache<false>();
     WAYPOINT("DONE");
 }

@@ -10,7 +10,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 
-#include "tt-metalium/assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
 #include <tt_stl/small_vector.hpp>
@@ -60,7 +60,6 @@ ResultWithOptions result_to_result_with_options(
 }
 
 ResultWithOptions conv2d(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -85,7 +84,6 @@ ResultWithOptions conv2d(
     if (dram_slice_config_.has_value()) {
         return result_to_result_with_options(
             conv2d_DRAM(
-                queue_id,
                 input_tensor,
                 weight_tensor,
                 device,
@@ -110,7 +108,6 @@ ResultWithOptions conv2d(
     } else {
         return result_to_result_with_options(
             conv2d_L1(
-                queue_id,
                 input_tensor,
                 weight_tensor,
                 device,
@@ -144,7 +141,6 @@ ResultWithOptions conv2d(
 // number of such slices.
 // Conv2dConfig does not control the final output, but rather the conv2d_L1 function that is called internally.
 Result conv2d_DRAM(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -211,6 +207,7 @@ Result conv2d_DRAM(
                         .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
                         .input_datatype = input_tensor.dtype(),
                         .output_datatype = output_dtype,
+                        .input_layout = input_tensor.layout(),
                         .enable_bias = bias_tensor.has_value(),
                         .mm_conv = mm_conv,
                     },
@@ -423,12 +420,10 @@ Result conv2d_DRAM(
             ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
             mm_conv,
             compute_grid_size,
-            // Setting layout to TILE forces input_channels_alignment to 32.
-            //  The padded_slice op needs aligned reads from L1.
-            Layout::TILE));
+            input_tensor_on_device.layout(),
+            BufferType::DRAM));
 
         Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
-            queue_id,
             input_tensor_on_device,
             ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
             ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
@@ -445,7 +440,6 @@ Result conv2d_DRAM(
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
-                queue_id,
                 sliced_input_tensor,
                 // TODO: Add check to ensure that the shard_layout and memory_config are the same as the last slice to
                 // re-use the weights tensor.
@@ -488,7 +482,6 @@ Result conv2d_DRAM(
                     {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
         }
         ttnn::experimental::slice_write(
-            queue_id,
             sliced_output_tensor,
             dram_output_tensor,
             ttnn::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
@@ -511,7 +504,6 @@ Result conv2d_DRAM(
 }
 
 Result conv2d_L1(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_,
     const ttnn::Tensor& weight_tensor_,
     MeshDevice* device,
@@ -620,6 +612,7 @@ Result conv2d_L1(
     const uint32_t input_channels_alignment = get_input_channels_alignment(
         input_tensor_post_tm.memory_config().memory_layout(),
         input_tensor.layout(),
+        input_tensor.memory_config().buffer_type(),
         mm_conv,
         input_tensor_post_tm.memory_config());
     const uint32_t in_channels_padded = tt::round_up(
@@ -707,7 +700,7 @@ Result conv2d_L1(
         }
     }
 
-    // call optimized conv op or matmul micro op
+    // call conv op or matmul micro op
     bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
     TT_ASSERT(input_is_on_device);
 
@@ -738,7 +731,6 @@ Result conv2d_L1(
             }
         } else {
             Tensor halo_output = ttnn::halo(
-                queue_id,
                 input_tensor_post_tm,
                 sliding_window_config,
                 0,
@@ -761,7 +753,7 @@ Result conv2d_L1(
         }
 
         // call conv micro op
-        auto conv_output = optimized_conv_new(
+        auto conv_output = conv2d(
             input_tensor_post_tm,
             weight_tensor_on_device,
             bias_tensor_on_device,
@@ -780,7 +772,8 @@ Result conv2d_L1(
             conv_config.enable_weights_double_buffer,
             conv_config.full_inner_dim,
             conv_config.enable_activation_reuse,
-            conv_config.config_tensors_in_dram);
+            conv_config.config_tensors_in_dram,
+            conv_config.force_split_reader);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
@@ -841,7 +834,6 @@ Result conv2d_L1(
 }
 
 ResultWithOptions Conv2dOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -864,7 +856,6 @@ ResultWithOptions Conv2dOperation::invoke(
     bool return_output_dim,
     bool return_weights_and_bias) {
     return conv2d(
-        queue_id,
         input_tensor,
         weight_tensor,
         device,

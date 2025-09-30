@@ -12,167 +12,91 @@ To build and execute, you may use the following commands:
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/loopback
 ```
-## Device setup
 
-``` cpp
+## Mesh setup
+
+Create a 1x1 mesh device, obtain the mesh command queue, construct a workload and coordinate range, and create a program.
+
+```cpp
 constexpr int device_id = 0;
-IDevice* device = CreateDevice(device_id);
-```
-
-We instantiate a device to control our accelerator.
-
-## Program pre-compilation setup
-
-``` cpp
-CommandQueue& cq = device->command_queue();
+auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram();
 ```
 
-We first obtain the device's `CommandQueue` in order to use the fast dispatch capabilities of the software. This will be used when issuing commands for asynchronous reads/writes/program management.
-
-Next, we create a `Program` to be run on our accelerator. This is how we'll be keeping track of things in our session with the device.
-
 ## Create buffers in DRAM and L1
 
-Next, we need to declare buffers that we will use during execution. We will need:
+We allocate a single-tile L1 buffer and two DRAM buffers (each 50 tiles). Use a page size equal to one tile so transfers operate tile-by-tile.
 
--   An L1 buffer within the core itself that will act as a temporary single-tile buffer
--   A DRAM buffer that will house input data (50 tiles)
--   A DRAM buffer that will be written to with output data (50 tiles)
-
-``` cpp
+```cpp
 constexpr uint32_t num_tiles = 50;
 constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
 constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
 
-InterleavedBufferConfig l1_config{
-    .device = device,
-    .size = tile_size_bytes,  // Single tile only
-    .page_size = tile_size_bytes,
-    .buffer_type = BufferType::L1
-};
+distributed::DeviceLocalBufferConfig l1_config{ .page_size = tile_size_bytes, .buffer_type = BufferType::L1 };
+distributed::DeviceLocalBufferConfig dram_config{ .page_size = tile_size_bytes, .buffer_type = BufferType::DRAM };
+distributed::ReplicatedBufferConfig l1_buffer_config{ .size = tile_size_bytes };
+distributed::ReplicatedBufferConfig dram_buffer_config{ .size = dram_buffer_size };
 
-auto l1_buffer = CreateBuffer(l1_config);
+auto l1_buffer = distributed::MeshBuffer::create(l1_buffer_config, l1_config, mesh_device.get());
+auto input_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+auto output_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
 ```
 
-The L1 buffer holds just one tile, while the DRAM buffers each hold 50 tiles.
+## Data movement kernel
 
-Let's make the input and output DRAM buffers.
+Declare the data movement kernel on core `{0,0}` that performs the copy.
 
-``` cpp
-InterleavedBufferConfig dram_config{
-    .device = device,
-    .size = dram_buffer_size,  // 50 tiles
-    .page_size = tile_size_bytes,  // Page size is one tile
-    .buffer_type = BufferType::DRAM
-};
-
-auto input_dram_buffer = CreateBuffer(dram_config);
-auto output_dram_buffer = CreateBuffer(dram_config);
-```
-
-## Building a data movement kernel
-
-Declare a kernel for data movement. We'll use a pre-written kernel that copies data from one place to another.
-
-We will be using the accelerator core with coordinates `{0, 0}`.
-
-``` cpp
+```cpp
 constexpr CoreCoord core = {0, 0};
-
 std::vector<uint32_t> dram_copy_compile_time_args;
-TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
-TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
-KernelHandle dram_copy_kernel_id = CreateKernel(
+TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+auto dram_copy_kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
     core,
-    DataMovementConfig{
-        .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::RISCV_0_default,
-        .compile_args = dram_copy_compile_time_args});
+    DataMovementConfig{ .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = dram_copy_compile_time_args });
 ```
 
-## Sending real data into DRAM
+## Upload input data
 
-``` cpp
+Upload a randomly generated bfloat16 vector to the input DRAM buffer. Use non-blocking upload to overlap with host setup.
+
+```cpp
 std::vector<bfloat16> input_vec(elements_per_tile * num_tiles);
-std::mt19937 rng(std::random_device{}());
-std::uniform_real_distribution<float> distribution(0.0f, 100.0f);
-for (auto& val : input_vec) {
-    val = bfloat16(distribution(rng));
-}
-
-EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
+// ... fill input_vec ...
+distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
 ```
 
-Send in a randomly-generated bfloat16 vector that will act as our input data tensor.
+## Set runtime arguments
 
-We use a non-blocking call so we can continue setting up our program.
-
-## Setting runtime arguments for the data movement kernel
-
-``` cpp
-const std::vector<uint32_t> runtime_args = {
-    l1_buffer->address(),
-    input_dram_buffer->address(),
-    output_dram_buffer->address(),
-    num_tiles
-};
-
-SetRuntimeArgs(
-    program,
-    dram_copy_kernel_id,
-    core,
-    runtime_args
-);
+```cpp
+const std::vector<uint32_t> runtime_args = { l1_buffer->address(), input_dram_buffer->address(), output_dram_buffer->address(), num_tiles };
+SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 ```
 
-We now set runtime arguments for our data movement kernel. For this
-particular kernel, we have to provide:
+## Launch and wait
 
--   Where the L1 buffer starts (memory address)
--   Where the input DRAM buffer starts (memory address)
--   Where the output DRAM buffer starts (memory address)
--   The number of tiles to copy
+Enqueue the program as a mesh workload (non-blocking), then wait for completion.
 
-## Running the program
-
-``` cpp
-EnqueueProgram(cq, program, /*blocking=*/false);
-Finish(cq);
-// NOTE: The above is equivalent to the following single line:
-// EnqueueProgram(cq, program, /*blocking=*/true);
+```cpp
+workload.add_program(device_range, std::move(program));
+distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+distributed::Finish(cq);
 ```
 
-Now we finally launch our program. The `Finish` call waits for the
-program to return a finished status.
+## Read back and verify
 
-## Launch and verify output
+Read the output buffer back from the shard at `{0,0}` and compare with the input.
 
-Then we can finally read back the data from the output buffer and assert that it matches what we sent!
-
-``` cpp
+```cpp
 std::vector<bfloat16> result_vec;
-EnqueueReadBuffer(cq, output_dram_buffer, result_vec, /*blocking=*/true);
-
-for (int i = 0; i < input_vec.size(); i++) {
-    if (input_vec[i] != result_vec[i]) {
-        pass = false;
-        break;
-    }
-}
+distributed::ReadShard(cq, result_vec, output_dram_buffer, distributed::MeshCoordinate(0, 0), /*blocking*/ true);
+// compare result_vec to input_vec
 ```
 
-We use a blocking call this time because we want to get all the data before doing a comparison.
-
-## Validation and teardown
-
-``` cpp
-pass &= CloseDevice(device);
-```
-
-We now use `CloseDevice` to teardown our connection to the Tenstorrent device.
-
-Now we can start adding some compute to our program. Please refer to the `Eltwise SFPU example`.
+Finally, close the mesh device after validation.

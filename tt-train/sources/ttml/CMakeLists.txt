@@ -23,6 +23,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
@@ -57,6 +59,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
@@ -108,6 +112,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
@@ -130,6 +136,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
@@ -164,6 +172,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/tokenizer_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
@@ -233,6 +243,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # SDPA Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -364,9 +382,8 @@ target_link_libraries(
         z
         pthread
         atomic
-        Metalium::Metal
-        Metalium::TTNN
-        Metalium::TTNNCPP
+        TT::Metalium
+        TTNN::TTNN
         Python3::Python
         fmt::fmt-header-only
         enchantum::enchantum

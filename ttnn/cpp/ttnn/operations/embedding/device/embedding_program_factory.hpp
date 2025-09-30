@@ -10,7 +10,6 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -79,6 +78,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -151,9 +151,9 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     }
 
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    uint32_t weights_single_tile_size = tt::tt_metal::detail::TileSize(weights_cb_data_format);
+    uint32_t weights_single_tile_size = tt::tile_size(weights_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     // Hardcoded limit to reduce L1 usage. Should be updated to be tuned based on overall L1 usage
     constexpr uint32_t max_double_buffer_tiles = 64;
@@ -441,7 +441,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     tt::DataFormat weights_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(weights.dtype());
 
     constexpr uint32_t out_cb_index = tt::CBIndex::c_0;
-    uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
+    uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
     uint32_t out_cb_size;
     if (output_sharded) {
         out_cb_size = output.buffer()->aligned_size_per_bank();
@@ -606,6 +606,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     Tensor& output,
     EmbeddingsType embeddings_type,
     std::optional<uint32_t> pad_token) {
+    using namespace tt::constants;
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
