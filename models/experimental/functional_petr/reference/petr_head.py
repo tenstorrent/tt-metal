@@ -258,7 +258,10 @@ class PETRHead(nn.Module):
         """
 
         x = mlvl_feats[0]
+        # batch_size, num_cams = 1,1
         batch_size, num_cams = x.size(0), x.size(1)
+        print(f"batch_size: {batch_size}")
+        print(f"num_cams: {num_cams}")
         input_img_h, input_img_w = img_metas[0]["pad_shape"]
         masks = x.new_ones((batch_size, num_cams, input_img_h, input_img_w))
         for img_id in range(batch_size):

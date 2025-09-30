@@ -300,6 +300,10 @@ class ttnn_PETRHead:
 
         x = mlvl_feats[0]
         batch_size, num_cams = x.shape[0], x.shape[1]
+        # print(f"x: {x}")
+        # print(f"img_metas: {img_metas}")
+        print(f"batch_size: {batch_size}")
+        print(f"num_cams: {num_cams}")
         input_img_h, input_img_w = img_metas[0]["pad_shape"]
         x = ttnn.to_torch(x)
         masks = x.new_ones((batch_size, num_cams, input_img_h, input_img_w))
