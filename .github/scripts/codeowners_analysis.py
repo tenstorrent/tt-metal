@@ -59,8 +59,11 @@ def analyze_codeowners(changed_files_path, codeowners_path):
 
     print(f"Analyzing {len(changed_files)} changed files using codeowners package...")
 
-    # Use codeowners package
-    co = CodeOwners(codeowners_path)
+    # Use codeowners package - read file content first
+    with open(codeowners_path, "r") as f:
+        codeowners_content = f.read()
+
+    co = CodeOwners(codeowners_content)
 
     # Collect all owners from matching lines
     team_groups = set()
@@ -70,15 +73,18 @@ def analyze_codeowners(changed_files_path, codeowners_path):
         matching_lines = list(co.matching_lines(file_path))
         if matching_lines:
             print(f"Found {len(matching_lines)} matching lines for {file_path}")
-            for line in matching_lines:
-                for owner in line.owners:
-                    if "/" in owner:
-                        # This is a team
-                        team_groups.add(owner)
-                    else:
-                        # This is an individual - get full name
-                        full_name = get_user_full_name(owner)
-                        individual_owners.add(full_name)
+            for line_tuple in matching_lines:
+                # matching_lines returns tuples: (owners, line_number, pattern, section_name)
+                if len(line_tuple) >= 2:
+                    owners_list = line_tuple[0]  # First element is the owners list
+                    for owner_type, owner in owners_list:
+                        if owner_type in ["USERNAME", "EMAIL"]:
+                            # This is an individual - get full name
+                            full_name = get_user_full_name(owner)
+                            individual_owners.add(full_name)
+                        elif owner_type == "TEAM":
+                            # This is a team
+                            team_groups.add(owner)
         else:
             print(f"No matches found for {file_path}")
 
