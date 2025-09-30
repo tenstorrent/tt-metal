@@ -549,12 +549,12 @@ on:
       suite_name:
         description: "Which sweep suite to run?"
         type: string
+      skip_on_timeout:
+        description: "Skip remaining tests in running suite after first timeout?"
+        type: boolean
+        default: false
       upload_results:
         description: "Upload sweep results to Superset?"
-        type: boolean
-        default: true
-      skip_on_timeout:
-        description: "Skip tests on timeout instead of failing?"
         type: boolean
         default: true
   schedule:
