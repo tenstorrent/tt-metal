@@ -291,11 +291,6 @@ tt::tt_metal::Tensor make_metal_tensor(
                                          tensor_data_type,
                                          &numpy_data,
                                          &shape_container]<typename MetalType>() -> tt::tt_metal::Tensor {
-            NB_COND_THROW(
-                (same_as_one_of<MetalType, float, bfloat16>()),
-                nb::exception_type::type_error,
-                "Row major not supported for float types");
-
             const tt::tt_metal::Shape tensor_shape(shape_container);
             const tt::tt_metal::MemoryConfig tensor_memory_config{};
             // Our tensor will initially be created from row-major numpy data, regardless of target layout
@@ -307,7 +302,7 @@ tt::tt_metal::Tensor make_metal_tensor(
 
             std::span<const NumpyType> numpy_data_span(
                 static_cast<const NumpyType*>(numpy_data.data()), numpy_data.size());
-            if constexpr (!std::same_as<MetalType, NumpyType>) {
+            if constexpr (!std::is_same_v<MetalType, NumpyType>) {
                 std::vector<MetalType> converted_data;
                 converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
 
