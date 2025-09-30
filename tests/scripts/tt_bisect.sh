@@ -165,10 +165,12 @@ while [[ "$found" == "false" ]]; do
       ;;
     *"There are only 'skip'ped commits left to test."*)
       echo "Bisect inconclusive: only skipped commits left."
+      echo "Last bisect output: $first_line"
       break
       ;;
     "")
       echo "git bisect produced no output; stopping to avoid an infinite loop."
+      echo "Last bisect output: $first_line"
       break
       ;;
   esac
