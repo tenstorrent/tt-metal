@@ -7,8 +7,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_ccl)
 set_target_properties(
     ttnn_op_ccl
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
@@ -22,7 +22,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES ccl_op_fusion.hpp
+        FILES
+            ccl_common.hpp
+            ccl_host_datastructures.hpp
+            ccl_host_types.hpp
+            ccl_op_fusion.hpp
+            common/host/ccl_command_stream_builders.hpp
+            common/types/ccl_types.hpp
+            common/uops/ccl_command.hpp
+            mesh_partition/mesh_partition.hpp
+            shared_with_host/hetergeneous_data_structs.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -70,12 +79,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_ccl PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_ccl
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_ccl PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS

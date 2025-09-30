@@ -7,7 +7,7 @@ set_target_properties(
     ttnn_op_sliding_window
     PROPERTIES
         VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+            false
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.

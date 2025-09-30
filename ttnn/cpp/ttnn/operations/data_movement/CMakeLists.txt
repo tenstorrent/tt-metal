@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
 set_target_properties(
     ttnn_op_data_movement
     PROPERTIES
-        VERIFY_INTERFACE_HEADER_SETS
-            FALSE
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -37,7 +37,9 @@ target_sources(
             bcast/bcast.hpp
             bcast/bcast_types.hpp
             concat/concat.hpp
+            copy/copy.hpp
             copy/device/copy_device_operation.hpp
+            pad/pad.hpp
             permute/permute.hpp
             repeat/repeat.hpp
             reshape_view/reshape.hpp
@@ -189,12 +191,7 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_data_movement PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_data_movement
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_data_movement PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
 install(
     TARGETS
