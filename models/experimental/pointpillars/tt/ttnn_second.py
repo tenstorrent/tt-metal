@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.functional_pointpillars.tt.common import TtConv
+from models.experimental.pointpillars.tt.common import TtConv
 from typing import Optional, Sequence
 
 

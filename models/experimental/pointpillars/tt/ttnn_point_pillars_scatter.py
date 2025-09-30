@@ -18,8 +18,9 @@ class TtPointPillarsScatter:
 
     def __call__(self, voxel_features, coors, batch_size):
         batch_canvas = []
+        batch_size = 1
         for batch_itt in range(batch_size):
-            canvas = ttnn.zeros([self.in_channels, self.nx * self.ny], dtype=voxel_features.dtype, device=self.device)
+            canvas = ttnn.zeros([self.in_channels, self.nx * self.ny], dtype=ttnn.bfloat16, device=self.device)
 
             # Only include non-empty pillars
             coors = ttnn.typecast(coors, dtype=ttnn.bfloat16)
@@ -41,7 +42,6 @@ class TtPointPillarsScatter:
             indices = this_coors[:, 2] * self.nx + this_coors[:, 3]
             indices = ttnn.from_torch(indices, dtype=ttnn.uint32, device=self.device)
 
-            voxel_features = ttnn.typecast(voxel_features, dtype=ttnn.bfloat16)
             voxels = ttnn.embedding(row_indices, voxel_features)
             voxels = ttnn.squeeze(voxels, dim=0)
             voxels_t = ttnn.permute(voxels, (1, 0))  # PCC: 0.9999981845508428

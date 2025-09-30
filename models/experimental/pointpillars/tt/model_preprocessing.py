@@ -2,18 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import torch
-import pytest
-from loguru import logger
+import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import run_for_wormhole_b0
-from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
-from models.experimental.functional_pointpillars.reference.mvx_faster_rcnn import MVXFasterRCNN
-from models.experimental.functional_pointpillars.reference.second import SECOND
-from models.experimental.functional_pointpillars.tt.ttnn_mvx_faster_rcnn import TtMVXFasterRCNN
-from models.experimental.functional_pointpillars.tt.ttnn_point_pillars_utils import TtLiDARInstance3DBoxes
+
+from models.experimental.pointpillars.reference.fpn import FPN
+from models.experimental.pointpillars.reference.second import SECOND
+from models.experimental.pointpillars.reference.hard_vfe import HardVFE
+from models.experimental.pointpillars.reference.anchor3d_head import Anchor3DHead
+from models.experimental.pointpillars.reference.mvx_faster_rcnn import MVXFasterRCNN
+
+from ttnn.model_preprocessing import preprocess_linear_weight
 
 
 def fold_batch_norm2d_into_conv2d(conv, bn):
@@ -39,6 +38,63 @@ def fold_batch_norm2d_into_conv2d(conv, bn):
 def create_custom_preprocessor(device):
     def custom_preprocessor(model, name, ttnn_module_args):
         parameters = {}
+        if isinstance(model, Anchor3DHead):
+            parameters["conv_cls"] = {}
+            parameters["conv_cls"]["weight"] = ttnn.from_torch(model.conv_cls.weight)
+            parameters["conv_cls"]["bias"] = ttnn.from_torch(
+                model.conv_cls.bias.reshape(1, 1, 1, -1),
+            )
+
+            parameters["conv_reg"] = {}
+            parameters["conv_reg"]["weight"] = ttnn.from_torch(model.conv_reg.weight)
+            parameters["conv_reg"]["bias"] = ttnn.from_torch(
+                model.conv_reg.bias.reshape(1, 1, 1, -1),
+            )
+
+            parameters["conv_dir_cls"] = {}
+            parameters["conv_dir_cls"]["weight"] = ttnn.from_torch(model.conv_dir_cls.weight)
+            parameters["conv_dir_cls"]["bias"] = ttnn.from_torch(
+                model.conv_dir_cls.bias.reshape(1, 1, 1, -1),
+            )
+
+        if isinstance(model, FPN):
+            parameters["lateral_convs"] = {}
+            for index, child in enumerate(model.lateral_convs):
+                parameters["lateral_convs"][index] = {}
+                parameters["lateral_convs"][index]["ConvModule"] = {}
+                conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.conv, child.bn)
+                parameters["lateral_convs"][index]["ConvModule"]["weight"] = ttnn.from_torch(conv_weight)
+                parameters["lateral_convs"][index]["ConvModule"]["bias"] = ttnn.from_torch(
+                    conv_bias.reshape(1, 1, 1, -1),
+                )
+            parameters["fpn_convs"] = {}
+            for index, child in enumerate(model.fpn_convs):
+                parameters["fpn_convs"][index] = {}
+                parameters["fpn_convs"][index]["ConvModule"] = {}
+                conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.conv, child.bn)
+                parameters["fpn_convs"][index]["ConvModule"]["weight"] = ttnn.from_torch(conv_weight)
+                parameters["fpn_convs"][index]["ConvModule"]["bias"] = ttnn.from_torch(
+                    conv_bias.reshape(1, 1, 1, -1),
+                )
+
+        if isinstance(model, HardVFE):
+            parameters["vfe_layers"] = {}
+            for index, child in enumerate(model.vfe_layers):
+                parameters["vfe_layers"][index] = {}
+                # As we are using torch batch_norm1d the norm weights are torch
+                parameters["vfe_layers"][index]["norm"] = {}
+                parameters["vfe_layers"][index]["norm"] = child.norm
+                # parameters["vfe_layers"][index]["norm"]["bias"] = child.norm.weight
+
+                parameters["vfe_layers"][index]["linear"] = {}
+                parameters["vfe_layers"][index]["linear"]["weight"] = preprocess_linear_weight(
+                    child.linear.weight, dtype=ttnn.bfloat16
+                )
+                parameters["vfe_layers"][index]["linear"]["weight"] = ttnn.to_device(
+                    parameters["vfe_layers"][index]["linear"]["weight"], device=device
+                )
+                parameters["vfe_layers"][index]["linear"]["bias"] = None
+
         if isinstance(model, MVXFasterRCNN):
             pts_voxel_encoder = {}  # HardVFE
             pts_middle_encoder = {}  # PointPillarsScatter
@@ -122,100 +178,17 @@ def create_custom_preprocessor(device):
             parameters["pts_neck"] = pts_neck
             parameters["pts_bbox_head"] = pts_bbox_head
 
+        if isinstance(model, SECOND):
+            parameters["blocks"] = {}
+            for index, child in enumerate(model.blocks):
+                parameters["blocks"][index] = {}
+                for i in range(0, len(child), 3):
+                    conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child[i], child[i + 1])
+                    parameters["blocks"][index][i] = {}
+                    parameters["blocks"][index][i]["weight"] = ttnn.from_torch(conv_weight)
+                    parameters["blocks"][index][i]["bias"] = ttnn.from_torch(
+                        conv_bias.reshape(1, 1, 1, -1),
+                    )
         return parameters
 
     return custom_preprocessor
-
-
-@pytest.mark.parametrize(
-    "use_pretrained_weight",
-    [
-        True,
-    ],
-)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@run_for_wormhole_b0()
-def test_ttnn_mvx_faster_rcnn(device, use_pretrained_weight, reset_seeds):
-    reference_model = MVXFasterRCNN(
-        pts_voxel_encoder=True,
-        pts_middle_encoder=True,
-        pts_backbone=True,
-        pts_neck=True,
-        pts_bbox_head=True,
-        train_cfg=None,
-    )
-    if use_pretrained_weight == True:
-        state_dict = torch.load(
-            "/home/ubuntu/punith/tt-metal/hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth"
-        )["state_dict"]
-        reference_model.load_state_dict(state_dict)
-    reference_model.eval()
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device)
-    )
-
-    batch_inputs_dict = torch.load("models/experimental/functional_pointpillars/batch_inputs_dict.pt")
-    # print("batch_inputs_dict",batch_inputs_dict["voxels"]['coors'].shape,batch_inputs_dict["voxels"]['coors'].dtype)
-
-    batch_data_samples_modified = torch.load(
-        "models/experimental/functional_pointpillars/batch_input_metas_modified.pt"
-    )  # modified
-    # print("batch_data_samples_modified", batch_data_samples_modified)
-
-    reference_output = reference_model(
-        batch_inputs_dict=batch_inputs_dict, batch_data_samples=batch_data_samples_modified
-    )
-
-    ttnn_batch_inputs_dict = batch_inputs_dict.copy()
-    ttnn_batch_inputs_dict["points"][0] = ttnn.from_torch(
-        ttnn_batch_inputs_dict["points"][0], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
-    )
-    ttnn_batch_inputs_dict["voxels"]["num_points"] = ttnn.from_torch(
-        ttnn_batch_inputs_dict["voxels"]["num_points"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32, device=device
-    )
-    ttnn_batch_inputs_dict["voxels"]["voxel_centers"] = ttnn.from_torch(
-        ttnn_batch_inputs_dict["voxels"]["voxel_centers"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
-    )
-    ttnn_batch_inputs_dict["voxels"]["voxels"] = ttnn.from_torch(
-        ttnn_batch_inputs_dict["voxels"]["voxels"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
-    )
-    ttnn_batch_inputs_dict["voxels"]["coors"] = ttnn.from_torch(
-        ttnn_batch_inputs_dict["voxels"]["coors"], layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32, device=device
-    )
-    ttnn_batch_data_samples_modified = batch_data_samples_modified.copy()
-    ttnn_batch_data_samples_modified[0]["box_type_3d"] = TtLiDARInstance3DBoxes
-
-    ttnn_model = TtMVXFasterRCNN(
-        pts_voxel_encoder=True,
-        pts_middle_encoder=True,
-        pts_backbone=True,
-        pts_neck=True,
-        pts_bbox_head=True,
-        train_cfg=None,
-        parameters=parameters,
-        device=device,
-    )
-    ttnn_output = ttnn_model(
-        batch_inputs_dict=ttnn_batch_inputs_dict, batch_data_samples=ttnn_batch_data_samples_modified
-    )
-
-    reference_output_final = reference_model.pts_bbox_head.predict(reference_output, batch_data_samples_modified)
-    for i in range(len(ttnn_output)):
-        for j in range(len(ttnn_output[i])):
-            ttnn_output[i][j] = ttnn.to_torch(ttnn_output[i][j])
-            ttnn_output[i][j] = ttnn_output[i][j].permute(0, 3, 1, 2)
-            ttnn_output[i][j] = ttnn_output[i][j].to(dtype=torch.float)
-
-    ttnn_output_final = ttnn_model.pts_bbox_head.predict(ttnn_output, ttnn_batch_data_samples_modified)
-
-    print("reference_output_final", reference_output_final[0]["labels_3d"].shape)
-    print("ttnn_output_final", ttnn_output_final[0]["labels_3d"].shape)
-
-    for i in range(len(ttnn_output)):
-        for j in range(len(ttnn_output[i])):
-            output_temp = ttnn_output[i][j]
-            # output_temp=ttnn.to_torch(output_temp)
-            # output_temp=output_temp.permute(0,3,1,2)
-            passing, pcc = assert_with_pcc(reference_output[i][j], output_temp, 0.97)
-            logger.info(f"Passing: {passing}, PCC: {pcc}")

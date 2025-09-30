@@ -4,7 +4,7 @@
 
 from typing import List, Union
 import torch.nn.functional as F
-from models.experimental.functional_pointpillars.tt.common import TtConv
+from models.experimental.pointpillars.tt.common import TtConv
 import ttnn
 import math
 

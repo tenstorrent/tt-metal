@@ -5,12 +5,12 @@
 from typing import Optional, Sequence, Tuple
 
 import torch
-from torch import Tensor
-from models.experimental.functional_pointpillars.tt.ttnn_point_pillars_utils import get_paddings_indicator
-import ttnn
+from torch import Tensor, nn
+import torch.nn.functional as F
+from models.experimental.pointpillars.reference.point_pillars_utils import get_paddings_indicator
 
 
-class TtVFELayer:
+class VFELayer(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -18,60 +18,40 @@ class TtVFELayer:
         norm_cfg: Optional[dict] = dict(type="BN1d", eps=1e-3, momentum=0.01),
         max_out: Optional[bool] = True,
         cat_max: Optional[bool] = True,
-        parameters=None,
-        device=None,
     ):
-        self.device = device
-        self.parameters = parameters
+        super(VFELayer, self).__init__()
         self.cat_max = cat_max
         self.max_out = max_out
         # self.units = int(out_channels / 2)
 
-        self.norm = parameters[
-            "norm"
-        ]  # nn.BatchNorm1d(out_channels, eps=norm_cfg["eps"], momentum=norm_cfg["momentum"])
+        self.norm = nn.BatchNorm1d(out_channels, eps=norm_cfg["eps"], momentum=norm_cfg["momentum"])
+        self.linear = nn.Linear(in_channels, out_channels, bias=False)
 
-        self.linear = ttnn.linear
-
-    def __call__(self, inputs):
-        device = self.device
+    def forward(self, inputs: Tensor) -> Tensor:
         # [K, T, 7] tensordot [7, units] = [K, T, units]
         voxel_count = inputs.shape[1]
 
-        x = self.linear(inputs, self.parameters["linear"]["weight"], memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        print("x: ", x.shape)
-        x = ttnn.permute(x, (0, 2, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        x = ttnn.to_torch(x)
-        x = self.norm(x)
-        x = ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        # x = ttnn.from_torch(
-        #     self.norm(ttnn.to_torch(ttnn.permute(x, (0, 2, 1)))),
-        #     device=device,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     dtype=ttnn.bfloat16,
-        # )
-        x = ttnn.permute(x, (0, 2, 1))
-        pointwise = ttnn.relu(x)
-        ttnn.deallocate(x)
+        x = self.linear(inputs)
+        x = self.norm(x.permute(0, 2, 1).contiguous()).permute(0, 2, 1).contiguous()
+        pointwise = F.relu(x)
         # [K, T, units]
         if self.max_out:
-            aggregated = ttnn.max(pointwise, dim=1, keepdim=True)
+            aggregated = torch.max(pointwise, dim=1, keepdim=True)[0]
         else:
             # this is for fusion layer
             return pointwise
 
         if not self.cat_max:
-            return ttnn.squeeze(aggregated, dim=1)
+            return aggregated.squeeze(1)
         else:
             # [K, 1, units]
-            repeated = ttnn.repeat(aggregated, [1, voxel_count, 1])
-            concatenated = ttnn.concat([pointwise, repeated], dim=2)
+            repeated = aggregated.repeat(1, voxel_count, 1)
+            concatenated = torch.cat([pointwise, repeated], dim=2)
             # [K, T, 2 * units]
             return concatenated
 
 
-class TtHardVFE:
+class HardVFE(nn.Module):
     def __init__(
         self,
         in_channels: int = 4,
@@ -85,10 +65,8 @@ class TtHardVFE:
         mode: str = "max",
         fusion_layer: dict = None,
         return_point_feats: bool = False,
-        parameters=None,
-        device=None,
     ):
-        self.device = device
+        super(HardVFE, self).__init__()
         assert len(feat_channels) > 0
         if with_cluster_center:
             in_channels += 3
@@ -128,77 +106,58 @@ class TtHardVFE:
             else:
                 max_out = True
                 cat_max = True
-            vfe_layers.append(
-                TtVFELayer(
-                    in_filters,
-                    out_filters,
-                    norm_cfg=norm_cfg,
-                    max_out=max_out,
-                    cat_max=cat_max,
-                    parameters=parameters["vfe_layers"][i],
-                    device=device,
-                )
-            )
-        self.vfe_layers = vfe_layers
+            vfe_layers.append(VFELayer(in_filters, out_filters, norm_cfg=norm_cfg, max_out=max_out, cat_max=cat_max))
+            self.vfe_layers = nn.ModuleList(vfe_layers)
         self.num_vfe = len(vfe_layers)
 
         self.fusion_layer = None
         if fusion_layer is not None:  # fusion_layer is None
             self.fusion_layer = MODELS.build(fusion_layer)
 
-    def __call__(
+    def forward(
         self,
         features: Tensor,
         num_points: Tensor,
         coors: Tensor,
         img_feats: Optional[Sequence[Tensor]] = None,
         img_metas: Optional[dict] = None,
+        *args,
+        **kwargs,
     ) -> tuple:
-        device = self.device
         features_ls = [features]
         # Find distance of x, y, and z from cluster center
         if self._with_cluster_center:
-            num_points_bf16 = ttnn.from_device(num_points)
-            num_points_bf16 = ttnn.to_dtype(num_points_bf16, dtype=ttnn.bfloat16)
-            num_points_bf16 = ttnn.to_device(num_points_bf16, device=device)
-            points_mean = ttnn.div(
-                ttnn.sum(features[:, :, :3], dim=1, keepdim=1), ttnn.reshape(num_points_bf16, (-1, 1, 1))
-            )
+            points_mean = features[:, :, :3].sum(dim=1, keepdim=True) / num_points.type_as(features).view(-1, 1, 1)
             # TODO: maybe also do cluster for reflectivity
-            f_cluster = ttnn.sub(features[:, :, :3], points_mean)
+            f_cluster = features[:, :, :3] - points_mean
             features_ls.append(f_cluster)
 
         # Find distance of x, y, and z from pillar center
         if self._with_voxel_center:
-            f_center = ttnn.zeros((features.shape[0], features.shape[1], 3), device=device)
-            f_center = ttnn.to_torch(f_center)
-            f_center[:, :, 0] = ttnn.to_torch(features)[:, :, 0] - (
-                ttnn.to_torch(coors)[:, 3].unsqueeze(1) * self.vx + self.x_offset
+            f_center = features.new_zeros(size=(features.size(0), features.size(1), 3))
+            f_center[:, :, 0] = features[:, :, 0] - (
+                coors[:, 3].type_as(features).unsqueeze(1) * self.vx + self.x_offset
             )
-            f_center[:, :, 1] = ttnn.to_torch(features)[:, :, 1] - (
-                ttnn.to_torch(coors)[:, 2].unsqueeze(1) * self.vy + self.y_offset
+            f_center[:, :, 1] = features[:, :, 1] - (
+                coors[:, 2].type_as(features).unsqueeze(1) * self.vy + self.y_offset
             )
-            f_center[:, :, 2] = ttnn.to_torch(features)[:, :, 2] - (
-                ttnn.to_torch(coors)[:, 1].unsqueeze(1) * self.vz + self.z_offset
+            f_center[:, :, 2] = features[:, :, 2] - (
+                coors[:, 1].type_as(features).unsqueeze(1) * self.vz + self.z_offset
             )
-            f_center = ttnn.from_torch(f_center, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
             features_ls.append(f_center)
 
         if self._with_distance:
             points_dist = torch.norm(features[:, :, :3], 2, 2, keepdim=True)
             features_ls.append(points_dist)
-        # Combine together feature decorations
-        voxel_feats = ttnn.concat(features_ls, dim=-1)
-        for i in range(len(features_ls)):
-            ttnn.deallocate(features_ls[i])
-        voxel_count = voxel_feats.shape[1]
 
+        # Combine together feature decorations
+        voxel_feats = torch.cat(features_ls, dim=-1)
+        # The feature decorations were calculated without regard to whether
+        # pillar was empty.
+        # Need to ensure that empty voxels remain set to zeros.
+        voxel_count = voxel_feats.shape[1]
         mask = get_paddings_indicator(num_points, voxel_count, axis=0)
-        mask = ttnn.from_device(mask)
-        mask = ttnn.to_dtype(mask, dtype=ttnn.bfloat16)
-        mask = ttnn.to_device(mask, device=device)
-        voxel_feats = ttnn.multiply(voxel_feats, ttnn.unsqueeze(mask, -1))
-        ttnn.deallocate(mask)
+        voxel_feats *= mask.unsqueeze(-1).type_as(voxel_feats)
 
         for i, vfe in enumerate(self.vfe_layers):
             voxel_feats = vfe(voxel_feats)

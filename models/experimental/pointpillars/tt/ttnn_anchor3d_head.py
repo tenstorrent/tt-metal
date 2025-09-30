@@ -6,14 +6,14 @@ import warnings
 
 import numpy as np
 
-from models.experimental.functional_pointpillars.tt.ttnn_point_pillars_utils import (
+from models.experimental.pointpillars.tt.ttnn_point_pillars_utils import (
     TtDeltaXYZWLHRBBoxCoder,
     multi_apply,
     TtBase3DDenseHead,
     TtAlignedAnchor3DRangeGenerator,
 )
 
-from models.experimental.functional_pointpillars.tt.common import TtConv
+from models.experimental.pointpillars.tt.common import TtConv
 
 
 class TtAnchor3DHead(TtBase3DDenseHead):

@@ -8,58 +8,11 @@ import pytest
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.experimental.functional_pointpillars.reference.mvx_faster_rcnn import MVXFasterRCNN
-from models.experimental.functional_pointpillars.reference.anchor3d_head import Anchor3DHead
-from models.experimental.functional_pointpillars.tt.ttnn_anchor3d_head import TtAnchor3DHead
-
-
-def fold_batch_norm2d_into_conv2d(conv, bn):
-    if not bn.track_running_stats:
-        raise RuntimeError("BatchNorm2d must have track_running_stats=True to be folded into Conv2d")
-
-    weight = conv.weight
-    bias = conv.bias
-    running_mean = bn.running_mean
-    running_var = bn.running_var
-    eps = bn.eps
-    scale = bn.weight
-    shift = bn.bias
-    weight = weight * (scale / torch.sqrt(running_var + eps))[:, None, None, None]
-    if bias is not None:
-        bias = (bias - running_mean) * (scale / torch.sqrt(running_var + eps)) + shift
-    else:
-        bias = shift - running_mean * (scale / torch.sqrt(running_var + eps))
-
-    return weight, bias
-
-
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
-        parameters = {}
-        if isinstance(model, Anchor3DHead):
-            parameters["conv_cls"] = {}
-            parameters["conv_cls"]["weight"] = ttnn.from_torch(model.conv_cls.weight)
-            parameters["conv_cls"]["bias"] = ttnn.from_torch(
-                model.conv_cls.bias.reshape(1, 1, 1, -1),
-            )
-
-            parameters["conv_reg"] = {}
-            parameters["conv_reg"]["weight"] = ttnn.from_torch(model.conv_reg.weight)
-            parameters["conv_reg"]["bias"] = ttnn.from_torch(
-                model.conv_reg.bias.reshape(1, 1, 1, -1),
-            )
-
-            parameters["conv_dir_cls"] = {}
-            parameters["conv_dir_cls"]["weight"] = ttnn.from_torch(model.conv_dir_cls.weight)
-            parameters["conv_dir_cls"]["bias"] = ttnn.from_torch(
-                model.conv_dir_cls.bias.reshape(1, 1, 1, -1),
-            )
-
-        return parameters
-
-    return custom_preprocessor
+from models.experimental.pointpillars.reference.mvx_faster_rcnn import MVXFasterRCNN
+from models.experimental.pointpillars.tt.ttnn_anchor3d_head import TtAnchor3DHead
+from models.experimental.pointpillars.tt.model_preprocessing import create_custom_preprocessor
 
 
 @pytest.mark.parametrize(
@@ -80,8 +33,11 @@ def test_ttnn_anchor3d_head(device, use_pretrained_weight, reset_seeds):
         train_cfg=None,
     )
     if use_pretrained_weight == True:
-        state_dict = torch.load("hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth")["state_dict"]
+        state_dict = torch.load(
+            "models/experimental/pointpillars/inputs_weights/hv_pointpillars_fpn_sbn-all_4x8_2x_nus-3d_20210826_104936-fca299c1.pth"
+        )["state_dict"]
         reference_model.load_state_dict(state_dict)
+
     reference_model.eval()
     reference_model = reference_model.pts_bbox_head
 
