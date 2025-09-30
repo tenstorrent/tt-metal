@@ -59,7 +59,7 @@ bool runTest(
     auto pos = path.find_last_of('.');
     // NOLINTNEXTLINE(bugprone-inc-dec-in-conditions)
     while (--pos && path[pos] >= '0' && path[pos] <= '9') {
-        continue;
+        continue;  // NOLINT(readability-redundant-control-flow)
     }
     if (path[pos] == '-') {
         while (path[++pos] != '.') {
