@@ -28,6 +28,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
+#include <unordered_map>
+
 // Constants
 const std::string output_dir = "generated/fabric";
 const std::string default_built_tests_dump_file = "built_tests.yaml";
@@ -69,6 +71,26 @@ using tt::tt_fabric::fabric_tests::fetch_pattern_ftype;
 using tt::tt_fabric::fabric_tests::fetch_pattern_ntype;
 using tt::tt_fabric::fabric_tests::fetch_pattern_num_packets;
 using tt::tt_fabric::fabric_tests::fetch_pattern_packet_size;
+
+// Bandwidth Summary Statistics
+// If you want to add new statistics, populate this enum with their names
+enum class BandwidthStatistics {
+    BandwidthMean,
+    BandwidthMin,
+    BandwidthMax,
+    BandwidthStdDev,
+    PacketsPerSecondMean,
+    CyclesMean
+};
+// The header of each statistic in the Bandwidth Summary CSV
+const std::unordered_map<BandwidthStatistics, std::string> BandwidthStatisticsHeader = {
+    {BandwidthStatistics::BandwidthMean, "Avg Bandwidth (GB/s)"},
+    {BandwidthStatistics::BandwidthMin, "BW Min (GB/s)"},
+    {BandwidthStatistics::BandwidthMax, "BW Max (GB/s)"},
+    {BandwidthStatistics::BandwidthStdDev, "BW Std Dev (GB/s)"},
+    {BandwidthStatistics::PacketsPerSecondMean, "Avg Packets/s"},
+    {BandwidthStatistics::CyclesMean, "Avg Cycles"},
+};
 
 // Access to internal API: ProgramImpl::num_kernel
 #include "impl/program/program_impl.hpp"
@@ -1053,9 +1075,9 @@ private:
         }
     }
 
-    void calculate_mean(const std::string& stat_name, const auto& lambda_measurement_vector) {
+    void calculate_mean(const BandwidthStatistics& stat, const auto& lambda_measurement_vector) {
         // Push statistics name into results summary csv header
-        stat_names_.push_back(stat_name);
+        stat_order_.push_back(stat);
         for (auto& result : bandwidth_results_summary_) {
             const std::vector<double>& measurements_vector = lambda_measurement_vector(result);
             double sum = std::accumulate(measurements_vector.begin(), measurements_vector.end(), 0.0);
@@ -1065,20 +1087,23 @@ private:
     }
 
     void calculate_cycles_mean() {
-        calculate_mean("Avg Cycles", [](const auto& result) {return result.cycles_vector;});
+        calculate_mean(BandwidthStatistics::CyclesMean, [](const auto& result) { return result.cycles_vector; });
     }
 
     void calculate_packets_per_second_mean() {
-        calculate_mean("Avg Packets/s", [](const auto& result) {return result.packets_per_second_vector;});
+        calculate_mean(BandwidthStatistics::PacketsPerSecondMean, [](const auto& result) {
+            return result.packets_per_second_vector;
+        });
     }
 
     void calculate_bandwidth_mean() {
-        calculate_mean("Avg Bandwidth (GB/s)", [](const auto& result) {return result.bandwidth_vector_GB_s;});
+        calculate_mean(
+            BandwidthStatistics::BandwidthMean, [](const auto& result) { return result.bandwidth_vector_GB_s; });
     }
 
     void calculate_bandwidth_min() {
         // Push statistics name into results summary csv header
-        stat_names_.push_back("BW Min (GB/s)");
+        stat_order_.push_back(BandwidthStatistics::BandwidthMin);
         for (auto& result : bandwidth_results_summary_) {
             result.statistics_vector.push_back(
                 *std::min_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end())
@@ -1088,7 +1113,7 @@ private:
 
     void calculate_bandwidth_max() {
         // Push statistics name into results summary csv header
-        stat_names_.push_back("BW Max (GB/s)");
+        stat_order_.push_back(BandwidthStatistics::BandwidthMax);
         for (auto& result : bandwidth_results_summary_) {
             result.statistics_vector.push_back(
                 *std::max_element(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end())
@@ -1098,7 +1123,7 @@ private:
 
     void calculate_bandwidth_std_dev() {
         // Push statistics name into results summary csv header
-        stat_names_.push_back("BW Std Dev (GB/s)");
+        stat_order_.push_back(BandwidthStatistics::BandwidthStdDev);
         for (auto& result : bandwidth_results_summary_) {
             double sum = std::accumulate(result.bandwidth_vector_GB_s.begin(), result.bandwidth_vector_GB_s.end(), 0.0);
             double mean = sum / result.num_iterations;
@@ -1115,10 +1140,11 @@ private:
     void calculate_bandwidth_summary_statistics() {
         // Add new statistics here
         // The statistics will be displayed in the bandwidth summary CSV file in this order
-        // The name of each statistic collected is maintained in-order in the stat_names_ vector
-        // The statistics are calculated for each test in the same order and are stored in each test's BandwidthResultSummary.statistics_vector
-        // Each function here should calculate the statistics for every test within a single invocation (see functions for details)
-        // NOTE: If you add new statistics, you must re-generate the golden CSV file, otherwise benchmarking will fail.
+        // The name of each statistic collected is maintained in-order in the stat_order_ vector
+        // The statistics are calculated for each test in the same order and are stored in each test's
+        // BandwidthResultSummary.statistics_vector Each function here should calculate the statistics for every test
+        // within a single invocation (see functions for details) NOTE: If you add new statistics, you must re-generate
+        // the golden CSV file, otherwise benchmarking will fail.
         calculate_cycles_mean();
         calculate_packets_per_second_mean();
         calculate_bandwidth_mean();
@@ -1185,7 +1211,8 @@ private:
 
         // Write detailed header
         summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations";
-        for (std::string stat_name : stat_names_) {
+        for (BandwidthStatistics stat : stat_order_) {
+            std::string stat_name = BandwidthStatisticsHeader.at(stat);
             summary_csv_stream << "," << stat_name;
         }
         summary_csv_stream << ",tolerance_percent";
@@ -1215,8 +1242,7 @@ private:
                     "Golden CSV entry not found for test {}, putting tolerance of 1.0 in summary CSV",
                     result.test_name);
                 summary_csv_stream << "," << 1.0;
-            }
-            else {
+            } else {
                 summary_csv_stream << "," << golden_it->tolerance_percent;
             }
             summary_csv_stream << "\n";
@@ -1370,12 +1396,13 @@ private:
             BandwidthResultSummary& test_result = bandwidth_results_summary_[i];
             // Find Average bandwidth result for the test
             // Statistic name for average bandwidth is set in calculate_bandwidth_mean()
-            auto bandwidth_stat_location = std::find(stat_names_.begin(), stat_names_.end(), "Avg Bandwidth (GB/s)");
-            if (bandwidth_stat_location == stat_names_.end()) {
+            auto bandwidth_stat_location =
+                std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::BandwidthMean);
+            if (bandwidth_stat_location == stat_order_.end()) {
                 log_error(tt::LogTest, "Average bandwidth statistic not found, was it calculated?");
                 return;
             }
-            int bandwidth_stat_index = std::distance(stat_names_.begin(), bandwidth_stat_location);
+            int bandwidth_stat_index = std::distance(stat_order_.begin(), bandwidth_stat_location);
             double test_result_avg_bandwidth = test_result.statistics_vector[bandwidth_stat_index];
 
             // Search for the corresponding golden entry for this test result
@@ -1476,7 +1503,7 @@ private:
     double measured_bw_avg_ = 0.0;
     double measured_bw_max_ = 0.0;
     std::filesystem::path raw_telemetry_csv_path_;
-    std::vector<std::string> stat_names_;
+    std::vector<BandwidthStatistics> stat_order_;
     std::filesystem::path csv_file_path_;
     std::filesystem::path csv_summary_file_path_;
 

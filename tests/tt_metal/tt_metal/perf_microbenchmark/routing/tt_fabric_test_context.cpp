@@ -285,21 +285,20 @@ std::string TestContext::generate_failed_test_format_string(const BandwidthResul
     tolerance_stream << std::fixed << std::setprecision(1) << acceptable_tolerance;
     // Because statistics order may change, we need to find the index of average cycles and packets per second
     double test_result_avg_cycles = -1;
-    auto cycles_stat_location = std::find(stat_names_.begin(), stat_names_.end(), "Avg Cycles");
-    if (cycles_stat_location == stat_names_.end()) {
+    auto cycles_stat_location = std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::CyclesMean);
+    if (cycles_stat_location == stat_order_.end()) {
         log_warning(tt::LogTest, "Average cycles statistic not found, omitting it in failure report");
-    }
-    else {
-        int cycles_stat_index = std::distance(stat_names_.begin(), cycles_stat_location);
+    } else {
+        int cycles_stat_index = std::distance(stat_order_.begin(), cycles_stat_location);
         test_result_avg_cycles = test_result.statistics_vector[cycles_stat_index];
     }
     double test_result_avg_packets_per_second = -1;
-    auto packets_per_second_stat_location = std::find(stat_names_.begin(), stat_names_.end(), "Avg Packets/s");
-    if (packets_per_second_stat_location == stat_names_.end()) {
+    auto packets_per_second_stat_location =
+        std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::PacketsPerSecondMean);
+    if (packets_per_second_stat_location == stat_order_.end()) {
         log_warning(tt::LogTest, "Average packets per second statistic not found, omitting it in failure report");
-    }
-    else {
-        int packets_per_second_stat_index = std::distance(stat_names_.begin(), packets_per_second_stat_location);
+    } else {
+        int packets_per_second_stat_index = std::distance(stat_order_.begin(), packets_per_second_stat_location);
         test_result_avg_packets_per_second = test_result.statistics_vector[packets_per_second_stat_index];
     }
     std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
