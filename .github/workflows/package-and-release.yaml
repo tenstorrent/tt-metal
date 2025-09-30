@@ -245,7 +245,7 @@ jobs:
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest
-    # if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout stable branch
         uses: actions/checkout@v4
@@ -302,7 +302,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: '.github/workflows/package-and-release.yaml',
-              ref: 'dpopov-automate-release-flow',
+              ref: 'stable',
               inputs: {
                 'release-type': 'rc',
                 'dry-run': 'false'
