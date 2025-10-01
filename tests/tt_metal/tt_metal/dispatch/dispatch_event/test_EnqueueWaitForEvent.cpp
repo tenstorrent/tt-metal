@@ -140,7 +140,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventSani
             for (uint i = 0; i < cqs.size(); i++) {
                 log_debug(
                     tt::LogTest, "j : {} Recording and Device Syncing on event for CQ ID: {}", j, cqs[i].get().id());
-                auto event = distributed::EnqueueRecordEvent(cqs[i]);
+                auto event = cqs[i].get().enqueue_record_event();
                 EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
                 EXPECT_EQ(event.id(), events_issued_per_cq[i] + 1);
                 cqs[i].get().enqueue_wait_for_event(event);
@@ -180,12 +180,12 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventCros
                     j,
                     cqs[cq_idx_record].get().id(),
                     cqs[cq_idx_wait].get().id());
-                auto event = distributed::EnqueueRecordEvent(cqs[cq_idx_record]);
+                auto event = cqs[cq_idx_record].get().enqueue_record_event();
                 EXPECT_EQ(event.mesh_cq_id(), cqs[cq_idx_record].get().id());
                 EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
                 cqs[cq_idx_wait].get().enqueue_wait_for_event(event);
 
-                // Note: Removed host sync here since EnqueueRecordEvent creates device-only events
+                // Note: Removed host sync here since MeshCommandQueue::enqueue_record_event creates device-only events
                 // that don't notify the host. Host sync would require EnqueueRecordEventToHost.
                 cmds_issued_per_cq[cq_idx_record] += num_cmds_per_cq;
                 // cmds_issued_per_cq[cq_idx_wait] += num_cmds_per_cq; // wait_for_event no longer records an event on
@@ -233,7 +233,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                 log_debug(tt::LogTest, "buf_idx: {} Doing Write to cq_id: {} of data: {}", buf_idx, i, srcs[i]);
 
                 distributed::WriteShard(cqs[i], buffers[i], srcs[i], distributed::MeshCoordinate(0, 0), false);
-                auto event = sync_events[i].emplace_back(distributed::EnqueueRecordEvent(cqs[i]));
+                auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event());
             }
 
             for (uint i = 0; i < cqs.size(); i++) {
@@ -315,7 +315,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     cq_write.get().id());
 
                 distributed::WriteShard(cq_write, buffers[i], srcs[i], zero_coord_, false);
-                auto event = distributed::EnqueueRecordEvent(cq_write);
+                auto event = cq_write.get().enqueue_record_event();
                 cq_read.get().enqueue_wait_for_event(event);
                 distributed::ReadShard(cq_read, result, buffers[i], zero_coord_, true);
                 bool local_pass = (srcs[i] == result);
@@ -402,7 +402,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
 
                     distributed::WriteShard(cq_write, buffers.back(), write_data.back(), zero_coord_, false);
                     if (use_events) {
-                        distributed::MeshEvent event_sync_read_after_write = distributed::EnqueueRecordEvent(cq_write);
+                        distributed::MeshEvent event_sync_read_after_write = cq_write.get().enqueue_record_event();
 
                         // Issue wait for write to complete, and non-blocking read from the second CQ.
                         cq_read.get().enqueue_wait_for_event(event_sync_read_after_write);
@@ -419,7 +419,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     // If more loops, Record Event on second CQ and wait for it to complete on first CQ before next
                     // loop's write.
                     if (use_events && j < num_wr_rd_per_buf - 1) {
-                        distributed::MeshEvent event_sync_write_after_read = distributed::EnqueueRecordEvent(cq_read);
+                        distributed::MeshEvent event_sync_write_after_read = cq_read.get().enqueue_record_event();
                         cq_write.get().enqueue_wait_for_event(event_sync_write_after_read);
                     }
                 }

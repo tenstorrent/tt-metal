@@ -218,7 +218,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
         mesh_device.get(),
         cq.id(),
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
-    distributed::EnqueueRecordEvent(cq);
+    cq.enqueue_record_event();
     event_status = distributed::EventQuery(*future_event);
     EXPECT_EQ(event_status, false);
 
