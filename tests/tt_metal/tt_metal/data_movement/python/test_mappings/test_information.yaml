@@ -423,3 +423,6 @@ tests:
 
   600:
     name: "Transaction ID - Read After Write"
+
+  601:
+    name: "Transaction ID - Read After Write One Packet Stateful"
