@@ -172,19 +172,19 @@ runs:
             echo "=== DEBUG: Trying pip install with isolation ==="
             # Try to install with isolation from current directory and clean environment
             mkdir -p "$HOME/wheels"
-            cp -f "/workspace/$WHEEL_FILENAME" "$HOME/wheels/"
+            cp -f "/work/$WHEEL_FILENAME" "$HOME/wheels/"
             chmod 0644 "$HOME/wheels/$WHEEL_FILENAME"
 
             PYTHONPATH="" PYTHONSAFEPATH=1 python3 -P -m pip install \
             --isolated --no-deps --no-input --disable-pip-version-check \
             --cache-dir "$PIP_CACHE_DIR" \
             "$HOME/wheels/$WHEEL_FILENAME"
-            cd "/workspace"
+            cd "/work"
 
             echo "Wheel installation completed"
           else
             echo "Skipping wheel installation"
           fi
-          export PYTHONPATH="/workspace:${PYTHONPATH:-}"
+          export PYTHONPATH="/work:${PYTHONPATH:-}"
           echo "=== DEBUG: Running user commands ==="
           ${{ inputs.run_args }}
