@@ -364,20 +364,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
     for (uint32_t link = 0; link < num_links; link++) {
-        uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
+        uint32_t batch_head_size =
+            std::accumulate(input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
 
         uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-        TT_FATAL(!(input_tensor_shape[3] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
-        TT_FATAL(!(output_tensor_shape[3] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
+        TT_FATAL(!(input_tensor_shape[-1] % TILE_WIDTH), "Input tensor width must be a multiple of TILE_WIDTH");
+        TT_FATAL(!(output_tensor_shape[-1] % TILE_WIDTH), "Output tensor width must be a multiple of TILE_WIDTH");
         uint32_t TILE_WIDTH = 32;
 
-        uint32_t input_tensor_Wt = input_tensor_shape[3] / TILE_WIDTH;
-        uint32_t input_tensor_Ht = input_tensor_shape[2] / TILE_WIDTH;
-        uint32_t input_tensor_C = input_tensor_shape[1];
+        uint32_t input_tensor_Wt = input_tensor_shape[-1] / TILE_WIDTH;
+        uint32_t input_tensor_Ht = input_tensor_shape[-2] / TILE_WIDTH;
+        uint32_t input_tensor_C = input_tensor_shape[-3];
 
-        uint32_t output_tensor_Wt = output_tensor_shape[3] / TILE_WIDTH;
-        uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
-        uint32_t output_tensor_C = output_tensor_shape[1];
+        uint32_t output_tensor_Wt = output_tensor_shape[-1] / TILE_WIDTH;
+        uint32_t output_tensor_Ht = output_tensor_shape[-2] / TILE_WIDTH;
+        uint32_t output_tensor_C = output_tensor_shape[-3];
 
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
             // Fabrix mux kernel
@@ -486,6 +487,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
 
+                auto dim_normalization = static_cast<int32_t>(input_tensor_shape.rank()) - 4;
+                uint32_t normalized_dim = (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
+                std::cout << "DIM: " << dim << " NORMALIZED DIM: " << normalized_dim << std::endl;
+
                 std::vector<uint32_t> reader_rt_args = {
                     input_tensor.buffer()->address(),                         // input_tensor_address
                     output_tensor.buffer()->address(),                        // output_tensor_address
@@ -495,7 +500,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor_Wt,                                         // width in tiles of entire output
                     output_tensor_Ht,                                         // height in tiles of entire output
                     output_tensor_C,                                          // num output channels
-                    dim,                                                      // dim to gather on
+                    normalized_dim,                                           // dim to gather on
                     batch_head_size,                                          // product of the first two dims
                     input_tile_id_start,                                      //
                     input_tile_id_end,                                        //
@@ -591,7 +596,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     output_tensor_Wt,                                            // width in tiles of entire output
                     output_tensor_Ht,                                            // height in tiles of entire output
                     output_tensor_C,                                             // num output channels
-                    dim,                                                         // dim to gather on
+                    normalized_dim,                                              // dim to gather on
                     batch_head_size,                                             // product of the first two dims
                     input_tile_id_start,                                         //
                     input_tile_id_end,                                           //
