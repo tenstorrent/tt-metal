@@ -51,9 +51,9 @@ LINKER_SCRIPTS  := $(HELPERS)/ld
 HEADER_DIR      := hw_specific/$(ARCH)/inc
 RMDIR           := rm -rf
 
-GXX             := $(TOOL_PATH)/riscv32-tt-elf-g++
-OBJDUMP         := $(TOOL_PATH)/riscv32-tt-elf-objdump
-OBJCOPY         := $(TOOL_PATH)/riscv32-tt-elf-objcopy
+GXX             := $(TOOL_PATH)/riscv-tt-elf-g++
+OBJDUMP         := $(TOOL_PATH)/riscv-tt-elf-objdump
+OBJCOPY         := $(TOOL_PATH)/riscv-tt-elf-objcopy
 
 # =========================
 # Compiler and Linker Flags
