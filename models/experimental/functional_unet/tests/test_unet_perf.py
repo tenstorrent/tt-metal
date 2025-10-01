@@ -129,7 +129,7 @@ def run_multi_iteration_perf_test(test_func, num_runs, *args, **kwargs) -> Perfo
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 4, 1633.0) if is_wormhole_b0() else (1, 4, 2869.0),),
+    ((1, 4, 1633.0) if is_wormhole_b0() else (1, 4, 2898.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_perf.py::test_unet_model"
