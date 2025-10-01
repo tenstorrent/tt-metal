@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
@@ -17,7 +17,6 @@ struct ElemwiseWriterKernelArgs {
 
 struct CompileTimeWriterKernelArgs {
     uint32_t cb_dst;
-    bool is_dst_dram;
 };
 
 static_assert(ttnn::kernel_utils::SerializableKernelArgs<ElemwiseWriterKernelArgs>);

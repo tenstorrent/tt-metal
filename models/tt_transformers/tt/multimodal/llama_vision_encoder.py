@@ -56,6 +56,7 @@ class TtLlamaVisionEncoder(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -65,8 +66,8 @@ class TtLlamaVisionEncoder(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         self.max_num_tiles = configuration.vision_max_num_tiles
         self.image_size = to_2tuple(configuration.vision_chunk_size)
@@ -138,6 +139,7 @@ class TtLlamaVisionEncoder(LightweightModule):
 
         self.transformer = TtLlamaImageTransformer(
             mesh_device,
+            tt_ccl,
             state_dict,
             f"{state_dict_prefix}transformer.",
             weight_cache_path,
@@ -149,6 +151,7 @@ class TtLlamaVisionEncoder(LightweightModule):
 
         self.global_transformer = TtLlamaImageTransformer(
             mesh_device,
+            tt_ccl,
             state_dict,
             f"{state_dict_prefix}global_transformer.",
             weight_cache_path,

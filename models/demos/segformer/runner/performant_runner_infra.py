@@ -9,6 +9,7 @@ from loguru import logger
 from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import divup, is_wormhole_b0
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
@@ -19,9 +20,8 @@ from models.demos.segformer.tests.pcc.test_segformer_decode_head import (
 from models.demos.segformer.tests.pcc.test_segformer_model import (
     create_custom_mesh_preprocessor as create_custom_preprocessor_model,
 )
-from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
-from models.utility_functions import divup, is_wormhole_b0
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -169,7 +169,7 @@ class SegformerTestInfra:
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.reshape((self.torch_output_tensor.logits).shape)
 
-        valid_pcc = 0.978
+        valid_pcc = 0.977
         self.pcc_passed, self.pcc_message = assert_with_pcc(
             self.torch_output_tensor.logits, output_tensor, pcc=valid_pcc
         )

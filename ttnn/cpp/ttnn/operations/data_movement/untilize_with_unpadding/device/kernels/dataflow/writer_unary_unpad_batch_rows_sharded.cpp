@@ -15,6 +15,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_untilize_out = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
+    constexpr uint32_t aligned_page_size = get_compile_time_arg_val(2);
 
     cb_reserve_back(cb_id_out, num_unpadded_output_rows);
     uint32_t l1_write_addr = get_write_ptr(cb_id_out);
@@ -26,7 +27,7 @@ void kernel_main() {
         for (uint32_t row = 0; row < num_unpadded_rows_per_batch; ++row) {
             noc_async_read(noc_l1_read_addr, l1_write_addr, unpadded_block_row_size_bytes);
             noc_l1_read_addr += padded_block_row_size_bytes;
-            l1_write_addr += unpadded_block_row_size_bytes;
+            l1_write_addr += aligned_page_size;
         }
 
         noc_async_read_barrier();

@@ -6,7 +6,6 @@
 
 #include <circular_buffer.hpp>
 #include <device.hpp>
-#include <kernel.hpp>
 #include <tt-metalium/program.hpp>
 #include <stdint.h>
 #include <vector_aligned.hpp>
@@ -17,7 +16,6 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "dev_msgs.h"
 #include "dispatch/dispatch_settings.hpp"
 #include "kernel_types.hpp"
 #include "program_impl.hpp"
@@ -25,7 +23,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 
-enum class CoreType;
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 
@@ -42,15 +40,15 @@ namespace program_dispatch {
 
 struct ProgramDispatchMetadata {
     std::vector<ConfigBufferEntry> kernel_config_addrs;
-    uint32_t sync_count;
-    uint32_t stall_first;
-    uint32_t stall_before_program;
+    uint32_t sync_count{};
+    uint32_t stall_first{};
+    uint32_t stall_before_program{};
 
     struct {
         uint32_t mesh_max_program_kernels_sizeB;
         bool is_cached;
         uint32_t offset;
-    } prefetcher_cache_info;
+    } prefetcher_cache_info{};
 };
 
 struct ExpectedNumWorkerUpdates {
@@ -194,6 +192,16 @@ void reset_expected_num_workers_completed_on_device(
 //
 ExpectedNumWorkerUpdates get_expected_num_workers_completed_updates(
     uint32_t num_workers, uint32_t num_additional_workers);
+
+void set_core_go_message_mapping_on_device(
+    IDevice* device,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping,
+    SystemMemoryManager& manager,
+    uint8_t cq_id);
+
+template <typename WorkloadType, typename DeviceType>
+uint32_t program_base_addr_on_core(
+    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
 
 }  // namespace program_dispatch
 

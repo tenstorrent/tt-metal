@@ -35,34 +35,25 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
-    const DataFormat src0_data_format = get_dataformat(cb_inp);
     const uint32_t stats_tile_bytes = get_tile_size(cb_stats);
-    const DataFormat stats_data_format = get_dataformat(cb_stats);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool stats_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t blk = get_compile_time_arg_val(4);
-    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(5);
+    constexpr uint32_t blk = get_compile_time_arg_val(0);
+    constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(1);
+    constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGenFast<src0_is_dram> src_a = {
-        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
-
-    const InterleavedAddrGenFast<stats_is_dram> src_stats = {
-        .bank_base_address = stats_addr, .page_size = stats_tile_bytes, .data_format = stats_data_format};
+    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
+    const auto src_stats = TensorAccessor(stats_args, stats_addr, stats_tile_bytes);
 
 #ifdef FUSE_GAMMA
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(6) == 1;
-    ASSERT(stick_size_is_pow2);
-    const uint32_t log_base_2_of_page_size = get_compile_time_arg_val(7);
-    const InterleavedPow2AddrGen<gamma_is_dram> addrg = {
-        .bank_base_address = gamma_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr, gamma_stick_size);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
 #endif
 #ifdef FUSE_BETA
-    const InterleavedPow2AddrGen<beta_is_dram> addrb = {
-        .bank_base_address = beta_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
+    const auto addrb = TensorAccessor(beta_args, beta_addr, gamma_stick_size);
     const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
 #endif
 

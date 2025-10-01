@@ -28,7 +28,7 @@ To run the demo for question answering using the Bloom model, follow these instr
 -  For running the inference device OPs analysis, use the following command to run the demo:
   ```sh
   # Need to enable the profiler by building with ./build_metal.sh -p
-  ./tt_metal/tools/profiler/profile_this.py -n vit -c "pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_device_OPs.py"
+  ./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_device_OPs.py"
   ```
 
 ## Details

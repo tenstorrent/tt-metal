@@ -2,12 +2,23 @@
 
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between Tensix cores.
 
+## Mesh Device API Support
+This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+
+**Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
+
 ## Test Flow
-Sharded L1 buffers are created on one Tensix core: the same core getting the same data. Data is written into the L1 buffer on the sender kernel. The sender kernel issues NOC transactions to transfer this data into the L1 buffer on the receiver kernel. Once data is transferred, the sender kernel signals to the receiver kernel that it is done by incrementing a semaphore. Receiver kernel waits on/polls this semaphore and completes its execution when it is incremented.
+L1 memory is allocated on a single Tensix core with separate address offsets for input and output data. Data is written into the input L1 memory location. The sender kernel issues NOC transactions to transfer this data from the input L1 address to the output L1 address within the same core (loopback). Once data is transferred, the sender kernel uses hardware barriers to ensure data validity and completion of the transaction.
 
 Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
 
 Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+
+## Running the Tests
+The tests use the Mesh Device API with fast dispatch mode:
+```
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*Loopback*"
+```
 
 ## Test Parameters
 | Parameter                 | Data Type             | Description |

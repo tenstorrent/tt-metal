@@ -14,7 +14,6 @@
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn_test_fixtures.hpp"
 
 namespace ttnn::distributed::test {

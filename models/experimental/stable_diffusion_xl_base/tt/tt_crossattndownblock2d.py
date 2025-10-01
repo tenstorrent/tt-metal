@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_transformermodel import TtTransformer2DModel
 from models.experimental.stable_diffusion_xl_base.tt.tt_resnetblock2d import TtResnetBlock2D
 from models.experimental.stable_diffusion_xl_base.tt.tt_downsample2d import TtDownsample2D
 
 
-class TtCrossAttnDownBlock2D(nn.Module):
+class TtCrossAttnDownBlock2D(LightweightModule):
     def __init__(
         self,
         device,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,9 +25,7 @@ void TTProfiler::read_results(
         return;
     }
     call_device_noop(device, number_of_noops, noop_identifier);
-    for (auto& dev : device->get_devices()) {
-        tt::tt_metal::detail::ReadDeviceProfilerResults(dev, read_state);
-    }
+    tt::tt_metal::ReadMeshDeviceProfilerResults(*device, read_state);
     call_device_noop(device, number_of_noops, noop_identifier);
 }
 

@@ -12,6 +12,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from models.datasets.llm_dataset_utils import (
     calculate_acc_metrics,
     prepare_textgen_dataloader,
@@ -21,7 +22,6 @@ from models.datasets.llm_dataset_utils import (
 from models.demos.t3000.falcon40b.tests.test_utils import load_hf_model
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
-from models.utility_functions import is_wormhole_b0
 from ttnn import ConcatMeshToTensor
 
 

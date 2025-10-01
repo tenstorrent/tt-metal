@@ -1,12 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "nlp_create_qkv_heads_boltz_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <hostdevcommon/tensor_accessor/arg_config.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 using namespace tt::constants;
@@ -32,11 +33,11 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt_metal::Buffer* in0_buffer = input_tensor.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
 
-    tt_metal::Buffer* in1_buffer;
+    tt_metal::Buffer* in1_buffer = nullptr;
     uint32_t in1_buffer_addr = 0;
     tt_metal::BufferType in1_buffer_type = tt_metal::BufferType::DRAM;
     if (read_from_input_tensor_kv) {
@@ -93,30 +94,25 @@ NlpCreateHeadsBoltzDeviceOperation::Interleaved::create(
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = false;
-    if (read_from_input_tensor_kv) {
-        in1_is_dram = in1_buffer_type == tt_metal::BufferType::DRAM;
-    }
-
-    // TODO: Q, K, V doesn't necessarily need to be the same output mem config
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
+    // Compile-time args must match kernel expectations exactly.
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)in1_is_dram,
         (std::uint32_t)q_num_tiles,
         (std::uint32_t)kv_num_tiles,
     };
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(read_from_input_tensor_kv ? in1_buffer : nullptr)
+        .append_to(reader_compile_time_args);
+
     std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
         (std::uint32_t)q_out_h_tiles,
         (std::uint32_t)q_out_w_tiles,
         (std::uint32_t)q_out_HtWt,
-        (std::uint32_t)num_q_heads,   // q_out_c
-        (std::uint32_t)num_kv_heads,  // kv_out_c
+        (std::uint32_t)num_q_heads,  // q_out_c
     };
+    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
+    writer_compile_time_args.push_back((std::uint32_t)num_kv_heads);  // kv_out_c placed after q accessor
+    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
@@ -294,7 +290,7 @@ NlpCreateHeadsBoltzDeviceOperation::Sharded::cached_program_t NlpCreateHeadsBolt
 
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;

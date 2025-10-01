@@ -12,8 +12,7 @@ struct ExpandOperation {
     static Tensor invoke(
         const ttnn::Tensor& input,
         tt::stl::Span<const int32_t> shape_vector,
-        const std::optional<MemoryConfig>& memory_config,
-        const QueueId& queue_id = DefaultQueueId);
+        const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::expand
 

@@ -6,12 +6,12 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_op.hpp"
+#include "slice_program_factory.hpp"
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
@@ -210,8 +210,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     constexpr uint32_t src0_cb_index = 0;
 
     const auto [cb_page_size, num_read_per_barrier, misalignment] =
@@ -355,7 +353,7 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
     tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {page_size_input, input_shape.rank()};
+    std::vector<uint32_t> reader_compile_time_args = {page_size_input, input_shape.rank(), a.element_size()};
     TensorAccessorArgs(*a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -592,8 +590,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_padded_sticks = a.physical_volume() / a.padded_shape()[-1];
-    uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
+    [[maybe_unused]] uint32_t num_padded_sticks = a.physical_volume() / a.padded_shape()[-1];
+    [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
 
     // stick sizes
     uint32_t W_padded = a.logical_shape()[-1];
@@ -605,8 +603,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     auto shard_spec_padded = a.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
 
-    auto& all_cores_padded = shard_spec_padded.grid;
-    uint32_t num_cores_padded = shard_spec_padded.num_cores();
+    [[maybe_unused]] auto& all_cores_padded = shard_spec_padded.grid;
+    [[maybe_unused]] uint32_t num_cores_padded = shard_spec_padded.num_cores();
     auto bbox_padded = shard_spec_padded.grid.bounding_box();
     CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y + 1};
     uint32_t num_cores_x_padded = grid_size_padded.x;
@@ -878,7 +876,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -986,10 +984,10 @@ operation::ProgramWithCallbacks slice_multi_core(
     }
     switch (a.layout()) {
         case Layout::ROW_MAJOR:
-            return a.is_sharded() ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
-                                  : (has_step ? slice_rm_strided_single_core_n_dims(
-                                                    a, output, output_tensor_start, output_tensor_end, step)
-                                              : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
+            return a.is_sharded()
+                       ? slice_rm_multi_core_sharded(a, output, output_tensor_start, output_tensor_end)
+                       : (has_step ? slice_rm_multi_core_stride(a, output, output_tensor_start, output_tensor_end, step)
+                                   : slice_rm_multi_core(a, output, output_tensor_start, output_tensor_end));
         case Layout::TILE: return slice_tile_multi_core(a, output, output_tensor_start, output_tensor_end);
         default: TT_ASSERT(false, "Unsupported Layout");
     }

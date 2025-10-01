@@ -38,7 +38,7 @@ def test_serialization(tmp_path, shape, tt_dtype):
 
     tt_tensor = ttnn.Tensor(torch_tensor, tt_dtype)
 
-    file_name = tmp_path / pathlib.Path("tensor.bin")
+    file_name = tmp_path / pathlib.Path("tensor.tensorbin")
     ttnn.dump_tensor(str(file_name), tt_tensor)
     torch_tensor_from_file = ttnn.load_tensor(str(file_name)).to_torch()
 
@@ -87,7 +87,7 @@ def test_sharded_tensor_serialization(tmp_path, device, tensor_spec):
     dtype = tt_dtype_to_torch_dtype[tensor_spec.dtype]
     py_tensor = torch.rand(list(tensor_spec.shape), dtype=dtype)
     tt_tensor = ttnn.from_torch(py_tensor, spec=tensor_spec, device=device)
-    file_name = tmp_path / pathlib.Path("tensor.bin")
+    file_name = tmp_path / pathlib.Path("tensor.tensorbin")
     ttnn.dump_tensor(str(file_name), tt_tensor)
     ttnn_tensor_from_file = ttnn.load_tensor(str(file_name), device=device)
     assert ttnn_tensor_from_file.spec == tensor_spec

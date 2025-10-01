@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -93,13 +93,14 @@ void kernel_main() {
         DeviceZoneScopedN("PF writer update remote cb");
         experimental::update_remote_cb_config_in_l1(remote_cb_id);
 
+        noc_async_atomic_barrier();
+
         // reset noc counters here because we didn't properly update ptrs for better perf.
         if (noc_mode == DM_DEDICATED_NOC) {
             ncrisc_noc_counters_init();
         } else {
             dynamic_noc_local_state_init();
         }
-    }
     // signal reader can exit, since reader cannot exit early due to the ongoing traffic on the same noc.
     {
         DeviceZoneScopedN("PF writer push sync");

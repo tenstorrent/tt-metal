@@ -6,7 +6,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "../scatter_enums.hpp"
@@ -28,8 +27,8 @@ using namespace tt::tt_metal;
 
 struct ScatterProgramFactory {
     struct shared_variables_t {
-        KernelHandle reader_kernel_id;
-        KernelHandle writer_kernel_id;
+        KernelHandle reader_kernel_id{};
+        KernelHandle writer_kernel_id{};
         std::vector<CoreCoord> cores;
     };
 

@@ -7,6 +7,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include "moreh_sum_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -53,16 +54,16 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t src0_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t scaler_single_tile_size = tt::tt_metal::detail::TileSize(src0_cb_data_format);
+    uint32_t scaler_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat mask_h_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t mask_h_single_tile_size = tt::tt_metal::detail::TileSize(mask_h_cb_data_format);
+    uint32_t mask_h_single_tile_size = tt::tile_size(mask_h_cb_data_format);
     tt::DataFormat intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat intermed1_cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t intermed_single_tile_size = tt::tt_metal::detail::TileSize(intermed_cb_data_format);
+    uint32_t intermed_single_tile_size = tt::tile_size(intermed_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
+    uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     tt::tt_metal::IDevice* device = input.device();
 
@@ -119,8 +120,9 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::KernelHandle reader_kernel_id;
     bfloat16 bfloat_scaler_value(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, Ht, Wt, HtWt, packed_scaler_value};
+    std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(packed_scaler_value);
 
     std::map<std::string, std::string> reader_defines;
     reader_defines["REDUCE_SCALER"] = "1";
@@ -136,8 +138,8 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     tt::tt_metal::KernelHandle writer_kernel_id;
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

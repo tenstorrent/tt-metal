@@ -3,6 +3,11 @@
 # multi-config generator was used.
 
 string(TOLOWER "${CPACK_BUILD_CONFIG}" BUILD_CONFIG_LOWER)
+if(NOT BUILD_CONFIG_LOWER)
+    # Multi-config generators should have CPACK_BUILD_CONFIG set, but single-config
+    # generators we need to read CMAKE_BUILD_TYPE from the CMake pass.
+    string(TOLOWER "@CMAKE_BUILD_TYPE@" BUILD_CONFIG_LOWER)
+endif()
 
 if(BUILD_CONFIG_LOWER STREQUAL "asan" OR BUILD_CONFIG_LOWER STREQUAL "tsan")
     set(CPACK_DEBIAN_DEBUGINFO_PACKAGE FALSE)

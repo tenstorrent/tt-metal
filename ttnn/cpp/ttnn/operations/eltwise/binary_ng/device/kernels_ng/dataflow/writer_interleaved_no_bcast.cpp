@@ -28,16 +28,13 @@ void kernel_main() {
 
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
 #if !DST_SHARDED
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<0>();
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const DataFormat dst_data_format = get_dataformat(cb_id_dst);
-
-    const InterleavedAddrGenFast<dst_is_dram> dst = {
-        .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
+    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 #endif
 
 #if !DST_SHARDED
-    constexpr bool has_sharding = get_compile_time_arg_val(2) == 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(dst_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;
@@ -69,7 +66,7 @@ void kernel_main() {
                             //  write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
                             cb_wait_front(cb_id_dst, onetile);
                             uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                            noc_async_write_tile(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
+                            noc_async_write_page(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
                             noc_async_write_barrier();
                             cb_pop_front(cb_id_dst, onetile);
 #endif

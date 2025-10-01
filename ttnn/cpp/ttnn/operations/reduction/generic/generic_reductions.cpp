@@ -163,7 +163,7 @@ static Tensor zero_volume_reduce(
         fill_value,
         input_tensor.dtype(),
         input_tensor.layout(),
-        *input_tensor.mesh_device(),
+        *input_tensor.device(),
         memory_config);
 }
 
@@ -196,7 +196,7 @@ static Tensor reduce_impl(
     }
 
     float pad_value = get_pad_value(reduce_type);
-    bool single_reduce_op = (dim.size() == 0) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
+    bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
         auto reduce_nd_loop = [&](const bool use_reduce_type) -> Tensor {
@@ -250,7 +250,7 @@ static Tensor reduce_impl(
         }
     } else {
         tt::tt_metal::ReduceOpDim reduce_op_dim;
-        if ((dim.size() == 0) || (dim.size() == 1 and dim[0] == rank - 1)) {
+        if ((dim.empty()) || (dim.size() == 1 and dim[0] == rank - 1)) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::W;
         } else if (dim.size() == 1 and dim[0] == rank - 2) {
             reduce_op_dim = tt::tt_metal::ReduceOpDim::H;
@@ -421,11 +421,11 @@ Tensor Reduce<reduce_type>::invoke(
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
 
-        if (non_height_width_dims.size() > 0) {
+        if (!non_height_width_dims.empty()) {
             input_tensor =
                 non_height_width_reduce(input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config);
 
-            if (height_width_dims.size() == 0) {
+            if (height_width_dims.empty()) {
                 return adjust_shape(
                     input_tensor, input_tensor_arg.logical_shape(), keepdim, height_width_dims, non_height_width_dims);
             }
@@ -463,11 +463,11 @@ Tensor pool_sum(
         /*non_height_width_dims=*/{});
 }
 
-template class Reduce<ReduceType::Sum>;
-template class Reduce<ReduceType::Mean>;
-template class Reduce<ReduceType::Max>;
-template class Reduce<ReduceType::Min>;
-template class Reduce<ReduceType::Std>;
-template class Reduce<ReduceType::Var>;
+template struct Reduce<ReduceType::Sum>;
+template struct Reduce<ReduceType::Mean>;
+template struct Reduce<ReduceType::Max>;
+template struct Reduce<ReduceType::Min>;
+template struct Reduce<ReduceType::Std>;
+template struct Reduce<ReduceType::Var>;
 }  // namespace operations::reduction
 }  // namespace ttnn

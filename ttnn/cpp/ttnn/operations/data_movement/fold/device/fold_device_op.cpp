@@ -52,12 +52,12 @@ void validate_fold(
 }
 
 void Fold::validate_on_program_cache_miss(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_fold(
+    validate_fold(
         {tensors.input_tensor}, op_attr.is_sharded, op_attr.is_dram_interleaved, op_attr.stride_h, op_attr.stride_w);
 }
 
 void Fold::validate_on_program_cache_hit(const operation_attributes_t& op_attr, const tensor_args_t& tensors) {
-    return validate_fold(
+    validate_fold(
         {tensors.input_tensor}, op_attr.is_sharded, op_attr.is_dram_interleaved, op_attr.stride_h, op_attr.stride_w);
 }
 
@@ -84,6 +84,13 @@ Fold::spec_return_value_t Fold::compute_output_specs(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config))};
     } else if (op_attr.is_dram_interleaved) {
         ttnn::Shape output_logical_shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
+        if (input_tensor.layout() == Layout::ROW_MAJOR) {
+            output_logical_shape = ttnn::Shape(
+                {input_shape[0],
+                 input_shape[1] / op_attr.stride_h,
+                 input_shape[2] / op_attr.stride_w,
+                 input_shape[3] * op_attr.stride_h * op_attr.stride_w});
+        }
         return {TensorSpec(
             output_logical_shape,
             tt::tt_metal::TensorLayout(

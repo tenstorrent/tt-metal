@@ -31,7 +31,7 @@ std::tuple<std::array<uint32_t, N>, CBHandle> create_cb(
         cb_config.set_globally_allocated_address(*buffer);
     }
 
-    std::array<uint32_t, N> cbs_out;
+    std::array<uint32_t, N> cbs_out{};
     std::copy(cbs, cbs + N, cbs_out.begin());
     return std::make_tuple(cbs_out, tt_metal::CreateCircularBuffer(program, core_spec, cb_config));
 }
@@ -47,6 +47,13 @@ inline std::tuple<uint32_t, CBHandle> create_cb(
     uint32_t cbs[] = {cb};
     auto [_, handle] = create_cb(cbs, program, core_spec, page_size, num_pages, data_format, buffer);
     return std::make_tuple(cb, handle);
+}
+
+inline uint32_t calculate_total_cb_size(const Program& program) {
+    const auto& cbs = program.circular_buffers();
+    return std::accumulate(cbs.begin(), cbs.end(), uint32_t{0}, [](auto acc, const auto& cb) {
+        return acc + (cb->globally_allocated() ? 0 : cb->size());
+    });
 }
 
 }  // namespace tt::tt_metal

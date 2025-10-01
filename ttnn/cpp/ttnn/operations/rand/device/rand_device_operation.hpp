@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,8 +29,8 @@ struct RandDeviceOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle compute_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
+            tt::tt_metal::KernelHandle compute_kernel_id{};
+            tt::tt_metal::KernelHandle writer_kernel_id{};
             std::vector<CoreCoord> cores;
         };
 

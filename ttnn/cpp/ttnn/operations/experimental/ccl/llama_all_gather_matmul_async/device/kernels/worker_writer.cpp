@@ -32,7 +32,6 @@ FORCE_INLINE void advance_local_read_address_for_fabric_write(
     // payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr_forward);
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
@@ -41,7 +40,6 @@ FORCE_INLINE void advance_local_read_address_for_fabric_write(
 
     if (num_targets_backward_direction > 0 && fabric_connection.has_backward_connection()) {
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr_backward);
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
@@ -127,17 +125,8 @@ void kernel_main() {
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
-
-    DPRINT << "CCL WW num_tiles_to_read: " << num_tiles_to_read << ENDL();
-    DPRINT << "CCL WW num_tiles_to_read: " << num_tiles_to_read << ENDL();
-    // DPRINT << "CCL WW num_targets_forward_direction: " << num_targets_forward_direction << ENDL();
-    // DPRINT << "CCL WW num_targets_backward_direction: " << num_targets_backward_direction << ENDL();
-
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
-        // DPRINT << "CCL core_noc_x[core_id]: " << core_noc_x[core_id] << ENDL();
-        // DPRINT << "CCL core_noc_y[core_id]: " << core_noc_y[core_id] << ENDL();
-        // DPRINT << "CCL num_tiles_to_read_this_core: " << num_tiles_to_read_this_core << ENDL();
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
         size_t l1_read_addr = get_read_ptr(cb0_id);
@@ -147,8 +136,6 @@ void kernel_main() {
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
 
         // This issues a flush barrier
-        DeviceZoneScopedN("CCL WRW adv rd addr fab");
-
         advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
@@ -181,11 +168,8 @@ void kernel_main() {
         out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
         32});
-
     // Write the mcast packet (forward)
-
     if (fabric_connection.has_forward_connection()) {
-        DeviceZoneScopedN("CCL WRW fwd mcast");
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
@@ -193,9 +177,7 @@ void kernel_main() {
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
-
     if (num_targets_backward_direction > 0 && fabric_connection.has_backward_connection()) {
-        DeviceZoneScopedN("CCL WRW bwd mcast");
         pkt_hdr->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();

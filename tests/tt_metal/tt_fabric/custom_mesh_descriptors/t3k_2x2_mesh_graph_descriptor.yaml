@@ -21,22 +21,15 @@ Mesh: [
   board: 2x2,
   device_topology: [2, 2],
   host_topology: [1, 1],
-  host_ranks: [[0]]},
+},
 {
   id: 1,
   board: 2x2,
   device_topology: [2, 2],
   host_topology: [1, 1],
-  host_ranks: [[0]]}
+}
 ]
 
-Graph: [
-  [[0, E0], [1, W0]],
-  [[0, E1], [1, W1]],
-  [[0, E2], [1, W2]],
-  [[0, E3], [1, W3]],
-  [[1, W0], [0, E0]],
-  [[1, W1], [0, E1]],
-  [[1, W2], [0, E2]],
-  [[1, W3], [0, E3]],
+RelaxedGraph: [
+  [M0, M1, 4],
 ]

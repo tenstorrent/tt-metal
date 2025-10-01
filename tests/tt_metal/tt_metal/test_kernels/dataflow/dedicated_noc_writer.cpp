@@ -55,8 +55,8 @@ void kernel_main() {
     }
 
     // Test gen_fast
-    const InterleavedAddrGenFast<false> s0 = {
-        .bank_base_address = l1_read_addr, .page_size = page_size, .data_format = DataFormat::Float16_b};
+    constexpr auto s_args = TensorAccessorArgs<2>();
+    const auto s0 = TensorAccessor(s_args, l1_read_addr, page_size);
 
     for (uint32_t i = 0; i < iteration; i++) {
         uint32_t noc = noc_index;
@@ -96,6 +96,32 @@ void kernel_main() {
 #ifndef ARCH_BLACKHOLE
         noc_inline_dw_write(noc_addr, 1, 0xF, noc);
 #endif
+    }
+
+    // barrier on all txns
+    noc_async_full_barrier(noc_index);
+
+    // Previous multicasts would have put trids into a non-zero state, so reset the barrier counter
+    reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
+
+    // DRAM sharded read API
+    uint32_t src_addr = noc_async_read_tile_dram_sharded_set_state<true>(DRAM_ALIGNMENT, page_size, 0, 0, noc_index);
+    for (uint32_t i = 0; i < iteration; i++) {
+        uint32_t trid = i % (NOC_MAX_TRANSACTION_ID + 1);
+        noc_async_read_tile_dram_sharded_with_state_with_trid(src_addr, DRAM_ALIGNMENT, l1_read_addr, trid, noc_index);
+    }
+
+    for (uint32_t i = 0; i <= NOC_MAX_TRANSACTION_ID; i++) {
+        noc_async_read_barrier_with_trid(i, noc_index);
+    }
+
+    // L1 sharded write API
+    for (uint32_t i = 0; i < iteration; i++) {
+        uint32_t trid = i % (NOC_MAX_TRANSACTION_ID + 1);
+        noc_async_write_one_packet_with_trid(l1_read_addr, addr_self_noc, page_size, trid, write_cmd_buf, noc_index);
+    }
+    for (uint32_t i = 0; i <= NOC_MAX_TRANSACTION_ID; i++) {
+        noc_async_write_barrier_with_trid(i, noc_index);
     }
 
     DPRINT << "END" << ENDL();

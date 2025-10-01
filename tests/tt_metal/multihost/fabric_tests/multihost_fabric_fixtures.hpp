@@ -18,20 +18,19 @@ namespace fabric_router_tests {
 template <typename Fixture>
 void validate_and_setup_control_plane_config(Fixture* fixture) {
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
-    const char* host_rank_str = std::getenv("TT_HOST_RANK");
-    auto local_mesh_id = std::string(mesh_id_str);
-    auto local_host_rank = std::string(host_rank_str);
-
-    TT_FATAL(
-        local_mesh_id.size() and local_host_rank.size(),
-        "TT_MESH_ID and TT_HOST_RANK environment variables must be set for Multi-Host Fabric Tests.");
+    TT_FATAL(mesh_id_str != nullptr, "TT_MESH_ID environment variable must be set for Multi-Host Fabric Tests.");
 
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
-        fixture->get_eth_coord_mapping(), std::stoi(local_mesh_id));
+        fixture->get_eth_coord_mapping(), std::stoi(mesh_id_str));
+    bool custom_mesh_graph_path_set =
+        tt::tt_metal::MetalContext::instance().rtoptions().is_custom_fabric_mesh_graph_desc_path_specified();
+    std::string custom_mesh_graph_path =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_custom_fabric_mesh_graph_desc_path();
     tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
-        fixture->get_path_to_mesh_graph_desc(), chip_to_eth_coord_mapping);
+        custom_mesh_graph_path_set ? custom_mesh_graph_path : fixture->get_path_to_mesh_graph_desc(),
+        chip_to_eth_coord_mapping);
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().get_control_plane().system_has_intermesh_links(),
+        !tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections_to_remote_devices().empty(),
         "Multi-Host Routing tests require ethernet links to a remote host.");
     TT_FATAL(
         *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) > 1,

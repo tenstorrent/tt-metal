@@ -1,13 +1,20 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 namespace tt {
 
-inline constexpr uint32_t align(uint32_t addr, uint32_t alignment) { return ((addr - 1) | (alignment - 1)) + 1; }
+template <typename T1, typename T2>
+constexpr std::common_type_t<T1, T2> align(T1 addr, T2 alignment) {
+    static_assert(std::is_integral<T1>::value, "align() requires integral types");
+    static_assert(std::is_integral<T2>::value, "align() requires integral types");
+    using T = std::common_type_t<T1, T2>;
+    return ((static_cast<T>(addr) - 1) | (static_cast<T>(alignment) - 1)) + 1;
+}
 
 }  // namespace tt

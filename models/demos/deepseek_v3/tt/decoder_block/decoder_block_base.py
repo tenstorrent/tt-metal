@@ -3,18 +3,20 @@
 
 from abc import abstractmethod
 from pathlib import Path
+from typing import Sequence
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
-from models.demos.deepseek_v3.tt.mla_1d import MLA1D
+from models.demos.deepseek_v3.tt.ccl import CCL
+from models.demos.deepseek_v3.tt.mla import MLA
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import ReshardConfig
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dicts
 from models.demos.deepseek_v3.utils.run_config import (
+    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     ModelState,
@@ -22,10 +24,11 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
-class DecoderBlockBase(AbstractModule):
+class DecoderBlockBase(SharedStateAddOn, AbstractModule):
     @classmethod
     def convert_weights(
         cls,
@@ -38,7 +41,7 @@ class DecoderBlockBase(AbstractModule):
             "mla_norm": DistributedRMSNorm.convert_weights(
                 hf_config, sub_state_dicts(state_dicts, "input_layernorm."), output_path / "mla_norm", mesh_device
             ),
-            "mla": MLA1D.convert_weights(
+            "mla": MLA.convert_weights(
                 hf_config, sub_state_dicts(state_dicts, "self_attn."), output_path / "mla", mesh_device
             ),
             "mlp_norm": DistributedRMSNorm.convert_weights(
@@ -60,11 +63,11 @@ class DecoderBlockBase(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
         return {
             "mla_norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
-            "mla": MLA1D.prefill_model_config(hf_config, mesh_device),
+            "mla": MLA.prefill_model_config(hf_config, mesh_device),
             "mlp_norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
             "mlp": cls.prefill_mlp_config(hf_config, mesh_device, is_padding_layer),
         }
@@ -74,19 +77,19 @@ class DecoderBlockBase(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
         mla_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
         mlp_norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
 
-        mla_config = MLA1D.decode_model_config(hf_config, mesh_device)
+        mla_config = MLA.decode_model_config(hf_config, mesh_device)
 
         return {
-            "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config_decode"]),
+            "mla_norm_reshard": ReshardConfig(memory_config=mla_norm_config["input_memory_config"]),
             "mla_norm": mla_norm_config,
             "mla_reshard": ReshardConfig(memory_config=mla_config["input_memory_config"]),
             "mla": mla_config,
-            "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config_decode"]),
+            "mlp_norm_reshard": ReshardConfig(memory_config=mlp_norm_config["input_memory_config"]),
             "mlp_norm": mlp_norm_config,
             "mlp_reshard": ReshardConfig(memory_config=ttnn.DRAM_MEMORY_CONFIG),
             "mlp": cls.decode_mlp_config(hf_config, mesh_device, is_padding_layer),
@@ -96,33 +99,55 @@ class DecoderBlockBase(AbstractModule):
     def create_state(
         cls,
         hf_config: PretrainedConfig,
-        mesh_device: ttnn.MeshDevice,
         paged_config: PagedAttentionConfig,
-        is_padding_layer: tuple[bool, ...],
-        ccl: CCL1D,
+        mesh_device: ttnn.MeshDevice,
+        ccl: CCL,
+        is_padding_layer: tuple[bool, ...] | None = None,
+        mla_cache: Sequence[torch.Tensor] | None = None,
     ) -> ModelState:
         return {
             "mla_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
-            "mla": MLA1D.create_state(hf_config, mesh_device, paged_config, ccl),
+            "mla": MLA.create_state(hf_config, paged_config, mesh_device, ccl, mla_cache),
             "mlp_norm": DistributedRMSNorm.create_state(hf_config, mesh_device, ccl),
             "mlp": cls.create_mlp_state(
                 hf_config,
                 mesh_device,
-                is_padding_layer,
                 ccl,
+                is_padding_layer,
+            ),
+        }
+
+    @classmethod
+    def create_shared_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...] | None = None,
+    ) -> ModelState:
+        return {
+            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "mlp": cls.create_mlp_shared_state(
+                hf_config,
+                mesh_device,
+                is_padding_layer,
             ),
         }
 
     @classmethod
     def forward_prefill(
-        cls, x: ttnn.Tensor, row_idx: int, user_id: int, rope_tensors: dict, cfg: RunPrefillConfig
+        cls,
+        x: ttnn.Tensor,
+        user_id: int,
+        row_idx: int,
+        cfg: RunPrefillConfig,
+        rope_tensors: dict,
+        page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
-        raise NotImplementedError("This is untested.")
         # MLA norm
         mla_norm_out = DistributedRMSNorm.forward_prefill(x, cfg["mla_norm"])
 
         # MLA
-        mla_out = MLA1D.forward_prefill(mla_norm_out, row_idx, user_id, rope_tensors, cfg["mla"])
+        mla_out = MLA.forward_prefill(mla_norm_out, user_id, row_idx, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
@@ -146,11 +171,11 @@ class DecoderBlockBase(AbstractModule):
     def forward_decode(
         cls,
         x: ttnn.Tensor,
-        row_idx: int,
         position_idxs: ttnn.Tensor,
+        row_idx: int,
+        cfg: RunDecodeConfig,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
-        cfg: RunDecodeConfig,
     ) -> ttnn.Tensor:
         # MLA norm
         mla_norm_in = ttnn.to_memory_config(x, **cfg["mla_norm_reshard"])
@@ -159,7 +184,7 @@ class DecoderBlockBase(AbstractModule):
 
         # MLA
         mla_norm_out = ttnn.to_memory_config(mla_norm_out, **cfg["mla_reshard"])
-        mla_out = MLA1D.forward_decode(mla_norm_out, cfg["mla"], position_idxs, rope_tensors, page_table, row_idx)
+        mla_out = MLA.forward_decode(mla_norm_out, position_idxs, row_idx, cfg["mla"], rope_tensors, page_table)
         ttnn.deallocate(mla_norm_out)
 
         # MLA Residual
@@ -203,7 +228,7 @@ class DecoderBlockBase(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelPrefillConfig:
         """
         Prefill configuration for the MLP component of the decoder layer.
@@ -217,7 +242,7 @@ class DecoderBlockBase(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLP component of the decoder layer.
@@ -231,11 +256,25 @@ class DecoderBlockBase(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
-        is_padding_layer: tuple[bool, ...],
-        ccl: CCL1D,
+        ccl: CCL,
+        is_padding_layer: tuple[bool, ...] | None = None,
     ) -> ModelState:
         """
         Create the state for the MLP component of the decoder layer.
+        This method should be implemented by subclasses to handle specific MLP configurations.
+        """
+        raise NotImplementedError("This method should be implemented in subclasses.")
+
+    @classmethod
+    @abstractmethod
+    def create_mlp_shared_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...] | None = None,
+    ) -> ModelState:
+        """
+        Create the shared state for the MLP component of the decoder layer.
         This method should be implemented by subclasses to handle specific MLP configurations.
         """
         raise NotImplementedError("This method should be implemented in subclasses.")
@@ -251,9 +290,9 @@ class DecoderBlockBase(AbstractModule):
 
     @classmethod
     @abstractmethod
-    def forward_mlp_decode(cls, x: ttnn.Tensor, row_idx: int, cfg: RunPrefillConfig) -> ttnn.Tensor:
+    def forward_mlp_decode(cls, x: ttnn.Tensor, row_idx: int, cfg: RunDecodeConfig) -> ttnn.Tensor:
         """
-        Forward pass for the MLP component during prefill.
+        Forward pass for the MLP component during decode.
         This method should be implemented by subclasses to handle specific MLP configurations.
         """
         raise NotImplementedError("This method should be implemented in subclasses.")

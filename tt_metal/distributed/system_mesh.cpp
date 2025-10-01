@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/container/vector.hpp>
 #include <stdint.h>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -13,7 +12,7 @@
 #include <cstddef>
 #include <unordered_set>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
@@ -164,7 +163,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         TT_FATAL(system_shape.dims() == 2, "Line topology is only supported for 2D meshes");
         TT_FATAL(
             system_shape[0] > system_offset[0] && system_shape[1] > system_offset[1],
-            "The specifed offset {} is out of bounds for the system mesh shape {}",
+            "The specified offset {} is out of bounds for the system mesh shape {}",
             system_offset,
             system_shape);
         Shape2D system_mesh_2d(system_shape[0], system_shape[1]);

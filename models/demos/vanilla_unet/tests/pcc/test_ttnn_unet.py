@@ -8,10 +8,9 @@ from loguru import logger
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
 
 import ttnn
-from models.demos.vanilla_unet.common import load_torch_model
+from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE, load_torch_model
 from models.demos.vanilla_unet.reference.unet import UNet
 from models.demos.vanilla_unet.ttnn.ttnn_unet import TtUnet
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -172,8 +171,7 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 1730}], indirect=True)
-@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE}], indirect=True)
 def test_unet(device, reset_seeds, model_location_generator):
     reference_model = load_torch_model(model_location_generator)
 

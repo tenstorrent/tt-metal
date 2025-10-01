@@ -1,9 +1,14 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <ttnn/distributed/create_socket.hpp>
+
 #include "core/distributed/distributed.hpp"
+#include "models/distributed/gpt2.hpp"
+#include "models/distributed/llama.hpp"
 #include "models/gpt2.hpp"
+#include "models/llama.hpp"
 
 // namespace name can't start with a digit
 namespace three_tier_arch {
@@ -32,11 +37,24 @@ struct TrainingConfig {
     std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    ttml::models::gpt2::TransformerConfig transformer_config;
+    std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;
 
     bool enable_mpi = false;
     uint32_t num_mh_workers = 1U;
+    ttnn::distributed::SocketType socket_type = ttnn::distributed::SocketType::MPI;
 };
+
+struct DeviceConfig {
+    // multidevice config: default to single device with default mapping of
+    // physical devices onto the mesh shape.
+    tt::tt_metal::distributed::MeshShape mesh_shape{1, 1};
+    std::vector<int> device_ids{};
+
+    bool enable_ddp = false;
+    bool enable_tp = false;
+};
+
+DeviceConfig parse_device_config(const YAML::Node &yaml_config);
 
 TrainingConfig parse_config(const YAML::Node &yaml_config);
 
@@ -48,6 +66,6 @@ std::string read_file_to_str(const std::string &file_path);
 
 uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size = 32U);
 
-void initialize_device(bool ddp, bool tp);
+void initialize_device(const tt::tt_metal::distributed::MeshShape &mesh_shape, const std::vector<int> &device_ids);
 
 }  // namespace three_tier_arch

@@ -32,22 +32,18 @@ void kernel_main() {
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 #if !SRC_SHARDED
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 #endif
 #if !SRC_SHARDED_B
-    constexpr bool src_is_dram_b = get_compile_time_arg_val(2) == 1;
     const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
-    const DataFormat src_data_format_b = get_dataformat(cb_id_src_b);
-    const InterleavedAddrGenFast<src_is_dram_b> src_b = {
-        .bank_base_address = src_addr_b, .page_size = src_tile_bytes_b, .data_format = src_data_format_b};
+    const auto src_b = TensorAccessor(src_b_args, src_addr_b, src_tile_bytes_b);
 #endif
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = get_compile_time_arg_val(1) == 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;
@@ -94,7 +90,7 @@ void kernel_main() {
                     cb_reserve_back(cb_id_src, onetile);
 #if !SRC_SHARDED
                     uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                    noc_async_read_tile(tile_offset, src, l1_write_addr_src);
+                    noc_async_read_page(tile_offset, src, l1_write_addr_src);
                     noc_async_read_barrier();
 #endif
                     FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
@@ -104,7 +100,7 @@ void kernel_main() {
                     cb_reserve_back(cb_id_src_b, onetile);
 #if !SRC_SHARDED_B
                     uint32_t l1_write_addr_src_b = get_write_ptr(cb_id_src_b);
-                    noc_async_read_tile(tile_offset_b, src_b, l1_write_addr_src_b);
+                    noc_async_read_page(tile_offset_b, src_b, l1_write_addr_src_b);
                     noc_async_read_barrier();
 #endif
                     FILL_TILE_WITH_FIRST_ELEMENT_B(cb_id_src_b);
@@ -117,7 +113,7 @@ void kernel_main() {
                             cb_reserve_back(cb_id_src, onetile);
 #if !SRC_SHARDED
                             uint32_t l1_write_addr = get_write_ptr(cb_id_src);
-                            noc_async_read_tile(tile_offset + tw, src, l1_write_addr);
+                            noc_async_read_page(tile_offset + tw, src, l1_write_addr);
                             noc_async_read_barrier();
 #endif
                             cb_push_back(cb_id_src, onetile);
@@ -126,12 +122,10 @@ void kernel_main() {
                             cb_reserve_back(cb_id_src_b, onetile);
 #if !SRC_SHARDED_B
                             uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
-                            noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
+                            noc_async_read_page(tile_offset_b + tw, src_b, l1_write_addr_b);
                             noc_async_read_barrier();
 #endif
-#if !SRC_SHARDED_B
                             cb_push_back(cb_id_src_b, onetile);
-#endif
 #endif
                         }
                         if constexpr (!has_sharding) {

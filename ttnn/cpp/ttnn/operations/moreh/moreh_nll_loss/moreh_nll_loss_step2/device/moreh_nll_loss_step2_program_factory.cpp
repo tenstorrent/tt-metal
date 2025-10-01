@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_step2_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
@@ -73,31 +74,31 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         });
 
     // create read/wrtie kernel
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
-        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
-    };
+    std::vector<uint32_t> reader_compile_time_args{};
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     auto reader_kernel_id = CreateReadKernel(
@@ -247,31 +248,31 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         });
 
     // create read/wrtie kernel
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
-        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
-    };
+    std::vector<uint32_t> reader_compile_time_args{};
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     auto reader_kernel_id = CreateReadKernel(
@@ -434,31 +435,31 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         });
 
     // create read/wrtie kernel
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(target)),
-        static_cast<uint32_t>(weight.has_value() ? is_dram(weight.value()) : false),
-        static_cast<uint32_t>(divisor.has_value() ? is_dram(divisor.value()) : false),
-    };
+    std::vector<uint32_t> reader_compile_time_args{};
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(target.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(weight.has_value() ? weight.value().buffer() : nullptr).append_to(reader_compile_time_args);
+    TensorAccessorArgs(divisor.has_value() ? divisor.value().buffer() : nullptr).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(output))};
+    std::vector<uint32_t> writer_compile_time_args{};
+    TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     auto reader_kernel_id = CreateReadKernel(

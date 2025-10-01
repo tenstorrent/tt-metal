@@ -90,6 +90,9 @@ venv/
 # exclude binaries
 *.bin
 
+# exclude serialized tensor binaries
+*.tensorbin
+
 # releases
 dist
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
 #include <boost/algorithm/string/replace.hpp>
+#include <tt_stl/small_vector.hpp>
 
 namespace ttnn::graph {
 
@@ -61,10 +62,10 @@ std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional_valu
 
 std::string graph_demangle(const std::string_view name) {
     int status = -4;
-    char* res = abi::__cxa_demangle(name.data(), NULL, NULL, &status);
+    char* res = abi::__cxa_demangle(name.data(), nullptr, nullptr, &status);
     const char* const demangled_name = (status == 0) ? res : name.data();
     std::string ret_val(demangled_name);
-    free(res);
+    free(res);  // NOLINT(cppcoreguidelines-no-malloc)
     return ret_val;
 }
 
@@ -81,9 +82,9 @@ std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction>
 
 template <typename T, std::size_t N>
 void GraphArgumentSerializer::register_small_vector() {
-    registry()[typeid(std::reference_wrapper<tt::stl::SmallVector<T, N>>)] = [](const std::any& value) -> std::string {
+    registry()[typeid(std::reference_wrapper<ttsl::SmallVector<T, N>>)] = [](const std::any& value) -> std::string {
         std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<tt::stl::SmallVector<T, N>>>(value);
+        auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<T, N>>>(value);
         oss << referenced_value.get();
         return oss.str();
     };
@@ -156,7 +157,8 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
         } else {
             // for debugging reasons, I want to report the type that is not managed
             std::ostringstream oss;
-            oss << "[ unsupported type" << " , ";
+            oss << "[ unsupported type"
+                << " , ";
             auto demangled_name = graph_demangle(element.type().name());
             boost::algorithm::replace_all(demangled_name, "__1::", "");
             oss << demangled_name;

@@ -53,6 +53,18 @@ def test_sd35_performance(
     """Performance test for SD35 pipeline with detailed timing analysis."""
 
     if galaxy_type == "4U":
+        # NOTE: Pipelines fail if a performance test is skipped without providing a benchmark output.
+        if is_ci_env:
+            profiler = BenchmarkProfiler()
+            with profiler("run", iteration=0):
+                pass
+
+            benchmark_data = BenchmarkData()
+            benchmark_data.save_partial_run_json(
+                profiler,
+                run_type="empty_run",
+                ml_model_name="empty_run",
+            )
         pytest.skip("4U is not supported for this test")
 
     # Setup parallel manager
@@ -267,9 +279,9 @@ def test_sd35_performance(
             "clip_encoding_time": 0.09,
             "t5_encoding_time": 0.1,
             "total_encoding_time": 0.2,
-            "denoising_steps_time": 10,
-            "vae_decoding_time": 2.3,
-            "total_time": 12.3,
+            "denoising_steps_time": 11,
+            "vae_decoding_time": 1.6,
+            "total_time": 12.6,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {

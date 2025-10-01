@@ -16,46 +16,57 @@ class TtCSPBepBackbone:
             device=device,
             conv=model_params.stem.block.conv,
             conv_pth=parameters.stem.block.conv,
-            activation="silu",
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
             activation_dtype=ttnn.bfloat16,
-            reshape=True,
             deallocate_activation=True,
         )
         self.erblock2_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.ERBlock_2[0].block.conv,
             conv_pth=parameters.ERBlock_2[0].block.conv,
-            activation="silu",
-            reshape=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            deallocate_activation=True,
         )
-        self.erblock2_1 = TtBepC3(device, parameters.ERBlock_2[1], model_params.ERBlock_2[1], n=6)
+        self.erblock2_1 = TtBepC3(
+            device,
+            parameters.ERBlock_2[1],
+            model_params.ERBlock_2[1],
+            n=6,
+        )
 
         self.erblock3_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.ERBlock_3[0].block.conv,
             conv_pth=parameters.ERBlock_3[0].block.conv,
-            activation="silu",
-            reshape=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
-        self.erblock3_1 = TtBepC3(device, parameters.ERBlock_3[1], model_params.ERBlock_3[1], n=12)
+        self.erblock3_1 = TtBepC3(
+            device,
+            parameters.ERBlock_3[1],
+            model_params.ERBlock_3[1],
+            n=12,
+        )
 
         self.erblock4_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.ERBlock_4[0].block.conv,
             conv_pth=parameters.ERBlock_4[0].block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation="silu",
-            reshape=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
-        self.erblock4_1 = TtBepC3(device, parameters.ERBlock_4[1], model_params.ERBlock_4[1], n=18)
+        self.erblock4_1 = TtBepC3(
+            device,
+            parameters.ERBlock_4[1],
+            model_params.ERBlock_4[1],
+            n=18,
+        )
 
         self.erblock5_0 = Yolov6l_Conv2D(
             device=device,
             conv=model_params.ERBlock_5[0].block.conv,
             conv_pth=parameters.ERBlock_5[0].block.conv,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            activation="silu",
-            reshape=True,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
         )
         self.erblock5_1 = TtBepC3(
             device,
@@ -80,8 +91,7 @@ class TtCSPBepBackbone:
 
         erblock4_0 = self.erblock4_0(erblock3_1)
         erblock4_1 = self.erblock4_1(erblock4_0)
-        erblock4 = ttnn.clone(erblock4_1)
-        outputs.append(erblock4)
+        outputs.append(erblock4_1)
 
         erblock5_0 = self.erblock5_0(erblock4_1)
         erblock5_1 = self.erblock5_1(erblock5_0)

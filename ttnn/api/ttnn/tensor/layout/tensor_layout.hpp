@@ -6,7 +6,6 @@
 
 #include <tt-metalium/shape2d.hpp>
 
-#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/layout/alignment.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -75,7 +74,7 @@ public:
     // Returns logical shard shape from shard spec shape
     Shape2D get_logical_shard_shape() const;
 
-    // Returns physical shard shape based on ShardMode, shard shape, and alignment
+    // Returns physical shard shape based on shard shape and alignment
     Shape2D get_physical_shard_shape() const;
 
     Shape2D compute_page_shape(const Shape2D& physical_size) const;

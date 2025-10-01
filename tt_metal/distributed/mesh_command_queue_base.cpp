@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -113,9 +113,9 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
     auto shard_shape = buffer.physical_shard_shape();
     auto datum_size_bytes = buffer.datum_size_bytes();
 
-    auto stride_size_bytes = datum_size_bytes * global_buffer_shape.width();
-    auto single_write_size = datum_size_bytes * shard_shape.width();
-    auto total_write_size_per_shard = single_write_size * shard_shape.height();
+    const auto stride_size_bytes = datum_size_bytes * global_buffer_shape.width();
+    const auto single_write_size = datum_size_bytes * shard_shape.width();
+    const uint64_t total_write_size_per_shard = single_write_size * shard_shape.height();
     auto num_shards_x = global_buffer_shape.width() / shard_shape.width();
     auto num_shards_y = global_buffer_shape.height() / shard_shape.height();
     uint32_t num_devices_x = buffer.device()->num_cols();
@@ -135,8 +135,8 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
                 /*region=*/std::nullopt,
                 num_txns_per_device);
             this->submit_memcpy_request(num_txns_per_device, true);
-            uint32_t write_offset = shard_x * single_write_size + shard_y * stride_size_bytes * shard_shape.height();
-            uint32_t size_to_write = total_write_size_per_shard;
+            uint64_t write_offset = shard_x * single_write_size + shard_y * stride_size_bytes * shard_shape.height();
+            uint64_t size_to_write = total_write_size_per_shard;
             uint32_t local_offset = 0;
             while (size_to_write) {
                 std::memcpy(
@@ -176,8 +176,10 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
             this->write_shard_to_device(buffer, coord, host_data, region);
         };
         for (const auto& coord : device_range) {
-            dispatch_thread_pool_->enqueue(
-                [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+            if (mesh_device_->is_local(coord)) {
+                dispatch_thread_pool_->enqueue(
+                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+            }
         }
         dispatch_thread_pool_->wait();
     } else {
@@ -197,12 +199,23 @@ void MeshCommandQueueBase::enqueue_write_mesh_buffer(
 
 void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
-    auto lock = lock_api_function_();
     TT_FATAL(
-        buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
+        (buffer->global_layout() == MeshBufferLayout::SHARDED) || (buffer->device()->num_devices() == 1),
+        "Can only read a Sharded MeshBuffer from a MeshDevice or a Replicated MeshBuffer from a Unit-Mesh.");
     TT_FATAL(
         blocking, "Non-Blocking reads are not supported through {}. Use enqueue_read_shards_instead.", __FUNCTION__);
-    this->read_sharded_buffer(*buffer, host_data);
+    if (buffer->global_layout() == MeshBufferLayout::SHARDED) {
+        auto lock = lock_api_function_();
+        this->read_sharded_buffer(*buffer, host_data);
+    } else {
+        std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+            .shard_coord = MeshCoordinate(0, 0),
+            .host_data = host_data,
+            .region = std::nullopt,
+        }};
+        // enqueue_read_shards will call lock_api_function_(), no need to call it here
+        this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
+    }
 }
 
 void MeshCommandQueueBase::enqueue_write_shards_nolock(
@@ -218,9 +231,12 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        dispatch_thread_pool_->enqueue(
-            [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
-            mesh_device_->get_device(shard_data_transfers[shard_idx].shard_coord)->id());
+        auto shard_coord = shard_data_transfers[shard_idx].shard_coord;
+        if (mesh_device_->is_local(shard_coord)) {
+            dispatch_thread_pool_->enqueue(
+                [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
+                mesh_device_->get_device(shard_coord)->id());
+        }
     }
     dispatch_thread_pool_->wait();
 
@@ -263,12 +279,14 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        this->read_shard_from_device(
-            *buffer,
-            shard_data_transfer.shard_coord,
-            shard_data_transfer.host_data,
-            shard_data_transfer.region,
-            num_txns_per_device);
+        if (mesh_device_->is_local(shard_data_transfer.shard_coord)) {
+            this->read_shard_from_device(
+                *buffer,
+                shard_data_transfer.shard_coord,
+                shard_data_transfer.host_data,
+                shard_data_transfer.region,
+                num_txns_per_device);
+        }
     }
     this->submit_memcpy_request(num_txns_per_device, blocking);
 }

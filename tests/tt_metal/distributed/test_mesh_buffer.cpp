@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,7 +36,6 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/util.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -265,7 +264,7 @@ INSTANTIATE_TEST_SUITE_P(
             TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::WIDTH_SHARDED, TensorMemoryLayout::BLOCK_SHARDED)));
 
 TEST_F(MeshBufferTest2x4, SweepShardAndConcat) {
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
@@ -328,9 +327,9 @@ TEST_F(MeshBufferTestSuite, ConfigValidation) {
 TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
     constexpr uint32_t NUM_ITERS = 100;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
-    for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
+    for ([[maybe_unused]] auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
         DeviceLocalBufferConfig per_device_buffer_config{
             .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
 
@@ -355,6 +354,9 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
 
             for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
                 for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+                    if (!mesh_device_->is_local(MeshCoordinate(logical_y, logical_x))) {
+                        continue;
+                    }
                     std::vector<uint32_t> dst_vec = {};
                     ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, MeshCoordinate(logical_y, logical_x));
                     EXPECT_EQ(dst_vec, src_vec);
@@ -365,7 +367,7 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
 }
 
 TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
@@ -416,7 +418,7 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
 }
 
 TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
@@ -470,7 +472,7 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
 TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
     constexpr uint32_t NUM_ITERS = 50;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     std::uniform_int_distribution<int> gen_num_datums(32, 128);
     std::mt19937 rng(seed);
@@ -527,7 +529,7 @@ TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
 TEST_F(MeshBufferTestSuite, MultiShardReadWriteMultiThread) {
     constexpr uint32_t NUM_ITERS = 50;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
-    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
 
     std::vector<std::thread> threads;
     for (int thread_idx = 0; thread_idx < 2; thread_idx += 1) {

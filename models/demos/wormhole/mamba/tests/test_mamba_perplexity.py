@@ -23,7 +23,6 @@ from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, Ma
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_model import MambaTT
 from models.demos.wormhole.mamba.tt.model_config import ModelMode
-from models.utility_functions import skip_for_grayskull
 
 
 def calculate_perplexity(
@@ -124,7 +123,6 @@ def test_mamba_reference_perplexity(
 
 
 @pytest.mark.timeout(1200)
-@skip_for_grayskull("Mamba not supported on Grayskull")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "model_version, mode, batch_size, max_seq_len, num_samples, expected_ppl, expected_top1, expected_top5",

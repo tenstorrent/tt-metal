@@ -36,7 +36,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         if (socket_mesh_device->get_device(connection.sender_core.device_coord)->id() == target_device->id()) {
             sender_core_coord = connection.sender_core.core_coord;
             receiver_core_coord = connection.receiver_core.core_coord;
-            sender_fabric_node_id = input_tensor.mesh_device()->get_fabric_node_id(connection.sender_core.device_coord);
+            sender_fabric_node_id = input_tensor.device()->get_fabric_node_id(connection.sender_core.device_coord);
             receiver_fabric_node_id = mesh_socket.get_fabric_node_id(
                 tt::tt_metal::distributed::SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
             break;
@@ -152,7 +152,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
 
     auto link_indices = tt::tt_fabric::get_forwarding_link_indices(sender_fabric_node_id, receiver_fabric_node_id);
     TT_FATAL(
-        link_indices.size() > 0,
+        !link_indices.empty(),
         "No link indices found {} {} {} {}",
         sender_fabric_node_id.mesh_id,
         sender_fabric_node_id.chip_id,

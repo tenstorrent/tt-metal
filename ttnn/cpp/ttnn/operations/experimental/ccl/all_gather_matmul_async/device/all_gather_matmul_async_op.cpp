@@ -23,7 +23,7 @@ AllGatherMatmulAsync create_all_gather_matmul_async_struct(
     const CoreCoord all_gather_core_grid_offset,
     const std::vector<IDevice*>& devices) {
     return ttnn::AllGatherMatmulAsync{
-        all_gather_struct_input, matmul_struct_input, all_gather_core_grid_offset, std::move(devices)};
+        all_gather_struct_input, matmul_struct_input, all_gather_core_grid_offset, devices};
 }
 
 }  // namespace all_gather_matmul_async_detail
@@ -120,34 +120,26 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
-    ::ttnn::ccl::get_device_sender_receiver_config(
-        mesh_device->get_device(mesh_coord),
-        this->all_gather_async_struct.devices,
-        this->all_gather_async_struct.topology);
+    log_debug(tt::LogOp, "DEBUG: create_program_at physical coordinate {} is called", mesh_coord);
+    auto mesh_device = input_tensors[0].device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coord) : input_tensors[0].device();
 
-    std::vector<IDevice*> devices_to_use = {};
-    devices_to_use = this->all_gather_async_struct.devices;
+    uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
+        input_tensors[0], mesh_coord, this->all_gather_async_struct.cluster_axis);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < this->all_gather_async_struct.ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            } else if (this->all_gather_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(this->all_gather_async_struct.ring_size - 1);
-            }
-            if (i != this->all_gather_async_struct.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            } else if (this->all_gather_async_struct.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
-            }
-        }
-    }
+    std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0],
+        mesh_coord,
+        1,
+        this->all_gather_async_struct.topology,
+        this->all_gather_async_struct.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
+        input_tensors[0],
+        mesh_coord,
+        -1,
+        this->all_gather_async_struct.topology,
+        this->all_gather_async_struct.cluster_axis);
 
     // Return the AllGatherMatmulAsync program with callbacks
     return all_gather_matmul_async_multi_core_with_workers(
@@ -158,8 +150,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
 
         /* All Gather Params */
         target_device,
-        forward_device,
-        backward_device,
+        mesh_coord,
+        forward_coord,
+        backward_coord,
         this->all_gather_async_struct.dim,
         this->all_gather_async_struct.num_links,
         this->all_gather_async_struct.ring_size,
@@ -167,6 +160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
         this->all_gather_async_struct.topology,
         this->all_gather_async_struct.semaphore,
         this->all_gather_async_struct.barrier_semaphore,
+        this->all_gather_async_struct.using_persistent_buffers,
         this->all_gather_async_struct.sub_device_id,
         this->all_gather_async_struct.chunks_per_sync,
         this->all_gather_async_struct.num_workers_per_link,
@@ -189,7 +183,6 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->all_gather_async_struct.semaphore.at(0).address();
 
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsync>(
         this->all_gather_async_struct.dim,
@@ -197,13 +190,22 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
         this->all_gather_async_struct.ring_size,
         this->all_gather_async_struct.output_mem_config,
         this->all_gather_async_struct.topology,
-        this->all_gather_async_struct.sub_device_id,
+        this->all_gather_async_struct.sub_device_id.has_value(),
+        this->all_gather_async_struct.sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  shard_builder::HalProgrammableCoreType::TENSIX, this->all_gather_async_struct.sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        this->all_gather_async_struct.cluster_axis,
+        this->all_gather_async_struct.barrier_semaphore.has_value(),
+        this->all_gather_async_struct.using_persistent_buffers,
+        this->all_gather_async_struct.chunks_per_sync,
+        this->all_gather_async_struct.num_workers_per_link,
+        this->all_gather_async_struct.num_buffers_per_channel,
         this->all_gather_core_grid_offset,
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_memory_config);
 }
 
 namespace operations {
@@ -242,16 +244,17 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
     std::vector<Tensor> output_tensors;
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
     if (bias.has_value()) {
-        optional_input_tensors.push_back(bias.value());
+        optional_input_tensors.push_back(bias);
     } else {
         optional_input_tensors.push_back(std::nullopt);
     }
+
+    bool using_persistent_buffers = persistent_output_buffer.has_value();
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
 
     /* AllGather setup */
     ttnn::AllGatherAsync all_gather_async_struct = ttnn::AllGatherAsync(
-        devices,
         dim,
         num_links,
         devices.size(),
@@ -261,7 +264,9 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         sub_device_id,
         /*cluster_axis=*/std::nullopt,
         false,
+        false,
         barrier_semaphore,
+        using_persistent_buffers,
         chunks_per_sync,
         num_workers_per_link,
         num_buffers_per_channel);

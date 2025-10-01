@@ -6,7 +6,7 @@
 #include <string>
 #include <map>
 
-#include "umd/device/types/arch.h"
+#include <umd/device/types/arch.hpp>
 
 namespace ttnn {
 

@@ -3,7 +3,6 @@
 
 
 from pathlib import Path
-from typing import final
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -15,7 +14,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     dequantize,
     even_int_div,
-    save_and_get_path,
+    shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -38,90 +37,50 @@ class Experts(AbstractModule):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
+        assert hf_config.n_routed_experts % mesh_device.get_num_devices() == 0, (
+            f"Number of experts ({hf_config.n_routed_experts}) must be divisible by the number of devices "
+            f"({mesh_device.get_num_devices()})"
+        )
+        (state_dict,) = state_dicts
+        assert state_dict is not None
 
-        # Mapping from weight keys to expert names
-        weight_key_to_expert = {"gate_proj": "w1_experts", "down_proj": "w2_experts", "up_proj": "w3_experts"}
-
-        # Initialize per-weight-type dictionary of device groups
-        weight_groups = {key: [] for key in weight_key_to_expert.keys()}
-        num_devices = mesh_device.get_num_devices()
-
-        # Group experts by device
-        for device_idx in range(num_devices):
-            # Calculate expert range for this device
-            start_expert = device_idx * num_experts_per_device
-            end_expert = start_expert + num_experts_per_device
-            expert_indices = range(start_expert, end_expert)
-
-            # Process each weight type
-            for weight_key in weight_key_to_expert.keys():
-                # Collect tensors for this weight type and device
-                weight_tensors = []
-                for expert_idx in expert_indices:
-                    weight_tensor = state_dict[f"experts.{expert_idx}.{weight_key}.weight"]
-                    inv_scale_key = f"experts.{expert_idx}.{weight_key}.weight_scale_inv"
-                    if inv_scale_key in state_dict:
-                        # Dequantize the tensor before using it
-                        inv_scale_tensor = state_dict[inv_scale_key]
-                        weight_tensor = dequantize(
-                            weight_tensor, inv_scale_tensor, hf_config.quantization_config["weight_block_size"]
-                        )
-
-                    weight_tensors.append(weight_tensor)
-                # Stack and permute, then add to the corresponding weight group
-                weight_groups[weight_key].append(torch.stack(weight_tensors, dim=0).permute(0, 2, 1))
-
-        # Convert weights for each expert group using compact loop
         return {
-            experts_group: {
-                "input_tensor_b": save_and_get_path(
-                    output_path / f"{experts_group}.input_tensor_b",
-                    cls._convert_weight(
-                        weight_groups[weight_key],
-                        mesh_device,
-                    ),
+            ttnn_name: {
+                "input_tensor_b": shard_and_save(
+                    output_path / f"{ttnn_name}.input_tensor_b",
+                    dequantize(
+                        torch.stack(
+                            [
+                                state_dict[f"experts.{expert_id}.{hf_name}.weight"]
+                                for expert_id in range(hf_config.n_routed_experts)
+                            ]
+                        ),
+                        torch.stack(
+                            [
+                                state_dict[f"experts.{expert_id}.{hf_name}.weight_scale_inv"]
+                                for expert_id in range(hf_config.n_routed_experts)
+                            ]
+                        ),
+                        (1, *hf_config.quantization_config["weight_block_size"]),
+                    )
+                    .unsqueeze(0)
+                    .transpose(-1, -2),
+                    shard_dims=(1, 1),
+                    mesh_device=mesh_device,
+                    dtype=ttnn.bfloat4_b,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
             }
-            for weight_key, experts_group in weight_key_to_expert.items()
+            for hf_name, ttnn_name in [
+                ("gate_proj", "w1_experts"),
+                ("down_proj", "w2_experts"),
+                ("up_proj", "w3_experts"),
+            ]
         }
-
-    @final
-    @classmethod
-    def _convert_weight(
-        cls,
-        wx_per_device_state_dict_group: list[torch.Tensor],
-        mesh_device: ttnn.Device,
-    ) -> ttnn.Tensor:
-        """
-        Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
-
-        Args:
-            weight_tensor: The weight tensor.
-            mesh_device: The mesh device to use for the conversion.
-
-        Returns:
-            The converted TTNN tensor.
-        """
-        multi_dev_host_weights = ttnn.from_host_shards(
-            [
-                ttnn.from_torch(e.unsqueeze(0), dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
-                for e in wx_per_device_state_dict_group
-            ],
-            mesh_device.shape,
-        )
-
-        multi_dev_weights = ttnn.to_device(
-            multi_dev_host_weights,
-            mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        return multi_dev_weights
 
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
@@ -134,7 +93,7 @@ class Experts(AbstractModule):
         Returns:
             True if the device is supported, False otherwise.
         """
-        return tuple(mesh_device.shape) == (1, 8) or tuple(mesh_device.shape) == (4, 8)
+        return mesh_device.shape[1] == 8
 
     @classmethod
     def _create_model_config(

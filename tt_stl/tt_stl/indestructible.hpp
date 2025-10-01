@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -45,7 +45,7 @@ public:
 
 private:
     // A buffer of std::byte with alignment of T and size of T
-    alignas(T) std::byte storage_[sizeof(T)];
+    alignas(T) std::byte storage_[sizeof(T)]{};
 };
 
 }  // namespace ttsl

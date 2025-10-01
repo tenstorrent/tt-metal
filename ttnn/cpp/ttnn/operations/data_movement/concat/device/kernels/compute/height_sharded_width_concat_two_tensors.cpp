@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include "compute_kernel_api/transpose_wh.h"
-
-constexpr uint32_t MAX_BATCH_SIZE = 8;
 
 template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
@@ -47,6 +45,7 @@ void MAIN {
 
     constexpr uint32_t tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t groups = get_compile_time_arg_val(12);
+    constexpr uint32_t MAX_BATCH_SIZE = get_compile_time_arg_val(13);
 
     transpose_wh_init(input0_cb, input0_transpose_cb);
 

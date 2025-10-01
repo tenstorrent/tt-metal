@@ -2,25 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import pytest
 import torch
 from loguru import logger
 from tqdm import tqdm
 
 import ttnn
-from models.demos.mobilenetv2.common import load_torch_model
-from models.demos.mobilenetv2.demo.demo_utils import get_batch
+from models.common.utility_functions import profiler, run_for_wormhole_b0
+from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE, load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_input_tensors,
     create_mobilenetv2_model_parameters,
-    get_mesh_mappers,
 )
-from models.demos.ttnn_resnet.tests.demo_utils import get_data_loader
-from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
-from models.utility_functions import profiler, run_for_wormhole_b0
+from models.demos.utils.common_demo_utils import get_batch, get_data_loader, get_mesh_mappers, load_imagenet_dataset
+from models.tt_cnn.tt.pipeline import (
+    PipelineConfig,
+    create_pipeline_from_config,
+    get_memory_config_for_persistent_dram_tensor,
+)
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
@@ -35,6 +37,7 @@ def run_mobilenetv2_imagenet_demo(
     model_location_generator=None,
     entire_imagenet_dataset=False,
     expected_accuracy=0.68,
+    resolution=(224, 224),
 ):
     batch_size = batch_size_per_device * device.get_num_devices()
     iterations = iterations // device.get_num_devices()
@@ -53,18 +56,18 @@ def run_mobilenetv2_imagenet_demo(
         ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size_per_device)
 
         _, host_input_tensor = create_mobilenetv2_input_tensors(
-            batch=batch_size, input_height=224, input_width=224, pad_channels=16, mesh_mapper=inputs_mesh_mapper
+            batch=batch_size,
+            input_height=resolution[0],
+            input_width=resolution[1],
+            pad_channels=16,
+            mesh_mapper=inputs_mesh_mapper,
         )
 
-        dram_cores = 10
-        assert host_input_tensor.shape[-2] % dram_cores == 0, "Expecting even sharding on DRAM input tensor"
-        dram_shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))}),
-            [host_input_tensor.shape[-2] // dram_cores, host_input_tensor.shape[-1]],
-            ttnn.ShardOrientation.ROW_MAJOR,
+        input_dram_mem_config = get_memory_config_for_persistent_dram_tensor(
+            host_input_tensor.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, device.dram_grid_size()
         )
-        input_dram_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+        logger.info(
+            f"Auto-selected persistent DRAM tensor memory config: shape={host_input_tensor.shape}, shard_shape={input_dram_mem_config.shard_spec.shape}, grid={input_dram_mem_config.shard_spec.grid}"
         )
 
         input_l1_core_grid = ttnn.CoreGrid(x=8, y=8)
@@ -79,29 +82,25 @@ def run_mobilenetv2_imagenet_demo(
             use_height_and_width_as_shard_shape=True,
         )
 
-        config = PipelineConfig(use_trace=True, num_command_queues=2, separate_io_queue=False)
+        config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
         pipe = create_pipeline_from_config(
             config,
             ttnn_model,
             device,
             dram_input_memory_config=input_dram_mem_config,
             l1_input_memory_config=input_l1_mem_config,
-            dram_output_memory_config=None,
-            output_shape=None,
-            output_dtype=None,
         )
 
         profiler.start(f"compile")
         pipe.compile(host_input_tensor)
         profiler.end(f"compile")
-
-        input_loc = str(model_location_generator("ImageNet_data"))
+        logger.info("ImageNet-1k validation Dataset")
+        input_loc = load_imagenet_dataset(model_location_generator)
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
-
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
-            inputs, labels = get_batch(data_loader, 224)
+            inputs, labels = get_batch(data_loader, resolution[0])
             ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
             ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
             ttnn_input = ttnn.from_torch(
@@ -130,7 +129,6 @@ def run_mobilenetv2_imagenet_demo(
             labels = input_labels_all[iter]
             output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
             prediction = output.argmax(dim=-1)
-
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
                 logger.info(

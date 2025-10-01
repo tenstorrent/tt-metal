@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
 #include <algorithm>
@@ -29,7 +28,7 @@ constexpr std::string_view KernelDir = "tests/tt_metal/tt_metal/test_kernels/sfp
 using namespace tt::tt_metal;
 
 bool runTest(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& coord,
     const std::string& path,
     unsigned baseLen) {
@@ -38,16 +37,15 @@ bool runTest(
     std::vector<uint32_t> compile_args{args_addr};
 
     auto program(tt::tt_metal::CreateProgram());
-    distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
-    auto kernel = CreateKernel(
+    distributed::MeshWorkload workload;
+    CreateKernel(
         program,
         path,
         coord,
         tt::tt_metal::ComputeConfig{
             .compile_args = compile_args,
         });
-    distributed::AddProgramToMeshWorkload(
-        workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     distributed::Finish(mesh_device->mesh_command_queue());
@@ -59,8 +57,9 @@ bool runTest(
     // If we need more sofphisticate tuning, we should add tags to the
     // body of the file itself.
     auto pos = path.find_last_of('.');
+    // NOLINTNEXTLINE(bugprone-inc-dec-in-conditions)
     while (--pos && path[pos] >= '0' && path[pos] <= '9') {
-        continue;
+        continue;  // NOLINT(readability-redundant-control-flow)
     }
     if (path[pos] == '-') {
         while (path[++pos] != '.') {
@@ -68,8 +67,8 @@ bool runTest(
         }
         expected |= 0x4000;
     }
-    std::vector<uint32_t> args =
-        tt::llrt::read_hex_vec_from_core(mesh_device->get_devices()[0]->id(), noc_xy, args_addr, sizeof(uint32_t));
+    std::vector<uint32_t> args = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        mesh_device->get_devices()[0]->id(), noc_xy, args_addr, sizeof(uint32_t));
     unsigned result = args[0];
     bool pass = result == expected;
     if (pass) {
@@ -84,7 +83,7 @@ bool runTest(
 }
 
 bool runTests(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::CoreCoord coord,
     std::string& path,
     unsigned baseLen) {
@@ -119,7 +118,7 @@ bool runTests(
     return pass;
 }
 
-bool runTestsuite(std::shared_ptr<distributed::MeshDevice> mesh_device, const tt::tt_metal::CoreCoord coord) {
+bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const tt::tt_metal::CoreCoord coord) {
     std::string path;
     if (auto* var = std::getenv("TT_METAL_HOME")) {
         path.append(var);
@@ -131,11 +130,11 @@ bool runTestsuite(std::shared_ptr<distributed::MeshDevice> mesh_device, const tt
     return runTests(mesh_device, coord, path, path.find_last_of('/') + 1);
 }
 
-using tt::tt_metal::CommandQueueSingleCardProgramFixture;
+using tt::tt_metal::UnitMeshCQSingleCardProgramFixture;
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
     CoreCoord core{0, 0};
-    for (auto mesh_device : devices_) {
+    for (const auto& mesh_device : devices_) {
         EXPECT_TRUE(runTestsuite(mesh_device, core));
     }
 }

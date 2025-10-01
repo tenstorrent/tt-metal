@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -21,8 +21,8 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
-    auto intermed_tile_size = tt::tt_metal::detail::TileSize(intermed_data_format);
+    auto tile_size = tt::tile_size(data_format);
+    auto intermed_tile_size = tt::tile_size(intermed_data_format);
 
     int32_t cb_usage = 0;        // bytes
     cb_usage += Wt * tile_size;  // input;
@@ -51,8 +51,8 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
-    auto intermed_tile_size = tt::tt_metal::detail::TileSize(intermed_data_format);
+    auto tile_size = tt::tile_size(data_format);
+    auto intermed_tile_size = tt::tile_size(intermed_data_format);
 
     int32_t cb_usage = 0;        // bytes
     cb_usage += Ht * tile_size;  // input;
@@ -90,9 +90,10 @@ void MorehSoftmaxOperation::validate_inputs(
     TT_FATAL(input.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((input.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
-        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B,
-        "Inputs must be of bfloat16 or bfloat8_b type");
-
+        input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
+            input.dtype() == DataType::FLOAT32,
+        "Inputs must be of bfloat16, bfloat8_b or float32 type. Received: {}",
+        input.dtype());
     const auto rank = input.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
@@ -139,13 +140,15 @@ MorehSoftmaxOperation::invoke(
     const MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    const bool is_fp32 = input.dtype() == DataType::FLOAT32;
     return {
         operation_attributes_t{
             dim,
             op,
             strategy,
             memory_config.value_or(input.memory_config()),
-            init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)},
+            init_device_compute_kernel_config(
+                input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32)},
         tensor_args_t{input, output}};
 }
 

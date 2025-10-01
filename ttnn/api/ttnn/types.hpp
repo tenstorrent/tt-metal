@@ -25,7 +25,6 @@ constexpr auto TILE_SIZE = 32;
 using tt::tt_metal::BufferType;
 using tt::tt_metal::DataType;
 using tt::tt_metal::MemoryConfig;
-using tt::tt_metal::ShardMode;
 using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::TensorMemoryLayout;
 
@@ -41,6 +40,7 @@ static constexpr auto TILE_LAYOUT = Layout::TILE;
 
 using tt::tt_metal::StorageType;
 static constexpr auto DEVICE_STORAGE_TYPE = StorageType::DEVICE;
+static constexpr auto HOST_STORAGE_TYPE = StorageType::HOST;
 
 using tt::tt_metal::CoreCoord;
 using tt::tt_metal::CoreRange;

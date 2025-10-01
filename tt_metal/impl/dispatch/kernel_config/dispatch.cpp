@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
@@ -24,7 +24,7 @@
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include "rtoptions.hpp"
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 
 #include "tt_metal/api/tt-metalium/device_pool.hpp"
@@ -182,12 +182,10 @@ void DispatchKernel::GenerateStaticConfigs() {
 
     if (!is_hd()) {
         create_edm_connection_sems(edm_connection_attributes_);
-        static_config_.is_2d_fabric =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology() ==
-            tt_fabric::Topology::Mesh;
+        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        static_config_.is_2d_fabric = fabric_context.is_2D_routing_enabled();
         static_config_.is_2d_fabric_dynamic =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_config() ==
-            tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+            static_config_.is_2d_fabric && fabric_context.is_dynamic_routing_enabled();
     } else {
         static_config_.is_2d_fabric = false;
         static_config_.is_2d_fabric_dynamic = false;
@@ -214,7 +212,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
-                prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+                prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         }
 
         // Downstream
@@ -225,7 +223,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.downstream_s_logical_core = dispatch_s_kernel->GetLogicalCore();
         } else {
             // If no dispatch_s, no downstream
-            TT_ASSERT(downstream_kernels_.size() == 0);
+            TT_ASSERT(downstream_kernels_.empty());
             dependent_config_.downstream_s_logical_core = UNUSED_LOGICAL_CORE;
         }
         dependent_config_.downstream_logical_core = UNUSED_LOGICAL_CORE;  // Unused
@@ -241,8 +239,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         TT_ASSERT(upstream_kernels_.size() == 1);
         if (auto dispatch_d = dynamic_cast<DispatchKernel*>(upstream_kernels_[0])) {
             dependent_config_.upstream_logical_core = dispatch_d->GetLogicalCore();
-            dependent_config_.upstream_dispatch_cb_sem_id =
-                dispatch_d->GetStaticConfig().my_downstream_cb_sem_id.value();
+            dependent_config_.upstream_dispatch_cb_sem_id = dispatch_d->GetStaticConfig().my_downstream_cb_sem_id;
             dependent_config_.upstream_sync_sem = 0;  // Unused
             dependent_config_.num_hops = tt::tt_metal::get_num_hops(device_id_, dispatch_d->GetDeviceId());
             assemble_2d_fabric_packet_header_args(this->dependent_config_, GetDeviceId(), dispatch_d->GetDeviceId());
@@ -307,7 +304,7 @@ void DispatchKernel::GenerateDependentConfigs() {
             dependent_config_.prefetch_h_noc_xy = tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(
                 prefetch_kernel->GetVirtualCore().x, prefetch_kernel->GetVirtualCore().y);
             dependent_config_.prefetch_h_local_downstream_sem_addr =
-                prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+                prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
         }
 
         // Downstream, expect a MUX_D
@@ -327,9 +324,8 @@ void DispatchKernel::GenerateDependentConfigs() {
                 TT_ASSERT(!found_dispatch_h, "DISPATCH_D has multiple downstream DISPATCH_H kernels.");
                 dependent_config_.downstream_logical_core = dispatch_h_kernel->GetLogicalCore();
                 dependent_config_.downstream_cb_size = dispatch_h_kernel->GetDispatchBufferSize();
-                dependent_config_.downstream_cb_base = dispatch_h_kernel->GetStaticConfig().dispatch_cb_base.value();
-                dependent_config_.downstream_cb_sem_id =
-                    dispatch_h_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
+                dependent_config_.downstream_cb_base = dispatch_h_kernel->GetStaticConfig().dispatch_cb_base;
+                dependent_config_.downstream_cb_sem_id = dispatch_h_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
                 dependent_config_.num_hops = tt::tt_metal::get_num_hops(dispatch_h_kernel->GetDeviceId(), device_id_);
                 assemble_2d_fabric_packet_header_args(
                     this->dependent_config_, GetDeviceId(), dispatch_h_kernel->GetDeviceId());
@@ -375,6 +371,12 @@ void DispatchKernel::CreateKernel() {
             .get_active_ethernet_cores(device_->id(), /*skip_reserved_tunnel_cores*/ true)
             .size();
     bool virtualize_num_eth_cores = num_virtual_active_eth_cores > num_physical_active_eth_cores;
+
+    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
+    CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+    auto virtual_start = device_->virtual_core_from_logical_core(device_worker_cores.start_coord, CoreType::WORKER);
+    auto virtual_end = device_->virtual_core_from_logical_core(device_worker_cores.end_coord, CoreType::WORKER);
+    auto virtual_core_range = CoreRange(virtual_start, virtual_end);
 
     std::vector<uint32_t> compile_args = {};
 
@@ -474,6 +476,9 @@ void DispatchKernel::CreateKernel() {
         {"TO_MESH_ID", std::to_string(dependent_config_.to_mesh_id.value_or(0))},
         {"TO_DEV_ID", std::to_string(dependent_config_.to_dev_id.value_or(0))},
         {"ROUTER_DIRECTION", std::to_string(dependent_config_.router_direction.value_or(0))},
+        {"WORKER_MCAST_GRID",
+         std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
+        {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };

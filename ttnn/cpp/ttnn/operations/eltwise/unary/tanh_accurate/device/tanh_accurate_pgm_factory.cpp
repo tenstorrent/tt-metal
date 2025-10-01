@@ -6,7 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -22,13 +21,14 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input;
+    const auto& ops_chain = args.op_chain;
 
     tt::tt_metal::Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
+    uint32_t single_tile_size_output = tt::tile_size(cb_data_format_output);
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
@@ -84,20 +84,6 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
             .set_page_size(im5_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im5_config);
 
-    // output for x > 3.5
-    uint32_t im6_cb_index = tt::CBIndex::c_7;
-    tt::tt_metal::CircularBufferConfig cb_im6_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im6_cb_index, cb_data_format}})
-            .set_page_size(im6_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im6_config);
-
-    // output for x <= 3.5
-    uint32_t im7_cb_index = tt::CBIndex::c_8;
-    tt::tt_metal::CircularBufferConfig cb_im7_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{im7_cb_index, cb_data_format}})
-            .set_page_size(im7_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im7_config);
-
     // output buffer
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
@@ -135,11 +121,25 @@ TanhAccurateProgramFactory::cached_program_t TanhAccurateProgramFactory::create(
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im2_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im3_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im4_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[im5_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines;
+    if (input.dtype() == DataType::FLOAT32) {
+        unary_defines["TANH_FP32"] = "1";
+    } else {
+        unary_defines["TANH_BF16"] = "1";
+    }
+
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
+    if (ops_chain[0].type() == UnaryOpType::TANHSHRINK) {
+        path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanhshrink.cpp";
+    }
 
     tt::tt_metal::CreateKernel(
         program,

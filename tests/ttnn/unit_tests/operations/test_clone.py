@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -94,7 +94,6 @@ memory_config_list = [
 ]
 
 
-@skip_for_blackhole("Fails on BH. Issue #20576")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -116,9 +115,17 @@ memory_config_list = [
     "tilized",
     [True, False],
 )
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        "bfloat16",
+        "int32",
+    ],
+)
 def test_clone_shape(
     shape,
     tilized,
+    input_dtype,
     device,
 ):
     """
@@ -129,7 +136,7 @@ def test_clone_shape(
         shape,
         memory_config_list[0],
         memory_config_list[0],
-        "bfloat16",
+        input_dtype,
         None,
         tilized,
         None,
@@ -149,10 +156,18 @@ def test_clone_shape(
     "tilized",
     [True, False],
 )
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        "bfloat16",
+        "int32",
+    ],
+)
 def test_clone_memory_config(
     input_memory_config,
     output_memory_config,
     tilized,
+    input_dtype,
     device,
 ):
     """
@@ -164,7 +179,7 @@ def test_clone_memory_config(
         [1, 3, 320, 384],
         input_memory_config,
         output_memory_config,
-        "bfloat16",
+        input_dtype,
         None,
         tilized,
         None,
@@ -221,8 +236,16 @@ def test_clone_dtype_conversion(
     "tilized",
     [True, False],
 )
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        "bfloat16",
+        "int32",
+    ],
+)
 def test_clone_callback(
     tilized,
+    input_dtype,
     device,
 ):
     """
@@ -235,7 +258,7 @@ def test_clone_callback(
             [1, 3, 320, 384],
             memory_config_list[0],
             memory_config_list[0],
-            "bfloat16",
+            input_dtype,
             None,
             tilized,
             None,

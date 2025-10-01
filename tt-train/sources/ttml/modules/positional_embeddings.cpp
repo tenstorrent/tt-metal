@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -69,7 +69,6 @@ autograd::TensorPtr PositionalEmbedding::operator()(const autograd::TensorPtr& i
 }
 
 void TrainablePositionalEmbedding::initialize_tensors(uint32_t sequence_length, uint32_t embedding_dim) {
-    auto* device = &autograd::ctx().get_device();
     m_weight = autograd::create_tensor();
     init::normal_init(m_weight, ttnn::Shape({1, 1, sequence_length, embedding_dim}), /* normal params */ {0.F, 1.F});
 }

@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -97,11 +97,9 @@ int main(int argc, char** argv) {
             auto l1_buffer = distributed::MeshBuffer::create(global_buffer_config, local_l1_config, device.get());
             auto input_dram_buffer =
                 distributed::MeshBuffer::create(global_buffer_config, local_dram_config, device.get());
-            const uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
             auto output_dram_buffer =
                 distributed::MeshBuffer::create(global_buffer_config, local_dram_config, device.get());
-            const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
             Program program = CreateProgram();
             auto mesh_workload = distributed::MeshWorkload();
@@ -140,8 +138,7 @@ int main(int argc, char** argv) {
                 core,
                 runtime_args
             );
-            distributed::AddProgramToMeshWorkload(
-                mesh_workload, std::move(program), distributed::MeshCoordinateRange(device->shape()));
+            mesh_workload.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program));
             distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             log_info(tt::LogTest, "Started program");
             distributed::Finish(cq);

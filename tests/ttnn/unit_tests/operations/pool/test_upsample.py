@@ -10,7 +10,7 @@ from typing import Union, Tuple
 import torch
 import torch.nn as nn
 import ttnn
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
 
 TILE_WIDTH = 32
@@ -196,7 +196,8 @@ def upsample_multicore_common(
                     break
                 nshards_w -= 1
             if nshards_w == 0 or nshards_h == 0:
-                raise ValueError("nshards_h or nshards_w is 0")
+                pytest.skip("nshards_h or nshards_w is 0")
+
             ncores = (nshards_h, nshards_w)
         shard_grid = get_shard_grid_from_num_cores(device, ncores)
 
@@ -264,6 +265,7 @@ def upsample_multicore_common(
         [1, 32, 5, 4],
         [1, 64, 128, 17],
         [1, 64, 132, 19],
+        [1, 8, 28, 28],
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

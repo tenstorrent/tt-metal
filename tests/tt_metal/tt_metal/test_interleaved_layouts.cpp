@@ -23,7 +23,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -36,10 +36,9 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/utils.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
-enum class ARCH;
 namespace tt_metal {
 class IDevice;
 }  // namespace tt_metal
@@ -68,7 +67,6 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
         int stick_size = num_elements_in_stick * 2;
-        int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
         uint32_t dram_buffer_size =
             num_sticks * stick_size;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
@@ -81,7 +79,6 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(const tt::AR
             .buffer_type = tt_metal::BufferType::DRAM};
 
         auto sticks_buffer = CreateBuffer(sticks_config);
-        uint32_t dram_buffer_src_addr = sticks_buffer->address();
 
         tt_metal::detail::WriteToBuffer(sticks_buffer, src_vec);
 
@@ -123,7 +120,6 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
         int stick_size = num_elements_in_stick * 2;
-        int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
 
         int num_tiles_c = stick_size / 64;
 
@@ -160,14 +156,16 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_time_args);
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
@@ -175,7 +173,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_1_default,
-                .compile_args = {1}});
+                .compile_args = reader_compile_time_args});
 
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
@@ -186,7 +184,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
 
         vector<uint32_t> compute_kernel_args = {uint(num_output_tiles)};
 
-        auto eltwise_unary_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
@@ -217,7 +215,7 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(const tt:
             (uint32_t) 0,
             (uint32_t) num_output_tiles});
 
-        CoreCoord debug_core = {1, 1};
+        [[maybe_unused]] CoreCoord debug_core = {1, 1};
 
         tt_metal::detail::LaunchProgram(device, program);
 
@@ -293,7 +291,6 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
         int num_sticks = 256;
         int num_elements_in_stick = 1024;
         int stick_size = num_elements_in_stick * 2;
-        int num_elements_in_stick_as_packed_uint32 = num_elements_in_stick / 2;
 
         int num_tiles_c = stick_size / 64;
 
@@ -324,15 +321,17 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
+        std::vector<uint32_t> reader_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_time_args);
         auto unary_reader_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_stick_layout_8bank.cpp",
@@ -340,18 +339,22 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(const tt:
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_1_default,
-                .compile_args = {1}});
+                .compile_args = reader_compile_time_args});
 
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_time_args);
         auto unary_writer_kernel = tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_stick_layout_8bank.cpp",
             core,
             tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = writer_compile_time_args});
 
         vector<uint32_t> compute_kernel_args = {uint(num_output_tiles)};
 
-        auto eltwise_unary_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
             core,
@@ -415,8 +418,6 @@ template <bool src_is_in_l1, bool dst_is_in_l1>
 bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     uint num_pages = 256;
     uint num_bytes_per_page = 2048;
-    uint num_entries_per_page = 512;
-    uint num_bytes_per_entry = 4;
     uint buffer_size = num_pages * num_bytes_per_page;
 
     uint num_l1_banks = 128;
@@ -433,33 +434,17 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{0, tt::DataFormat::Float16_b}})
             .set_page_size(0, num_bytes_per_page);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(2 * num_bytes_per_page, {{16, tt::DataFormat::Float16_b}})
             .set_page_size(16, num_bytes_per_page);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .compile_args = {not src_is_in_l1}});
-
-    auto unary_writer_kernel = tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = {not dst_is_in_l1}});
+    // Buffers and host data
 
     vector<uint32_t> compute_kernel_args = {num_pages};
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
@@ -485,44 +470,52 @@ bool test_interleaved_l1_datacopy(const tt::ARCH& arch) {
         src = CreateBuffer(l1_config);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
 
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, {src->address(), 0, 0, num_pages});
-
     } else {
         TT_FATAL((buffer_size % num_dram_banks) == 0, "Error");
 
         src = CreateBuffer(dram_config);
         tt_metal::detail::WriteToBuffer(src, host_buffer);
-
-        tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, {src->address(), 0, 0, num_pages});
     }
 
-    std::vector<uint32_t> readback_buffer;
+    // Create destination buffer prior to kernels to build compile-time args
     if constexpr (dst_is_in_l1) {
         dst = CreateBuffer(l1_config);
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {dst->address(), 0, num_pages});
-
-        tt_metal::detail::LaunchProgram(device, program);
-
-        tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
-
     } else {
         dst = CreateBuffer(dram_config);
-
-        tt_metal::SetRuntimeArgs(
-            program,
-            unary_writer_kernel,
-            core,
-            {dst->address(), 0, num_pages});
-
-        tt_metal::detail::LaunchProgram(device, program);
-
-        tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
     }
+
+    // Create kernels with TensorAccessorArgs compile-time arguments
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(src).append_to(reader_compile_time_args);
+    auto unary_reader_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
+
+    std::vector<uint32_t> writer_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(dst).append_to(writer_compile_time_args);
+    auto unary_writer_kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
+
+    // Now that kernels exist, set reader runtime args
+    tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, {src->address(), 0, 0, num_pages});
+
+    std::vector<uint32_t> readback_buffer;
+    tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dst->address(), 0, num_pages});
+
+    tt_metal::detail::LaunchProgram(device, program);
+
+    tt_metal::detail::ReadFromBuffer(dst, readback_buffer);
 
     pass = (host_buffer == readback_buffer);
 

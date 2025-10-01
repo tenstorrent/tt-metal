@@ -20,16 +20,24 @@ class TtBottleneck:
         self.is_downsample = is_downsample
         self.activation_dtype = activation_dtype
 
-        self.conv1 = TtConv2D(conv_args.conv1, conv_pth.conv1, device=device, activation="relu")
-        self.conv2 = TtConv2D(conv_args.conv2, conv_pth.conv2, device=device, activation="relu", act_block_h=32)
-        self.conv3 = TtConv2D(conv_args.conv3, conv_pth.conv3, device=device, activation="", is_blk=conv3_blk_sharded)
+        self.conv1 = TtConv2D(
+            conv_args.conv1, conv_pth.conv1, device=device, activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+        )
+        self.conv2 = TtConv2D(
+            conv_args.conv2,
+            conv_pth.conv2,
+            device=device,
+            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            act_block_h=32,
+        )
+        self.conv3 = TtConv2D(conv_args.conv3, conv_pth.conv3, device=device, activation=None, is_blk=conv3_blk_sharded)
 
         if is_downsample:
             self.downsample = TtConv2D(
                 conv_args.downsample[0],
                 conv_pth.downsample,
                 device=device,
-                activation="",
+                activation=None,
                 is_blk=blk_sharded,
                 activation_dtype=activation_dtype,
             )

@@ -13,7 +13,6 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/reduction/accumulation/cumprod/cumprod.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
@@ -21,7 +20,10 @@ void bind_reduction_cumprod_operation(py::module& module) {
         R"doc(
         Returns cumulative product of `input` along dimension `dim`
         For a given `input` of size N, the `output` will also contain N elements and be such that:
-        This function is fundamentally identical to `torch.cumprod()`
+
+        .. math::
+            \mathrm{{output}}_i = \mathrm{{input}}_1 \times \mathrm{{input}}_2 \times \cdots \times \mathrm{{input}}_i
+
 
         Args:
             input (ttnn.Tensor): input tensor
@@ -35,8 +37,12 @@ void bind_reduction_cumprod_operation(py::module& module) {
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Example:
+            input_tensor = ttnn.rand((N, N), device=device)
+            output_tensor = ttnn.cumprod(input_tensor, dim=0)
+
         Note:
-            If both `dtype` and `output` are specified then `output.dtype` must be `dtype`)
+            If both `dtype` and `output` are specified then `output.dtype` must match `dtype`.
 
             Supported dtypes, layout, ranks and `dim` values:
 
@@ -60,12 +66,10 @@ void bind_reduction_cumprod_operation(py::module& module) {
 
         .. code-block:: python
 
-            import torch
             import ttnn
 
             # Create tensor
-            torch_input = torch.rand([2, 3, 4])
-            tensor_input = ttnn.from_torch(torch_input, device=device)
+            tensor_input = ttnn.rand((2,3,4), device=device)
 
             # Apply ttnn.cumprod() on dim=0
             tensor_output = ttnn.cumprod(tensor_input, dim=0)
@@ -88,9 +92,8 @@ void bind_reduction_cumprod_operation(py::module& module) {
                std::optional<DataType>& dtype,
                const bool& reverse_order,
                std::optional<Tensor> optional_out,
-               const std::optional<MemoryConfig>& memory_config,
-               const QueueId& queue_id = DefaultQueueId) -> Tensor {
-                return self(queue_id, input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
+               const std::optional<MemoryConfig>& memory_config) -> Tensor {
+                return self(input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
@@ -98,8 +101,7 @@ void bind_reduction_cumprod_operation(py::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("reverse_order") = false,
             py::arg("out") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

@@ -12,7 +12,6 @@ void kernel_main() {
     const auto num_output_tiles = get_arg_val<uint32_t>(i++);
     const auto input_tile_stride = get_arg_val<uint32_t>(i++);
     const auto start_id = get_arg_val<uint32_t>(i++);
-    const auto input_is_dram = (get_arg_val<uint32_t>(i++) == 1);
     const auto HtWt = get_arg_val<uint32_t>(i++);
     const auto inner_size = get_arg_val<uint32_t>(i++);
 
@@ -33,11 +32,8 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
     uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
-    const auto input_data_format = get_dataformat(cb_id_in0);
-    const InterleavedAddrGenFast<true> dram_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
-    const InterleavedAddrGenFast<false> l1_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    constexpr auto input_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(input_args, input_addr, input_tile_bytes);
 
     for (uint32_t i = start_id; i < start_id + num_output_tiles; i++) {
         uint32_t hw_tile_id = i % HtWt;
@@ -48,11 +44,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
             cb_reserve_back(cb_id_in0, onetile);
             l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-            if (input_is_dram) {
-                noc_async_read_tile(read_tile_id, dram_input_addrg, l1_write_addr_in0);
-            } else {
-                noc_async_read_tile(read_tile_id, l1_input_addrg, l1_write_addr_in0);
-            }
+            noc_async_read_tile(read_tile_id, s, l1_write_addr_in0);
             noc_async_read_barrier();
             cb_push_back(cb_id_in0, onetile);
             read_tile_id += input_tile_stride;

@@ -5,7 +5,6 @@
 import pytest
 import torch
 import ttnn
-import os
 from loguru import logger
 from models.experimental.vadv2.reference import spatial_cross_attention
 from models.experimental.vadv2.tt import tt_spatial_cross_attention
@@ -17,6 +16,7 @@ from ttnn.model_preprocessing import (
     preprocess_linear_weight,
     preprocess_linear_bias,
 )
+from models.experimental.vadv2.common import load_torch_model
 
 
 def custom_preprocessor(model, name):
@@ -87,25 +87,18 @@ def create_vadv2_model_parameters_sca(model: SpatialCrossAttention, input_tensor
 def test_vadv2_sca(
     device,
     reset_seeds,
+    model_location_generator,
 ):
-    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vadv2/weights_download.sh")
     point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
     batch_first = True
     torch_model = spatial_cross_attention.SpatialCrossAttention(
         embed_dims=256, pc_range=point_cloud_range, batch_first=batch_first
     )
-    torch_dict = torch.load(weights_path)
-
-    state_dict = {
-        k: v
-        for k, v in torch_dict.items()
-        if (k.startswith("pts_bbox_head.transformer.encoder.layers.0.attentions.1."))
-    }
-    new_state_dict = dict(zip(torch_model.state_dict().keys(), state_dict.values()))
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model=torch_model,
+        layer="pts_bbox_head.transformer.encoder.layers.0.attentions.1.",
+        model_location_generator=model_location_generator,
+    )
 
     query = torch.randn(1, 10000, 256)
     key = torch.randn(6, 240, 1, 256)

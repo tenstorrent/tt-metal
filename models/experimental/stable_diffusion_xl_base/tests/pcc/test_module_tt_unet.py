@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DCond
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -146,6 +146,8 @@ def run_unet_model(
     ttnn.deallocate(ttnn_output_tensor)
     ttnn.deallocate(ttnn_timestep_tensor)
     ttnn.deallocate(ttnn_encoder_tensor)
+    ttnn.deallocate(ttnn_added_cond_kwargs["text_embeds"])
+    ttnn.deallocate(ttnn_added_cond_kwargs["time_ids"])
 
     ttnn.ReadDeviceProfiler(device)
 
@@ -174,6 +176,8 @@ def run_unet_model(
         ttnn.deallocate(ttnn_output_tensor)
         ttnn.deallocate(ttnn_timestep_tensor)
         ttnn.deallocate(ttnn_encoder_tensor)
+        ttnn.deallocate(ttnn_added_cond_kwargs["text_embeds"])
+        ttnn.deallocate(ttnn_added_cond_kwargs["time_ids"])
 
         ttnn.ReadDeviceProfiler(device)
 

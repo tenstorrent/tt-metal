@@ -32,12 +32,12 @@ struct MorehGetItemOperation {
 
     struct MorehGetItemRmFactory {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            std::size_t num_cores;
-            uint32_t core_h;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            std::size_t num_cores{};
+            uint32_t core_h{};
             ttnn::SmallVector<uint32_t> index_dims;
-            uint32_t input_dim_offset;
+            uint32_t input_dim_offset{};
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -56,12 +56,12 @@ struct MorehGetItemOperation {
 
     struct MorehGetItemTilizedFactory {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            std::size_t num_cores;
-            uint32_t core_h;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id{};
+            tt::tt_metal::KernelHandle unary_writer_kernel_id{};
+            std::size_t num_cores{};
+            uint32_t core_h{};
             ttnn::SmallVector<uint32_t> index_dims;
-            uint32_t input_dim_offset;
+            uint32_t input_dim_offset{};
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

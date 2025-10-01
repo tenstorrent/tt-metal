@@ -11,6 +11,7 @@ class TtLlamaCrossAttention(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -24,8 +25,8 @@ class TtLlamaCrossAttention(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
 
         self.dim = dim
@@ -64,7 +65,7 @@ class TtLlamaCrossAttention(LightweightModule):
 
         # TODO DRAM Shard the weights (see llama3 text)
         self.wq = ttnn.as_tensor(
-            self.state_dict[wq_str].transpose(-2, -1),
+            state_dict[wq_str].transpose(-2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
@@ -74,7 +75,7 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         self.wk = ttnn.as_tensor(
-            self.state_dict[wk_str].transpose(-2, -1),
+            state_dict[wk_str].transpose(-2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
@@ -84,7 +85,7 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         self.wv = ttnn.as_tensor(
-            self.state_dict[wv_str].transpose(-2, -1),
+            state_dict[wv_str].transpose(-2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
@@ -94,7 +95,7 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         self.wo = ttnn.as_tensor(
-            self.state_dict[wo_str].transpose(-2, -1),
+            state_dict[wo_str].transpose(-2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -113,6 +114,7 @@ class TtLlamaCrossAttention(LightweightModule):
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
             weight_key="q_norm",
             eps=self.norm_eps,
+            tt_ccl=self.tt_ccl,
         )
 
         self.k_norm = RMSNorm(
@@ -123,6 +125,7 @@ class TtLlamaCrossAttention(LightweightModule):
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
             weight_key="k_norm",
             eps=self.norm_eps,
+            tt_ccl=self.tt_ccl,
         )
 
     def compute_xattn_kv_cache(self, xattn_tokens, user_id, xattn_cache, cross_page_table=None):
@@ -283,13 +286,19 @@ class TtLlamaCrossAttention(LightweightModule):
 
         # All reduce
         if self.is_multichip:
-            output = ttnn.reduce_scatter(
+            output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
+                persistent_output_buffers=None,
                 dim=3,
-                math_op=ttnn.ReduceType.Sum,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 num_links=1,
-                topology=self.configuration.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.configuration.ccl_topology(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
         return ttnn.to_memory_config(output, self.model_config["DECODE_RESIDUAL_MEMCFG"])
@@ -374,13 +383,19 @@ class TtLlamaCrossAttention(LightweightModule):
 
         # Reduce-scatter
         if self.is_multichip:  # TODO use_fused_all_gather_matmul
-            dense_out_reduced = ttnn.reduce_scatter(
+            dense_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
+                persistent_output_buffers=None,
                 dim=3,
-                math_op=ttnn.ReduceType.Sum,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 num_links=1,
-                topology=self.configuration.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.configuration.ccl_topology(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
             return dense_out_reduced
         else:

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -323,6 +323,8 @@ def test_sub_opt_output_typecast_inputs(input_shapes, device):
         (torch.Size([5, 1, 64, 1]), torch.Size([1, 3, 1, 128]), torch.Size([5, 3, 64, 128])),
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1]), torch.Size([5, 3, 128, 64])),
         (torch.Size([5, 1, 1]), torch.Size([1, 32, 128]), torch.Size([5, 32, 128])),
+        (torch.Size([5, 1, 1, 128]), torch.Size([1, 3, 64, 128]), torch.Size([5, 3, 64, 128])),
+        (torch.Size([1, 3, 64, 128]), torch.Size([5, 1, 1, 128]), torch.Size([5, 3, 64, 128])),
     ),
 )
 # Typecast on output

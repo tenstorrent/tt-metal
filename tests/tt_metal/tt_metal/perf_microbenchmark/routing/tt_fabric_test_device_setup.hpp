@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include <memory>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 
@@ -43,6 +43,7 @@ enum class TestWorkerType : uint8_t { SENDER, RECEIVER };
 
 struct TestWorker {
 public:
+    virtual ~TestWorker() = default;
     TestWorker(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void set_kernel_src(const std::string_view& kernel_src);
     void create_kernel(
@@ -58,13 +59,14 @@ public:
 
 protected:
     CoreCoord logical_core_;
-    uint32_t worker_id_;
+    uint32_t worker_id_{};
     std::string kernel_src_;
     TestDevice* test_device_ptr_;
 };
 
 struct TestSender : TestWorker {
 public:
+    ~TestSender() override = default;
     TestSender(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src);
     void add_config(TestTrafficSenderConfig config);
     void add_sync_config(TestTrafficSenderConfig sync_config);
@@ -91,6 +93,7 @@ public:
 
 struct TestReceiver : TestWorker {
 public:
+    ~TestReceiver() override = default;
     TestReceiver(
         CoreCoord logical_core,
         TestDevice* test_device_ptr,
@@ -138,6 +141,10 @@ public:
 
     // Method to access sender configurations for traffic analysis
     const std::unordered_map<CoreCoord, TestSender>& get_senders() const { return senders_; }
+
+    const std::unordered_map<RoutingDirection, std::set<uint32_t>>& get_used_fabric_connections() const {
+        return used_fabric_connections_;
+    }
 
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
@@ -241,7 +248,12 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
     std::optional<RoutingDirection> outgoing_direction;
     std::vector<uint32_t> outgoing_link_indices;
     // either we will have hops specified or the dest node id
-    if (config.hops.has_value()) {
+    // With 2d unicast, we have bugs where we try to follow the input hop count but the routing tables
+    // cause the packets to fail to reach the destination properly in some cases, due to torus links
+    bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
+                               (config.parameters.is_2D_routing_enabled) &&
+                               (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
+    if (config.hops.has_value() && !is_torus_2d_unicast) {
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
         outgoing_link_indices =
             this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
@@ -490,11 +502,11 @@ inline std::vector<uint32_t> TestDevice::generate_fabric_connection_args(
 }
 
 inline void TestDevice::create_sync_kernel() {
-    log_info(tt::LogTest, "creating sync kernel on node: {}", fabric_node_id_);
+    log_debug(tt::LogTest, "creating sync kernel on node: {}", fabric_node_id_);
 
     // TODO: fetch these dynamically
-    const bool is_2d_fabric = this->device_info_provider_->is_2d_fabric();
-    const bool use_dynamic_routing = this->device_info_provider_->use_dynamic_routing();
+    const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
+    const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
 
     // Assuming single sync core per device for now
     TT_FATAL(
@@ -506,8 +518,8 @@ inline void TestDevice::create_sync_kernel() {
 
     // Compile-time args
     std::vector<uint32_t> ct_args = {
-        is_2d_fabric,
-        use_dynamic_routing,
+        is_2D_routing_enabled,
+        is_dynamic_routing_enabled,
         sync_sender.sync_fabric_connections_.size(),        /* num sync fabric connections */
         static_cast<uint32_t>(senders_.size() + 1),         /* num local sync cores (all senders + sync core) */
         sender_memory_map_->common.get_kernel_config_size() /* kernel config buffer size */
@@ -562,20 +574,14 @@ inline void TestDevice::create_sync_kernel() {
     }
 
     // create sync kernel with local args
-    sync_sender.create_kernel(
-        coord_,
-        std::move(ct_args),
-        std::move(rt_args),
-        std::move(local_args),
-        sender_memory_map_->get_local_args_address(),
-        {});
-    log_info(tt::LogTest, "created sync kernel on core: {}", sync_core);
+    sync_sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
+    log_debug(tt::LogTest, "created sync kernel on core: {}", sync_core);
 }
 
 inline void TestDevice::create_sender_kernels() {
     // TODO: fetch these dynamically
-    const bool is_2d_fabric = this->device_info_provider_->is_2d_fabric();
-    const bool use_dynamic_routing = this->device_info_provider_->use_dynamic_routing();
+    const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
+    const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
 
     // all local senders + one sync core
     uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size()) + 1;
@@ -587,8 +593,8 @@ inline void TestDevice::create_sender_kernels() {
 
         // Compile-time args
         std::vector<uint32_t> ct_args = {
-            is_2d_fabric,
-            use_dynamic_routing,
+            is_2D_routing_enabled,
+            is_dynamic_routing_enabled,
             sender.fabric_connections_.size(),                  /* num fabric connections */
             sender.configs_.size(),                             /* num traffic configs */
             (uint32_t)benchmark_mode_,                          /* benchmark mode */
@@ -648,14 +654,8 @@ inline void TestDevice::create_sender_kernels() {
         }
 
         // create kernel with local args
-        sender.create_kernel(
-            coord_,
-            std::move(ct_args),
-            std::move(rt_args),
-            std::move(local_args),
-            sender_memory_map_->get_local_args_address(),
-            {});
-        log_info(tt::LogTest, "created sender kernel on core: {}", core);
+        sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
+        log_debug(tt::LogTest, "created sender kernel on core: {}", core);
     }
 }
 
@@ -692,18 +692,13 @@ inline void TestDevice::create_receiver_kernels() {
         }
 
         receiver.create_kernel(
-            coord_,
-            std::move(ct_args),
-            std::move(rt_args),
-            std::move(local_args),
-            receiver_memory_map_->get_local_args_address(),
-            {});
-        log_info(tt::LogTest, "created receiver kernel on core: {}", core);
+            coord_, ct_args, rt_args, local_args, receiver_memory_map_->get_local_args_address(), {});
+        log_debug(tt::LogTest, "created receiver kernel on core: {}", core);
     }
 }
 
 inline void TestDevice::create_kernels() {
-    log_info(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
+    log_debug(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
     // create sync kernels
     if (global_sync_) {
         this->create_sync_kernel();

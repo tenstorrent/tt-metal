@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,8 @@
 
 namespace ttml::ttnn_fixed::distributed {
 
+tt::tt_metal::Tensor all_gather(const tt::tt_metal::Tensor& tensor, int dim);
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor);
-tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim);
+tt::tt_metal::Tensor reduce_scatter(const tt::tt_metal::Tensor& tensor, int dim);
 
 }  // namespace ttml::ttnn_fixed::distributed

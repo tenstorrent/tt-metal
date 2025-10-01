@@ -7,7 +7,6 @@
 
 #include "../gather.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
@@ -34,7 +33,6 @@ Tensor pre_tosa_gather_transform_input_index_tensor(const Tensor& input_tensor, 
 }  // namespace
 
 Tensor ExecuteTosaGather::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const Tensor& input_index_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
@@ -73,13 +71,7 @@ Tensor ExecuteTosaGather::invoke(
         CMAKE_UNIQUE_NAMESPACE::pre_tosa_gather_transform_input_index_tensor(input_index_tensor, dim, C);
 
     return ttnn::gather(
-        queue_id,
-        input_tensor,
-        dim,
-        expanded_index_tensor,
-        sparse_grad,
-        memory_config_value,
-        optional_output_tensor_value);
+        input_tensor, dim, expanded_index_tensor, sparse_grad, memory_config_value, optional_output_tensor_value);
 }
 
 }  // namespace ttnn::operations::data_movement

@@ -3,18 +3,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
-from pathlib import Path
 
 import torch
-import torch.nn as nn
-from loguru import logger
 from ttnn.model_preprocessing import (  # preprocess_layernorm_parameter,; preprocess_linear_bias,; preprocess_linear_weight,
     ParameterDict,
     ParameterList,
 )
 
 import ttnn
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s_world.reference.yolov8s_world import (
     SPPF,
     C2f,
@@ -59,66 +56,6 @@ def move_to_device(object, device):
         return ttnn.to_device(object, device)
     else:
         return object
-
-
-class Ensemble(nn.ModuleList):
-    def __init__(self):
-        super(Ensemble, self).__init__()
-
-    def forward(self, x, augment=False):
-        y = []
-        for module in self:
-            y.append(module(x, augment)[0])
-        y = torch.cat(y, 1)
-        return y, None
-
-
-def attempt_download(file, repo="ultralytics/assets"):
-    tests = Path(__file__).parent.parent
-    file_path = tests / Path(str(file).strip().replace("'", "").lower())
-
-    if not file_path.exists():
-        name = "yolov8s-world.pt"
-        msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
-        try:
-            url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
-            logger.info(f"Downloading {url} to {file_path}...")
-            torch.hub.download_url_to_file(url, file_path)
-
-            assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
-        except Exception as e:
-            logger.info(f"Error downloading from GitHub: {e}. Trying secondary source...")
-
-            url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
-            logger.info(f"Downloading {url} to {file_path}...")
-            os.system(f"curl -L {url} -o {file_path}")
-
-            if not file_path.exists() or file_path.stat().st_size < 1e6:
-                file_path.unlink(missing_ok=True)
-                logger.info(f"ERROR: Download failure for {msg}")
-            else:
-                logger.info(f"Download succeeded from secondary source!")
-    return file_path
-
-
-def attempt_load(weights, map_location=None):
-    model = Ensemble()
-    for w in weights if isinstance(weights, list) else [weights]:
-        weight_path = attempt_download(w)
-        logger.info(f"Loading weights from: {weight_path}")
-        ckpt = torch.load(weight_path, map_location=map_location, weights_only=False)
-        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
-    for m in model.modules():
-        if isinstance(m, (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU)):
-            m.inplace = True
-        elif isinstance(m, nn.Upsample):
-            m.recompute_scale_factor = None
-    if len(model) == 1:
-        return model[-1]
-    else:
-        for k in ["names", "stride"]:
-            setattr(model, k, getattr(model[-1], k))
-        return model
 
 
 def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
@@ -666,57 +603,6 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-def tt_adaptive_to_max_pool2d(input_shape, output_size):
-    if isinstance(output_size, int):
-        output_size = (output_size, output_size)
-
-    input_height, input_width = input_shape[1], input_shape[2]
-    output_height, output_width = output_size
-
-    # Check if dimensions are valid
-    if input_height < output_height or input_width < output_width:
-        raise ValueError("Output size cannot be larger than input size for max pooling")
-
-    # Calculate stride (might be floating point)
-    stride_h_float = input_height / output_height
-    stride_w_float = input_width / output_width
-
-    # Round down stride to integer
-    stride_h = math.floor(stride_h_float)
-    stride_w = math.floor(stride_w_float)
-
-    # Ensure stride is at least 1
-    stride_h = max(1, stride_h)
-    stride_w = max(1, stride_w)
-
-    # Calculate kernel size
-    kernel_h = input_height - (output_height - 1) * stride_h
-    kernel_w = input_width - (output_width - 1) * stride_w
-
-    # Handle case where kernel size might be too large
-    if kernel_h > input_height:
-        kernel_h = input_height
-    if kernel_w > input_width:
-        kernel_w = input_width
-
-    # Calculate if this is an exact conversion
-    is_exact = (
-        stride_h_float == stride_h
-        and stride_w_float == stride_w
-        and input_height == (output_height - 1) * stride_h + kernel_h
-        and input_width == (output_width - 1) * stride_w + kernel_w
-    )
-
-    message = ""
-    if not is_exact:
-        message = (
-            "Note: This is an approximation. For non-integer stride ratios, "
-            "AdaptiveMaxPool2d uses a more complex logic with varying kernel sizes."
-        )
-
-    return kernel_w, stride_h, 0, message
-
-
 def ttnn_custom_normalize(x, dim, device):
     # Convert input to tiled layout
     if x.layout != ttnn.TILE_LAYOUT:
@@ -747,15 +633,3 @@ def ttnn_custom_normalize(x, dim, device):
     normalized = ttnn.divide(x, norm_expanded)
 
     return normalized
-
-
-def get_mesh_mappers(device):
-    if device.get_num_devices() > 1:
-        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
-        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
-        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
-    else:
-        inputs_mesh_mapper = None
-        weights_mesh_mapper = None
-        output_mesh_composer = None
-    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,9 @@ import pytest
 from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
@@ -161,7 +160,6 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "batch_size",
     (32,),
@@ -233,7 +231,7 @@ def test_llama_sampling_inference(
     if load_cached_outputs:
         # Cached model outputs
         tt_model_output_cache_path = (
-            f"models/demos/llama3_70b_galaxy/tests/ref_outputs/test_llama_model/text_demo_logits.bin"
+            f"models/demos/llama3_70b_galaxy/tests/ref_outputs/test_llama_model/text_demo_logits.tensorbin"
         )
         tt_input_loaded = ttnn.load_tensor(file_name=tt_model_output_cache_path, device=mesh_device)
         tt_input_loaded = tt_input_loaded.reshape(1, 1, 32, -1)

@@ -1,22 +1,21 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/system_mesh_translation_map.hpp"
 
-#include <boost/move/utility_core.hpp>
 #include <optional>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "control_plane.hpp"
 #include <tt_stl/indestructible.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "mesh_coord.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::distributed {
 

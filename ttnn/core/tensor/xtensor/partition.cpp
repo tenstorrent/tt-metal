@@ -249,7 +249,7 @@ Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::Tenso
 }  // namespace adaptor
 
 Tensor concat(const std::vector<Tensor>& tensors, int dim) {
-    TT_FATAL(tensors.size() > 0, "Cannot concatenate an empty list of tensors");
+    TT_FATAL(!tensors.empty(), "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
         case tt::tt_metal::DataType::BFLOAT4_B:
@@ -265,6 +265,7 @@ Tensor concat(const std::vector<Tensor>& tensors, int dim) {
 }
 
 // Explicit instantiations for the public API.
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define EXPLICIT_INSTANTIATIONS_FOR_TYPE(T)                                                                          \
     template StridedViews<xt::xarray<T>> chunk(const xt::xexpression<xt::xarray<T>>&, int, int);                     \
     template StridedViews<xt::xarray<T>> chunk_ndim(                                                                 \
@@ -300,6 +301,7 @@ EXPLICIT_INSTANTIATIONS_FOR_TYPE(int32_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint8_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint16_t)
 EXPLICIT_INSTANTIATIONS_FOR_TYPE(uint32_t)
+// NOLINTEND(bugprone-macro-parentheses)
 
 #undef EXPLICIT_INSTANTIATIONS_FOR_TYPE
 

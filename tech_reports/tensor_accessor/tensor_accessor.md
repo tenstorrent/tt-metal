@@ -98,21 +98,21 @@ Address Calculation
 
 ```c++
 // Get the NOC address for a given page
-uint32_t noc_addr = tensor_accessor.get_noc_addr(page_id);
+uint64_t noc_addr = tensor_accessor.get_noc_addr(page_id);
 
 // Get bank ID and offset for a given page
 auto [bank_id, bank_offset] = tensor_accessor.get_bank_and_offset(page_id);
 
 // You can also address pages by nd coordinate (such address calculation is a little bit cheaper)
 std::array<uint32_t, 4> page_coord{0, 1, 2, 3};
-uint32_t noc_addr = tensor_accessor.get_noc_addr(page_coord);   // <- Anything with operator[] should work
+uint64_t noc_addr = tensor_accessor.get_noc_addr(page_coord);   // <- Anything with operator[] should work
 
 // For sharded tensor, you can get address of shards:
 static_assert(args::is_sharded, "Sharded API requires sharded tensor");
-uint32_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_id);
+uint64_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_id);
 
 std::array<uint32_t, 4> shard_coord{0, 1, 2, 3};
-uint32_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_coord); // <- Anything with operator[] should work
+uint64_t noc_addr = tensor_accessor.get_shard_noc_addr(shard_coord); // <- Anything with operator[] should work
 ```
 
 Data Transfer
@@ -172,10 +172,14 @@ bool is_local = tensor_accessor.is_local_shard(shard_id);
 
 Note: In case containers size is compile-time, then shapes, strides, coords are `std::array<uint32_t, rank/num_banks>`, otherwide `Span<uint32_t>`
 
+## Tensor Accessor iterators
+You can use TensorAccessor iterators to speed up and/or simplify iteration over pages in a tensor.
+[Tensor Accessor iterators documentation.](./tensor_accessor_iterator.md)
 
 ## Performance Considerations
 - If rank is static, then construction of TensorAccessor is 0-cost, meaning that everything is precomputed in compile time.
-- Calculation of address scales ~lineary with number rank
+- Calculation of address scales ~linearly with rank
+- Iterator-based approaches are more efficient than repeated calls to get_noc_addr() due to state caching (especially shard_pages)
 
 
 ## Examples:

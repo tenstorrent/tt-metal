@@ -7,10 +7,6 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_exp.h"
-#define MAIN math_main()
-#define MATH(x) x
-#else
-#define MATH(x)
 #endif
 
 namespace ckernel {
@@ -58,8 +54,13 @@ template <
     bool skip_positive_check = false,
     int iterations = 8>
 ALWI void exp_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC, uint16_t scale = p_sfpu::kCONST_1_FP16B) {
-    MATH((llk_math_eltwise_unary_sfpu_exponential<approx, fast_and_approx, scale_en, skip_positive_check, iterations>(
-        idst, vector_mode, scale)));
+    MATH((llk_math_eltwise_unary_sfpu_exponential<
+          approx,
+          fast_and_approx,
+          scale_en,
+          skip_positive_check,
+          iterations,
+          DST_ACCUM_MODE>(idst, vector_mode, scale)));
 }
 
 }  // namespace ckernel

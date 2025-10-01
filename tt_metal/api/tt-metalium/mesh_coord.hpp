@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,9 +10,8 @@
 #include <vector>
 
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/shape_base.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -411,7 +410,7 @@ public:
      * @param coord The global coordinate to check
      * @return true if the coordinate contains a local value, false if remote
      */
-    bool is_local_at(const MeshCoordinate& coord) const { return this->at(coord).is_local(); }
+    bool is_local(const MeshCoordinate& coord) const { return this->at(coord).is_local(); }
 };
 
 template <typename T>
@@ -430,7 +429,7 @@ MeshContainer<T>::MeshContainer(const MeshShape& shape, std::vector<T> values) :
         shape.mesh_size() == values_.size(),
         "Shape and values size mismatch; shape: {}, values: {}",
         shape,
-        values.size());
+        values_.size());
 }
 
 template <typename T>

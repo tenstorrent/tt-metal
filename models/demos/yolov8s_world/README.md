@@ -1,7 +1,7 @@
 # Yolov8s-World
 
 ## Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ## Introduction
 Demo showcasing Yolov8s-World running on `Wormhole - n150, n300` using ttnn.
@@ -16,20 +16,20 @@ The YOLO-World Model introduces an advanced, real-time Ultralytics YOLOv8-based 
 ## How to Run
 - Use the following command to run the model:
 ```
-pytest --disable-warnings models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_YoloModel
+pytest --disable-warnings models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_yolo_model
 ```
 
 ### Model Performant with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `90` FPS.
+- For `640x640`, end-2-end perf is `105` FPS.
   ```bash
-  pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_perf_yolov8s_world.py::test_perf_yolov8s_world
+  pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_e2e_performant.py::test_perf_yolov8s_world
   ```
 
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `175` FPS.
+- For `640x640`, end-2-end perf is `189` FPS.
   ```bash
-  pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_perf_yolov8s_world.py::test_perf_yolov8s_world_dp
+  pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_e2e_performant.py::test_perf_yolov8s_world_dp
   ```
 
 ### Demo with Trace+2CQs
@@ -68,7 +68,7 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 ### Performant evaluation with Trace+2CQ
 - Use the following command to run the performant evaluation with Trace+2CQs:
   ```
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
+  pytest models/demos/yolo_eval/evaluate.py::test_yolov8s_world[res0-device_params0-tt_model]
   ```
 Note: The model is evaluated with 500 samples.
 

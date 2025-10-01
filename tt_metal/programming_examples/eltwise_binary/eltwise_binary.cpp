@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -24,16 +25,18 @@ int main(int argc, char** argv) {
 
     // clang-format off
     try {
-        // Initialize the device (here we use the 1st device, but you can use any device)
+        // Create a 1x1 mesh on device 0. The same API scales to multi-device meshes.
         constexpr int device_id = 0;
-        IDevice* device = CreateDevice(device_id);
+        std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-        // In Metalium, submitting operations to the device is done through a command queue. This includes
-        // uploading/downloading data to/from the device, and executing programs.
-        CommandQueue& cq = device->command_queue();
+        // Submit work via a mesh command queue: data uploads/downloads and program execution.
+        distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
         // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
         // same kernel at a given time. Metalium allows you to run different kernels on different cores
         // simultaneously.
+        distributed::MeshWorkload workload;
+        // Execute across this device range. Here it spans the whole mesh (1x1).
+        auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
         Program program = CreateProgram();
 
         // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
@@ -47,18 +50,19 @@ int main(int argc, char** argv) {
         constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
         constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
 
-        // Create 3 buffers on DRAM. These will hold the input and output data. src0 and src1 are the input buffers, dst is the
-        // output buffer.
-        InterleavedBufferConfig config{
-            .device = device,                       // The device to create the buffer on
-            .size = n_tiles * tile_size_bytes,      // The size of the buffer in bytes
-            .page_size = tile_size_bytes,           // The page size of the buffer in bytes. Unlike the `loopback` example, we
-                                                    // need the page size to be the same as the tile size for a large portion of
-                                                    // the NoC transfer APIs to work.
-            .buffer_type = BufferType::DRAM};       // This is a DRAM buffer.
-        auto src0_dram_buffer = CreateBuffer(config);
-        auto src1_dram_buffer = CreateBuffer(config);
-        auto dst_dram_buffer = CreateBuffer(config);
+        // Create 3 DRAM-backed mesh buffers: two inputs (src0, src1) and one output (dst).
+        distributed::DeviceLocalBufferConfig dram_config{
+            .page_size = tile_size_bytes, //The page size of the buffer in bytes. Unlike the `loopback` example, we
+                                          // need the page size to be the same as the tile size for a large portion of the NoC transfer APIs to work.
+            .buffer_type = BufferType::DRAM}; // This is a DRAM buffer.
+        distributed::ReplicatedBufferConfig buffer_config{
+            .size = n_tiles * tile_size_bytes // Total bytes per device (replicated across the mesh).
+        };
+
+        auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        // Each handle represents a mesh-wide replicated buffer; on a unit mesh this is a single device allocation.
 
         // Initialize the input buffers with random data. For this example, src0 is a random vector of bfloat16 values
         std::mt19937 rng(std::random_device{}());
@@ -72,9 +76,9 @@ int main(int argc, char** argv) {
         constexpr float val_to_add = -1.0f;
         std::vector<bfloat16> b_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
 
-        // Upload the data from host to the device.
-        EnqueueWriteBuffer(cq, src0_dram_buffer, a_data, false);
-        EnqueueWriteBuffer(cq, src1_dram_buffer, b_data, false);
+        // Upload host vectors into the mesh buffers.
+        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
+        distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
         // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
@@ -143,23 +147,24 @@ int main(int argc, char** argv) {
 
         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates
         // to Metalium that the operation is non-blocking. The function is allowed to return upon the kernel being queued. We must
-        // ensure that the kernel is finished before we read the output buffer. This is done by calling Finish(cq) which waits until
-        // all operations in the command queue are finished. This is equivalent to calling EnqueueProgram(cq, program, true); telling
+        // ensure that the kernel is finished before we read the output buffer. This is done by calling distributed::Finish(cq) which waits until
+        // all operations in the command queue are finished. This is equivalent to calling EnqueueMeshWorkload(cq, program, true); telling
         // Metalium to wait until the program is finished before returning.
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
+        workload.add_program(device_range, std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
         // Equivalently:
-        // EnqueueProgram(cq, program, true);
+        // distributed::EnqueueMeshWorkload(cq, workload, true);
 
-        // Read the output buffer and compare it with the expected output.
+        // Read the output buffer (from shard at mesh coordinate {0,0} on a unit mesh) and validate.
         std::vector<bfloat16> result_vec;
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
         for (size_t i = 0; i < result_vec.size(); ++i) {
-            const float expected = a_data[i].to_float() + val_to_add;
-            const float actual = result_vec[i].to_float();
+            const float expected = static_cast<float>(a_data[i]) + val_to_add;
+            const float actual = static_cast<float>(result_vec[i]);
 
             if (std::abs(expected - actual) > eps) {
                 pass = false;
@@ -168,7 +173,7 @@ int main(int argc, char** argv) {
         }
 
         // Finally, we close the device.
-        pass &= CloseDevice(device);
+        pass &= mesh_device->close();
     } catch (const std::exception& e) {
         fmt::print(stderr, "Test failed with exception!\n");
         fmt::print(stderr, "{}\n", e.what());

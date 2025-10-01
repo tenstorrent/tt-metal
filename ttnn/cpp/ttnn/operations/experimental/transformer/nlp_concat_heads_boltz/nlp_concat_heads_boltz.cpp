@@ -11,7 +11,6 @@
 
 namespace ttnn::operations::experimental::transformer {
 ttnn::Tensor NLPConcatHeadsBoltzOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
@@ -23,10 +22,4 @@ ttnn::Tensor NLPConcatHeadsBoltzOperation::invoke(
         .at(0);
 }
 
-ttnn::Tensor NLPConcatHeadsBoltzOperation::invoke(
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(ttnn::DefaultQueueId, input_tensor, memory_config, std::move(optional_output_tensor));
-}
-};  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::operations::experimental::transformer

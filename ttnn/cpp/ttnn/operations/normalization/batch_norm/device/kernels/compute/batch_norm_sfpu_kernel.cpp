@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/rsqrt.h"
 
 #include <cstdint>
 
@@ -47,7 +48,7 @@ ALWI void batchnorm_bcast_tiles(
     for (uint32_t i = 0; i < onetile; ++i) {
         copy_tile(cb_eps, i, i * 2 + 1);
 
-        add_binary_tile(i * 2, i * 2 + 1);
+        add_binary_tile(i * 2, i * 2 + 1, i * 2);
     }
     rsqrt_tile_init();
     for (uint32_t i = 0; i < onetile; ++i) {
@@ -81,7 +82,7 @@ ALWI void batchnorm_bcast_tiles(
         copy_tile_to_dst_init_short_with_dt(cb_other, cb_bcast);
         for (uint32_t i = 0; i < onetile; ++i) {
             copy_tile(cb_bcast, i, i * 2 + 1);
-            sub_binary_tile(i * 2, i * 2 + 1);
+            sub_binary_tile(i * 2, i * 2 + 1, i * 2);
         }
         cb_pop_front(cb_other, onetile);
 
@@ -91,7 +92,7 @@ ALWI void batchnorm_bcast_tiles(
         copy_tile_to_dst_init_short_with_dt(cb_bcast, cb_den);
         for (uint32_t i = 0; i < onetile; ++i) {
             copy_tile(cb_den, i, i * 2 + 1);
-            mul_binary_tile(i * 2, i * 2 + 1);
+            mul_binary_tile(i * 2, i * 2 + 1, i * 2);
 
             pack_tile(i * 2, cb_affine_or_out);
         }
@@ -112,7 +113,7 @@ ALWI void batchnorm_bcast_tiles(
             copy_tile_to_dst_init_short_with_dt(cb_affine_or_out, cb_weight);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_weight, i, i * 2 + 1);
-                mul_binary_tile(i * 2, i * 2 + 1);
+                mul_binary_tile(i * 2, i * 2 + 1, i * 2);
 
                 pack_tile(i * 2, cb_scaled_output);
             }
@@ -135,7 +136,7 @@ ALWI void batchnorm_bcast_tiles(
             copy_tile_to_dst_init_short_with_dt(cb_tmp_1, cb_bias);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_bias, i, i * 2 + 1);
-                add_binary_tile(i * 2, i * 2 + 1);
+                add_binary_tile(i * 2, i * 2 + 1, i * 2);
 
                 pack_tile(i * 2, cb_output_0);
             }

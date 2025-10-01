@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ struct ReadCoreDataDescriptor {
     uint32_t size_bytes = 0;
 };
 
-uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type);
+uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_type, uint32_t num_subdevices);
 
 namespace device_dispatch {
 
@@ -29,7 +29,7 @@ struct CoreDispatchParams {
     uint32_t size_bytes = 0;
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
-    CoreType dispatch_core_type;
+    CoreType dispatch_core_type{CoreType::COUNT};
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,12 +9,18 @@ import pytest
 import torch
 import ttnn
 
-from models.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
-dtypes = [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.bfloat16, ttnn.bfloat8_b)]
+dtypes = [
+    (torch.float32, ttnn.float32),
+    (torch.bfloat16, ttnn.bfloat16),
+    (torch.bfloat16, ttnn.bfloat8_b),
+    (torch.int32, ttnn.int32),
+    (torch.int32, ttnn.uint32),
+]
 shapes = [(1,), (2,), (2, 3), (4, 16, 3, 1), (4, 3, 1, 2, 2)]
 repeat_shapes = [
     (1,),

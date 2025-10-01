@@ -28,6 +28,8 @@
 #include <tt_stl/type_name.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+// NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
+
 namespace ttsl {
 
 template <typename T>
@@ -201,6 +203,13 @@ struct Attribute final {
         move_storage{other.move_storage},
         implementations{other.implementations} {}
 
+    Attribute(Attribute&& other) noexcept :
+        pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
+        delete_storage{other.delete_storage},
+        copy_storage{other.copy_storage},
+        move_storage{other.move_storage},
+        implementations{other.implementations} {}
+
     Attribute& operator=(const Attribute& other) {
         if (other.pointer != this->pointer) {
             this->destruct();
@@ -216,14 +225,7 @@ struct Attribute final {
         return *this;
     }
 
-    Attribute(Attribute&& other) :
-        pointer{other.pointer ? other.move_storage(this->type_erased_storage, other.pointer) : nullptr},
-        delete_storage{other.delete_storage},
-        copy_storage{other.copy_storage},
-        move_storage{other.move_storage},
-        implementations{other.implementations} {}
-
-    Attribute& operator=(Attribute&& other) {
+    Attribute& operator=(Attribute&& other) noexcept {
         if (other.pointer != this->pointer) {
             this->destruct();
             this->pointer = nullptr;
@@ -241,8 +243,8 @@ struct Attribute final {
     ~Attribute() { this->destruct(); }
 
 private:
-    alignas(ALIGNMENT) void* pointer = nullptr;
-    alignas(ALIGNMENT) storage_t type_erased_storage;
+    alignas(ALIGNMENT) storage_t type_erased_storage{};
+    void* pointer = nullptr;
 
     void (*delete_storage)(storage_t&) = nullptr;
     void* (*copy_storage)(storage_t& storage, const void*) = nullptr;
@@ -508,7 +510,8 @@ struct visit_object_of_type_t;
 
 template <typename object_t, typename T>
 void visit_object_of_type(auto&& callback, T&& object) {
-    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    visit_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -646,7 +649,8 @@ struct transform_object_of_type_t;
 
 template <typename object_t, typename T>
 auto transform_object_of_type(auto&& callback, T&& object) {
-    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(callback, object);
+    return transform_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(
+        std::forward<decltype(callback)>(callback), std::forward<T>(object));
 }
 
 template <typename T>
@@ -1233,6 +1237,13 @@ inline hash_t hash_objects_with_default_seed(const Types&... args) noexcept {
     return detail::hash_objects(DEFAULT_SEED, args...);
 }
 
+// Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
+template <typename T>
+void hash_combine(std::size_t& seed, const T& value) {
+    std::hash<T> hasher;
+    seed ^= hasher(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+
 }  // namespace hash
 
 namespace json {
@@ -1314,7 +1325,7 @@ struct to_json_t<std::array<T, N>> {
 template <typename T, std::size_t N>
 struct from_json_t<std::array<T, N>> {
     std::array<T, N> operator()(const nlohmann::json& json_object) noexcept {
-        std::array<T, N> array;
+        std::array<T, N> array{};
         [&array, &json_object]<size_t... Ns>(std::index_sequence<Ns...>) {
             (
                 [&array, &json_object] {
@@ -1578,3 +1589,5 @@ namespace [[deprecated("Use ttsl namespace instead")]] stl {
 using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
+
+// NOLINTEND(bugprone-multi-level-implicit-pointer-conversion)

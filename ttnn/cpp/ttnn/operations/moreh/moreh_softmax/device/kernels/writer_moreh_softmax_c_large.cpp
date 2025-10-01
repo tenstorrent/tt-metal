@@ -17,12 +17,9 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     uint32_t dst_out_tile_bytes = get_tile_size(cb_out);
-    const DataFormat dst_out_data_format = get_dataformat(cb_out);
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-
-    const InterleavedAddrGenFast<dst_is_dram> dst_out = {
-        .bank_base_address = dst_addr, .page_size = dst_out_tile_bytes, .data_format = dst_out_data_format};
+    constexpr auto out_args = TensorAccessorArgs<0>();
+    const auto dst_out = TensorAccessor(out_args, dst_addr, dst_out_tile_bytes);
 
     uint32_t curr_tile = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += onetile) {
