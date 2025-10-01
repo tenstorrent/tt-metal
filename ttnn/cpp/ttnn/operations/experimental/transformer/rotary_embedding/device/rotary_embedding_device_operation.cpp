@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "rotary_embedding_device_operation.hpp"
 #include "rotary_embedding_program_factory.hpp"
 
@@ -64,7 +65,7 @@ std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::v
     const auto& input_tensor = input_tensors.at(0);
     auto shape = input_tensor.padded_shape();
     if (!this->token_idx.has_value()) {
-        shape[-2] = round_up(this->seq_len, TILE_HEIGHT);
+        shape[-2] = ttsl::math::round_up(this->seq_len, TILE_HEIGHT);
     }
 
     if (this->output_mem_config.is_sharded()) {
@@ -82,7 +83,7 @@ std::vector<ttnn::TensorSpec> RotaryEmbedding::compute_output_specs(const std::v
                     break;
                 }
             }
-            uint32_t Ht = div_up(num_blocks, num_cores);
+            uint32_t Ht = ttsl::math::div_up(num_blocks, num_cores);
             shard_spec.grid = num_cores_to_corerangeset(num_cores, core_grid, true);
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.padded_shape()[-1]};
             shard_spec.orientation = ShardOrientation::ROW_MAJOR;

@@ -120,7 +120,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
         dim = 3;
         uint32_t multiple = input_tensor.tensor_spec().tile().get_tile_shape()[1] * num_devices;
-        uint32_t next_aligned_tile = tt::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
+        uint32_t next_aligned_tile = ttsl::math::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
         // pad with zeros to next aligned tile size
         std::array<uint32_t, 4> new_padded_shape = {
             input_tensor.padded_shape()[0],
@@ -234,7 +234,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
         dim = 3;
         uint32_t multiple = input_tensor.tensor_spec().tile().get_tile_shape()[1] * devices.size();
-        uint32_t next_aligned_tile = tt::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
+        uint32_t next_aligned_tile = ttsl::math::div_up(input_tensor.padded_shape()[3], multiple) * multiple;
         // pad with zeros to next aligned tile size
         std::array<uint32_t, 4> new_padded_shape = {
             input_tensor.padded_shape()[0],

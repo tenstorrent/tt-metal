@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/math.hpp>
 #include "device/slice_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/common/constants.hpp"
@@ -118,8 +119,8 @@ ttnn::Tensor SliceOperation::invoke(
 
     ttnn::SmallVector<uint32_t> padded_ends = modified_ends;
     if (input.layout() == Layout::TILE) {
-        padded_ends[input_rank - 2] = std::max(tt::round_up(padded_ends[input_rank - 2], tile_shape[0]), tile_shape[0]);
-        padded_ends[input_rank - 1] = std::max(tt::round_up(padded_ends[input_rank - 1], tile_shape[1]), tile_shape[1]);
+        padded_ends[input_rank - 2] = std::max(ttsl::math::round_up(padded_ends[input_rank - 2], tile_shape[0]), tile_shape[0]);
+        padded_ends[input_rank - 1] = std::max(ttsl::math::round_up(padded_ends[input_rank - 1], tile_shape[1]), tile_shape[1]);
     }
 
     ttnn::SmallVector<uint32_t> actual_shape_vec, final_padded_shape_vec;

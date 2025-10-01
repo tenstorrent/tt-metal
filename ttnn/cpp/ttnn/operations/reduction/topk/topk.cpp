@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <tt_stl/math.hpp>
 
 #include "topk.hpp"
 #include "device/topk_op.hpp"
@@ -23,7 +24,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 uint32_t get_nearest_supported_k_value(uint32_t k) {
-    return tt::constants::TILE_WIDTH * tt::div_up(k, tt::constants::TILE_WIDTH);
+    return tt::constants::TILE_WIDTH * ttsl::math::div_up(k, tt::constants::TILE_WIDTH);
 }
 
 // one stop for all transformations needed after executing top-k

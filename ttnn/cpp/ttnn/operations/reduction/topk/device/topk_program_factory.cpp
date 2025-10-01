@@ -45,7 +45,7 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
 
-    uint32_t Ktiles = tt::div_up(k, tt::constants::TILE_WIDTH);
+    uint32_t Ktiles = ttsl::math::div_up(k, tt::constants::TILE_WIDTH);
 
     // for streaming in input
     uint32_t num_cb_unit = 2;

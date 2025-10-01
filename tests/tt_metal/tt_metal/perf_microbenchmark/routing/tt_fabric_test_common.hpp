@@ -22,6 +22,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt_stl/math.hpp>
 #include "tt_align.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
@@ -777,7 +778,7 @@ public:
             num_forward_hops = full_hop_count;
             num_backward_hops = full_hop_count;
         } else if (pattern_type == HighLevelTrafficPattern::HalfRing) {
-            num_forward_hops = tt::div_up(full_hop_count, 2);
+            num_forward_hops = ttsl::math::div_up(full_hop_count, 2);
             num_backward_hops = full_hop_count - num_forward_hops;
             if (src_node_id.chip_id % 2 == 0) {
                 std::swap(num_forward_hops, num_backward_hops);
@@ -823,7 +824,7 @@ public:
             num_forward_hops = full_hop_count;
             num_backward_hops = full_hop_count;
         } else if (pattern_type == HighLevelTrafficPattern::HalfRing) {
-            num_forward_hops = tt::div_up(full_hop_count, 2);
+            num_forward_hops = ttsl::math::div_up(full_hop_count, 2);
             num_backward_hops = full_hop_count - num_forward_hops;
             if (src_node_id.chip_id % 2 == 0) {
                 std::swap(num_forward_hops, num_backward_hops);

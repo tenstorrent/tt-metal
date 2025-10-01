@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/work_split.hpp>
+#include <tt_stl/math.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
@@ -1297,7 +1298,7 @@ void override_runtime_args_wh(
                 core,
                 {input_tensor.buffer()->address(),
                  num_tiles_per_core,
-                 tt::round_down(num_tiles_read, HtWt) + h * Wt + w,
+                 ttsl::math::round_down(num_tiles_read, HtWt) + h * Wt + w,
                  h,
                  w,
                  Ht,
@@ -1318,7 +1319,7 @@ void override_runtime_args_wh(
 
             reader_args[0] = input_tensor.buffer()->address();
             reader_args[1] = num_tiles_per_core;
-            reader_args[2] = tt::round_down(num_tiles_read, HtWt) + h * Wt + w;
+            reader_args[2] = ttsl::math::round_down(num_tiles_read, HtWt) + h * Wt + w;
             reader_args[3] = h;
             reader_args[4] = w;
             reader_args[5] = Ht;
@@ -1337,7 +1338,7 @@ void override_runtime_args_wh(
         // std::vector<uint32_t> reader_runtime_args = {
         //         input_tensor.buffer()->address(),
         //         num_tiles_per_core,
-        //         tt::round_down(num_tiles_read, HtWt) + h * Wt + w,
+        //         ttsl::math::round_down(num_tiles_read, HtWt) + h * Wt + w,
         //         h,
         //         w,
         //         Ht,
