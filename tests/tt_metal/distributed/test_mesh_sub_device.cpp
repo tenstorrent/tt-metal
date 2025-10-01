@@ -59,9 +59,9 @@ TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     auto waiter_mesh_workload = MeshWorkload();
     auto syncer_mesh_workload = MeshWorkload();
     auto incrementer_mesh_workload = MeshWorkload();
-    AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), devices);
-    AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), devices);
-    AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
+    waiter_mesh_workload.add_program(devices, std::move(waiter_program));
+    syncer_mesh_workload.add_program(devices, std::move(syncer_program));
+    incrementer_mesh_workload.add_program(devices, std::move(incrementer_program));
     for (uint32_t i = 0; i < num_iters; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
@@ -131,8 +131,8 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto datacopy_mesh_workload = MeshWorkload();
     MeshCoordinateRange devices(mesh_device_->shape());
 
-    AddProgramToMeshWorkload(syncer_mesh_workload, std::move(sync_and_incr_program), devices);
-    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(datacopy_program), devices);
+    syncer_mesh_workload.add_program(devices, std::move(sync_and_incr_program));
+    datacopy_mesh_workload.add_program(devices, std::move(datacopy_program));
 
     for (int i = 0; i < 50; i++) {
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
@@ -187,16 +187,16 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
     auto waiter_mesh_workload = MeshWorkload();
     auto syncer_mesh_workload = MeshWorkload();
     auto incrementer_mesh_workload = MeshWorkload();
-    AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), devices);
-    AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), devices);
-    AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
+    waiter_mesh_workload.add_program(devices, std::move(waiter_program));
+    syncer_mesh_workload.add_program(devices, std::move(syncer_program));
+    incrementer_mesh_workload.add_program(devices, std::move(incrementer_program));
 
     auto waiter_mesh_workload_1 = MeshWorkload();
     auto syncer_mesh_workload_1 = MeshWorkload();
     auto incrementer_mesh_workload_1 = MeshWorkload();
-    AddProgramToMeshWorkload(waiter_mesh_workload_1, std::move(waiter_program_1), devices);
-    AddProgramToMeshWorkload(syncer_mesh_workload_1, std::move(syncer_program_1), devices);
-    AddProgramToMeshWorkload(incrementer_mesh_workload_1, std::move(incrementer_program_1), devices);
+    waiter_mesh_workload_1.add_program(devices, std::move(waiter_program_1));
+    syncer_mesh_workload_1.add_program(devices, std::move(syncer_program_1));
+    incrementer_mesh_workload_1.add_program(devices, std::move(incrementer_program_1));
 
     // Load SubDevice configs, run corresponding workloads, reset ... repeat
     for (uint32_t i = 0; i < num_iters; i++) {
@@ -237,9 +237,9 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
     auto waiter_mesh_workload = MeshWorkload();
     auto syncer_mesh_workload = MeshWorkload();
     auto incrementer_mesh_workload = MeshWorkload();
-    AddProgramToMeshWorkload(waiter_mesh_workload, std::move(waiter_program), devices);
-    AddProgramToMeshWorkload(syncer_mesh_workload, std::move(syncer_program), devices);
-    AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
+    waiter_mesh_workload.add_program(devices, std::move(waiter_program));
+    syncer_mesh_workload.add_program(devices, std::move(syncer_program));
+    incrementer_mesh_workload.add_program(devices, std::move(incrementer_program));
 
     // Run programs on sub-device manager 1
     for (uint32_t i = 0; i < k_num_iters; i++) {

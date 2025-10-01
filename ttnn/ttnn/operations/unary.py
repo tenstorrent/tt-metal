@@ -177,8 +177,12 @@ for unary_function in TTNN_ELTWISE_UNARY_CPP_FUNCTIONS:
 def _golden_function_asin(input_tensor_a, *args, device, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.asin(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    result = torch.asin(input_tensor_a)
+    # ttnn returns inf instead of nan for bfloat16, so mask NaNs to inf in torch.asin
+    return (
+        result.masked_fill_((input_tensor_a < -1) | (input_tensor_a > 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
     )
 
 
@@ -188,8 +192,12 @@ ttnn.attach_golden_function(ttnn.asin, golden_function=_golden_function_asin)
 def _golden_function_acos(input_tensor_a, *args, device, **kwargs):
     import torch
 
-    return torch.nan_to_num(
-        torch.acos(input_tensor_a), nan=device.sfpu_nan(), posinf=device.sfpu_inf(), neginf=-device.sfpu_inf()
+    result = torch.acos(input_tensor_a)
+    # ttnn returns inf instead of nan for bfloat16, so mask NaNs to inf in torch.acos
+    return (
+        result.masked_fill_((input_tensor_a < -1) | (input_tensor_a > 1), float("inf"))
+        if input_tensor_a.dtype == torch.bfloat16
+        else result
     )
 
 
