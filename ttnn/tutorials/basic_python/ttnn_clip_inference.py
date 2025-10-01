@@ -6,7 +6,6 @@ import ttnn
 import torch
 from loguru import logger
 import re
-import os
 import math
 import numpy as np
 from PIL import Image
@@ -83,12 +82,12 @@ def main():
         for key, value in state_dict.items():
             if isinstance(value, torch.Tensor):
                 # Convert PyTorch tensors to TT-NN tensors
-                state_dict[key] = to_ttnn(value)
+                ttnn_state_dict[key] = to_ttnn(value)
             elif isinstance(value, torch.Size):
                 # Convert PyTorch Size objects to TT-NN Size objects
-                state_dict[key] = ttnn.Size(value)
+                ttnn_state_dict[key] = ttnn.Size(value)
 
-        return state_dict
+        return ttnn_state_dict
 
     class Transformer:
         def __init__(self, state_dict, heads, attention_mask=None, prefix=""):
@@ -384,16 +383,8 @@ def main():
                 return_output_dim=False,
             )
 
-            # ERROR: Number of shards along height 7 must not exceed number of cores 2
-            output_height = height // self.patch_size
-            output_width = width // self.patch_size
-
             # Check Convolution result
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-            host_tensor = ttnn.to_torch(x, dtype=torch.float32)
-
-            host_tensor = torch.reshape(host_tensor, (batch_size, output_height, output_width, out_channels))
-
             x = ttnn.reshape(x, (x.shape[0], x.shape[1] * x.shape[2], x.shape[3]))
 
             class_embedding = convert_ttnn_dtype(self.class_embedding, x.dtype, (x.shape[0], 1, x.shape[-1]))
