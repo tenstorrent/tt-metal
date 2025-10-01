@@ -195,7 +195,8 @@ protected:
         const MeshCoordinate& device_coord,
         const void* src,
         const std::optional<BufferRegion>& region,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        std::shared_ptr<PinnedMemory> pinned_memory = nullptr) override;
     void read_shard_from_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
