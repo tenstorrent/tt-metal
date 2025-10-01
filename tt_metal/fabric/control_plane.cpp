@@ -669,6 +669,41 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 }
             }
 
+            // TODO: Remove this once we have global physical to logical mapping
+            // Use ethernet coordinates for 2x4 big mesh because of unpredictable nw chip pinning
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::N300_2x2 &&
+                tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size().get() == 2) {
+                // Pick out the chip with the lowest ethernet coordinate (i.e. NW chip)
+                const auto& chip_eth_coords =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
+                TT_FATAL(!chip_eth_coords.empty(), "No chip ethernet coordinates found in ethernet coordinates map");
+
+                // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
+                const auto min_coord =
+                    *std::min_element(chip_eth_coords.begin(), chip_eth_coords.end(), [](const auto& a, const auto& b) {
+                        const auto& [chip_a, eth_coord_a] = a;
+                        const auto& [chip_b, eth_coord_b] = b;
+
+                        if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
+                            return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
+                        }
+                        if (eth_coord_a.x != eth_coord_b.x) {
+                            return eth_coord_a.x < eth_coord_b.x;
+                        }
+                        if (eth_coord_a.y != eth_coord_b.y) {
+                            return eth_coord_a.y < eth_coord_b.y;
+                        }
+                        if (eth_coord_a.rack != eth_coord_b.rack) {
+                            return eth_coord_a.rack < eth_coord_b.rack;
+                        }
+                        return eth_coord_a.shelf < eth_coord_b.shelf;
+                    });
+
+                nw_chip_physical_id =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(
+                        min_coord.second);
+            }
+
             const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
             std::uint32_t i = 0;
             for (const auto& [_, fabric_chip_id] : mesh_container) {
