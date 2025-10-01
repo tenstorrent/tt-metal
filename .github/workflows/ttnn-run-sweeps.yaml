@@ -552,7 +552,7 @@ on:
       skip_on_timeout:
         description: "Skip remaining tests in running suite after first timeout?"
         type: boolean
-        default: false
+        default: true
       upload_results:
         description: "Upload sweep results to Superset?"
         type: boolean
