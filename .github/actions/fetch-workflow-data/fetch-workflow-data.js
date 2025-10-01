@@ -26,21 +26,6 @@ function getCutoffDate(days) {
 }
 
 /**
- * Get the latest created_at date from cached runs.
- * @param {Array} runs - Array of workflow run objects
- * @returns {Date} The latest created_at date, or epoch if none
- */
-function getLatestCachedDate(runs) {
-  if (!runs.length) return new Date(0); // Safe default: epoch
-  // Map to timestamps, filter out invalid dates
-  const times = runs
-    .map(run => new Date(run.created_at).getTime())
-    .filter(t => !isNaN(t) && t > 0);
-  if (!times.length) return new Date(0);
-  return new Date(Math.max(...times));
-}
-
-/**
  * Fetch all workflow runs for the repository, paginated, stopping at sinceDate if provided.
  * @param {object} github - Octokit client
  * @param {object} context - GitHub Actions context
@@ -55,7 +40,7 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
 
   core.info(`createdDateFilter: ${createdDateFilter}`);
   core.info(`days ${days}, sinceDate: ${sinceDate}`);
-  for (let page = 1; page <= MAX_PAGES; page++) {
+  for (let page = 1; page <= MAX_PAGES; page++) { // download pages of runs from the GitHub API
     const params = {
       owner: context.repo.owner,
       repo: context.repo.repo,
@@ -65,7 +50,7 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
     if (eventType) {
       params.event = eventType;
     }
-    const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo(params);
+    const { data: runs } = await github.rest.actions.listWorkflowRunsForRepo(params); // listWorkflowRunsForRepo is a GitHub API call to list the workflow runs for the repository
     if (!runs.workflow_runs.length) {
       break;
     }
@@ -75,12 +60,12 @@ async function fetchAllWorkflowRuns(github, context, days, sinceDate, eventType=
       if (sinceDate && runDate <= sinceDate) {
         core.info(`Early exit: found run at ${runDate} <= latest cached date ${sinceDate}`);
         return allRuns;
-      }
+      } // if a run is found that's too old, we can early exit cuz all future runs will be even older
       if (runDate >= cutoffDate) {
         allRuns.push(run);
       }
     }
-    // If we got fewer runs than requested, we've reached the end
+    // If the api call returned no runs, assume we've reached the end and break
     if (!runs.workflow_runs.length) break;
   }
   return allRuns;

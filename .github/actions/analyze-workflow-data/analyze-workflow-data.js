@@ -21,6 +21,59 @@ const SUCCESS_EMOJI = '✅';
 const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
 
+// Optional logs index mapping (runId -> extracted logs directory)
+// This is populated when the action input `logs-index-path` is provided.
+let __logsIndexMap = undefined;
+
+/**
+ * Load a mapping from workflow run IDs to their extracted logs directories.
+ * The JSON file may be either an object map of { "<runId>": "<dir>" }
+ * or an array of objects like [{ run_id: 123, dir: "/abs/path" }].
+ */
+function loadLogsIndexFromFile(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return undefined;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const json = JSON.parse(raw);
+    const map = new Map();
+    // Object form: direct mapping from run id to directory
+    if (json && typeof json === 'object' && !Array.isArray(json)) {
+      for (const [k, v] of Object.entries(json)) {
+        if (typeof v === 'string' && v) map.set(String(k), v);
+      }
+      return map;
+    }
+    // Array form: list of entries with fields that identify run id and dir
+    if (Array.isArray(json)) {
+      for (const entry of json) {
+        if (!entry) continue;
+        const id = entry.run_id ?? entry.id ?? entry.runId;
+        const dir = entry.dir ?? entry.path ?? entry.extract_dir ?? entry.extractDir;
+        if (id !== undefined && typeof dir === 'string' && dir) {
+          map.set(String(id), dir);
+        }
+      }
+      return map.size ? map : undefined;
+    }
+  } catch (e) {
+    core.warning(`Failed to load logs index from ${filePath}: ${e.message}`);
+  }
+  return undefined;
+}
+
+/**
+ * Resolve the extracted logs directory for a given run ID using the loaded index.
+ */
+function getLogsDirForRunId(runId) {
+  try {
+    if (!__logsIndexMap) return undefined;
+    const key = String(runId);
+    return __logsIndexMap.get(key);
+  } catch (_) {
+    return undefined;
+  }
+}
+
 // CODE FOR OWNERSHIP MAPPING
 
 // Owners mapping cache
@@ -232,19 +285,22 @@ async function fetchCommitAuthor(octokit, context, commitSha) {
  * Download workflow run logs and extract up to N error snippets.
  * Returns an array of strings (snippets).
  */
-async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 50) {
+async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 50, logsDirPath = undefined) {
   const owner = context.repo.owner; // return the owner of the repository
   const repo = context.repo.repo; // return the repository name
   try {
     await core.startGroup(`Extracting error snippets for run ${runId}`); // start a group to log the error snippets (we log this to the console)
-    const { data } = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId }); // downloadWorkflowRunLogs is a GitHub API call to download the logs for a run
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `runlogs-${runId}-`)); // create a temporary directory to store the logs
-    const zipPath = path.join(tmpDir, 'run_logs.zip'); // create a path to the zip file
-    fs.writeFileSync(zipPath, Buffer.from(data)); // write the logs to the zip file in the temporary directory
-    const extractDir = path.join(tmpDir, 'extract'); // create a path to the extract directory
-    fs.mkdirSync(extractDir, { recursive: true }); // create the extract directory
-    execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' }); // unzip the zip file to the extract directory. ignore the child process' IO
-    let snippets = findErrorSnippetsInDir(extractDir, maxSnippets); // find the error snippets in the extract directory
+    // IMPORTANT: This function no longer downloads logs.
+    // It expects a path to the already-extracted logs directory. This can be
+    // supplied explicitly via `logsDirPath` or resolved via the optional
+    // `logs-index-path` input (loaded into `__logsIndexMap`).
+    const resolvedDir = logsDirPath || getLogsDirForRunId(runId);
+    let snippets = [];
+    if (resolvedDir && fs.existsSync(resolvedDir)) {
+      snippets = findErrorSnippetsInDir(resolvedDir, maxSnippets); // parse error snippets from provided logs directory
+    } else {
+      core.info(`No logs directory available for run ${runId}; skipping log parsing`);
+    }
     core.info(`Total snippets collected: ${snippets.length}`); // log the total number of snippets collected
 
     // Query job/step status once to validate findings and/or provide fallback
@@ -850,6 +906,7 @@ async function run() {
     const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true })); // get the json of pipelines that we want to analyze
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
     const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true'; // get the alert-all input from the action inputs
+    const logsIndexPath = core.getInput('logs-index-path', { required: false }); // optional: path to JSON mapping runId -> extracted logs dir
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -866,6 +923,16 @@ async function run() {
     const grouped = JSON.parse(fs.readFileSync(cachePath, 'utf8')); // parse the cached data into a json object
     const hasPrevious = previousCachePath && fs.existsSync(previousCachePath); // check if the previous cache file exists
     const previousGrouped = hasPrevious ? JSON.parse(fs.readFileSync(previousCachePath, 'utf8')) : null; // parse the previous cached data into a json object
+
+    // Optionally load the logs index mapping so we can resolve run IDs to log directories
+    if (logsIndexPath) {
+      __logsIndexMap = loadLogsIndexFromFile(logsIndexPath);
+      if (__logsIndexMap && __logsIndexMap.size) {
+        core.info(`Loaded logs index with ${__logsIndexMap.size} entries from ${logsIndexPath}`);
+      } else if (logsIndexPath) {
+        core.info(`No valid entries found in logs index file at ${logsIndexPath}`);
+      }
+    }
 
     // Track failed workflows
     const failedWorkflows = [];
@@ -941,7 +1008,13 @@ async function run() {
         const latestFail = mainRuns.find(r => r.conclusion !== 'success');
         let owners = undefined;
         try {
-          const errs = await fetchErrorSnippetsForRun(octokit, github.context, latestFail.id, 20); // get the error snippets for the latest failing run (fetch 20 to reuse later)
+          const errs = await fetchErrorSnippetsForRun(
+            octokit,
+            github.context,
+            latestFail.id,
+            20,
+            getLogsDirForRunId(latestFail.id)
+          ); // get the error snippets for the latest failing run using pre-extracted logs if available
           errorSnippetsCache.set(latestFail.id, errs); // cache the error snippets for reuse
           // Aggregate owners from snippets
           const ownerSet = new Map(); // ownerSet will contain the mappings from an owner's id and name to the owner object
@@ -1061,7 +1134,13 @@ async function run() {
           // Error snippets from the latest failing run (item.run_id already contains the latest failing run)
           // Reuse cached error snippets if available, otherwise fetch
           if (item.run_id) {
-            item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(octokit, github.context, item.run_id, 20);
+            item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
+              octokit,
+              github.context,
+              item.run_id,
+              20,
+              getLogsDirForRunId(item.run_id)
+            );
             if (!errorSnippetsCache.has(item.run_id)) {
               errorSnippetsCache.set(item.run_id, item.error_snippets);
             }
@@ -1120,7 +1199,13 @@ async function run() {
           // Error snippets from the latest failing run (item.run_id already contains the latest failing run)
           // Reuse cached error snippets if available, otherwise fetch
           if (item.run_id) {
-            item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(octokit, github.context, item.run_id, 20);
+            item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
+              octokit,
+              github.context,
+              item.run_id,
+              20,
+              getLogsDirForRunId(item.run_id)
+            );
             if (!errorSnippetsCache.has(item.run_id)) {
               errorSnippetsCache.set(item.run_id, item.error_snippets);
             }
