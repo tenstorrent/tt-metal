@@ -9,7 +9,6 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    DPRINT << "Receiver started" << ENDL();
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
@@ -27,8 +26,6 @@ void kernel_main() {
     uint32_t reduce_second_stage_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
     constexpr bool rms_norm = get_compile_time_arg_val(15) == 1;
     constexpr bool use_welford = get_compile_time_arg_val(16) == 1;
-
-    DPRINT << "Receiver got inputs" << ENDL();
 
     const bool is_last_all_to_all_worker = get_arg_val<uint32_t>(0);
     const uint32_t all_to_all_tile_offset_bytes = get_arg_val<uint32_t>(1);
@@ -134,9 +131,7 @@ void kernel_main() {
                                              const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
         // global reduce
         // wait for local data ready
-        DPRINT << "Receiver waiting on partials" << ENDL();
         cb_wait_front(cb_partial, block_h * num_tiles_scaler);
-        DPRINT << "Receiver done waiting on partials" << ENDL();
 
         // inc mcast sender
         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
