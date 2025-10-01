@@ -129,6 +129,10 @@ void bind_normalization_softmax_operation(py::module& module) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B
                  - TILE
 
+            Note:
+                * All tensors must be on-device and interleaved (TILE layout).
+                * Using the attention-optimized kernels requires a 4D input tensor and reducing on the last dimension.
+
             Example:
                 .. code-block:: python
 
