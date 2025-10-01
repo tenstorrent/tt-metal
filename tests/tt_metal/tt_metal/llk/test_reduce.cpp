@@ -190,12 +190,15 @@ void add_reader_writer_kernels(
             scaler = std::sqrt(scaler);
         }  // Needed because AVG pool multiplies twice by the scaler
         case ReduceDim::W: {
+            // Use the modified reader_unary_8bank.cpp directly (like reduce_c pattern)
             auto unary_reader_kernel = tt_metal::CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
                 logical_core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                    .defines = {{"GENERATE_BCAST_SCALER", "1"}, {"BLOCK_SIZE", "1"}}});
 
             auto unary_writer_kernel = tt_metal::CreateKernel(
                 program,
@@ -204,31 +207,28 @@ void add_reader_writer_kernels(
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
+            // New argument order: src_addr, Ht, Wt, NC, scaler
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_reader_kernel,
                 logical_core,
                 {
                     src_dram_buffer->address(),
-                    (uint32_t)0,  // dram bank id
-                    (uint32_t)0,  // unused
-                    num_tensor_tiles,
-                    NC,
-                    Ht,
-                    Wt,
-                    Ht * Wt,
-                    *reinterpret_cast<uint32_t*>(&scaler),
+                    Ht,                                     // Number of rows (height in tiles)
+                    Wt,                                     // Number of cols (width in tiles)
+                    NC,                                     // Number of channels
+                    *reinterpret_cast<uint32_t*>(&scaler),  // scaler value
                 });
 
-            uint32_t num_tiles =
-                test_config.reduce_dim == ReduceDim::W ? (num_tensor_tiles / Wt) : (num_tensor_tiles / (Wt * Ht));
+            // Output tiles: one per row per channel (NC * Ht)
+            uint32_t output_tiles = NC * Ht;
             tt_metal::SetRuntimeArgs(
                 program,
                 unary_writer_kernel,
                 logical_core,
                 {dst_dram_buffer->address(),
-                 (uint32_t)0,  // dram bank id
-                 num_tiles});
+                 (uint32_t)0,     // dram bank id
+                 output_tiles});  // number of output tiles
 
             break;
         }
@@ -373,7 +373,9 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dst_config);
 
     uint32_t src0_cb_index = 0;
-    uint32_t num_buffer_tiles = 32;
+    // Increase buffer size to handle NC * Ht * Wt tiles for reduce_c pattern
+    uint32_t max_input_tiles = NC * Ht * Wt;
+    uint32_t num_buffer_tiles = std::max(32U, max_input_tiles);
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
             num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -382,7 +384,9 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
-    uint32_t num_output_buffer_tiles = 32;
+    // Increase output buffer size to handle NC * Ht output tiles
+    uint32_t max_output_tiles = NC * Ht;
+    uint32_t num_output_buffer_tiles = std::max(32U, max_output_tiles);
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
@@ -602,7 +606,7 @@ TEST_F(DeviceFixture, TensixComputeReduceH) {
 }
 
 TEST_F(DeviceFixture, TensixComputeReduceW) {
-    std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
+    std::vector<uint32_t> shape = {1, 1, 20 * TILE_HEIGHT, 10 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::HiFi4); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1

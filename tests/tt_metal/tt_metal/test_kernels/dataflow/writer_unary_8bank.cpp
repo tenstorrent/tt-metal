@@ -26,16 +26,16 @@ void kernel_main() {
     const InterleavedAddrGenFast<write_to_dram> s = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
+    // Wait on all output tiles at once (like reduce_c pattern)
+    cb_wait_front(cb_id_out0, num_tiles);
+    uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+
     for (uint32_t i = 0; i < num_tiles; i++) {
         uint64_t dst_noc_addr = get_noc_addr(i, s);
-
-        cb_wait_front(cb_id_out0, onetile);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
-
-        noc_async_write_tile(i, s, l1_read_addr);
-
-        noc_async_write_barrier();
-
-        cb_pop_front(cb_id_out0, onetile);
+        uint32_t tile_addr = l1_read_addr + (i * tile_bytes);
+        noc_async_write_tile(i, s, tile_addr);
     }
+
+    noc_async_write_barrier();
+    cb_pop_front(cb_id_out0, num_tiles);
 }
