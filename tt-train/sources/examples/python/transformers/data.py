@@ -1,6 +1,7 @@
 import os
 import numpy as np
 from datasets import load_dataset
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 
 def load_shakespeare_text():
@@ -31,13 +32,35 @@ class CharTokenizer:
 
 
 # --- Build tokenizer + dataset splits ---
-def prepare_data():
+def prepare_data(yaml_config):
     text = load_shakespeare_text()
 
-    ctok = CharTokenizer(text)
-    vocab_size = (ctok.vocab_size + 31) // 32 * 32  # pad to multiple of 32
-    encode = lambda t: np.array(ctok.encode(t), dtype=np.uint32)
-    decode_fn = lambda ids: ctok.decode(list(ids))
+    training_config = yaml_config.get("training_config", {})
+    use_bpe = training_config.get("tokenizer_type", "char") == "bpe"
+    tokenizer_path = training_config.get("tokenizer_path", "")
+
+    ctok = None
+    vocab_size = None
+    encode = None
+    decode_fn = None
+    if use_bpe:
+        assert tokenizer_path, "tokenizer_path is required when use_bpe is true"
+        tokenizer_path = os.path.join(os.environ["TT_METAL_HOME"], "tt-train", tokenizer_path)
+        if os.path.isdir(tokenizer_path):
+            bpe = AutoTokenizer.from_pretrained(tokenizer_path, local_files_only=True)
+        elif os.path.isfile(tokenizer_path):
+            # Load directly from a single tokenizer.json file
+            bpe = PreTrainedTokenizerFast(tokenizer_file=tokenizer_path)
+        else:
+            raise FileNotFoundError(f"Tokenizer path not found: {tokenizer_path}")
+        vocab_size = bpe.vocab_size
+        encode = lambda t: np.array(bpe.encode(t), dtype=np.uint32)
+        decode_fn = lambda ids: bpe.decode(list(ids))
+    else:
+        ctok = CharTokenizer(text)
+        vocab_size = (ctok.vocab_size + 31) // 32 * 32  # pad to multiple of 32
+        encode = lambda t: np.array(ctok.encode(t), dtype=np.uint32)
+        decode_fn = lambda ids: ctok.decode(list(ids))
 
     # Encode full corpus, split 90/10
     ids = encode(text)

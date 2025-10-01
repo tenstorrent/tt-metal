@@ -92,7 +92,6 @@ class ModelConfig:
         lcfg.num_groups = tc.get("num_groups", 3)
         lcfg.embedding_dim = tc.get("embedding_dim", 384)
         lcfg.num_blocks = tc.get("num_blocks", 6)
-        # Adjust vocab size for TP divisibility like in C++
         vs = tc.get("vocab_size", 256)
         if self.device_config.enable_tp:
             num_devices = self.device_config.total_devices()
@@ -285,7 +284,7 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
 def main(config: str):
     yaml_config = get_config(config)
     set_seed(yaml_config["training_config"].get("seed", 42))
-    train_ids, val_ids, vocab_size, decode = prepare_data()
+    train_ids, val_ids, vocab_size, decode = prepare_data(yaml_config)
 
     # Use vocab_size from data instead of config
     training_config = yaml_config.setdefault("training_config", {})
