@@ -39,6 +39,8 @@ outputs:
     description: 'Absolute path to the directory containing extracted logs per run'
   logs-index-path:
     description: 'Absolute path to the JSON mapping of run_id -> logs directory'
+  commits-path:
+    description: 'Absolute path to JSON array of commits on main in the last N days'
 
 runs:
   using: 'node20'

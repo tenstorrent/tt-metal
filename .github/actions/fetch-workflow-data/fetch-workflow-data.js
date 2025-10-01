@@ -243,6 +243,48 @@ async function run() {
       } catch (e) {
         core.warning(`[TEST MODE] Failed to restore logs artifact: ${e.message}`);
       }
+
+      // Additionally fetch the commits artifact from the same run, if present
+      try {
+        const owner = github.context.repo.owner;
+        const repo = github.context.repo.repo;
+        const commitsArtifact = artifacts.find(a => a && a.name === 'commits-main');
+        const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+        let commitsPath = path.join(workspace, 'commits-main.json');
+        if (commitsArtifact) {
+          const commitsZipPath = path.join(tmpDir, `${commitsArtifact.name}.zip`);
+          const respCommits = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: commitsArtifact.id, archive_format: 'zip' });
+          fs.writeFileSync(commitsZipPath, Buffer.from(respCommits.data));
+          const extractCommitsDir = path.join(tmpDir, `${commitsArtifact.name}-extract`);
+          if (!fs.existsSync(extractCommitsDir)) fs.mkdirSync(extractCommitsDir, { recursive: true });
+          execFileSync('unzip', ['-o', commitsZipPath, '-d', extractCommitsDir], { stdio: 'ignore' });
+          // Find commits-main.json
+          const stack2 = [extractCommitsDir];
+          let foundCommitsPath;
+          while (stack2.length && !foundCommitsPath) {
+            const dir = stack2.pop();
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) stack2.push(p);
+              else if (ent.isFile() && ent.name === 'commits-main.json') { foundCommitsPath = p; break; }
+            }
+          }
+          if (foundCommitsPath) {
+            fs.cpSync(foundCommitsPath, commitsPath, { recursive: false });
+            core.info(`[TEST MODE] Restored commits index to ${commitsPath}`);
+          } else {
+            core.info('[TEST MODE] No commits-main.json found; creating empty list');
+            if (!fs.existsSync(commitsPath)) fs.writeFileSync(commitsPath, JSON.stringify([]));
+          }
+        } else {
+          core.info('[TEST MODE] No commits-main artifact found in selected run; creating empty list');
+          if (!fs.existsSync(commitsPath)) fs.writeFileSync(commitsPath, JSON.stringify([]));
+        }
+        core.setOutput('commits-path', commitsPath);
+      } catch (e) {
+        core.warning(`[TEST MODE] Failed to restore commits artifact: ${e.message}`);
+      }
       // Exit early
       return;
     }
@@ -358,12 +400,53 @@ async function run() {
     // Persist the index file alongside the logs directory
     const logsIndexPath = path.join(logsRoot, 'logs-index.json');
     fs.writeFileSync(logsIndexPath, JSON.stringify(logsIndex));
+
+    // Build a commits index for the main branch within the last N days
+    // The index is an array of commits sorted by commit author/commit date ascending.
+    // Each entry: { sha, short, url, author_login, author_name, author_url, date }
+    const commits = [];
+    try {
+      const sinceIso = getCutoffDate(days).toISOString();
+      const perPage = 100;
+      let page = 1;
+      while (true) {
+        const resp = await octokit.rest.repos.listCommits({
+          owner,
+          repo,
+          sha: branch,
+          since: sinceIso,
+          per_page: perPage,
+          page,
+        });
+        const arr = resp.data || [];
+        if (!arr.length) break;
+        for (const c of arr) {
+          const sha = c.sha;
+          const short = sha ? sha.substring(0, 7) : '';
+          const url = `https://github.com/${owner}/${repo}/commit/${sha}`;
+          const author_login = c.author?.login;
+          const author_name = c.commit?.author?.name;
+          const author_url = c.author?.html_url;
+          const date = c.commit?.author?.date || c.commit?.committer?.date || null;
+          commits.push({ sha, short, url, author_login, author_name, author_url, date });
+        }
+        if (arr.length < perPage) break;
+        page++;
+      }
+      // Sort oldest -> newest by date for deterministic slicing
+      commits.sort((a, b) => new Date(a.date || 0) - new Date(b.date || 0));
+    } catch (e) {
+      core.warning(`Failed to build commits index: ${e.message}`);
+    }
+    const commitsPath = path.join(workspace, 'commits-main.json');
+    fs.writeFileSync(commitsPath, JSON.stringify(commits));
     // Set output
     core.setOutput('total-runs', mergedRuns.length);
     core.setOutput('workflow-count', grouped.size);
     core.setOutput('cache-path', outputPath);
     core.setOutput('logs-root', logsRoot);
     core.setOutput('logs-index-path', logsIndexPath);
+    core.setOutput('commits-path', commitsPath);
     // Log remaining GitHub API rate limit
     const rateLimit = await octokit.rest.rateLimit.get();
     const remaining = rateLimit.data.resources.core.remaining;
