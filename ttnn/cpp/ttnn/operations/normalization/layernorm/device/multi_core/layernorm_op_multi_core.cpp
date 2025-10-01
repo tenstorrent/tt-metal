@@ -747,11 +747,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
-    if (use_welford && !(is_pre_all_gather || is_post_all_gather)) {
-        // Welford pushes one mean and one var tile per block height
-        ex_partial_CB_size *= 2;
-        ex_external_CB_size *= 2;
-    }
     if (is_pre_all_gather || is_post_all_gather) {
         ex_partial_CB_size = ex_partial_CB_size * pre_all_gather_stats_block_tiles;
     }
@@ -807,6 +802,15 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
     if (is_pre_all_gather) {
         ex_external_CB_size = ex_external_CB_size * pre_all_gather_stats_block_tiles;
+    }
+
+    if (use_welford) {
+        // Welford calculates 1 mean tile and 1 var tile per height tile
+        // (for row major) or width tile (for col major)
+        ex_external_CB_size *= 2;
+        ex_partial_CB_size *= 2;
+        ex_CB_size *= 2;
+        ex_global_CB_size *= 2;
     }
 
     uint32_t num_none_all_to_all_workers = num_blocks - num_cores_all_to_all;

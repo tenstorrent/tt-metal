@@ -313,23 +313,96 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
 
 
 @pytest.mark.parametrize("use_welford", [True])
-def test_layer_norm_sharded(device, use_welford):
-    # Test parameters
-    tensor_height = 1024
-    tensor_width = 1024
-    shard_grid_rows = 4
-    shard_grid_cols = 4
-    block_ht = 8
-    block_wt = 8
-    subblock_w = 4
+@pytest.mark.parametrize("two_stage", [True])
+@pytest.mark.parametrize("repeating", [True])
+def test_layer_norm_sharded(device, use_welford, two_stage, repeating):
+    torch.manual_seed(0)
 
-    # Run torch layer norm
-    torch_input_tensor = torch.rand((tensor_height, tensor_width), dtype=torch.bfloat16)
-    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[tensor_width])
-
-    # Calculate expected values
     tile_height = 32
     tile_width = 32
+
+    # Test parameters
+    if two_stage:
+        # Two-stage
+        tensor_height = 32 * 4
+        tensor_width = 32 * 8
+        shard_grid_rows = 2
+        shard_grid_cols = 4
+        block_wt = 1
+        block_ht = tensor_height // tile_height
+        subblock_w = 1
+        shard_height = tensor_height
+        shard_width = tensor_width // (shard_grid_cols * shard_grid_rows)
+        mem_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    else:
+        # Block-sharded
+        tensor_height = 32 * 2
+        tensor_width = 32 * 2
+        shard_grid_rows = 2
+        shard_grid_cols = 2
+        block_wt = tensor_width // tile_width // shard_grid_cols
+        block_ht = tensor_height // tile_height // shard_grid_rows
+        subblock_w = 1
+        shard_height = tensor_height // shard_grid_rows
+        shard_width = tensor_width // shard_grid_cols
+        mem_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+    # Run torch layer norm
+    # Create a tensor that has identical rows,
+    # each row has values from 1 to tensor_width
+    if repeating:
+        # torch_input_tensor = torch.rand((tensor_height, tensor_width), dtype=torch.bfloat16)
+        torch_input_tensor = torch.arange(tensor_width).repeat(tensor_height, 1).to(torch.bfloat16)
+    else:
+        torch_input_tensor = (
+            torch.arange(tensor_height * tensor_width).reshape(tensor_height, tensor_width).to(torch.bfloat16)
+        )
+
+    if two_stage:
+        # Print the means of each (shard_grid cols * shard_grid rows) width shard across the width dim
+        for i in range(shard_grid_cols * shard_grid_rows):
+            print(f"Shard {i} means: {torch_input_tensor[:, i * shard_width:(i + 1) * shard_width].mean(dim=1)}")
+
+        # Print the mean of the first shard_grid_cols shards across the width dim
+        print(
+            f"First {shard_grid_cols} shards means: {torch_input_tensor[:, :shard_grid_cols * shard_width].mean(dim=1)}"
+        )
+        # Print the mean of the last shard_grid_cols shards across the width dim
+        print(
+            f"Last {shard_grid_cols} shards means: {torch_input_tensor[:, -shard_grid_cols * shard_width:].mean(dim=1)}"
+        )
+        # Print means of first tile_height rows across the first half of the tensor width
+        print(
+            f"First {tile_height} rows means (first half): {torch_input_tensor[:tile_height, :tensor_width//2].mean(dim=1)}"
+        )
+        # Print means of first tile_height rows across the second half of the tensor width
+        print(
+            f"First {tile_height} rows means (second half): {torch_input_tensor[:tile_height, tensor_width//2:].mean(dim=1)}"
+        )
+    else:
+        # Print the partial means of each (X,Y) shard of the input tensor
+        for i in range(shard_grid_rows):
+            for j in range(shard_grid_cols):
+                print(
+                    f"Shard {j},{i} means: {torch_input_tensor[i * shard_height:(i + 1) * shard_height, j * shard_width:(j + 1) * shard_width].mean(dim=1)}"
+                )
+
+    # torch_input_tensor = torch.rand((tensor_height, tensor_width), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[tensor_width])
+
+    # Print the input tensor and the mean along the width
+    # Compute a tensor xmm that subtracts the column-wise mean
+    # from each element in the corresponding row of the input tensor
+    xmm = torch_input_tensor - torch_input_tensor.mean(dim=1).unsqueeze(1)
+    means = torch_input_tensor.mean(dim=1)
+    print(f"Input tensor: {torch_input_tensor}")
+    print(f"Means: {means}")
+    print(f"Variances: {torch_input_tensor.var(dim=1)}")
+    print(f"x - mean: {xmm}")
+    print(f"1/sqrt(var+eps): {1/torch.sqrt((torch_input_tensor + 1e-12).var(dim=1))}")
+    print(
+        f"(x- mean) * 1/sqrt(var+eps): {(xmm * 0.0140)}"
+    )  # 1/torch.sqrt((torch_input_tensor + 1e-12).var(dim=1)).unsqueeze(1))}")
 
     # Tensor dimensions in tiles (padded)
     Mt = (tensor_height + tile_height - 1) // tile_height
@@ -355,26 +428,22 @@ def test_layer_norm_sharded(device, use_welford):
     print(f"num_cores_all_to_all={num_cores_all_to_all}")
 
     # Create shard spec
-    shard_height = tensor_height // shard_grid_rows
-    shard_width = tensor_width // shard_grid_cols
-
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(shard_grid_rows - 1, shard_grid_cols - 1),
+                    ttnn.CoreCoord(shard_grid_cols - 1, shard_grid_rows - 1),
                 )
             }
         ),
         [shard_height, shard_width],
         ttnn.ShardOrientation.ROW_MAJOR,
     )
+    print(f"Shard spec: {shard_spec}")
 
     # Create memory config with sharding
-    memory_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec
-    )
+    memory_config = ttnn.MemoryConfig(memory_layout=mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec)
 
     # Convert to TTNN tensor
     input_ttnn = ttnn.from_torch(
@@ -387,7 +456,7 @@ def test_layer_norm_sharded(device, use_welford):
 
     # Create output memory config (same sharding as input)
     output_memory_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec
+        memory_layout=mem_layout, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec
     )
 
     # Run layernorm
@@ -407,7 +476,21 @@ def test_layer_norm_sharded(device, use_welford):
     output_ttnn = ttnn.from_device(output_ttnn)
     output_ttnn = ttnn.to_torch(output_ttnn)
 
-    print(f"Torch output tensor: {torch_output_tensor}")
-    print(f"TTNN output tensor: {output_ttnn}")
+    # print(f"Torch output tensor: {torch_output_tensor}")
+    # print(f"TTNN output tensor: {output_ttnn}")
     print(f"PCC: {comp_pcc(torch_output_tensor, output_ttnn)[1]}")
+
+    torch.set_printoptions(profile="full")  # Adjust threshold as needed
+    with open("/localdev/rmiller/scratch/torch_input.txt", "w") as f:
+        f.write(str(torch_input_tensor))
+    with open("/localdev/rmiller/scratch/torch_output.txt", "w") as f:
+        # Write the string representation of the tensor to the file
+        f.write(str(torch_output_tensor[:, :10]))
+    with open("/localdev/rmiller/scratch/means.txt", "w") as f:
+        f.write(str(means))
+    with open(f"/localdev/rmiller/scratch/ttnn_output_{use_welford}.txt", "w") as f:
+        # Write the string representation of the tensor to the file
+        f.write(str(output_ttnn[:, :10]))
+    with open("/localdev/rmiller/scratch/xmm.txt", "w") as f:
+        f.write(str(xmm[:, 0]))
     assert_with_pcc(torch_output_tensor, output_ttnn, 0.9998)
