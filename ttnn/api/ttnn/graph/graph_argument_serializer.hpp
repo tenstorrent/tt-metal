@@ -5,17 +5,11 @@
 
 #include <any>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <typeindex>
 #include <unordered_map>
-#include <iostream>
-#include <set>
-#include <variant>
-#include <tuple>
-#include <array>
-#include <vector>
-#include <optional>
 
 namespace ttnn::graph {
 std::string graph_demangle(std::string_view name);
