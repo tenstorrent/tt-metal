@@ -17,9 +17,10 @@ inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::hardmish, APPROXIMATE>();
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardmish(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::hardmish<APPROXIMATE>, dst_index, vector_mode);
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel
