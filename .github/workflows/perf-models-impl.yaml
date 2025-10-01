@@ -304,10 +304,10 @@ jobs:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-info.model-group }}" | tr ' ' '-')
-          export PERF_REPORT_FILENAME=Models_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Perf_$(date +%Y_%m_%d).csv
-          cat Models_Perf_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_perf_results.py CHECK
+          export PERF_REPORT_FILENAME=Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          python3 models/perf/merge_device_perf_results.py $PERF_REPORT_FILENAME CHECK
           echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       # TODO: Fix the pipeline before enabling notifications.
@@ -320,15 +320,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           ls -hal
-          export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
-          ls -hal $PERF_REPORT_FILENAME
-          echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+          test -f ${{ steps.generate-perf-report.outputs.perf_report_filename }}
+          echo "perf_report_filename=${{ steps.generate-perf-report.outputs.perf_report_filename }}" >> "$GITHUB_OUTPUT"
       - name: Upload perf report
         if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: perf-report-csv-${{ matrix.test-info.model-group }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          name: device-perf-report-csv-${{ matrix.test-info.model-group }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
