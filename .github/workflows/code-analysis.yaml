@@ -665,20 +665,24 @@ jobs:
                 # Create new ping comment
                 echo "Creating ping comment..."
 
-                # Use jq to properly create JSON and avoid shell escaping issues
-                JSON_PAYLOAD=$(jq -n --arg body "$PING_MESSAGE" '{"body": $body}')
+                # Create temporary file to avoid shell interpretation of JSON
+                TEMP_JSON_FILE=$(mktemp)
+                jq -n --arg body "$PING_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"
 
                 # Debug: show what we're sending
                 echo "Sending JSON payload:"
-                echo "$JSON_PAYLOAD" | jq '.'
+                cat "$TEMP_JSON_FILE"
 
-                # Try curl with proper error handling
+                # Try curl with file upload to avoid shell escaping issues
                 RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
                   -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                   -H "Accept: application/vnd.github.v3+json" \
                   -H "Content-Type: application/json" \
-                  -d "$JSON_PAYLOAD" \
+                  --data-binary @"$TEMP_JSON_FILE" \
                   "$COMMENTS_API")
+
+                # Clean up temp file
+                rm -f "$TEMP_JSON_FILE"
 
                 # Extract HTTP status code
                 HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
@@ -733,12 +737,16 @@ jobs:
               SLACK_MESSAGE="$SLACK_MESSAGE, this PR <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|*$PR_TITLE*> by $PR_AUTHOR_FULL_NAME needs your approval/review to merge this."
 
               # Send to Slack using bot token
-              SLACK_JSON_PAYLOAD=$(jq -n --arg channel "C09HT5VSXRB" --arg text "$SLACK_MESSAGE" '{"channel": $channel, "text": $text}')
+              SLACK_TEMP_FILE=$(mktemp)
+              jq -n --arg channel "C09HT5VSXRB" --arg text "$SLACK_MESSAGE" '{"channel": $channel, "text": $text}' > "$SLACK_TEMP_FILE"
+
               curl -s -X POST \
                 -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
                 -H "Content-Type: application/json" \
-                -d "$SLACK_JSON_PAYLOAD" \
+                --data-binary @"$SLACK_TEMP_FILE" \
                 "https://slack.com/api/chat.postMessage"
+
+              rm -f "$SLACK_TEMP_FILE"
 
               echo "Slack notification sent to #codeowners-ping-checking"
             fi
