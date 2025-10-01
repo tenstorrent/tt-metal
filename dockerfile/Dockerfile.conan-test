@@ -2,8 +2,6 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE} AS builder
 
-ARG CONAN_PROFILE
-
 # Set up environment
 ENV TT_METAL_HOME=/tt-metal
 ENV PYTHONPATH=/tt-metal

@@ -132,7 +132,7 @@ class TTMetaliumConan(ConanFile):
         self.requires("openmpi/4.1.6")
         self.requires("capstone/5.0.6")
         self.requires("libnuma/2.0.19")
-        self.requires("boost/1.88.0")
+        self.requires("boost/1.86.0")
         self.requires("hwloc/2.10.0")
         self.requires("zlib/1.3.1")
         self.requires("cpython/3.10.14")
