@@ -69,7 +69,7 @@ jobs:
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
             name: "Fabric Collectives ubench - Point to Point",
-            cmd: "bash tests/tt_metal/tt_fabric/benchmark/collectives/unicast/ci_run_unicast.sh"
+            cmd: "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/ci_run_unicast.sh"
           } # Tomer Levin
         ]
     container:
