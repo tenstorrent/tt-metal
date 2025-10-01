@@ -98,7 +98,7 @@ def test_all_gather_async(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
