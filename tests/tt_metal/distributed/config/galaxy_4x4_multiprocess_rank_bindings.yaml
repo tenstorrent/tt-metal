@@ -1,0 +1,22 @@
+# Galaxy 4x4 dual mesh rank binding configuration
+# Galaxy is 8x4 (32 devices total), split into two 4x4 meshes
+# Rank 0: First 4x4 mesh (top half: rows 0-3)
+# Rank 1: Second 4x4 mesh (bottom half: rows 4-7)
+#
+# Device numbering assumption (row-major):
+# Row 0: 0-3, Row 1: 4-7, Row 2: 8-11, Row 3: 12-15
+# Row 4: 16-19, Row 5: 20-23, Row 6: 24-27, Row 7: 28-31
+# Top 4x4 (rows 0-3): 0,1,2,3, 4,5,6,7, 8,9,10,11, 12,13,14,15
+# Bottom 4x4 (rows 4-7): 16,17,18,19, 20,21,22,23, 24,25,26,27, 28,29,30,31
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31"
+
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_4x4_dual_mesh_graph_descriptor.yaml"

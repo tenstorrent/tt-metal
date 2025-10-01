@@ -295,6 +295,27 @@ bool detect_cycles_in_traffic(
         max_retry_attempts = 1;
     }
 
+    // FIXED: Build a flow-aware graph that tracks which flows use which edges
+    // This allows us to detect true circular resource dependencies, not just bidirectional traffic
+
+    struct DirectedEdge {
+        FabricNodeId from;
+        FabricNodeId to;
+        bool operator==(const DirectedEdge& other) const { return from == other.from && to == other.to; }
+    };
+
+    struct EdgeHash {
+        std::size_t operator()(const DirectedEdge& edge) const {
+            auto h1 = std::hash<uint32_t>{}(*edge.from.mesh_id);
+            auto h2 = std::hash<uint32_t>{}(edge.from.chip_id);
+            auto h3 = std::hash<uint32_t>{}(*edge.to.mesh_id);
+            auto h4 = std::hash<uint32_t>{}(edge.to.chip_id);
+            return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
+        }
+    };
+
+    // Track which flows use which edges
+    std::unordered_map<DirectedEdge, std::vector<std::pair<FabricNodeId, FabricNodeId>>, EdgeHash> edge_to_flows;
     NodeGraph comprehensive_graph;
 
     // Build comprehensive graph from ONLY inter-mesh traffic pairs
@@ -304,9 +325,12 @@ bool detect_cycles_in_traffic(
         // For inter-mesh routing, we need to build the actual path through ethernet links
         path_graph = build_path_graph(src, dest, route_manager);
 
-        // Merge this path into the comprehensive graph
+        // Merge this path into the comprehensive graph AND track which flow uses which edge
         for (const auto& [node, neighbors] : path_graph) {
             for (const auto& neighbor : neighbors) {
+                DirectedEdge edge{node, neighbor};
+                edge_to_flows[edge].push_back({src, dest});
+
                 auto& node_neighbors = comprehensive_graph[node];
                 if (std::find(node_neighbors.begin(), node_neighbors.end(), neighbor) == node_neighbors.end()) {
                     node_neighbors.push_back(neighbor);
@@ -317,6 +341,61 @@ bool detect_cycles_in_traffic(
 
     // Detect cycles in the comprehensive graph
     auto cycles = detect_cycles(comprehensive_graph);
+
+    // FIXED: Filter out false positive cycles caused by bidirectional traffic
+    // A cycle is a FALSE POSITIVE if it's just back-and-forth traffic with no resource contention
+    std::vector<CyclePath> true_cycles;
+    for (const auto& cycle : cycles) {
+        bool is_false_positive = false;
+
+        // Check if this is a simple 2-node bidirectional cycle (A->B->A)
+        if (cycle.size() == 3 && cycle[0] == cycle[2]) {
+            FabricNodeId node_a = cycle[0];
+            FabricNodeId node_b = cycle[1];
+
+            DirectedEdge forward{node_a, node_b};
+            DirectedEdge reverse{node_b, node_a};
+
+            // Check if these edges are used by different flows (no contention)
+            auto forward_it = edge_to_flows.find(forward);
+            auto reverse_it = edge_to_flows.find(reverse);
+
+            if (forward_it != edge_to_flows.end() && reverse_it != edge_to_flows.end()) {
+                // Check if any flow uses BOTH edges (that would be a real cycle)
+                bool same_flow_uses_both = false;
+                for (const auto& forward_flow : forward_it->second) {
+                    for (const auto& reverse_flow : reverse_it->second) {
+                        if (forward_flow == reverse_flow) {
+                            same_flow_uses_both = true;
+                            break;
+                        }
+                    }
+                    if (same_flow_uses_both) {
+                        break;
+                    }
+                }
+
+                // If different flows use opposite directions, it's NOT a deadlock
+                if (!same_flow_uses_both) {
+                    is_false_positive = true;
+                    log_debug(
+                        tt::LogTest,
+                        "Filtering out false positive 2-node cycle {}->{}->{}: bidirectional traffic with no resource "
+                        "contention",
+                        node_a,
+                        node_b,
+                        node_a);
+                }
+            }
+        }
+
+        if (!is_false_positive) {
+            true_cycles.push_back(cycle);
+        }
+    }
+
+    // Use filtered cycles instead of all detected cycles
+    cycles = true_cycles;
 
     if (!cycles.empty()) {
         log_warning(

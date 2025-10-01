@@ -1,0 +1,180 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# NOTE: For Galaxy dual 4x4 mesh testing, we rely on the mesh descriptor
+# defined via the rank bindings configuration and let the system auto-detect
+# the physical topology based on the TT_VISIBLE_DEVICES settings.
+
+Tests:
+  # ======================================================================================
+  # Test 1: Simple unicast test for dual 4x4 meshes on Galaxy
+  # This tests basic communication patterns between devices in each mesh
+  # and cross-mesh communication
+  # Fabric must be 2D Dynamic.
+  # ======================================================================================
+  - name: UnicastWithChipId
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Within Mesh 0 - test corner to corner
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 15]
+      # Within Mesh 1 - test corner to corner
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [1, 15]
+      # Cross-mesh communication - Mesh 0 to Mesh 1
+      - device: [0, 3]
+        patterns:
+          - destination:
+              device: [1, 0]
+          - destination:
+              device: [1, 5]
+      # Cross-mesh communication - Mesh 1 to Mesh 0
+      - device: [1, 3]
+        patterns:
+          - destination:
+              device: [0, 0]
+          - destination:
+              device: [0, 5]
+
+  # ======================================================================================
+  # Test 2: Unicast test using MeshCoordinates
+  # ======================================================================================
+  - name: UnicastWithMeshCoordinates
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, [0, 0]]
+        patterns:
+          - destination:
+              device: [1, [0, 0]]
+      - device: [0, [3, 3]]
+        patterns:
+          - destination:
+              device: [1, [3, 3]]
+
+  # ======================================================================================
+  # Test 3: All-to-all pattern test for thorough validation
+  # ======================================================================================
+  - name: UnicastAlltoAll
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    parametrization_params:
+      size: [512, 1024, 2048]
+      num_packets: [50, 100]
+      ntype: [unicast_write, atomic_inc]
+    defaults:
+      ftype: unicast
+    patterns:
+      - type: all_to_all
+        iterations: 2
+
+  # ======================================================================================
+  # Test 4: Random pairing test
+  # ======================================================================================
+  - name: UnicastRandomPairing
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 2048
+      num_packets: 10
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 1
+
+  # ======================================================================================
+  # Test 5: Inter-Mesh Cycle Detection Test
+  # This test creates traffic patterns between the two 4x4 meshes designed to
+  # stress the cycle detection algorithm. While a simple 2-mesh setup may not
+  # create true routing cycles (since meshes are directly connected), this test
+  # validates that the cycle detection code correctly analyzes inter-mesh routing.
+  #
+  # Pattern: Multiple simultaneous bidirectional flows between mesh boundaries
+  # - Creates complex routing dependencies
+  # - Tests cycle detection's ability to analyze inter-mesh traffic
+  # - Useful for validating cycle detection infrastructure
+  # ======================================================================================
+  - name: CycleDetectionStressTest
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 50
+    senders:
+      # Bidirectional traffic pattern 1: Corner devices
+      - device: [0, 0]  # Mesh 0, top-left corner
+        patterns:
+          - destination:
+              device: [1, 15]  # Mesh 1, bottom-right corner
+      - device: [1, 15]  # Mesh 1, bottom-right corner
+        patterns:
+          - destination:
+              device: [0, 0]  # Mesh 0, top-left corner
+
+      # Bidirectional traffic pattern 2: Middle boundary devices
+      - device: [0, 12]  # Mesh 0, bottom row, device 12
+        patterns:
+          - destination:
+              device: [1, 3]  # Mesh 1, top row, device 3
+      - device: [1, 3]  # Mesh 1, top row, device 3
+        patterns:
+          - destination:
+              device: [0, 12]  # Mesh 0, bottom row, device 12
+
+      # Bidirectional traffic pattern 3: Another pair
+      - device: [0, 7]  # Mesh 0, device 7
+        patterns:
+          - destination:
+              device: [1, 8]  # Mesh 1, device 8
+      - device: [1, 8]  # Mesh 1, device 8
+        patterns:
+          - destination:
+              device: [0, 7]  # Mesh 0, device 7
+
+      # Multiple destinations from single source (fan-out pattern)
+      - device: [0, 5]
+        patterns:
+          - destination:
+              device: [1, 2]
+          - destination:
+              device: [1, 7]
+          - destination:
+              device: [1, 11]
+
+      # Multiple sources to single destination (fan-in pattern)
+      - device: [1, 6]
+        patterns:
+          - destination:
+              device: [0, 10]
+      - device: [1, 9]
+        patterns:
+          - destination:
+              device: [0, 10]
+      - device: [1, 14]
+        patterns:
+          - destination:
+              device: [0, 10]
