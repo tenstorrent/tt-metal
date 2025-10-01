@@ -9,6 +9,7 @@ from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
+from models.common.utility_functions import skip_for_n_dev, skip_for_wormhole_b0, skip_for_n_or_less_dev
 
 
 def run_with_trace(
@@ -282,11 +283,13 @@ def run_all_to_all_impl(
         assert eq, f"{i} FAILED: {output}"
 
 
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize(
-    "num_devices, num_links, logical_shape, in_dim, out_dim, layout",
+    "num_links, logical_shape, in_dim, out_dim, layout",
     [
-        (4, 1, [1, 1, 44544, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
-        (4, 1, [1, 1, 44544, 3072], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
+        (1, [1, 1, 44544, 3072 * 3], 2, 3, ttnn.TILE_LAYOUT),  # Pre-attn all-to-all
+        (1, [1, 1, 44544, 3072], 3, 2, ttnn.TILE_LAYOUT),  # Post-attn all-to-all
     ],
     ids=["pre-attn", "post-attn"],
 )
@@ -317,7 +320,6 @@ def run_all_to_all_impl(
 )
 def test_all_to_all(
     bh_1d_mesh_device,
-    num_devices,
     logical_shape,
     in_dim,
     out_dim,
@@ -332,6 +334,7 @@ def test_all_to_all(
     enable_trace,
     is_ci_env,
 ):
+    num_devices = bh_1d_mesh_device.shape[0]
     topology = ttnn.Topology.Ring
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, 0)
     run_all_to_all_impl(
