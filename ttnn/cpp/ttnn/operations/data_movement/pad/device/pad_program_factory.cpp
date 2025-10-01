@@ -1562,17 +1562,33 @@ operation::ProgramWithCallbacks pad_tile_multicore(
         total_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    std::vector<uint32_t> input_id_per_dim, output_id_per_dim;  // input and output odometers
-    // initialize odos to vectors of length num_dims filled with 0
+    /*
+    As an example, lets say we want to pad a [2, 2, 32, 32] tensor to [2, 3, 64, 64]
+    The input tensor exists as [2, 2, 1, 1] if we reduce by tile (page) size, and the output as [2, 3, 2, 2]
+    we increment through these shapes, and will write a total of 2 * 3 * 2 * 2 = 24 tiles, so we will utilize 24 cores
+    for each core, we calculate if we are within the "input region" of the output. this does a simple check of
+    if any element in the incremented input_id_per_dim is less than the output_id_per_dim, if so, we are outside
+    the input region, and we will write a padding tile, and we will not increment the input_id_per_dim for that tile.
+    if we are within the input region, we will write the tile from input to the output, and increment the
+    input_id_per_dim. This works because we increment the least-significant dim first, and the input region correctly
+    matches the output after the output wraps around. In this example:
+    core 3: in_per_dim: [0,0,1,1] ; out_per_dim: [0,0,1,1], we copy the tile and increment, next ->
+    core 4: in_per_dim: [0,1,0,0] ; out_per_dim: [0,0,1,2], the last 2 output dims are greater than input,
+    so we write the pad tile, and increment only output dim. This continues until the out_per_dim wraps...
+    core 7: in_per_dim: [0,1,0,0] ; out_per_dim: [0,1,0,0], and so on and so forth
+    */
+
+    std::vector<uint32_t> input_id_per_dim, output_id_per_dim;  // input and output id_per_dims
+    // initialize id_per_dims to vectors of length num_dims filled with 0
     input_id_per_dim.resize(a_shape.rank(), 0);
     output_id_per_dim.resize(output_padded_shape.rank(), 0);
     // instantiate the input and output tensor padded shapes
     auto input_page_shape = a.padded_shape();
     auto output_page_shape = output_padded_shape;
-    input_page_shape[-1] /= 32;
-    input_page_shape[-2] /= 32;
-    output_page_shape[-1] /= 32;
-    output_page_shape[-2] /= 32;
+    input_page_shape[-1] /= tt::constants::TILE_HEIGHT;
+    input_page_shape[-2] /= tt::constants::TILE_HEIGHT;
+    output_page_shape[-1] /= tt::constants::TILE_HEIGHT;
+    output_page_shape[-2] /= tt::constants::TILE_HEIGHT;
     bool within_input_region;
     uint32_t input_page_offset = 0;
     uint32_t output_page_offset = 0;
