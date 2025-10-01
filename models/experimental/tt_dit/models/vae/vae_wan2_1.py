@@ -332,8 +332,7 @@ class WanCausalConv3d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=self.ccl_manager.num_links,
-                # memory_config=mem_config_output,
+                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
                 topology=self.ccl_manager.topology,
             )
             ttnn.synchronize_device(x_BTHWC.device())
@@ -355,7 +354,7 @@ class WanCausalConv3d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=self.ccl_manager.num_links,
+                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -710,7 +709,7 @@ class WanConv2d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                num_links=self.ccl_manager.num_links,
+                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
@@ -732,7 +731,7 @@ class WanConv2d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                num_links=self.ccl_manager.num_links,
+                num_links=1,  # Forcing to 1 because on 6U, not enough work to split among links
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
             )
