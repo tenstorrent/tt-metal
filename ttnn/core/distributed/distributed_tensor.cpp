@@ -10,8 +10,6 @@
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <tt_stl/reflection.hpp>
-
 #include "tensor/host_buffer/functions.hpp"
 #include "tensor/storage.hpp"
 #include "tensor/tensor_impl.hpp"
