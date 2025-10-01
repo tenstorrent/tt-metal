@@ -84,71 +84,45 @@ HalCoreInfoType create_tensix_mem_map() {
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumTensixDispatchClasses);
-    std::vector<HalJitBuildConfig> processor_types;
-    for (uint8_t processor_class_idx = 0; processor_class_idx < NumTensixDispatchClasses; processor_class_idx++) {
-        uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
-        processor_types.resize(num_processors);
-        for (size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
-            DeviceAddr fw_base{}, local_init{}, fw_launch{};
-            uint32_t fw_launch_value{};
-            ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
-            switch (processor_class_idx) {
-                case 0: {
-                    fw_base = MEM_BRISC_FIRMWARE_BASE;
-                    local_init = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                    fw_launch = 0x0;  // BRISC is hardcoded to have reset PC of 0
-                    fw_launch_value = generate_risc_startup_addr(fw_base);
-                } break;
-                case 1: {
-                    fw_base = MEM_NCRISC_FIRMWARE_BASE;
-                    local_init = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                    fw_launch = RISCV_DEBUG_REG_NCRISC_RESET_PC;
-                    fw_launch_value = fw_base;
-                } break;
-                case 2: {
-                    switch (processor_type_idx) {
-                        case 0: {
-                            fw_base = MEM_TRISC0_FIRMWARE_BASE;
-                            local_init = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH;
-                            fw_launch = RISCV_DEBUG_REG_TRISC0_RESET_PC;
-                            fw_launch_value = fw_base;
-                        } break;
-                        case 1: {
-                            fw_base = MEM_TRISC1_FIRMWARE_BASE;
-                            local_init = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH;
-                            fw_launch = RISCV_DEBUG_REG_TRISC1_RESET_PC;
-                            fw_launch_value = fw_base;
-                        } break;
-                        case 2: {
-                            fw_base = MEM_TRISC2_FIRMWARE_BASE;
-                            local_init = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH;
-                            fw_launch = RISCV_DEBUG_REG_TRISC2_RESET_PC;
-                            fw_launch_value = fw_base;
-                        } break;
-                    }
-                } break;
-                default: TT_THROW("Unexpected processor class {} for Quasar Tensix", processor_class_idx);
-            }
-
-            processor_types[processor_type_idx] = HalJitBuildConfig{
-                .fw_base_addr = fw_base,
-                .local_init_addr = local_init,
-                .fw_launch_addr = fw_launch,
-                .fw_launch_addr_value = fw_launch_value,
-                .memory_load = memory_load,
-            };
-        }
-        processor_classes[processor_class_idx] = processor_types;
-    }
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
+        // DM
+        {
+            {.fw_base_addr = MEM_DM_FIRMWARE_BASE,
+             .local_init_addr = MEM_DM0_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_DM_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        },
+        // COMPUTE
+        // {
+        //     // TRISC0
+        //     {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
+        //      .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
+        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC0_RESET_PC,
+        //      .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
+        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        //     // TRISC1
+        //     {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
+        //      .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
+        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC1_RESET_PC,
+        //      .fw_launch_addr_value = MEM_TRISC1_FIRMWARE_BASE,
+        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        //     // TRISC2
+        //     {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
+        //      .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
+        //      .fw_launch_addr = RISCV_DEBUG_REG_TRISC2_RESET_PC,
+        //      .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
+        //      .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        // },
+    };
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
-        processor_classes,
-        mem_map_bases,
-        mem_map_sizes,
-        fw_mailbox_addr,
+        std::move(processor_classes),
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory()};

@@ -2,7 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_tensix_noc_overlay_reg.h>
+#include "tt_tensix_noc_overlay_reg.h"
+
+#ifndef _NOC_PARAMETERS_H_
+#define _NOC_PARAMETERS_H_
+
+// TODO: review these values
+#define VIRTUAL_TENSIX_START_X 1
+#define VIRTUAL_TENSIX_START_Y 2
+#define COORDINATE_VIRTUALIZATION_ENABLED 1
 
 #ifndef NOC_X_SIZE
 #define NOC_X_SIZE 4
@@ -27,6 +35,7 @@
 #define FLEX_PORT_ADDR_MATCH_BIT_WIDTH 10
 
 #define NOC_REGS_START_ADDR TT_NOC_REG_MAP_BASE_ADDR
+#define NOC_REG_SPACE_START_ADDR NOC_REGS_START_ADDR
 
 #define NOC_CMD_BUF_OFFSET 0x00000800
 #define NOC_CMD_BUF_OFFSET_BIT 11
@@ -34,7 +43,7 @@
 //! USE_4_NOCS--#define NOC_INSTANCE_OFFSET_BIT   15
 #define NOC_INSTANCE_OFFSET 0x00010000
 #define NOC_INSTANCE_OFFSET_BIT 16
-#define NOC_CMD_BUF_INSTANCE_OFFSET(noc, buf) ((buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT))
+#define NOC_CMD_BUF_INSTANCE_OFFSET(noc, buf) (((buf) << NOC_CMD_BUF_OFFSET_BIT) + ((noc) << NOC_INSTANCE_OFFSET_BIT))
 
 ////
 // NIU master IF control registers:
@@ -282,7 +291,7 @@
 #define NOC_FLIT_TYPE_WIDTH 3
 
 // addr fields
-#define NOC_ADDR_LOCAL_BITS 64
+#define NOC_ADDR_LOCAL_BITS 36 /*64*/
 #define NOC_ADDR_NODE_ID_BITS 6
 
 // NOC CMD fields
@@ -306,6 +315,7 @@
 #define NOC_CMD_STATIC_VC(vc) (((uint32_t)(vc)) << 14)
 #define NOC_RESP_STATIC_VC(vc) (((uint32_t)(vc)) << 20)
 #define NOC_CMD_PORT_REQ_MASK(m) (((uint32_t)(m)) << 26)
+#define NOC_CMD_VC_STATIC (0x1 << 15)  // TODO remove
 
 // CMD_HI
 #define NOC_CMD_PKT_TAG_ID(id) (((uint32_t)(id)) << 0)
@@ -369,7 +379,7 @@
 
 ///
 
-#define NOC_DATA_WIDTH 2048 + 3
+#define NOC_DATA_WIDTH (2048 + 3)
 #define NOC_PAYLOAD_WIDTH 2048
 #define NOC_WORD_BYTES (NOC_PAYLOAD_WIDTH / 8)
 #define NOC_MAX_BURST_WORDS 256
@@ -434,3 +444,37 @@
 #define NOC_MULTICAST_COORD(x_start, y_start, x_end, y_end)                                                            \
     ((((uint32_t)(y_start)) << (3 * NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(x_start)) << (2 * NOC_ADDR_NODE_ID_BITS)) | \
      (((uint32_t)(y_end)) << (1 * NOC_ADDR_NODE_ID_BITS)) | ((uint32_t)(x_end)))
+
+#define NOC_COORD_REG_OFFSET 0  // offset (from LSB) in register holding x-y coordinate
+
+#define NOC_XY_ENCODING(x, y) ((((uint32_t)(y)) << (NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(x))))
+
+// Base address pulled from tt::umd::Cluster::get_pcie_base_addr_from_device
+#define NOC_XY_PCIE_ENCODING(x, y) \
+    ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
+
+#define NOC_LOCAL_ADDR(addr) (addr)
+
+// TODO review these alignment restrictions
+// Alignment restrictions
+#define NOC_L1_READ_ALIGNMENT_BYTES 16
+#define NOC_L1_WRITE_ALIGNMENT_BYTES 16
+#define NOC_PCIE_READ_ALIGNMENT_BYTES 64
+#define NOC_PCIE_WRITE_ALIGNMENT_BYTES 16
+#define NOC_DRAM_READ_ALIGNMENT_BYTES 64
+#define NOC_DRAM_WRITE_ALIGNMENT_BYTES 16
+
+#define L1_ALIGNMENT                                                                              \
+    (static_cast<uint32_t>(                                                                       \
+        NOC_L1_READ_ALIGNMENT_BYTES >= NOC_L1_WRITE_ALIGNMENT_BYTES ? NOC_L1_READ_ALIGNMENT_BYTES \
+                                                                    : NOC_L1_WRITE_ALIGNMENT_BYTES))
+#define PCIE_ALIGNMENT                                                                                  \
+    (static_cast<uint32_t>(                                                                             \
+        NOC_PCIE_READ_ALIGNMENT_BYTES >= NOC_PCIE_WRITE_ALIGNMENT_BYTES ? NOC_PCIE_READ_ALIGNMENT_BYTES \
+                                                                        : NOC_PCIE_WRITE_ALIGNMENT_BYTES))
+#define DRAM_ALIGNMENT                                                                                  \
+    (static_cast<uint32_t>(                                                                             \
+        NOC_DRAM_READ_ALIGNMENT_BYTES >= NOC_DRAM_WRITE_ALIGNMENT_BYTES ? NOC_DRAM_READ_ALIGNMENT_BYTES \
+                                                                        : NOC_DRAM_WRITE_ALIGNMENT_BYTES))
+
+#endif
