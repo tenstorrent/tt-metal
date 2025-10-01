@@ -674,12 +674,6 @@ jobs:
                 # Create new ping comment
                 echo "Creating ping comment..."
 
-                # Debug: Check variables
-                echo "Debug info:"
-                echo "PR_NUMBER: '$PR_NUMBER'"
-                echo "COMMENTS_API: '$COMMENTS_API'"
-                echo "PING_MESSAGE length: ${#PING_MESSAGE}"
-
                 # Create temporary file to avoid shell interpretation of JSON
                 TEMP_JSON_FILE=$(mktemp)
                 if jq -n --arg body "$PING_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"; then
@@ -688,13 +682,6 @@ jobs:
                   echo "Failed to create JSON file"
                   exit 1
                 fi
-
-                # Debug: show what we're sending
-                echo "Sending JSON payload:"
-                cat "$TEMP_JSON_FILE"
-
-                # Try curl with file upload to avoid shell escaping issues
-                echo "Making curl request to: $COMMENTS_API"
                 RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
                   -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                   -H "Accept: application/vnd.github.v3+json" \
@@ -706,7 +693,7 @@ jobs:
                 rm -f "$TEMP_JSON_FILE"
 
                 # Extract HTTP status code
-                HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+                HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://' | sed 's/;//')
                 RESPONSE_BODY=$(echo "$RESPONSE" | sed -e 's/HTTPSTATUS:.*//')
 
                 if [ "$HTTP_STATUS" = "201" ]; then
@@ -761,15 +748,22 @@ jobs:
               SLACK_TEMP_FILE=$(mktemp)
               jq -n --arg channel "C09HT5VSXRB" --arg text "$SLACK_MESSAGE" '{"channel": $channel, "text": $text}' > "$SLACK_TEMP_FILE"
 
-              curl -s -X POST \
+              SLACK_RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
                 -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
                 -H "Content-Type: application/json" \
                 --data-binary @"$SLACK_TEMP_FILE" \
-                "https://slack.com/api/chat.postMessage"
+                "https://slack.com/api/chat.postMessage")
+
+              SLACK_HTTP_STATUS=$(echo "$SLACK_RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://' | sed 's/;//')
+
+              if [ "$SLACK_HTTP_STATUS" = "200" ]; then
+                echo "✅ Slack notification sent successfully to #codeowners-ping-checking"
+              else
+                echo "❌ ERROR: Failed to send Slack notification (HTTP $SLACK_HTTP_STATUS)"
+                echo "Slack response: $(echo "$SLACK_RESPONSE" | sed -e 's/HTTPSTATUS:.*//')"
+              fi
 
               rm -f "$SLACK_TEMP_FILE"
-
-              echo "Slack notification sent to #codeowners-ping-checking"
             fi
           else
             echo "No pending owners to ping"
