@@ -870,6 +870,7 @@ class StableDiffusion3Pipeline:
                 ttnn_device=self.encoder_device,
                 encoder_parallel_config=self.encoder_parallel_config,
                 clip_skip=clip_skip,
+                zero_masking=True,
             )
 
             prompt_2_embed, pooled_prompt_2_embed = _get_clip_prompt_embeds(
@@ -881,6 +882,7 @@ class StableDiffusion3Pipeline:
                 ttnn_device=self.encoder_device,
                 encoder_parallel_config=self.encoder_parallel_config,
                 clip_skip=clip_skip,
+                zero_masking=True,
             )
             clip_prompt_embeds = torch.cat([prompt_embed, prompt_2_embed], dim=-1)
 
@@ -895,6 +897,7 @@ class StableDiffusion3Pipeline:
                 text_encoder=self._text_encoder_3,
                 tokenizer_max_length=tokenizer_max_length,
                 joint_attention_dim=self._prompt_embedding_dim,
+                zero_masking=True,
             )
 
         clip_prompt_embeds = torch.nn.functional.pad(
@@ -918,6 +921,7 @@ class StableDiffusion3Pipeline:
                 encoder_parallel_config=self.encoder_parallel_config,
                 ttnn_device=self.encoder_device,
                 clip_skip=clip_skip,
+                zero_masking=True,
             )
             negative_prompt_2_embed, negative_pooled_prompt_2_embed = _get_clip_prompt_embeds(
                 prompt=negative_prompt_2,
@@ -928,6 +932,7 @@ class StableDiffusion3Pipeline:
                 encoder_parallel_config=self.encoder_parallel_config,
                 ttnn_device=self.encoder_device,
                 clip_skip=clip_skip,
+                zero_masking=True,
             )
             negative_clip_prompt_embeds = torch.cat([negative_prompt_embed, negative_prompt_2_embed], dim=-1)
 
@@ -942,6 +947,7 @@ class StableDiffusion3Pipeline:
                 text_encoder=self._text_encoder_3,
                 tokenizer_max_length=tokenizer_max_length,  # TODO: why?
                 joint_attention_dim=self._prompt_embedding_dim,
+                zero_masking=True,
             )
 
         negative_clip_prompt_embeds = torch.nn.functional.pad(
@@ -978,6 +984,7 @@ def _get_clip_prompt_embeds(
     text_encoder: CLIPEncoder,
     tokenizer_max_length: int,
     tokenizer: CLIPTokenizer,  # TODO: CLIPTokenizerFast?
+    zero_masking: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     batch_size = len(prompt)
 
@@ -1030,6 +1037,16 @@ def _get_clip_prompt_embeds(
     prompt_embeds = prompt_embeds.to(device=device)
     pooled_prompt_embeds = pooled_prompt_embeds.to(device=device)
 
+    def masking_wo_first_eos(token: torch.Tensor, eos: int) -> torch.Tensor:
+        idx = (token != eos).sum(dim=1)
+        mask = token != eos
+        arange = torch.arange(mask.size(0))
+        mask[arange, idx] = True
+        return mask.unsqueeze(-1)  # B x L x 1
+
+    if zero_masking:
+        prompt_embeds = prompt_embeds * masking_wo_first_eos(text_input_ids, tokenizer.eos_token_id)
+
     _, seq_len, _ = prompt_embeds.shape
     # duplicate text embeddings for each generation per prompt, using mps friendly method
     prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
@@ -1054,6 +1071,7 @@ def _get_t5_prompt_embeds(
     text_encoder: T5Encoder | None,
     tokenizer_max_length: int,
     tokenizer: T5TokenizerFast,  # TODO: change to T5Tokenizer?
+    zero_masking: bool = False,
 ) -> torch.Tensor:
     prompt = [prompt] if isinstance(prompt, str) else prompt
     batch_size = len(prompt)
@@ -1104,6 +1122,9 @@ def _get_t5_prompt_embeds(
     prompt_embeds = ttnn.to_torch(tt_prompt_embeds)
 
     prompt_embeds = prompt_embeds.to(device=torch_device)
+
+    if zero_masking:
+        prompt_embeds = prompt_embeds * (text_input_ids != tokenizer.pad_token_id).unsqueeze(-1)
 
     _, seq_len, _ = prompt_embeds.shape
 
