@@ -22,7 +22,17 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         page_size % input_tensors[0].buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
 
-    TT_FATAL(this->dim == 3, "reduce_scatter_minimal_async currently only supports reducing on dim 3");
+    if (topology == ccl::Topology::Linear) {
+        TT_FATAL(
+            this->dim == 3,
+            "reduce_scatter_minimal_async line topology implementation only supports scattering on dim 3");
+    } else if (topology == ccl::Topology::Ring) {
+        TT_FATAL(
+            this->dim == 1 || this->dim == 2 || this->dim == 3,
+            "reduce_scatter_minimal_async ring topology implementation only supports scattering on dim 1, 2, or 3");
+    } else {
+        TT_FATAL(false, "reduce_scatter_minimal_async only supports linear or ring topology");
+    }
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
@@ -30,14 +40,17 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         "Operands to reduce_scatter_minimal_async need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
 
-    const auto& input_shape = input_tensor.padded_shape();
-    TT_FATAL(
-        (input_shape[this->dim] / tt::constants::TILE_WIDTH) % this->ring_size == 0,
-        "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number of "
-        "tiles is {} and the ring_size is {}",
-        this->dim,
-        input_shape[this->dim] / tt::constants::TILE_WIDTH,
-        this->ring_size);
+    if (this->dim == 2 || this->dim == 3) {
+        const auto& input_shape = input_tensor.padded_shape();
+        uint32_t tile_size = this->dim == 2 ? tt::constants::TILE_HEIGHT : tt::constants::TILE_WIDTH;
+        TT_FATAL(
+            (input_shape[this->dim] / tile_size) % this->ring_size == 0,
+            "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number "
+            "of tiles is {} and the ring_size is {}",
+            this->dim,
+            input_shape[this->dim] / tile_size,
+            this->ring_size);
+    }
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
