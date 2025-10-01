@@ -37,7 +37,25 @@ parameters = {
         + gen_shapes([1, 1, 1], [12, 128, 128], [1, 1, 1], 7)
         + gen_shapes([1, 1], [11, 11], [1, 1], 2)
         + gen_shapes([1], [256], [16], 2),
-        "dim": [0, 1, 2, 3, None],
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
         "keepdim": [True, False],
         "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
@@ -57,6 +75,17 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "Row major is only supported for fp32 & fp16"
     if not test_vector["keepdim"]:
         return True, "keepdim = false is not supported"
+
+    # Validate dim parameter for duplicate dimensions
+    dim = test_vector["dim"]
+    if isinstance(dim, (list, tuple)):
+        input_shape = test_vector["input_shape"]
+        normalized_dims = []
+        for d in dim:
+            normalized_d = d % len(input_shape)
+            if normalized_d in normalized_dims:
+                return True, f"Duplicate dimension {d} found in dim list"
+            normalized_dims.append(normalized_d)
 
     return False, None
 

@@ -44,7 +44,16 @@ def run_sum(
         else:
             torch_output_tensor = torch.sum(torch_input_tensor_a)
     else:
-        dim = dim % len(input_shape)
+        # Handle both single dimension and list of dimensions
+        if isinstance(dim, (list, tuple)):
+            # Normalize dimensions (duplicates should be caught by invalidate_vector)
+            normalized_dims = []
+            for d in dim:
+                normalized_d = d % len(input_shape)
+                normalized_dims.append(normalized_d)
+            dim = tuple(normalized_dims)
+        else:
+            dim = dim % len(input_shape)
         torch_output_tensor = torch.sum(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     input_tensor_a = ttnn.from_torch(
