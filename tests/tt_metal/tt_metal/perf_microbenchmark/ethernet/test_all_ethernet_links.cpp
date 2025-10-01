@@ -683,6 +683,10 @@ int main(int argc, char** argv) {
     //     "Unsupported benchmark {} specified, check BenchmarkType enum for supported values",
     //     benchmark_type);
 
+    constexpr uint32_t packet_size_bytes = 16;
+    constexpr uint32_t packet_size_words = packet_size_bytes >> 4;
+    constexpr uint32_t data_size = 256 * packet_size_bytes;
+
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     std::vector<chip_id_t> ids(num_devices, 0);
     std::iota(ids.begin(), ids.end(), 0);
@@ -701,6 +705,7 @@ int main(int argc, char** argv) {
         tt::tt_metal::MetalContext::instance().rtoptions(),
         true);
 
+    auto my_host_name = physical_system_descriptor.my_host_name();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& unique_chip_ids = cluster.get_unique_chip_ids();
     std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
@@ -710,14 +715,14 @@ int main(int argc, char** argv) {
     }
 
     std::unordered_map<chip_id_t, tt_metal::Program> programs;
-    const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
+    const auto& asic_topology = physical_system_descriptor.get_asic_topology(my_host_name);
 
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
     const size_t dst_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
 
-    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, 4);
+    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, data_size / sizeof(uint32_t));
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> kernel_coords;
     std::unordered_set<tt_cxy_pair> sender_kernel_coords;
     std::unordered_set<tt_cxy_pair> receiver_kernel_coords;
@@ -728,6 +733,9 @@ int main(int argc, char** argv) {
         auto& sender_program = programs[sender_chip_id];
 
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) != my_host_name) {
+                continue;
+            }
             auto receiver_chip_id = asic_id_to_chip_id[*dst_asic_id];
             auto receiver_device = devices[receiver_chip_id];
             auto& receiver_program = programs[receiver_chip_id];
@@ -747,11 +755,15 @@ int main(int argc, char** argv) {
                     std::cout << "Sender chip id: " << sender_chip_id << std::endl;
                     std::cout << "  -> Connected to " << receiver_chip_id << " over: " << +src_chan << " -> "
                               << +dst_chan << std::endl;
+                    std::cout << "Writing inputs to sender core: " << sender_chip_id << " Core: " << sender_coord.str()
+                              << " Data size: " << inputs.size() << std::endl;
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         sender_chip_id,
                         sender_device->ethernet_core_from_logical_core(sender_coord),
                         inputs,
                         src_eth_l1_byte_address);
+                    std::cout << "Writing zeros to receiver core: " << receiver_chip_id
+                              << " Core: " << receiver_coord.str() << " Data size: " << inputs.size() << std::endl;
                     std::vector<uint32_t> all_zeros(inputs.size(), 0);
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         receiver_chip_id,
@@ -759,16 +771,22 @@ int main(int argc, char** argv) {
                         all_zeros,
                         dst_eth_l1_byte_address);
 
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(sender_chip_id);
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_chip_id);
+
+                    std::cout << "Creating sender kernel: " << sender_chip_id << " Core: " << sender_coord.str()
+                              << std::endl;
                     auto sender_kernel = tt_metal::CreateKernel(
                         sender_program,
                         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
                         sender_coord,
-                        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {16, 16 >> 4}});
+                        tt_metal::EthernetConfig{
+                            .noc = tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
                     tt_metal::SetRuntimeArgs(
                         sender_program,
                         sender_kernel,
                         sender_coord,
-                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, 16});
+                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
 
                     auto receiver_kernel = tt_metal::CreateKernel(
                         receiver_program,
@@ -777,7 +795,7 @@ int main(int argc, char** argv) {
                         tt_metal::EthernetConfig{
                             .noc = tt_metal::NOC::NOC_0,
                         });
-                    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_coord, {16});
+                    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_coord, {data_size});
                     kernel_coords[sender_chip_id].push_back(sender_coord);
                     kernel_coords[receiver_chip_id].push_back(receiver_coord);
                     sender_kernel_coords.insert(tt_cxy_pair(sender_chip_id, sender_coord));
@@ -793,6 +811,50 @@ int main(int argc, char** argv) {
                         receiver_coord.str());
                 }
             }
+        }
+    }
+
+    for (const auto& host_neighbor : physical_system_descriptor.get_host_neighbors(my_host_name)) {
+        const auto& exit_nodes = physical_system_descriptor.get_connecting_exit_nodes(my_host_name, host_neighbor);
+        for (const auto& exit_node : exit_nodes) {
+            auto my_asic = exit_node.src_exit_node;
+            auto my_chip = asic_id_to_chip_id[*my_asic];
+            auto neighbor_asic = exit_node.dst_exit_node;
+            bool sender = (*my_asic > *neighbor_asic);
+            auto my_device = devices[my_chip];
+            auto& my_program = programs[my_chip];
+            const auto& my_soc_desc = cluster.get_soc_desc(my_chip);
+            auto my_coord = my_soc_desc.get_eth_core_for_channel(exit_node.eth_conn.src_chan, CoordSystem::LOGICAL);
+
+            if (sender) {
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    my_chip, my_device->ethernet_core_from_logical_core(my_coord), inputs, src_eth_l1_byte_address);
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
+                auto sender_kernel = tt_metal::CreateKernel(
+                    my_program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
+                    my_coord,
+                    tt_metal::EthernetConfig{
+                        .noc = tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
+                tt_metal::SetRuntimeArgs(
+                    my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+                sender_kernel_coords.insert(tt_cxy_pair(my_chip, my_coord));
+                std::cout << "Cross host sender on: " << my_chip << " Core: " << my_coord.str() << std::endl;
+            } else {
+                std::vector<uint32_t> all_zeros(inputs.size(), 0);
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    my_chip, my_device->ethernet_core_from_logical_core(my_coord), all_zeros, dst_eth_l1_byte_address);
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
+                auto receiver_kernel = tt_metal::CreateKernel(
+                    my_program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
+                    my_coord,
+                    tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+                tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
+                receiver_kernel_coords.insert(tt_cxy_pair(my_chip, my_coord));
+                std::cout << "Cross host receiver on: " << my_chip << " Core: " << my_coord.str() << std::endl;
+            }
+            kernel_coords[my_chip].push_back(my_coord);
         }
     }
 
@@ -812,7 +874,7 @@ int main(int argc, char** argv) {
         tt_metal::detail::WaitProgramDone(device->get_devices()[0], mesh_workload.get_programs().begin()->second);
         for (const auto& kernel_coord : kernel_coords[device_id]) {
             auto result_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                device_id, device->ethernet_core_from_logical_core(kernel_coord), src_eth_l1_byte_address, 16);
+                device_id, device->ethernet_core_from_logical_core(kernel_coord), src_eth_l1_byte_address, data_size);
             bool is_sender =
                 sender_kernel_coords.find(tt_cxy_pair(device_id, kernel_coord)) != sender_kernel_coords.end();
             std::cout << "verifying " << (is_sender ? "Sender" : "Receiver") << " at Device: " << device_id
