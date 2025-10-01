@@ -178,15 +178,15 @@ def test_accuracy_sdxl(
                 "target_checks": {
                     "functional": {
                         "avg_gen_time": targets["perf"]["functional"],
-                        "avg_gen_time_check": 3 if targets["perf"]["functional"] >= avg_gen_end_to_end else 2,
+                        "avg_gen_time_check": 2 if targets["perf"]["functional"] >= avg_gen_end_to_end else 3,
                     },
                     "complete": {
                         "avg_gen_time": targets["perf"]["complete"],
-                        "avg_gen_time_check": 3 if targets["perf"]["complete"] >= avg_gen_end_to_end else 2,
+                        "avg_gen_time_check": 2 if targets["perf"]["complete"] >= avg_gen_end_to_end else 3,
                     },
                     "target": {
                         "avg_gen_time": targets["perf"]["target"],
-                        "avg_gen_time_check": 3 if targets["perf"]["target"] >= avg_gen_end_to_end else 2,
+                        "avg_gen_time_check": 2 if targets["perf"]["target"] >= avg_gen_end_to_end else 3,
                     },
                 },
                 "average_denoising_time": profiler.get("denoising_loop"),
