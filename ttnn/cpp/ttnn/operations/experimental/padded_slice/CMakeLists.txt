@@ -3,6 +3,12 @@ add_library(TTNN::Ops::Experimental::PaddedSlice ALIAS ttnn_op_experimental_padd
 
 target_precompile_headers(ttnn_op_experimental_padded_slice REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_padded_slice)
+set_target_properties(
+    ttnn_op_experimental_padded_slice
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            false
+)
 
 file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
