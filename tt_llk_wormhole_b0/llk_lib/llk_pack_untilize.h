@@ -130,10 +130,9 @@ template <
     bool diagonal                = false,
     bool narrow_row              = false,
     std::uint32_t row_num_datums = TILE_C_DIM>
-inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
+inline void _llk_pack_untilize_init_(
+    const std::uint32_t pack_dst_format, const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const bool include_setup_calls = false)
 {
-    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
-
     _llk_pack_untilize_configure_addrmod_<diagonal, narrow_row>();
 
     _llk_pack_untilize_mop_config_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(face_r_dim, num_faces);
@@ -142,6 +141,23 @@ inline void _llk_pack_untilize_init_(const std::uint32_t pack_dst_format, const 
     {
         const std::uint32_t output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces > 1) ? num_faces / 2 : 1) * FACE_C_DIM);
         TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
+    }
+
+    if (include_setup_calls)
+    {
+        // Pack row by row
+        if constexpr (diagonal)
+        {
+            TT_SETADCXX(p_setadc::PAC, 0, 0x0);
+        }
+        else if constexpr (narrow_row)
+        {
+            TT_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
+        }
+        else
+        {
+            TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+        }
     }
 }
 

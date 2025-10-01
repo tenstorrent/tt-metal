@@ -67,8 +67,22 @@ inline void _llk_unpack_untilize_init_(
     const std::uint32_t unpack_dst_format,
     const std::uint32_t tile_size,
     const std::uint32_t face_r_dim                 = FACE_R_DIM,
-    [[maybe_unused]] const std::uint32_t num_faces = 4)
+    [[maybe_unused]] const std::uint32_t num_faces = 4,
+    const bool include_setup_calls                 = false)
 {
+    if (include_setup_calls)
+    {
+        // Disable transpose when unused
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
+
+        // Save state of unpacker config for quick restore
+        TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0,
+                  UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32); // Save unpack stride config
+        TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1,
+                  THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);                                              // Save tile x dim per context
+        TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1); // Save descriptor 1
+    }
+
     const std::uint32_t unpA_ch1_x_stride = (unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float32   ? 4
                                             : (unpack_dst_format & 0x3) == (std::uint32_t)DataFormat::Float16 ? 2
                                                                                                               : 1;
