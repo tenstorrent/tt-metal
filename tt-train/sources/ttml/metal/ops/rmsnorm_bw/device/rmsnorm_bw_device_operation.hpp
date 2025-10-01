@@ -14,9 +14,9 @@ namespace ttml::metal::ops::rmsnorm_bw::device {
 
 struct RMSNormBackwardDeviceOperation {
     using operation_attributes_t = ttml::metal::ops::rmsnorm_bw::device::operation_attributes_t;
-
     using tensor_args_t = ttml::metal::ops::rmsnorm_bw::device::tensor_args_t;
     using spec_return_value_t = ttml::metal::ops::rmsnorm_bw::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::ops::rmsnorm_bw::device::tensor_return_value_t;
     using tensor_return_value_t = ttml::metal::ops::rmsnorm_bw::device::tensor_return_value_t;
     using program_factory_t = std::variant<RMSNormBackwardProgramFactory>;
 
