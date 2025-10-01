@@ -184,7 +184,6 @@ jobs:
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_all_gather_apc.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_reduce_scatter_apc.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/perf_tests.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_gather_nightly.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all_combine_bh.py \
