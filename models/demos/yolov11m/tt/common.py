@@ -110,7 +110,7 @@ class Yolov11Conv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            slice_config=ttnn.Conv2dDRAMSliceWidth,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
