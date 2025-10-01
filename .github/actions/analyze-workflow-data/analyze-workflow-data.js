@@ -234,7 +234,9 @@ function renderRawCommitUrlsTable(commits) {
   }
   const rows = commits.map(c => {
     const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : '');
-    return `| ${url} |`;
+    // Wrap the URL in backticks to avoid GitHub auto-shortening to repo@shortSHA
+    // This renders the full raw URL text without hyperlinking
+    return `| \`${url}\` |`;
   }).join('\n');
   return [
     '| URL |',
