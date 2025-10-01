@@ -664,11 +664,13 @@ jobs:
               if [ "$PING_OWNERS" = "true" ]; then
                 # Create new ping comment
                 echo "Creating ping comment..."
+                # Properly escape the message for JSON
+                JSON_PAYLOAD=$(jq -n --arg body "$PING_MESSAGE" '{"body": $body}')
                 curl -s -X POST \
                   -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                   -H "Accept: application/vnd.github.v3+json" \
                   -H "Content-Type: application/json" \
-                  -d "{\"body\": \"$PING_MESSAGE\"}" \
+                  -d "$JSON_PAYLOAD" \
                   "$COMMENTS_API"
                 echo "Ping comment created for PR #$PR_NUMBER"
               else
@@ -712,10 +714,11 @@ jobs:
               SLACK_MESSAGE="$SLACK_MESSAGE, this PR <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|*$PR_TITLE*> by $PR_AUTHOR_FULL_NAME needs your approval/review to merge this."
 
               # Send to Slack using bot token
+              SLACK_JSON_PAYLOAD=$(jq -n --arg channel "C09HT5VSXRB" --arg text "$SLACK_MESSAGE" '{"channel": $channel, "text": $text}')
               curl -s -X POST \
                 -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
                 -H "Content-Type: application/json" \
-                -d "{\"channel\": \"C09HT5VSXRB\", \"text\": \"$SLACK_MESSAGE\"}" \
+                -d "$SLACK_JSON_PAYLOAD" \
                 "https://slack.com/api/chat.postMessage"
 
               echo "Slack notification sent to #codeowners-ping-checking"
