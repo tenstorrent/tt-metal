@@ -247,7 +247,8 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     auto& exit_nodes = exit_node_connection_table_[hostname];
 
     auto add_local_asic_descriptor = [&](AsicID src_unique_id, chip_id_t src_chip_id) {
-        auto [tray_id, asic_location] = get_asic_position(src_chip_id, get_arch(cluster_), using_mock_cluster_desc_);
+        auto [tray_id, asic_location] =
+            get_asic_position(cluster_, get_arch(cluster_), src_chip_id, using_mock_cluster_desc_);
         asic_descriptors_[src_unique_id] = ASICDescriptor{
             TrayID{tray_id}, asic_location, cluster_desc->get_board_type(src_chip_id), src_unique_id, hostname};
     };
