@@ -30,6 +30,8 @@ void MAIN {
 
     fused_eltwise_binary_reduce<ELTWISE_OP_TYPE, REDUCE_OP, REDUCE_DIM>(cb_inp0, cb_inp1, 0, 0, tile_cnt);
 
+    // dprint_tensix_dest_reg(0);
+
     tile_regs_commit();
     tile_regs_wait();
 
@@ -40,25 +42,25 @@ void MAIN {
 
     PACK(for (uint32_t i = 0; i < 32; ++i) { TTI_NOP; });
 
-    DPRINT_PACK({
-        DPRINT << "Output tile in cb_out0:" << ENDL();
-        for (uint16_t r = 0; r < 32; ++r) {
-            DPRINT << (uint)r << " : "
-                   << TileSlice(
-                          cb_out0,
-                          0,
-                          SliceRange{
-                              .h0 = (uint8_t)r,
-                              .h1 = (uint8_t)(r + 1),
-                              .hs = (uint8_t)1,
-                              .w0 = (uint8_t)0,
-                              .w1 = (uint8_t)32,
-                              .ws = (uint8_t)1},
-                          true,
-                          false)
-                   << ENDL();
-        }
-    });
+    // DPRINT_PACK({
+    //     DPRINT << "Output tile in cb_out0:" << ENDL();
+    //     for (uint16_t r = 0; r < 32; ++r) {
+    //         DPRINT << (uint)r << " : "
+    //                << TileSlice(
+    //                       cb_out0,
+    //                       0,
+    //                       SliceRange{
+    //                           .h0 = (uint8_t)r,
+    //                           .h1 = (uint8_t)(r + 1),
+    //                           .hs = (uint8_t)1,
+    //                           .w0 = (uint8_t)0,
+    //                           .w1 = (uint8_t)32,
+    //                           .ws = (uint8_t)1},
+    //                       true,
+    //                       false)
+    //                << ENDL();
+    //     }
+    // });
 
     cb_push_back(cb_out0, 1);
 
