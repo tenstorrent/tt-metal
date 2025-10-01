@@ -10,17 +10,18 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-
 class InspectorFixture : public ::testing::Test {
-  protected:
+protected:
     // Helper to find a free port
     int find_free_port() {
         int sock = socket(AF_INET, SOCK_STREAM, 0);
-        if (sock < 0) return 0;
+        if (sock < 0) {
+            return 0;
+        }
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = INADDR_ANY;
-        addr.sin_port = 0; // Let OS pick
+        addr.sin_port = 0;  // Let OS pick
         if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
             close(sock);
             return 0;
@@ -37,7 +38,9 @@ class InspectorFixture : public ::testing::Test {
 
     std::string find_free_port_address() {
         int port = find_free_port();
-        if (port == 0) return "";
+        if (port == 0) {
+            return "";
+        }
         return "localhost:" + std::to_string(port);
     }
 
@@ -48,15 +51,14 @@ class InspectorFixture : public ::testing::Test {
         kj::Own<kj::NetworkAddress> addr = network.parseAddress(address).wait(waitScope);
         kj::Own<kj::AsyncIoStream> conn = addr->connect().wait(waitScope);
         capnp::TwoPartyClient client(*conn);
-        tt::tt_metal::inspector::rpc::Inspector::Client inspector = client.bootstrap().castAs<tt::tt_metal::inspector::rpc::Inspector>();
+        tt::tt_metal::inspector::rpc::Inspector::Client inspector =
+            client.bootstrap().castAs<tt::tt_metal::inspector::rpc::Inspector>();
         auto request = inspector.getProgramsRequest();
         auto response = request.send().wait(waitScope);
     }
 
     void start(tt::tt_metal::inspector::RpcServerController& controller, const std::string& address) {
-        controller.get_rpc_server().setGetProgramsCallback([](auto result) {
-            result.initPrograms(0);
-        });
+        controller.get_rpc_server().setGetProgramsCallback([](auto result) { result.initPrograms(0); });
         controller.start(address);
     }
 };
