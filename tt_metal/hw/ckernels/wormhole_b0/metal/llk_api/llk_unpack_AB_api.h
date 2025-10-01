@@ -138,3 +138,29 @@ inline void llk_unpack_AB_reduce_row_max_init() {
     TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0);  // Unpack a whole tile of an operand
     _llk_unpack_AB_reduce_row_max_mop_config_();  // Unpack operand and scaler
 }
+
+// Block-based reduce row max functions
+template <uint32_t block_ct_dim>
+inline void llk_unpack_AB_reduce_block_max_row_init(const std::uint32_t operandA, const std::uint32_t operandB) {
+    // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
+    // if we have the flag set with REDUCE_ROW, we don't need to do anything
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(1);
+
+    TTI_SETADCXX(p_setadc::UNP_B, FACE_R_DIM * FACE_C_DIM - 1, 0x0);        // Unpack a single face of a scaler
+    TTI_SETADCXX(p_setadc::UNP_A, 4 * (FACE_R_DIM * FACE_C_DIM) - 1, 0x0);  // Unpack a tile of an operand
+    _llk_unpack_AB_reduce_block_max_row_mop_config_<block_ct_dim>();        // Unpack operand and scaler
+}
+
+template <uint32_t block_ct_dim>
+inline void llk_unpack_AB_reduce_block_max_row(
+    const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t row_start_index) {
+    std::uint32_t operandA_id = get_operand_id(operandA);
+    std::uint32_t operandB_id = get_operand_id(operandB);
+    std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    std::uint32_t offset_address_a = get_local_cb_interface(operandA_id).fifo_page_size * row_start_index;
+    std::uint32_t address_a = base_address_a + offset_address_a;
+    std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+
+    // Always tile index 0 for operandB
+    _llk_unpack_AB_<BroadcastType::NONE>(address_a, base_address_b);
+}
