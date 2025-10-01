@@ -124,6 +124,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_llama_config.def_rw("scaling_factor", &models::llama::LlamaConfig::scaling_factor);
         py_llama_config.def_rw("high_freq_factor", &models::llama::LlamaConfig::high_freq_factor);
         py_llama_config.def_rw("low_freq_factor", &models::llama::LlamaConfig::low_freq_factor);
+        py_llama_config.def_rw("original_context_length", &models::llama::LlamaConfig::original_context_length);
 
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());

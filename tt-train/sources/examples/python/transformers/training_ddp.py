@@ -50,8 +50,9 @@ def initialize_device(yaml_config):
 class ModelConfig:
     def __init__(self, yaml_config):
         self.device_config = DeviceConfig(yaml_config)
-        self.model_type = yaml_config.get("model_type", "gpt2")
-        self.transformer_config = yaml_config.get("transformer_config", {})
+        training_config = yaml_config.get("training_config", {})
+        self.model_type = training_config.get("model_type", "gpt2")
+        self.transformer_config = training_config.get("transformer_config", {})
 
     def _create_gpt2(self):
         gcfg = ttml.models.gpt2.GPT2TransformerConfig()
@@ -61,19 +62,57 @@ class ModelConfig:
         gcfg.vocab_size = self.transformer_config.get("vocab_size", 256)
         gcfg.max_sequence_length = self.transformer_config.get("max_sequence_length", 256)
         gcfg.dropout_prob = self.transformer_config.get("dropout_prob", 0.2)
+        # Optional runner type: accept enum or string names; fallback to defaults if absent
+        if "runner_type" in self.transformer_config:
+            rt = self.transformer_config["runner_type"]
+            if rt == "memory_efficient":
+                gcfg.runner_type = ttml.models.RunnerType.MemoryEfficient
+            else:
+                gcfg.runner_type = ttml.models.RunnerType.Default
         return ttml.models.gpt2.create_gpt2_model(gcfg)
 
     def _create_llama(self):
-        raise NotImplementedError("LLama model is not supported yet")
-        # lcfg = ttml.models.llama.LlamaConfig()
-        # lcfg.num_heads = self.transformer_config.get("num_heads", 6)
-        # lcfg.num_groups = self.transformer_config.get("num_groups", 3)
-        # lcfg.embedding_dim = self.transformer_config.get("embedding_dim", 384)
-        # lcfg.num_blocks = self.transformer_config.get("num_blocks", 6)
-        # lcfg.vocab_size = self.transformer_config.get("vocab_size", 256)
-        # lcfg.max_sequence_length = self.transformer_config.get("max_sequence_length", 256)
-        # lcfg.dropout_prob = self.transformer_config.get("dropout_prob", 0.2)
-        # return ttml.models.llama.create(lcfg)
+        lcfg = ttml.models.llama.LlamaConfig()
+        tc = self.transformer_config
+
+        # Core fields with sensible defaults
+        lcfg.num_heads = tc.get("num_heads", 6)
+        lcfg.num_groups = tc.get("num_groups", 3)
+        lcfg.embedding_dim = tc.get("embedding_dim", 384)
+        lcfg.num_blocks = tc.get("num_blocks", 6)
+        lcfg.vocab_size = tc.get("vocab_size", 256)
+        lcfg.max_sequence_length = tc.get("max_sequence_length", 256)
+        lcfg.dropout_prob = tc.get("dropout_prob", 0.0)
+
+        # Optional fields
+        if "intermediate_dim" in tc:
+            lcfg.intermediate_dim = tc["intermediate_dim"]
+        if "theta" in tc:
+            lcfg.theta = tc["theta"]
+
+        # Runner type (simple mapping like GPT2)
+        rt = tc.get("runner_type", "default")
+        if rt == "memory_efficient":
+            lcfg.runner_type = ttml.models.RunnerType.MemoryEfficient
+        else:
+            lcfg.runner_type = ttml.models.RunnerType.Default
+
+        if "weight_tying" in tc:
+            lcfg.weight_tying = tc["weight_tying"]
+
+        # Optional RoPE scaling from nested block
+        rope = tc.get("rope_scaling")
+        if rope:
+            if "scaling_factor" in rope:
+                lcfg.scaling_factor = rope["scaling_factor"]
+            if "high_freq_factor" in rope:
+                lcfg.high_freq_factor = rope["high_freq_factor"]
+            if "low_freq_factor" in rope:
+                lcfg.low_freq_factor = rope["low_freq_factor"]
+            if "original_context_length" in rope:
+                lcfg.original_context_length = rope["original_context_length"]
+
+        return ttml.models.llama.create_llama_model(lcfg)
 
     def create_model(self):
         if self.model_type == "gpt2":
@@ -177,7 +216,7 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
 
         # For DDP, composer concatenates losses from all devices - take mean
         loss_numpy = loss.to_numpy(composer=composer)
-        train_loss = float(loss_numpy.mean() if use_ddp else loss_numpy)
+        train_loss = loss_numpy.mean()
 
         # Accumulate loss
         accum_loss += train_loss
@@ -223,20 +262,16 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
 @click.command()
 @click.option("-c", "--config", type=str, default="training_shakespeare_nanogpt.yaml")
 def main(config: str):
-    set_seed(42)
     yaml_config = get_config(config)
+    set_seed(yaml_config["training_config"].get("seed", 42))
     train_ids, val_ids, vocab_size, decode = prepare_data()
 
     initialize_device(yaml_config)
     device = ttml.autograd.AutoContext.get_instance().get_device()
-    print(device)
 
     model_config = ModelConfig(yaml_config)
     model = model_config.create_model()
-    print(model)
-
     optimizer = create_optimizer(model, yaml_config)
-    print(optimizer)
 
     training_cfg = TrainingConfig(yaml_config)
     device_config = DeviceConfig(yaml_config)
