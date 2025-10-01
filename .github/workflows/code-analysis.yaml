@@ -482,6 +482,15 @@ jobs:
           PING_OWNERS="${{ steps.generate-comment.outputs.ping-owners }}"
           SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
 
+          # Define API endpoint
+          COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
+
+          # Validate PR_NUMBER
+          if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
+            echo "ERROR: PR_NUMBER is not set or is null"
+            exit 1
+          fi
+
           echo "Generating ping message for pending owners..."
 
           # Get PR information
@@ -665,15 +674,27 @@ jobs:
                 # Create new ping comment
                 echo "Creating ping comment..."
 
+                # Debug: Check variables
+                echo "Debug info:"
+                echo "PR_NUMBER: '$PR_NUMBER'"
+                echo "COMMENTS_API: '$COMMENTS_API'"
+                echo "PING_MESSAGE length: ${#PING_MESSAGE}"
+
                 # Create temporary file to avoid shell interpretation of JSON
                 TEMP_JSON_FILE=$(mktemp)
-                jq -n --arg body "$PING_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"
+                if jq -n --arg body "$PING_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"; then
+                  echo "JSON file created successfully"
+                else
+                  echo "Failed to create JSON file"
+                  exit 1
+                fi
 
                 # Debug: show what we're sending
                 echo "Sending JSON payload:"
                 cat "$TEMP_JSON_FILE"
 
                 # Try curl with file upload to avoid shell escaping issues
+                echo "Making curl request to: $COMMENTS_API"
                 RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
                   -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                   -H "Accept: application/vnd.github.v3+json" \
