@@ -216,7 +216,7 @@ inline bool FileContainsAllStringsInOrder(std::string file_name, const std::vect
 }
 
 // Delete all lines from file that start with a given prefix
-inline bool DeleteLinesStartingWith(std::string file_name, const std::string &prefix) {
+inline bool DeleteLinesStartingWith(const std::string& file_name, const std::string &prefix) {
     std::fstream log_file;
     if (!OpenFile(file_name, log_file, std::fstream::in)) {
         log_info(tt::LogTest, "File '{}' does not exist!", file_name);
