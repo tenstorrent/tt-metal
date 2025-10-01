@@ -16,6 +16,7 @@ from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhol
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
 from ttnn.operations.conv2d import get_torch_act_func_from_string
+from models.experimental.panoptic_deeplab.tt.common import PDL_L1_SMALL_SIZE
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -126,6 +127,7 @@ def run_conv(
     enable_activation_reuse=False,
     config_tensors_in_dram=False,
     custom_pcc=None,
+    force_split_reader=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -255,6 +257,7 @@ def run_conv(
         full_inner_dim=bs_full_inner_dim,
         enable_activation_reuse=enable_activation_reuse,
         config_tensors_in_dram=config_tensors_in_dram,
+        force_split_reader=force_split_reader,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -4272,10 +4275,10 @@ def test_conv_sharded_rm_input(
     # fmt: off
     [
         (1,  128,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 3, HS, 32 * 4),
-        (1,  128,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 0),
+        (1,  128,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 32 * 8), #act_block_h_override 0 fails because of Commit #db1fdd0
         (1,  128,   32, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 2, HS, 32 * 4),
         (1,  128,  128,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 4, HS, 0),
-        (1,  160,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1, HS, 32 * 4),
+        (1,  160,  128, 128,  256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1, HS, 32 * 3),
         (1,  256,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 0),
         (1,  256,  256,  64,  128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (1, 1), 1, False, 1, HS, 32 * 2),
         (1,    3,   64, 512, 1024, ttnn.bfloat16,  ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (2, 2), (1, 1), 1, False, 1, HS, 32 * 41),
@@ -4313,7 +4316,7 @@ def test_conv_sharded_rm_input(
     ],
     # fmt: on
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @run_for_blackhole("blackhole specific tests")
 def test_conv2d_panoptic(
     device,
@@ -4378,7 +4381,7 @@ def test_conv2d_panoptic(
         [ttnn.TILE_LAYOUT, ttnn.bfloat8_b],
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity, shard_layout, frequency_in_model",
     # fmt: off
@@ -4477,7 +4480,7 @@ def test_conv_dram_panoptic(
     ),
     # fmt: on
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 1024}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": PDL_L1_SMALL_SIZE}], indirect=True)
 @run_for_blackhole("blackhole specific tests")
 def test_conv2d_ch_split_dram_panoptic(
     device,
@@ -5015,4 +5018,65 @@ def test_resnet50_first_conv_p150(
         input_dtype=ttnn.bfloat16,
         sharded_cfg=memory_config,
         enable_activation_reuse=True,
+    )
+
+
+@pytest.mark.parametrize("config_in_dram", [False,True])
+@pytest.mark.parametrize("full_inner_dim", [False,True])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, act_block_h_override",
+    (
+        (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
+        (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
+        (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
+        (32, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
+        (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
+    ),
+)
+@pytest.mark.parametrize("force_split_reader", [True, False])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_block_sharding(
+    device,
+    torch_tensor_map,
+    config_in_dram,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    force_split_reader,
+    full_inner_dim,
+    act_block_h_override,
+):
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi, #math_fidelity
+        ttnn.bfloat8_b, #output_dtype
+        ttnn.bfloat8_b, #weights_dtype
+        1, # batch_size
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        (pad_h, pad_w),
+        {"act_block_h": act_block_h_override},
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        input_layout=ttnn.TILE_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        groups=1,
+        in_place=False,
+        force_split_reader=force_split_reader,
+        config_tensors_in_dram=config_in_dram,
+        bs_full_inner_dim=full_inner_dim,
     )

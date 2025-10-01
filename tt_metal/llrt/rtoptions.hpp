@@ -86,8 +86,7 @@ struct InspectorSettings {
     bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
-    std::string rpc_server_host = "localhost";
-    uint16_t rpc_server_port = 50051;
+    std::string rpc_server_address = "localhost:50051";
     bool rpc_server_enabled = true;
 };
 
@@ -276,10 +275,8 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
-    void set_inspector_rpc_server_host(const std::string& host) { inspector_settings.rpc_server_host = host; }
-    uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
-    void set_inspector_rpc_server_port(uint16_t port) { inspector_settings.rpc_server_port = port; }
+    const std::string& get_inspector_rpc_server_address() const { return inspector_settings.rpc_server_address; }
+    void set_inspector_rpc_server_address(const std::string& address) { inspector_settings.rpc_server_address = address; }
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
 

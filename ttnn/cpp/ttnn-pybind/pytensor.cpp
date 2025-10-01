@@ -944,7 +944,9 @@ void pytensor_module(py::module& m_tensor) {
         .def_property_readonly("tile", [](const Tensor& self) { return self.tensor_spec().tile(); })
         .def(
             "deallocate",
-            [](Tensor& self, bool force) { return self.deallocate(force); },
+            [](Tensor& self, bool force) {
+                self.deallocate(force);
+            },
             py::arg("force") = false,
             R"doc(
                 Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.

@@ -713,9 +713,10 @@ class MLA(AbstractModule):
     @classmethod
     def create_page_table(
         cls,
-        page_table: torch.Tensor,
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
+        page_table: torch.Tensor | None = None,
+        batch_size: int = MAX_BATCH_SIZE,
     ) -> ttnn.Tensor:
         """Helper function to allocate the page table for MLA on device.
 
@@ -734,6 +735,15 @@ class MLA(AbstractModule):
             Device-allocated version of the page table representing the page table
         """  # TODO: update docs
         assert cls.is_device_supported(mesh_device), f"Mesh device shape {mesh_device.shape} must be supported by MLA."
+
+        if page_table is None:
+            max_num_blocks = paged_config.max_num_blocks
+            _, dp_factor = mesh_device.shape
+            batch_per_shard = even_int_div(batch_size, dp_factor)
+
+            page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
+            page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
+
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
