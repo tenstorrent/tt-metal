@@ -69,8 +69,6 @@ jobs:
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
-      - name: Setup report
-        run: touch Models_Device_Perf_$(date +%Y_%m_%d).csv
       - name: Run falcon7b model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
