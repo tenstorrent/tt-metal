@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ namespace tt::tt_fabric {
 
 // 1D routing specialization
 template <>
-void routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
+void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
@@ -21,14 +21,14 @@ void routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 
 // 1D compressed routing specialization. No-op
 template <>
-void routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
+void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
     // No-op
 }
 
 // 2D compressed routing specialization
 template <>
-void routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
+void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
     uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) {
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {

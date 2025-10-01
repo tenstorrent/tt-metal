@@ -310,7 +310,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
-OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
+Conv2dParallelizationConfig determine_conv_op_parallel_config_from_conv_output_mem_config(
     const MemoryConfig& conv_output_mem_config,
     uint32_t num_cores_nhw,
     uint32_t num_cores_c_in,
@@ -360,9 +360,9 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     return {subblock_h, subblock_w};
 }
 
-OptimizedConvBlockConfig determine_per_core_conv_block_config(
+Conv2dBlockConfig determine_per_core_conv_block_config(
     const ParallelConfig& parallel_config,
-    const OptimizedConvParallelizationConfig& conv_op_parallel_config,
+    const Conv2dParallelizationConfig& conv_op_parallel_config,
     uint32_t padded_in_channels,
     uint32_t padded_output_height_ntiles_per_core,
     uint32_t act_block_h_override,
@@ -474,8 +474,7 @@ bool is_1d_deptwise_conv(
     return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
 }
 
-SkipMcast conv_skip_mcast(
-    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
+SkipMcast conv_skip_mcast(const Conv2dParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
     bool skip_act_mcast = false;
     bool skip_weights_mcast = false;
     if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED || memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
@@ -547,7 +546,7 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     return {input_padded_shape, input_tensor_sharded_memory_config};
 };
 
-static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
+std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
     MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
@@ -797,8 +796,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
 }
 
 ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_conv_op_config(
-    OptimizedConvParallelizationConfig conv_parallelization_config,
-    OptimizedConvBlockConfig conv_blocking_config,
+    Conv2dParallelizationConfig conv_parallelization_config,
+    Conv2dBlockConfig conv_blocking_config,
     bool height_sharded,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
     bool transpose_mcast,
@@ -1031,7 +1030,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     return winning_config.conv_config;
 }
 
-std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
+std::tuple<Conv2dParallelizationConfig, Conv2dBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
     const DeviceComputeKernelConfig& compute_config,
     const ParallelConfig& input_parallel_config,
@@ -1050,7 +1049,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
         ttnn::Shape({1, 1, nhw_out, out_channels_padded}), output_parallel_config, round_up_size);
 
-    OptimizedConvParallelizationConfig opt_conv_op_parallel_config =
+    Conv2dParallelizationConfig opt_conv_op_parallel_config =
         determine_conv_op_parallel_config_from_conv_output_mem_config(
             conv_out_memory_config,
             get_num_cores_nhw_from_parallel_config(input_parallel_config),
@@ -1060,7 +1059,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     uint32_t nhw_out_padded_ntile_per_core =
         conv_out_memory_config.shard_spec().value().shape[0] / tt::constants::TILE_HEIGHT;
 
-    OptimizedConvBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
+    Conv2dBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
         input_parallel_config,
         opt_conv_op_parallel_config,
         in_channels_padded,
@@ -1391,8 +1390,8 @@ uint32_t calculate_conv_dram_slice_L1_usage(
 }
 conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const OptimizedConvBlockConfig& block_config,
-    const OptimizedConvParallelizationConfig& pconfig,
+    const Conv2dBlockConfig& block_config,
+    const Conv2dParallelizationConfig& pconfig,
     const ttnn::Shape& weights_shape,
     const SlidingWindowConfig& sliding_window_config,
     std::array<uint32_t, 2> dilation,

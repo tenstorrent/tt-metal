@@ -11,7 +11,7 @@ from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )
-from models.common.utility_functions import skip_for_blackhole, run_for_blackhole
+from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout, assert_equal
 import ttnn
@@ -125,6 +125,8 @@ def run_conv(
     throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
     enable_activation_reuse=False,
     config_tensors_in_dram=False,
+    custom_pcc=None,
+    force_split_reader=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -254,6 +256,7 @@ def run_conv(
         full_inner_dim=bs_full_inner_dim,
         enable_activation_reuse=enable_activation_reuse,
         config_tensors_in_dram=config_tensors_in_dram,
+        force_split_reader=force_split_reader,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -328,21 +331,24 @@ def run_conv(
 
     ref = torch.permute(ref, (0, 2, 3, 1))
 
-    if not fp32_accum:
-        pcc = 0.985
-        if input_channels * filter_height * filter_width > 10000:
-            pcc = 0.97
-    elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
-        pcc = 0.996
+    if custom_pcc is not None:
+        pcc = custom_pcc
     else:
-        pcc = 0.997
+        if not fp32_accum:
+            pcc = 0.985
+            if input_channels * filter_height * filter_width > 10000:
+                pcc = 0.97
+        elif math_fidelity == ttnn.MathFidelity.LoFi and output_dtype == ttnn.bfloat8_b:
+            pcc = 0.996
+        else:
+            pcc = 0.997
 
-    # Check if activation is tanh
-    is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
-    if is_tanh:
-        # Scale down PCC for tanh.
-        # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
-        pcc = pcc * 0.99
+        # Check if activation is tanh
+        is_tanh = activation is not None and activation.op_type == ttnn.UnaryOpType.TANH
+        if is_tanh:
+            # Scale down PCC for tanh.
+            # tanh has a range of -1 to 1. So discrepancies in output values which are close to 0 tend to disproportionately affect the PCC.
+            pcc = pcc * 0.99
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
@@ -3522,6 +3528,7 @@ def test_conv2d_sdxl_refiner(
     ),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
+@pytest.mark.timeout(120)
 def test_conv2d_vae_sdxl(
     device,
     torch_tensor_map,
@@ -4727,7 +4734,8 @@ def test_conv2d_activation_reuse(
         enable_act_double_buffer=True,  # will be disabled if activation reuse is enabled
         input_dtype = input_dtype,
         enable_activation_reuse=enable_activation_reuse,
-        config_tensors_in_dram=config_in_dram
+        config_tensors_in_dram=config_in_dram,
+        custom_pcc=0.999
     )
 
 
@@ -4938,4 +4946,136 @@ def test_conv2d_1kX1k(
         enable_act_double_buffer=act_db,
         enable_weights_double_buffer=w_db,
         slice_config=slice_config,
+    )
+
+# CB pointer update regression test
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
+    (
+        # ResNet50 first conv parameters - batch_size=32, input_shape={32; 115; 115; 16}
+        (32, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 49 * 32}),
+    ),
+)
+def test_resnet50_first_conv_p150(
+    device,
+    torch_tensor_map,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    shard_layout,
+    config_override,
+):
+    # Test runs on Blackhole P150
+    if (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) != (13, 10):
+        pytest.skip("Test is only supported on Blackhole P150")
+
+    input_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
+        }
+    )
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(input_core_range_set, (3328, 16), ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        (pad_h, pad_w),
+        config_override,
+        shard_layout=shard_layout,
+        input_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        deallocate_activation=True,
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        input_dtype=ttnn.bfloat16,
+        sharded_cfg=memory_config,
+        enable_activation_reuse=True,
+    )
+
+
+@pytest.mark.parametrize("config_in_dram", [False,True])
+@pytest.mark.parametrize("full_inner_dim", [False,True])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, act_block_h_override",
+    (
+        (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
+        (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
+        (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
+        (32, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
+        (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
+    ),
+)
+@pytest.mark.parametrize("force_split_reader", [True, False])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_block_sharding(
+    device,
+    torch_tensor_map,
+    config_in_dram,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    force_split_reader,
+    full_inner_dim,
+    act_block_h_override,
+):
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi, #math_fidelity
+        ttnn.bfloat8_b, #output_dtype
+        ttnn.bfloat8_b, #weights_dtype
+        1, # batch_size
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        (pad_h, pad_w),
+        {"act_block_h": act_block_h_override},
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        input_layout=ttnn.TILE_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        groups=1,
+        in_place=False,
+        force_split_reader=force_split_reader,
+        config_tensors_in_dram=config_in_dram,
+        bs_full_inner_dim=full_inner_dim,
     )
