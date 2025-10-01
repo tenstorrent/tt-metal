@@ -56,7 +56,7 @@ struct SliceReshardAsync {
         final_semaphore(final_semaphore),
         barrier_semaphore(barrier_semaphore),
         num_links(num_links),
-        output_mem_config(output_mem_config),
+        output_mem_config(std::move(output_mem_config)),
         topology(topology),
         ring_size(ring_size) {}
 
