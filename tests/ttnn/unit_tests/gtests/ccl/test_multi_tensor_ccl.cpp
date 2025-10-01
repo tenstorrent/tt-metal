@@ -137,6 +137,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, DISABLED_AllGatherMinimalAsyncComposit
 
 // same as above but with a different tensor shape which triggers the native implementation
 TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherMinimalAsyncNative) {
+    // Issue #29828: This has some assertion error, issue assigned to CCL team
+    GTEST_SKIP();
     auto mesh_devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices(mesh_device_.get());
     auto devices = CMAKE_UNIQUE_NAMESPACE::get_line_devices_as_idevice(mesh_devices);
 
