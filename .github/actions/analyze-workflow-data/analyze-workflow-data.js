@@ -1245,7 +1245,7 @@ async function run() {
               '',
               '  - Commits between last success and first failure (tables below):',
               '',
-              commitsMd,
+              // commitsMd,
               '',
               '  - Raw commit URLs:',
               '',
@@ -1308,13 +1308,13 @@ async function run() {
 
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
-            const commitsMd2 = renderCommitsTable(it.commits_between || []);
+            // const commitsMd2 = renderCommitsTable(it.commits_between || []);
             const rawUrlsMd2 = renderRawCommitUrlsTable(it.commits_between || []);
             commitsList = [
               '',
               '  - Commits between last success and first failure (tables below):',
               '',
-              commitsMd2,
+              // commitsMd2,
               '',
               '  - Raw commit URLs:',
               '',
