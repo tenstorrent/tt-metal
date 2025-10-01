@@ -420,3 +420,6 @@ tests:
 
   318:
     name: "All from All Custom"
+
+  600:
+    name: "Transaction ID - Read After Write"
