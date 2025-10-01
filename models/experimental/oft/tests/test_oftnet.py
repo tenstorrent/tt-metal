@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,7 +22,7 @@ from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhol
 from loguru import logger
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 12 * 1024}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 14 * 1024}], indirect=True)
 @pytest.mark.parametrize(
     "input_image_path, calib_path",
     [
