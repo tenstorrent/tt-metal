@@ -119,8 +119,11 @@ private:
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
 
-    // Storage for all trace ids
-    std::vector<uint32_t> trace_ids;
+    std::vector<uint32_t> traces_replayed;
+
+    std::unordered_set<uint32_t> traces_being_recorded;
+
+    std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
 
     // Read all control buffers
     void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
@@ -226,6 +229,14 @@ public:
     // frequency scale
     double freq_scale = 1.0;
 
+    void markTraceBegin(uint32_t trace_id);
+
+    void markTraceEnd(uint32_t trace_id);
+
+    void markTraceReplay(uint32_t trace_id);
+
+    void addRuntimeIdToTrace(uint32_t trace_id, uint32_t runtime_id);
+
     // Freshen device logs
     void freshDeviceLog();
 
@@ -263,6 +274,8 @@ public:
 
     // Get marker details for the marker corresponding to the given timer id
     tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;
+
+    std::pair<uint64_t, uint64_t> getTraceIdAndCount(uint32_t run_host_id, uint32_t device_trace_counter) const;
 
     // setter and getter on last fast dispatch read
     void setLastFDReadAsDone();
