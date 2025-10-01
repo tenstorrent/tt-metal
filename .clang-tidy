@@ -200,6 +200,8 @@ CheckOptions:
     value: false
   - key: performance-unnecessary-copy-initialization.AllowedTypes
     value: "^MemoryPin$"
+  - key: misc-include-cleaner.IgnoreHeaders
+    value: 'net/proto2/public/.*;yaml-cpp/.*;taskflow/.*'
 
 FormatStyle: 'file'
 
