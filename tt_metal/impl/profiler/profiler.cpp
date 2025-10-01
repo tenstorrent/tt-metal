@@ -1147,6 +1147,24 @@ void DeviceProfiler::readProfilerBuffer(IDevice* device) {
     }
 }
 
+void DeviceProfiler::markTraceBegin(uint32_t trace_id) {
+    TT_ASSERT(traces_being_recorded.find(trace_id) == traces_being_recorded.end());
+    traces_being_recorded.insert(trace_id);
+}
+
+void DeviceProfiler::markTraceEnd(uint32_t trace_id) {
+    TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
+    traces_being_recorded.erase(trace_id);
+}
+
+void DeviceProfiler::markTraceReplay(uint32_t trace_id) { traces_replayed.push_back(trace_id); }
+
+void DeviceProfiler::addRuntimeIdToTrace(uint32_t trace_id, uint32_t runtime_id) {
+    log_info(tt::LogMetal, "Adding runtime id {} to trace id {}", runtime_id, trace_id);
+    TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
+    runtime_ids_per_trace[trace_id].insert(runtime_id);
+}
+
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
     const CoreCoord& worker_core,
@@ -1201,6 +1219,7 @@ void DeviceProfiler::readRiscProfilerResults(
     std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>& device_markers_for_core =
         device_markers_per_core_risc_map[phys_coord];
 
+    uint32_t deviceTraceCounterRead = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (data_source == ProfilerDataBufferSource::L1) {
@@ -1238,7 +1257,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
             uint32_t riscNumRead = 0;
             uint32_t coreFlatIDRead = 0;
-            uint32_t deviceTraceCounterRead = 0;
+            deviceTraceCounterRead = 0;
             uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
@@ -1379,6 +1398,8 @@ void DeviceProfiler::readRiscProfilerResults(
             }
         }
     }
+
+    TT_ASSERT(deviceTraceCounterRead == traces_replayed.size());
 }
 
 void DeviceProfiler::updateFirstTimestamp(uint64_t timestamp) {
@@ -1394,6 +1415,41 @@ tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
     } else {
         return tracy::UnidentifiedMarkerDetails;
     }
+}
+
+std::pair<uint64_t, uint64_t> DeviceProfiler::getTraceIdAndCount(
+    uint32_t run_host_id, uint32_t device_trace_counter) const {
+    if (device_trace_counter == 0) {
+        return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
+    }
+
+    // log_info(tt::LogMetal, "Device trace counter: {}", device_trace_counter);
+    // log_info(tt::LogMetal, "Traces replayed size: {}", traces_replayed.size());
+    TT_ASSERT(device_trace_counter <= traces_replayed.size());
+    const uint32_t trace_id = traces_replayed[device_trace_counter - 1];
+    log_info(tt::LogMetal, "Trace id: {}", trace_id);
+
+    if (runtime_ids_per_trace.find(trace_id) == runtime_ids_per_trace.end()) {
+        return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
+    }
+
+    const std::unordered_set<uint32_t>& runtime_ids = runtime_ids_per_trace.at(trace_id);
+    // log_info(tt::LogMetal, "Runtime ids: {}", runtime_ids.size());
+    // log_info(tt::LogMetal, "Run host id: {}",
+    // tt::tt_metal::detail::DecodePerDeviceProgramID(run_host_id).base_program_id);
+    const uint32_t base_program_id = tt::tt_metal::detail::DecodePerDeviceProgramID(run_host_id).base_program_id;
+    if (runtime_ids.find(base_program_id) == runtime_ids.end()) {
+        return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
+    }
+
+    uint64_t trace_id_count = 0;
+    for (uint32_t i = 0; i < device_trace_counter; ++i) {
+        if (traces_replayed[i] == trace_id) {
+            trace_id_count++;
+        }
+    }
+
+    return {trace_id, trace_id_count};
 }
 
 void DeviceProfiler::readDeviceMarkerData(
@@ -1412,22 +1468,7 @@ void DeviceProfiler::readDeviceMarkerData(
     nlohmann::json meta_data;
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
-
-    TT_ASSERT(device_trace_counter <= trace_ids.size());
-    const uint64_t trace_id =
-        device_trace_counter == 0 ? tracy::TTDeviceMarker::INVALID_NUM : trace_ids[device_trace_counter - 1];
-
-    uint64_t trace_id_count;
-    if (trace_id == tracy::TTDeviceMarker::INVALID_NUM) {
-        trace_id_count = tracy::TTDeviceMarker::INVALID_NUM;
-    } else {
-        trace_id_count = 0;
-        for (uint32_t i = 0; i < device_trace_counter; ++i) {
-            if (trace_ids[i] == trace_id) {
-                trace_id_count++;
-            }
-        }
-    }
+    const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
 
     const auto& [new_marker_it, new_marker_inserted] = device_markers.emplace(
         run_host_id,
@@ -1637,7 +1678,7 @@ void DeviceProfiler::setLastFDReadAsDone() { this->is_last_fd_read_done = true; 
 
 bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_done; }
 
-void DeviceProfiler::addTraceId(uint32_t trace_id) { this->trace_ids.push_back(trace_id); }
+void DeviceProfiler::addTraceId(uint32_t trace_id) { this->traces_replayed.push_back(trace_id); }
 
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #if defined(TRACY_ENABLE)
@@ -1692,6 +1733,9 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
 
         this->thread_pool->wait();
     }
+
+    // assert that last trace id in vector == (trace id for all cores on the last op)r
+    // TT_ASSERT(this->trace_ids.at(this->trace_ids.size() - 1) == );
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);

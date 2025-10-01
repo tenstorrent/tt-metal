@@ -44,6 +44,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/graph_tracking.hpp>
@@ -330,6 +331,14 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
     for (auto& [device_range, program] : mesh_workload.get_programs()) {
+#if defined(TRACY_ENABLE)
+        if (this->trace_id().has_value()) {
+            for_each_local(mesh_device_, device_range, [&](const auto& coord) {
+                auto device = mesh_device_->get_device(coord);
+                TracyTTMetalEnqueueProgramTrace(device->id(), *(this->trace_id().value()), program.get_runtime_id());
+            });
+        }
+#endif
         auto& program_cmd_seq = mesh_workload.impl().get_dispatch_cmds_for_program(program, command_hash);
         TT_ASSERT(
             use_prefetcher_cache == program_cmd_seq.prefetcher_cache_used,
