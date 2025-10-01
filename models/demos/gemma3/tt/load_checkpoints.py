@@ -148,7 +148,7 @@ def map_hf_to_meta_keys_vision_only(state_dict):
     return replace_keys(state_dict, replacements)
 
 
-def map_vision_hf_to_meta_keys(state_dict, head_dim):
+def map_vision_hf_to_meta_keys_split_to_submodels(state_dict):
     vision_state_dict = dict()
     text_state_dict = dict()
     other_state_dict = dict()
@@ -162,6 +162,12 @@ def map_vision_hf_to_meta_keys(state_dict, head_dim):
             selected_dict = other_state_dict
 
         selected_dict[k] = v
+
+    return vision_state_dict, text_state_dict, other_state_dict
+
+
+def map_vision_hf_to_meta_keys(state_dict, head_dim):
+    vision_state_dict, text_state_dict, other_state_dict = map_vision_hf_to_meta_keys_split_to_submodels(state_dict)
 
     text_state_dict = convert_hf_qkv_to_meta_format(text_state_dict, head_dim)
     text_state_dict = map_hf_to_meta_keys(text_state_dict)
