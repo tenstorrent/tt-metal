@@ -94,7 +94,7 @@ std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> discover_tunnels_from_m
                 "tt-topology.");
         }
 
-        TT_ASSERT(tunnels_from_mmio.size() != 0, "Must have at least 1 tunnel from MMIO Device.");
+        TT_ASSERT(!tunnels_from_mmio.empty(), "Must have at least 1 tunnel from MMIO Device.");
         uint32_t tunnel_depth = tunnels_from_mmio[0].size();
         log_debug(tt::LogMetal, "Each FD Tunnel is {} deep.", tunnel_depth);
 

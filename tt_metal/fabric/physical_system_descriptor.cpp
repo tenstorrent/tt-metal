@@ -31,7 +31,7 @@ tt::ARCH get_arch(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     // Pick a chip and query its architecture
     auto cluster_descriptor = cluster->get_cluster_description();
     const std::unordered_set<chip_id_t>& chips = cluster_descriptor->get_all_chips();
-    TT_FATAL(chips.size() > 0, "Unable to determine architecture because UMD driver detected no chips.");
+    TT_FATAL(!chips.empty(), "Unable to determine architecture because UMD driver detected no chips.");
     tt::ARCH arch = cluster_descriptor->get_arch(*chips.begin());
     TT_FATAL(arch != tt::ARCH::Invalid, "Chip {} has invalid architecture.", *chips.begin());
 
