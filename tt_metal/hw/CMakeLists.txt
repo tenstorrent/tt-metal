@@ -135,9 +135,9 @@ foreach(ARCH IN LISTS ARCHS)
 endforeach()
 
 if(TT_USE_SYSTEM_SFPI)
-    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++")
+    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++")
 else()
-    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++")
+    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv-tt-elf-g++")
 endif()
 
 if(NOT EXISTS "${GPP_CMD}")
