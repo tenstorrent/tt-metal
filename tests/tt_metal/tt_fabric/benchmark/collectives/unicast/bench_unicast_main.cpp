@@ -43,7 +43,7 @@ struct RunOptions {
     std::string csv_path;      // if non-empty, append one row
 };
 
-static void usage(const char* argv0) {
+void usage(const char* argv0) {
     std::string bin = std::filesystem::path(argv0).filename().string();
     if (bin.empty()) {
         bin = "build/test/tt_metal/tt_fabric/bench_unicast";
@@ -92,7 +92,7 @@ Legend:
     log_error(tt::LogTest, "{}", text);
 }
 
-static bool parse_mesh_chip(const std::string& s, uint32_t& mesh, int& chip) {
+bool parse_mesh_chip(const std::string& s, uint32_t& mesh, int& chip) {
     size_t colon = s.find(':');
     if (colon == std::string::npos) {
         mesh = 0;
@@ -104,7 +104,7 @@ static bool parse_mesh_chip(const std::string& s, uint32_t& mesh, int& chip) {
     return true;
 }
 
-static bool parse_xy(const std::string& s, int& x, int& y) {
+bool parse_xy(const std::string& s, int& x, int& y) {
     auto comma = s.find(',');
     if (comma == std::string::npos) {
         return false;
@@ -115,7 +115,7 @@ static bool parse_xy(const std::string& s, int& x, int& y) {
 }
 
 // Fills RunOptions + PerfParams + raw src/dst strings. Returns false on bad args.
-static bool parse_cli_or_usage(
+bool parse_cli_or_usage(
     int argc, char** argv, RunOptions& run, PerfParams& p, std::string& src_dev_str, std::string& dst_dev_str) {
     std::string src_type = "dram";  // reserved
     std::string dst_type = "l1";    // reserved
