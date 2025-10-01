@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 #include "conv_reader_common.hpp"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -56,13 +56,18 @@ void kernel_main() {
     const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
     const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(30);
+    constexpr uint32_t act_block_size = get_compile_time_arg_val(31);
+    constexpr uint32_t read_ind_stride = get_compile_time_arg_val(32);
+    constexpr uint32_t act_cb_block_cnt = get_compile_time_arg_val(33);
+
+    const uint32_t base_write_addr = get_write_ptr(cb_id_act_second_reader);
 
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_first_semaphore_addr);
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_second_semaphore_addr);
 
-    constexpr uint32_t ct_arg_idx = 31;
+    constexpr uint32_t ct_arg_idx = 34;
 #else
     constexpr bool split_reader_enabled = false;
     constexpr uint32_t ct_arg_idx = 18;
@@ -107,7 +112,7 @@ void kernel_main() {
     // Initial setup for second reader (starting from second reader's data)
     uint32_t start_reader_idx = (uint32_t)(packed_reader_indices_ptr[0] & 0xffff) + 1;
     uint32_t reader_idx = start_reader_idx;
-
+    uint32_t cb_ind_offset = 0;
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     constexpr uint32_t coalesced_read_bytes =
         ((dilation_w == 1) ? weight_size_w * conv_act_c_read_bytes : conv_act_c_read_bytes);
@@ -168,6 +173,9 @@ void kernel_main() {
                     noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
                     noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
                     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
+                    DPRINT << "SPLIT READER: ACT WRITE BASE: " << act_write_offset
+                           << get_write_ptr(cb_id_act_second_reader) << " OFFSET: " << act_write_offset
+                           << " CB ID: " << cb_id_act_second_reader << ENDL();
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
                     read_activation_data<
                         sliced_inner_dim,
@@ -186,6 +194,10 @@ void kernel_main() {
                         reader_idx,
                         act_l1_read_addr,
                         stride_h_bytes);
+                    cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
+
+                    get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
+                        base_write_addr + cb_ind_offset * act_block_size;
                     noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
                 }
 #endif

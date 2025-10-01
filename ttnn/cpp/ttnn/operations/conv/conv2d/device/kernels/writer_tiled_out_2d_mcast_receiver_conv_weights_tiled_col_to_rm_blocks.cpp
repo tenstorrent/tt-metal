@@ -45,15 +45,19 @@ void kernel_main() {
     constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
-
     const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
     const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
     constexpr uint32_t act_write_offset = get_compile_time_arg_val(30);
-
+    constexpr uint32_t act_block_size = get_compile_time_arg_val(31);
+    constexpr uint32_t read_ind_stride = get_compile_time_arg_val(32);
+    constexpr uint32_t act_cb_block_cnt = get_compile_time_arg_val(33);
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_first_semaphore_addr);
     volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_second_semaphore_addr);
+
+    const uint32_t base_write_addr = get_write_ptr(cb_id_act_second_reader);
+
 #endif
 
     // mcast args
@@ -90,6 +94,8 @@ void kernel_main() {
     constexpr uint32_t stride_h_bytes = padded_conv_act_size_w * conv_act_c_read_bytes * dilation_h;
 
     const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
+
+    uint32_t cb_ind_offset = 0;
 
 #endif
 // read in bias if enabled (done only once for all batches)
@@ -130,6 +136,10 @@ void kernel_main() {
                         reader_idx,
                         act_l1_read_addr,
                         stride_h_bytes);
+                    cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
+
+                    get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
+                        base_write_addr + cb_ind_offset * act_block_size;
                     noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
                 }
 #endif

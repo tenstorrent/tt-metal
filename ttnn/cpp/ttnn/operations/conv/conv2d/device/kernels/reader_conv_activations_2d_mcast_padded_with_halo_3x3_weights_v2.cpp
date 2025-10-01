@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "conv_reader_common.hpp"
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -122,6 +122,8 @@ void kernel_main() {
 #ifdef SPLIT_READER
                 noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
 #endif
+                DPRINT << "SPLIT READER: ACT WRITE BASE: " << get_write_ptr(cb_id_act_row_major_bfloat16)
+                       << " CB ID: " << cb_id_act_row_major_bfloat16 << ENDL();
                 noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 read_activation_data<
                     sliced_inner_dim,

@@ -927,9 +927,24 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             (uint32_t)filter_h};
 
         if (block_sharded) {
+            const bool has_overlap_act_cb = get_cb_info_by_name(cb_info, Conv2dCb::ACT).overlapped_by_cb.has_value();
+            uint32_t act_cb_id_stride = 1;
+            if (has_overlap_act_cb && !skip_activation_mcast) {
+                act_cb_id_stride += get_num_cores_channels_from_parallel_config(parallel_config);
+            }
+            const CBInfo& act_cb_info = (get_cb_info_by_name(cb_info, Conv2dCb::ACT).overlapped_by_cb.has_value())
+                                            ? get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16)
+                                            : get_cb_info_by_name(cb_info, Conv2dCb::ACT);
+            const uint32_t act_cb_block_cnt =
+                act_cb_info.num_pages / (act_block_num_tiles_split + act_block_num_tiles_split_last);
+
             split_reader_args.push_back(act_split_reader_sync_first_semaphore_id);
             split_reader_args.push_back(act_split_reader_sync_second_semaphore_id);
             split_reader_args.push_back(act_block_num_tiles_split * tt::tile_size(conv_input_df));
+            split_reader_args.push_back(
+                (act_block_num_tiles_split_last + act_block_num_tiles_split) * tt::tile_size(conv_input_df));
+            split_reader_args.push_back(act_cb_id_stride);
+            split_reader_args.push_back(act_cb_block_cnt);
         }
 
         if (enable_activation_reuse && height_sharded) {
