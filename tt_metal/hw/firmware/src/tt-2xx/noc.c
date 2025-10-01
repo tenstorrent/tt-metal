@@ -9,9 +9,9 @@
 #include "noc_parameters.h"
 
 // generated code
-#include "../registers/c/noc_niu_reg.h"
-#include "../registers/c/noc_config_reg.h"
-#include "../registers/c/noc_status_reg.h"
+#include "registers/noc_niu_reg.h"
+#include "registers/noc_config_reg.h"
+#include "registers/noc_status_reg.h"
 
 #ifdef TB_NOC
 
@@ -235,46 +235,46 @@ void noc_transfer(TransferParams* p) {
         cmd_value_lo.f.cmd_path_reserve = 0;
     }
 
-    LOG_C(
-        "Writing CMD_BUF: %d, CMD_LO: cmd_at_cpy_bit=%d,  cmd_rw_bit=%d,  cmd_wr_be_bit=%d,  cmd_wr_inline_bit=%d, "
-        "cmd_resp_marked_bit=%d,  cmd_brcst_bit=%d,  cmd_linked_bit=%d,  cmd_path_reserve=%d,  cmd_mem_rd_drop_ack=%d, "
-        " cmd_dyna_routing_en=%d,  cmd_l1_acc_at_en=%d,  cmd_flush_bit=%d,  cmd_snoop_bit=%d,  cmd_static_vc=%d,  "
-        "resp_static_vc=%d, cmd_port_req_mask=%d \n",
-        p->cmd_select,
-        cmd_value_lo.f.cmd_at_cpy_bit,
-        cmd_value_lo.f.cmd_rw_bit,
-        cmd_value_lo.f.cmd_wr_be_bit,
-        cmd_value_lo.f.cmd_wr_inline_bit,
-        cmd_value_lo.f.cmd_resp_marked_bit,
-        cmd_value_lo.f.cmd_brcst_bit,
-        cmd_value_lo.f.cmd_linked_bit,
-        cmd_value_lo.f.cmd_path_reserve,
-        cmd_value_lo.f.cmd_mem_rd_drop_ack,
-        cmd_value_lo.f.cmd_dyna_routing_en,
-        cmd_value_lo.f.cmd_l1_acc_at_en,
-        cmd_value_lo.f.cmd_flush_bit,
-        cmd_value_lo.f.cmd_snoop_bit,
-        cmd_value_lo.f.cmd_static_vc,
-        cmd_value_lo.f.resp_static_vc,
-        cmd_value_lo.f.cmd_port_req_mask);
+    // LOG_C(
+    //     "Writing CMD_BUF: %d, CMD_LO: cmd_at_cpy_bit=%d,  cmd_rw_bit=%d,  cmd_wr_be_bit=%d,  cmd_wr_inline_bit=%d, "
+    //     "cmd_resp_marked_bit=%d,  cmd_brcst_bit=%d,  cmd_linked_bit=%d,  cmd_path_reserve=%d, cmd_mem_rd_drop_ack=%d,
+    //     " " cmd_dyna_routing_en=%d,  cmd_l1_acc_at_en=%d,  cmd_flush_bit=%d,  cmd_snoop_bit=%d,  cmd_static_vc=%d,  "
+    //     "resp_static_vc=%d, cmd_port_req_mask=%d \n",
+    //     p->cmd_select,
+    //     cmd_value_lo.f.cmd_at_cpy_bit,
+    //     cmd_value_lo.f.cmd_rw_bit,
+    //     cmd_value_lo.f.cmd_wr_be_bit,
+    //     cmd_value_lo.f.cmd_wr_inline_bit,
+    //     cmd_value_lo.f.cmd_resp_marked_bit,
+    //     cmd_value_lo.f.cmd_brcst_bit,
+    //     cmd_value_lo.f.cmd_linked_bit,
+    //     cmd_value_lo.f.cmd_path_reserve,
+    //     cmd_value_lo.f.cmd_mem_rd_drop_ack,
+    //     cmd_value_lo.f.cmd_dyna_routing_en,
+    //     cmd_value_lo.f.cmd_l1_acc_at_en,
+    //     cmd_value_lo.f.cmd_flush_bit,
+    //     cmd_value_lo.f.cmd_snoop_bit,
+    //     cmd_value_lo.f.cmd_static_vc,
+    //     cmd_value_lo.f.resp_static_vc,
+    //     cmd_value_lo.f.cmd_port_req_mask);
 
-    LOG_C(
-        "Writing CMD_HI: cmd_pkt_tag_id=%d, cmd_force_dim_routing=%d \n",
-        cmd_value_hi.f.cmd_pkt_tag_id,
-        cmd_value_hi.f.cmd_force_dim_routing);
+    // LOG_C(
+    //     "Writing CMD_HI: cmd_pkt_tag_id=%d, cmd_force_dim_routing=%d \n",
+    //     cmd_value_hi.f.cmd_pkt_tag_id,
+    //     cmd_value_hi.f.cmd_force_dim_routing);
 
-    if (cmd_value_lo.f.cmd_brcst_bit) {
-        if (cmd_value_lo.f.cmd_static_vc < NOC_BCAST_VC_START ||
-            cmd_value_lo.f.cmd_static_vc > NOC_BCAST_VC_START + 3) {
-            LOG_C("ERROR: Invalid static VC for multicast\n");
-            exit(1);
-        }
-    } else {
-        if (cmd_value_lo.f.cmd_static_vc < 0 || cmd_value_lo.f.cmd_static_vc > 7) {
-            LOG_C("ERROR: Invalid static VC for unicast\n");
-            exit(1);
-        }
-    }
+    // if (cmd_value_lo.f.cmd_brcst_bit) {
+    //     if (cmd_value_lo.f.cmd_static_vc < NOC_BCAST_VC_START ||
+    //         cmd_value_lo.f.cmd_static_vc > NOC_BCAST_VC_START + 3) {
+    //         LOG_C("ERROR: Invalid static VC for multicast\n");
+    //         exit(1);
+    //     }
+    // } else {
+    //     if (cmd_value_lo.f.cmd_static_vc < 0 || cmd_value_lo.f.cmd_static_vc > 7) {
+    //         LOG_C("ERROR: Invalid static VC for unicast\n");
+    //         exit(1);
+    //     }
+    // }
 
     NOC_WRITE_REG(NOC_NIU_CMD_LO_REG_ADDR, cmd_value_lo.val);
 
