@@ -154,7 +154,6 @@ target_link_libraries(
     INTERFACE
         dl
         pthread
-        atomic
         hwloc
         numa
 )
