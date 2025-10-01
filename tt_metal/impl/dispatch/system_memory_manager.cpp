@@ -427,6 +427,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         loop_and_wait_with_timeout(fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration);
     };
 
+    wait_for_fetch_q_space();
     // Wrap FetchQ if possible
     uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
         CommandQueueDeviceAddrType::UNRESERVED);
