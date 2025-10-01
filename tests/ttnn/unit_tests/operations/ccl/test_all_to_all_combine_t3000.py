@@ -816,3 +816,80 @@ def test_perf(
         input_memory_config,
         output_memory_config,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params, mesh_shape, mesh_device, axis, num_links, test_skew",
+    [
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500000,
+            },
+            (2, 4),
+            (2, 4),
+            1,
+            1,
+            False,
+            id="fabric_1d_line_axis_1",
+        ),
+    ],
+    indirect=["device_params", "mesh_device"],
+)
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7000])
+@pytest.mark.parametrize("seq", [2])
+@pytest.mark.parametrize("local_reduce", [False])
+@pytest.mark.parametrize("scheme", ["random"])
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("topology", [None])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_all_to_all_combine_no_trace_submesh(
+    mesh_device,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    seq,
+    local_reduce,
+    experts_per_device,
+    select_experts_k,
+    hidden_size,
+    num_iters,
+    scheme,
+    input_memory_config,
+    output_memory_config,
+    num_links,
+    topology,
+    dtype,
+    test_skew,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+    devices = mesh_shape[0] * mesh_shape[1]
+    batch = batches_per_device * devices
+    experts = experts_per_device * devices
+
+    mesh_device.disable_and_clear_program_cache()
+
+    run_all_to_all_combine_test(
+        submesh_device,
+        submesh_device.shape,
+        axis,
+        batch,
+        seq,
+        local_reduce,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        num_links=num_links,
+        scheme=scheme,
+        topology=topology,
+        input_memory_config=input_memory_config,
+        output_memory_config=output_memory_config,
+        test_skew=test_skew,
+    )

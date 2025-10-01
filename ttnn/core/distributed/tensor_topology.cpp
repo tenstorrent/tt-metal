@@ -64,6 +64,12 @@ tt::tt_metal::distributed::MeshCoordinate TensorTopology::get_device_coord(
     }
 
     // Return the mesh coordinate at the flattened position
+    TT_FATAL(
+        flattened_index < mesh_coords_.size(),
+        "Flattened index {} is out of bounds of mesh_coordinates {} in tensor topology with distribution shape {}",
+        flattened_index,
+        mesh_coords_.size(),
+        distribution_shape_);
     return mesh_coords_[flattened_index];
 }
 
