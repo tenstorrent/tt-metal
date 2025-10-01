@@ -721,19 +721,39 @@ jobs:
               for i in "${!SELECTED_ARRAY[@]}"; do
                 owner="${SELECTED_ARRAY[$i]}"
                 if [ -n "$owner" ]; then
-                  # Get user full name for Slack @ mentions
+                    # Get user info from GitHub API
                   USER_API="https://api.github.com/users/$owner"
                   USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
                                  -H "Accept: application/vnd.github.v3+json" \
                                  "$USER_API" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  USER_EMAIL=$(echo "$USER_DATA" | jq -r '.email // empty' 2>/dev/null)
 
-                  # Use @Full Name format that Slack recognizes
-                  if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                    SLACK_MESSAGE="$SLACK_MESSAGE @$USER_NAME"
-                  else
-                    SLACK_MESSAGE="$SLACK_MESSAGE @$owner"
+                  # Try to get Slack user ID by email if available
+                  SLACK_USER_ID=""
+                  if [ -n "$USER_EMAIL" ] && [ "$USER_EMAIL" != "null" ]; then
+                    # Lookup user by email in Slack
+                    SLACK_LOOKUP_RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X GET \
+                      -H "Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}" \
+                      "https://slack.com/api/users.lookupByEmail?email=$USER_EMAIL")
+                    SLACK_LOOKUP_HTTP=$(echo "$SLACK_LOOKUP_RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://' | sed 's/;//')
+                    if [ "$SLACK_LOOKUP_HTTP" = "200" ]; then
+                      SLACK_USER_ID=$(echo "$SLACK_LOOKUP_RESPONSE" | sed -e 's/HTTPSTATUS:.*//' | jq -r '.user.id // empty' 2>/dev/null)
+                    fi
                   fi
+
+                  # Add user mention to message
+                  if [ -n "$SLACK_USER_ID" ] && [ "$SLACK_USER_ID" != "null" ]; then
+                    # Use proper Slack user mention format: <@USERID>
+                    SLACK_MESSAGE="$SLACK_MESSAGE <@$SLACK_USER_ID>"
+                  elif [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                    # Fallback to full name without @ (won't tag but shows name)
+                    SLACK_MESSAGE="$SLACK_MESSAGE $USER_NAME"
+                  else
+                    # Final fallback to GitHub username without @
+                    SLACK_MESSAGE="$SLACK_MESSAGE $owner"
+                  fi
+
                   # Add comma if not the last owner
                   if [ $((i + 1)) -lt $OWNER_COUNT ]; then
                     SLACK_MESSAGE="$SLACK_MESSAGE,"
