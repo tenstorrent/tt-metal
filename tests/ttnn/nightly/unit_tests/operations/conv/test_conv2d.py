@@ -126,6 +126,7 @@ def run_conv(
     enable_activation_reuse=False,
     config_tensors_in_dram=False,
     custom_pcc=None,
+    force_split_reader=None,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -255,6 +256,7 @@ def run_conv(
         full_inner_dim=bs_full_inner_dim,
         enable_activation_reuse=enable_activation_reuse,
         config_tensors_in_dram=config_tensors_in_dram,
+        force_split_reader=force_split_reader,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -5015,4 +5017,65 @@ def test_resnet50_first_conv_p150(
         input_dtype=ttnn.bfloat16,
         sharded_cfg=memory_config,
         enable_activation_reuse=True,
+    )
+
+
+@pytest.mark.parametrize("config_in_dram", [False,True])
+@pytest.mark.parametrize("full_inner_dim", [False,True])
+@pytest.mark.parametrize(
+    "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, act_block_h_override",
+    (
+        (32, 32, 2, 32, 3, 3, 1, 1, 1, 1, 64),# single core
+        (64, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# multiple cores along C, single core along NHW
+        (64, 32, 8, 32, 3, 3, 1, 1, 1, 1, 64),# output grid > input grid  ( output c > input c)
+        (32, 64, 2, 32, 3, 3, 1, 1, 1, 1, 64),# input grid > output grid ( input c > output c)
+        (57, 24, 2, 32, 3, 3, 1, 1, 1, 1, 64),# weird shape example
+    ),
+)
+@pytest.mark.parametrize("force_split_reader", [True, False])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_block_sharding(
+    device,
+    torch_tensor_map,
+    config_in_dram,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    force_split_reader,
+    full_inner_dim,
+    act_block_h_override,
+):
+
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi, #math_fidelity
+        ttnn.bfloat8_b, #output_dtype
+        ttnn.bfloat8_b, #weights_dtype
+        1, # batch_size
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        (pad_h, pad_w),
+        {"act_block_h": act_block_h_override},
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        input_layout=ttnn.TILE_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
+        groups=1,
+        in_place=False,
+        force_split_reader=force_split_reader,
+        config_tensors_in_dram=config_in_dram,
+        bs_full_inner_dim=full_inner_dim,
     )
