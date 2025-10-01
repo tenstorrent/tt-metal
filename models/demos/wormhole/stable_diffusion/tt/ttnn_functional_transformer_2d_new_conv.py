@@ -249,6 +249,7 @@ class transformer_2d_model:
             "groups": 1,
             "device": self.device,
             "conv_config": conv_config,
+            "slice_config": ttnn.Conv2dL1FullSliceConfig,
         }
 
         hidden_states, [self.proj_in_conv_weights, self.proj_in_conv_bias] = ttnn.conv2d(
@@ -311,6 +312,7 @@ class transformer_2d_model:
                     "groups": 1,
                     "device": self.device,
                     "conv_config": conv_config,
+                    "slice_config": ttnn.Conv2dL1FullSliceConfig,
                 }
 
                 hidden_states, [self.proj_out_conv_weights, self.proj_out_conv_bias] = ttnn.conv2d(

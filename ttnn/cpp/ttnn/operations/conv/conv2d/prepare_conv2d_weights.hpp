@@ -114,7 +114,8 @@ ttnn::Tensor prepare_conv_bias(
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_ = std::nullopt);
 
 // Unified parameter struct for conv2d weight and bias preparation
 struct Conv2dWeightsBiasPrepConfig {
@@ -124,12 +125,12 @@ struct Conv2dWeightsBiasPrepConfig {
         std::optional<DataType> weights_bias_dtype_,
         uint32_t weight_block_h_ntiles_,
         uint32_t weight_block_w_ntiles_,
-        const sliding_window::ParallelConfig& input_parallel_config_,
-        const sliding_window::ParallelConfig& output_parallel_config_,
+        const std::optional<sliding_window::ParallelConfig>& input_parallel_config_,
+        const std::optional<sliding_window::ParallelConfig>& output_parallel_config_,
         uint32_t groups_,
         uint32_t act_block_h_ntiles_,
         uint32_t input_width_,
-        bool interlaved_mm_conv,
+        bool interleaved_mm_conv,
         bool has_bias_ = false,
         bool parameters_on_device_ = true,
         bool enable_kernel_stride_folding_ = false,
@@ -155,15 +156,17 @@ struct Conv2dWeightsBiasPrepConfig {
         kernel_size(kernel_size_),
         stride(stride_),
         padding_n4(padding_n4_),
-        interleaved_mm_conv(interlaved_mm_conv) {}
+        interleaved_mm_conv(interleaved_mm_conv) {}
 
     // Common parameters
     const uint32_t input_channels_alignment;
     const std::optional<DataType> weights_bias_dtype;
     uint32_t weight_block_h_ntiles;
     const uint32_t weight_block_w_ntiles;
-    const sliding_window::ParallelConfig input_parallel_config;
-    const sliding_window::ParallelConfig output_parallel_config;
+
+    // Interleaved MM convs don't need parallel configs
+    const std::optional<sliding_window::ParallelConfig> input_parallel_config;
+    const std::optional<sliding_window::ParallelConfig> output_parallel_config;
     const uint32_t groups;
     const uint32_t act_block_h_ntiles;
     const uint32_t input_width;
