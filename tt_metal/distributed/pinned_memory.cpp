@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <cstdint>
 #include <unistd.h>
@@ -253,6 +254,69 @@ void* PinnedMemoryImpl::lock() {
 }
 
 void PinnedMemoryImpl::unlock() {}
+
+/* Pinned memory cache manager */
+class PinnedMemoryManager {
+public:
+    std::lock_guard<std::mutex> lock_() { return std::lock_guard<std::mutex>(mutex_); }
+    void clear_cache() {
+        lock_();
+        pinned_memories_cache_.clear();
+    }
+    void cache_pin(PinnedMemoryWrapper&& pinned_memory_wrapper) {
+        lock_();
+        pinned_memories_cache_.emplace_back(std::move(pinned_memory_wrapper));
+    }
+    void uncache_pin(const PinnedMemoryWrapper& pinned_memory_wrapper) {
+        lock_();
+        auto it = std::find_if(
+            pinned_memories_cache_.begin(),
+            pinned_memories_cache_.end(),
+            [&](const PinnedMemoryWrapper& cached_wrapper) {
+                return cached_wrapper.device_range == pinned_memory_wrapper.device_range &&
+                       cached_wrapper.pinned_memory == pinned_memory_wrapper.pinned_memory;
+            });
+
+        if (it != pinned_memories_cache_.end()) {
+            pinned_memories_cache_.erase(it);
+        }
+    }
+
+    template <typename Predicate>
+    std::shared_ptr<PinnedMemory> find_matching_pin(Predicate pred) {
+        lock_();
+        auto it = std::find_if(pinned_memories_cache_.begin(), pinned_memories_cache_.end(), pred);
+        if (it != pinned_memories_cache_.end()) {
+            return it->pinned_memory;
+        }
+        return nullptr;
+    }
+
+private:
+    std::deque<PinnedMemoryWrapper> pinned_memories_cache_;
+    std::mutex mutex_;
+};
+
+// A cache for all memory pins actively in use
+PinnedMemoryManager pinned_memory_manager;
+
+void clear_pinned_memories_cache() { pinned_memory_manager.clear_cache(); }
+
+void add_pin_to_cache(PinnedMemoryWrapper&& pinned_memory_wrapper) {
+    pinned_memory_manager.cache_pin(std::move(pinned_memory_wrapper));
+}
+
+void remove_pin_from_cache(const PinnedMemoryWrapper& pinned_memory_wrapper) {
+    pinned_memory_manager.uncache_pin(pinned_memory_wrapper);
+}
+
+template <typename Predicate>
+std::shared_ptr<PinnedMemory> find_matching_pin_in_cache(Predicate pred) {
+    return pinned_memory_manager.find_matching_pin(pred);
+}
+// Explicit instantiation for std::function predicate type
+template std::shared_ptr<PinnedMemory> find_matching_pin_in_cache<std::function<bool(const PinnedMemoryWrapper&)>>(
+    std::function<bool(const PinnedMemoryWrapper&)>);
 
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(

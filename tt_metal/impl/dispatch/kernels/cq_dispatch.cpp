@@ -579,7 +579,7 @@ void process_write_paged(uint32_t& block_noc_writes_to_clear, uint32_t block_nex
     uint32_t page_size = cmd->write_paged.page_size;
     uint32_t pages = cmd->write_paged.pages;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
-    uint32_t write_length = pages * page_size;
+    uint64_t write_length = (uint64_t)pages * page_size;
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
     uint32_t dst_addr_offset = 0;  // Offset into page.
 
