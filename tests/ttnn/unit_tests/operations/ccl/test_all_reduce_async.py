@@ -160,6 +160,7 @@ def run_all_reduce_test(
     [
         ttnn.bfloat16,
         ttnn.bfloat8_b,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
@@ -172,6 +173,68 @@ def run_all_reduce_test(
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_ring_all_reduce_post_commit(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    function_level_defaults,
+    num_iters=2,
+):
+    run_all_reduce_test(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        function_level_defaults,
+        num_iters=num_iters,
+    )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape",
+    [
+        ([1, 8, 256, 1024]),
+        ([1, 8, 33, 65]),
+        ([1, 8, 224, 224]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.float32,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_failing_all_reduce_shapes(
     t3k_mesh_device,
     num_devices,
     per_chip_output_shape,
@@ -221,6 +284,7 @@ def test_ring_all_reduce_post_commit(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
@@ -362,9 +426,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = ttnn.to_torch(t)
-        tensor_unpadded_shape = list(golden_canonical_out_tensor.shape)
-        tt_output_tensor = tt_output_tensor[:, :, : tensor_unpadded_shape[2], : tensor_unpadded_shape[3]]
-
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
