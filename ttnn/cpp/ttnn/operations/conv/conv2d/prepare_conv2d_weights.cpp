@@ -1604,7 +1604,8 @@ ttnn::Tensor prepare_conv_bias(
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_) {
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     TT_FATAL(!ttnn::has_storage_type_of(bias_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv bias should be placed on host");
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));

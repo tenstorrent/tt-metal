@@ -180,7 +180,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("input_dtype"),
         py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
+        py::arg("compute_config") = std::nullopt,
+        py::arg("slice_config") = std::nullopt);
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
