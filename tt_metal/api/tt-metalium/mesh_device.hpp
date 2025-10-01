@@ -124,6 +124,8 @@ private:
     // Num Virtual Eth Cores == Max Number of Eth Cores across all opened devices (Issue #19729)
     std::size_t num_virtual_eth_cores_ = 0;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
+    // Kernel binary path prefix for pre-compiled kernels (experimental)
+    std::string kernel_binary_path_prefix_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
@@ -249,6 +251,10 @@ public:
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
+
+    // Kernel binary path prefix for pre-compiled kernels (experimental)
+    void set_kernel_binary_path_prefix(const std::string& prefix) override { kernel_binary_path_prefix_ = prefix; }
+    const std::string& get_kernel_binary_path_prefix() const override { return kernel_binary_path_prefix_; }
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
