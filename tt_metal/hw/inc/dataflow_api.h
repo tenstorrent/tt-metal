@@ -2447,6 +2447,79 @@ struct noc_traits_t<CircularBuffer> {
     static auto dst_addr(const CircularBuffer& dst, const Noc&, const dst_args_type&) { return dst.get_write_ptr(); }
 };
 
+template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
+class Semaphore {
+public:
+    explicit Semaphore(uint32_t semaphore_id) : local_l1_addr_(get_semaphore<core_type>(semaphore_id)) {}
+
+    // Standard semaphore operations
+
+    // New API, no atomicity as of now
+    void up(uint32_t value) {
+        auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        *sem_addr += value;
+    }
+
+    void up(uint32_t value, uint32_t noc_x, uint32_t noc_y, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+        uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, local_l1_addr_);
+        noc_semaphore_inc(dest_noc_addr, value, noc_index, vc);
+    }
+
+    // New API, no atomicity as of now
+    void down(uint32_t value) {
+        auto* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_);
+        WAYPOINT("NSDW");
+        do {
+            invalidate_l1_cache();
+        } while ((*sem_addr) < value);
+        WAYPOINT("NSDD");
+        *sem_addr -= value;
+    }
+
+    // Existing semaphore API to accommodate existing kernels
+
+    void wait(uint32_t value) {
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_), value);
+    }
+
+    void wait_min(uint32_t value) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_), value);
+    }
+
+    void set(uint32_t value) {
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_), value);
+    }
+
+    void set_multicast(
+        const Noc& noc,
+        uint32_t noc_x_start,
+        uint32_t noc_y_start,
+        uint32_t noc_x_end,
+        uint32_t noc_y_end,
+        uint32_t num_dests,
+        bool linked = false) {
+        uint64_t multicast_addr =
+            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
+        noc_semaphore_set_multicast(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+    }
+
+    void set_multicast_loopback_src(
+        const Noc& noc,
+        uint32_t noc_x_start,
+        uint32_t noc_y_start,
+        uint32_t noc_x_end,
+        uint32_t noc_y_end,
+        uint32_t num_dests,
+        bool linked = false) {
+        uint64_t multicast_addr =
+            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
+        noc_semaphore_set_multicast_loopback_src(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+    }
+
+private:
+    uint32_t local_l1_addr_;
+};
+
 template <typename DSpecT>
 struct noc_traits_t<TensorAccessor<DSpecT>> {
     struct src_args_type {
