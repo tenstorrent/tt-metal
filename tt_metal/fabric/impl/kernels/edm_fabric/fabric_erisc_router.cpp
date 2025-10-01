@@ -1587,7 +1587,7 @@ void run_sender_channel_step_impl(
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
-        
+
         if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
             local_sender_channel_worker_interface
                 .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(
