@@ -178,12 +178,20 @@ def test_swin_s_transformer(device, use_pretrained_weight, reset_seeds, model_lo
     )
 
     # Convert input tensor to TTNN format
+    n, c, h, w = torch_input_tensor.shape
+    if c < 16:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
+    )
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=input_mem_config,
     )
 
     # Apply TTNN model
@@ -194,5 +202,5 @@ def test_swin_s_transformer(device, use_pretrained_weight, reset_seeds, model_lo
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(
-        torch_output_tensor, output_tensor, pcc=0.96 if use_pretrained_weight else 0.99  # pcc=0.9611514804078299
+        torch_output_tensor, output_tensor, pcc=0.98 if use_pretrained_weight else 0.99  # pcc=0.9753986334439912
     )  # The drop starts as we use shard MM in patch_mergig & mlp sub_module sub_module
