@@ -193,7 +193,7 @@ int main() {
     SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer->address()});
 
     // Program enqueue
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
