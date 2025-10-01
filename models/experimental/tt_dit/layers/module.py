@@ -127,7 +127,9 @@ class Module:
 
         error_msg = ""
         if strict and missing_keys:
-            error_msg += "missing Torch state keys: " + ", ".join(missing_keys) + "; "
+            error_msg += "missing Torch state keys: " + ", ".join(missing_keys)
+            if unexpected_keys:
+                error_msg += "; "
         if strict and unexpected_keys:
             error_msg += "unexpected Torch state keys: " + ", ".join(unexpected_keys) + "\n"
         if error_msg:
