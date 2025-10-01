@@ -33,7 +33,6 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/utils.hpp>
 // Mesh device test dependencies
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -390,8 +389,6 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
 // Test to ensure writing from 16B aligned L1 address to 16B aligned pinned memory works using MeshDevice
 TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
-    using tt::tt_metal::distributed::AddProgramToMeshWorkload;
-    using tt::tt_metal::distributed::CreateMeshWorkload;
     using tt::tt_metal::distributed::EnqueueMeshWorkload;
     using tt::tt_metal::distributed::MeshCoordinate;
     using tt::tt_metal::distributed::MeshCoordinateRange;
@@ -454,9 +451,9 @@ TEST_F(UnitMeshCQSingleCardFixture, MeshL1ToPinnedMemoryAt16BAlignedAddress) {
                 num_16b_writes}});
 
     // Create mesh workload and add program
-    MeshWorkload mesh_workload = CreateMeshWorkload();
+    MeshWorkload mesh_workload;
     MeshCoordinateRange device_range(target_coord, target_coord);
-    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+    mesh_workload.add_program(device_range, std::move(program));
 
     // Launch workload using mesh command queue
     auto& mesh_cq = mesh_device->mesh_command_queue();

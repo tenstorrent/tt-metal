@@ -501,6 +501,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
 }
 
 MeshDevice::~MeshDevice() {
+    fmt::println(stderr, "MeshDevice::~MeshDevice");
     Inspector::mesh_device_destroyed(this);
     close();
 }
