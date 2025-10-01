@@ -94,7 +94,7 @@ def test_graph_capture_with_all_parameters(device):
     assert node7[0] == "Shape([1, 4, 2048, 128])"
     assert node7[1] == "DataType::BFLOAT16"
     assert node7[2] == "Layout::ROW_MAJOR"
-    assert node7[3].startswith("0x")
+    assert node7[3].isnumeric()
     assert (
         node6[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
@@ -167,19 +167,11 @@ def test_graph_capture_without_memory_config(device):
     )
 
     # tt::tt_metal::create_device_tensor
-<<<<<<< HEAD
-    node8 = captured_graph[8]["arguments"]
-    assert node8[0] == "Shape([1, 1, 1, 1])"
-    assert node8[1] == "DataType::BFLOAT16"
-    assert node8[2] == "Layout::TILE"
-    assert node8[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
-=======
     node10 = captured_graph[10]["arguments"]
     assert node10[0] == "Shape([1, 1, 1, 1])"
     assert node10[1] == "DataType::BFLOAT16"
     assert node10[2] == "Layout::TILE"
-    assert node10[3].startswith("0x")
->>>>>>> 9f2cca8470a (Adapted the graph_argument_serializer to be more flexible and support more data types. Tested with DeepSeek-R1-Distill-Qwen-1.5B and only 5 operations are not covered. From those 5, only 2 we could cover but it would mean a huge complexity addition to an already complicated codebase)
+    assert node10[3].isnumeric()
     assert (
         node8[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
@@ -227,19 +219,11 @@ def test_graph_capture_without_dtype(device):
     )
 
     # tt::tt_metal::create_device_tensor
-<<<<<<< HEAD
-    node6 = captured_graph[6]["arguments"]
-    assert node6[0] == "Shape([32, 32])"
-    assert node6[1] == "DataType::INT32"
-    assert node6[2] == "Layout::TILE"
-    assert node6[3] == "[ unsupported type , std::reference_wrapper<tt::tt_metal::IDevice*>]"
-=======
     node7 = captured_graph[7]["arguments"]
     assert node7[0] == "Shape([32, 32])"
     assert node7[1] == "DataType::INT32"
     assert node7[2] == "Layout::TILE"
-    assert node7[3].startswith("0x")
->>>>>>> 9f2cca8470a (Adapted the graph_argument_serializer to be more flexible and support more data types. Tested with DeepSeek-R1-Distill-Qwen-1.5B and only 5 operations are not covered. From those 5, only 2 we could cover but it would mean a huge complexity addition to an already complicated codebase)
+    assert node7[3].isnumeric()
     assert (
         node6[4]
         == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
@@ -329,7 +313,7 @@ def test_graph_capture_with_all_parameters_json_output(device):
     assert arg0_item3["Shape"] == [1, 4, 2048, 128]
     assert item3["arguments"][1]["arg1"] == "DataType::BFLOAT16"
     assert item3["arguments"][2]["arg2"] == "Layout::ROW_MAJOR"
-    assert item3["arguments"][3]["arg3"].startswith("0x")
+    assert item3["arguments"][3]["arg3"].isnumeric()
 
     arg4_item3 = item3["arguments"][4]["arg4"]
     mem_config_item3 = arg4_item3["MemoryConfig"]
@@ -483,7 +467,7 @@ def test_graph_capture_without_memory_config_json_output(device):
     assert arg0_item3["Shape"] == [1, 1, 1, 1]
     assert item3["arguments"][1]["arg1"] == "DataType::BFLOAT16"
     assert item3["arguments"][2]["arg2"] == "Layout::TILE"
-    assert item3["arguments"][3]["arg3"].startswith("0x")
+    assert item3["arguments"][3]["arg3"].isnumeric()
 
     arg4_item3 = item3["arguments"][4]["arg4"]
     mem_config_item3 = arg4_item3["MemoryConfig"]
@@ -593,7 +577,7 @@ def test_graph_capture_without_dtype_json_output(device):
     # arg2
     assert item3["arguments"][2]["arg2"] == "Layout::TILE"
     # arg3
-    assert item3["arguments"][3]["arg3"].startswith("0x")
+    assert item3["arguments"][3]["arg3"].isnumeric()
 
     # arg4: Check the MemoryConfig
     arg4_item3 = item3["arguments"][4]["arg4"]
