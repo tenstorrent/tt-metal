@@ -332,7 +332,6 @@ class WanCausalConv3d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                mesh_device=self.mesh_device,
                 num_links=self.ccl_manager.num_links,
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
@@ -356,7 +355,6 @@ class WanCausalConv3d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                mesh_device=self.mesh_device,
                 num_links=self.ccl_manager.num_links,
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
@@ -712,7 +710,6 @@ class WanConv2d:
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(
                     self.parallel_config.height_parallel.mesh_axis
                 ),
-                mesh_device=self.mesh_device,
                 num_links=self.ccl_manager.num_links,
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,
@@ -735,7 +732,6 @@ class WanConv2d:
                     self.parallel_config.width_parallel.mesh_axis
                 )[0],
                 barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.parallel_config.width_parallel.mesh_axis),
-                mesh_device=self.mesh_device,
                 num_links=self.ccl_manager.num_links,
                 # memory_config=mem_config_output,
                 topology=self.ccl_manager.topology,

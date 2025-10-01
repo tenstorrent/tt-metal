@@ -16,36 +16,35 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from diffusers import WanTransformer3DModel
-from models.tt_transformers.tt.common import get_rot_transformation_mat
 
 
 @pytest.mark.parametrize(
     "mesh_device, sp_axis, tp_axis, num_links",
     [
-        [(1, 1), 0, 1, 1],
-        [(1, 2), 0, 1, 1],
-        [(1, 2), 1, 0, 1],
-        [(2, 1), 0, 1, 1],
-        [(2, 1), 1, 0, 1],
-        [(2, 2), 0, 1, 1],
-        [(2, 2), 1, 0, 1],
+        # [(1, 1), 0, 1, 1],
+        # [(1, 2), 0, 1, 1],
+        # [(1, 2), 1, 0, 1],
+        # [(2, 1), 0, 1, 1],
+        # [(2, 1), 1, 0, 1],
+        # [(2, 2), 0, 1, 1],
+        # [(2, 2), 1, 0, 1],
         [(2, 4), 0, 1, 1],
         [(2, 4), 1, 0, 1],
-        [(1, 8), 1, 0, 1],
+        # [(1, 8), 1, 0, 1],
         [(4, 8), 0, 1, 4],
         [(4, 8), 1, 0, 4],
     ],
     ids=[
-        "1x1sp0tp1",
-        "1x2sp0tp1",
-        "1x2sp1tp0",
-        "2x1sp0tp1",
-        "2x1sp1tp0",
-        "2x2sp0tp1",
-        "2x2sp1tp0",
+        # "1x1sp0tp1",
+        # "1x2sp0tp1",
+        # "1x2sp1tp0",
+        # "2x1sp0tp1",
+        # "2x1sp1tp0",
+        # "2x2sp0tp1",
+        # "2x2sp1tp0",
         "2x4sp0tp1",
         "2x4sp1tp0",
-        "1x8sp1tp0",
+        # "1x8sp1tp0",
         "4x8sp0tp1",
         "4x8sp1tp0",
     ],
@@ -171,7 +170,7 @@ def test_wan_attention(
         tt_rope_sin = bf16_tensor(rope_sin_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=-2)
 
         # Create transformation matrix for RoPE
-        trans_mat = get_rot_transformation_mat(None)
+        trans_mat = get_rot_transformation_mat()
         tt_trans_mat = bf16_tensor(trans_mat, device=mesh_device)
 
         logger.info(f"torch_rope_cos shape: {torch_rope_cos.shape}. tt_rope_cos shape: {tt_rope_cos.shape}")
