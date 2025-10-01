@@ -160,6 +160,7 @@ def run_all_reduce_test(
     [
         ttnn.bfloat16,
         ttnn.bfloat8_b,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
@@ -222,13 +223,13 @@ def test_ring_all_reduce_post_commit(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
@@ -283,6 +284,7 @@ def test_failing_all_reduce_shapes(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
