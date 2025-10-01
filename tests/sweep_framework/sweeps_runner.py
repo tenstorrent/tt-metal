@@ -388,6 +388,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
         result["start_time_ts"] = dt.datetime.now()
+        result["input_hash"] = vector_id
         validity = deserialize(test_vector["validity"]).split(".")[-1]
         if validity == VectorValidity.INVALID:
             invalid_vectors_count += 1

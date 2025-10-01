@@ -22,9 +22,6 @@ on:
           - ccl.generality.reduce_scatter
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
-          - conv2d.full.conv2d_misc
-          - conv2d.full.conv2d_sharding
-          - conv2d.full.conv2d_sliding_window
           - conv2d.short.conv2d_short_sweep
           - conv2d.short.conv2d_ttforge_sweep
           - conv_transpose2d.short.conv_transpose2d_short_sweep
