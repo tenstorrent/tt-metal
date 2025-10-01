@@ -22,7 +22,7 @@ from ...pipelines.motif.pipeline_motif import (
 @pytest.mark.parametrize(
     ("image_w", "image_h", "guidance_scale", "num_inference_steps"),
     [
-        (1024, 1024, 5.0, 28),
+        (1024, 1024, 5.0, 50),
     ],
 )
 @pytest.mark.parametrize(
