@@ -41,7 +41,7 @@ namespace tt::tt_fabric {
  * The consumer when issuing an acknowledgement, will increment the producer's free slots counter.
  */
 template <uint8_t EDM_NUM_BUFFER_SLOTS>
-struct RouterElasticChannelWriterAdapter {
+struct RouterChannelWriterAdapter {
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;
@@ -58,7 +58,7 @@ struct RouterElasticChannelWriterAdapter {
     static constexpr uint32_t close_connection_request_value = 2;
     // HACK: Need a way to properly set this up
 
-    RouterElasticChannelWriterAdapter() = default;
+    RouterChannelWriterAdapter() = default;
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE void init(
@@ -116,7 +116,7 @@ struct RouterElasticChannelWriterAdapter {
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
-    FORCE_INLINE RouterElasticChannelWriterAdapter(
+    FORCE_INLINE RouterChannelWriterAdapter(
         bool connected_to_persistent_fabric,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
@@ -382,7 +382,6 @@ private:
 
         send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
             source_address,
-            1,
             size_bytes,
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
             this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
@@ -400,6 +399,6 @@ private:
 };
 
 template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
-using EdmToEdmSender = RouterElasticChannelWriterAdapter<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
+using EdmToEdmSender = RouterChannelWriterAdapter<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
 
 }  // namespace tt::tt_fabric

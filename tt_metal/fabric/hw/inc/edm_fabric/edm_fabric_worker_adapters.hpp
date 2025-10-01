@@ -642,7 +642,6 @@ private:
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
                 source_address,
-                1,
                 size_bytes,
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
                 this->edm_buffer_slot_addrs[this->get_buffer_slot_index()],
@@ -652,7 +651,6 @@ private:
         } else {
             send_chunk_from_address_with_trid<stateful_api, vc1_has_different_downstream_dest>(
                 source_address,
-                1,
                 size_bytes,
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0) >> NOC_ADDR_COORD_SHIFT,
                 this->edm_buffer_addr,

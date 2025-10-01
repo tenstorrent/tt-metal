@@ -1176,6 +1176,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         sender_channel_connection_liveness_check_disable_array.begin(),
         sender_channel_connection_liveness_check_disable_array.end(),
         false);
+    // by default, only worker sender channels are non-elastic
+    std::fill(
+        is_sender_channel_elastic_array.begin(),
+        is_sender_channel_elastic_array.end(),
+        true);
 }
 
 void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const {
@@ -1705,6 +1710,7 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     TT_FATAL(sender_channels_num_buffer != 0, "sender_channels_num_buffer should not be 0!");
 
     this->sender_channel_connection_liveness_check_disable_array[ds_edm] = true;
+    this->is_sender_channel_elastic_array[ds_edm] = false;
     return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
