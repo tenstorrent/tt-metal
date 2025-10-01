@@ -1012,7 +1012,7 @@ KernelHandle CreateDataMovementKernel(
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
     std::string kernel_name;
-    if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
+    if (kernel_src.source_type_ == KernelSource::FILE_PATH || kernel_src.source_type_ == KernelSource::BINARY_PATH) {
         kernel_name = kernel_src.source_;
     } else {
         TT_FATAL(kernel_src.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
@@ -1109,7 +1109,7 @@ KernelHandle CreateKernel(
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    KernelSource kernel_src(KernelSource::FILE_PATH, file_name);
     KernelHandle kernel = std::visit(
         ttsl::overloaded{
             [&](const DataMovementConfig& cfg) {
@@ -1130,7 +1130,7 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    KernelSource kernel_src(KernelSource::SOURCE_CODE, kernel_src_code);
     return std::visit(
         ttsl::overloaded{
             [&](const DataMovementConfig& cfg) {
@@ -1410,6 +1410,36 @@ void UpdateDynamicCircularBufferAddress(
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
+}
+
+void SetKernelBinaryPathPrefix(IDevice* device, const std::string& binary_path_prefix) {
+    // Store the binary path prefix on the device
+    // This will be used when constructing paths for BINARY_PATH kernels
+    device->set_kernel_binary_path_prefix(binary_path_prefix);
+}
+
+size_t ComputeKernelOriginalPathHash(const std::string& original_path) {
+    return std::hash<std::string>{}(original_path);
+}
+
+KernelHandle CreateKernelFromBinary(
+    Program& program,
+    const std::string& kernel_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::variant<std::string, size_t>& original_path_or_hash) {
+    
+    KernelSource kernel_src(KernelSource::BINARY_PATH, kernel_name, original_path_or_hash);
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    return std::visit(
+        ttsl::overloaded{
+            [&](const DataMovementConfig& cfg) {
+                return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
+            },
+            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
+            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
+        },
+        config);
 }
 
 }  // namespace experimental

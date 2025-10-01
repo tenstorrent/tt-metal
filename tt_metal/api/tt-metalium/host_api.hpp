@@ -678,6 +678,71 @@ uint8_t PopCurrentCommandQueueIdForThread();
 // clang-format on
 uint8_t GetCurrentCommandQueueIdForThread();
 
+namespace experimental {
+
+// clang-format off
+/**
+ * Create a kernel from pre-compiled binaries.
+ * Pre-compiled binaries are obtained from the tt-metal cache after a successful run.
+ * User should copy ~/.cache/tt-metal-cache/<build_hash> to <destination_path> and preserve its internal structure.
+ * 
+ * <destination_path>/4097/kernels/cq_dispatch/11716257026492908183/brisc/brisc.elf
+ * ^^^^^^^^^^^^^^^^^^ ^^^^^^^^^^^^ ^^^^^^^^^^^
+ * Binary path prefix  int. dirs.  kernel name
+ * 
+ * Binary path prefix must be set via SetKernelBinaryPathPrefix before calling this function.
+ * To help identify the correct pre-compiled binary, user must provide either path to kernel's original .cpp path or its hash returned by ComputeKernelOriginalPathHash.
+ * 
+ * | Argument               | Description                                                                                                    | Type                                                                     | Valid Range | Required |
+ * |------------------------|----------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------|-------------|----------|
+ * | program                | The program to which this kernel will be added to                                                              | Program &                                                                |             | Yes      |
+ * | kernel_name            | Name of the pre-compiled kernel binary (name of source file without .cpp)                                      | const std::string &                                                      |             | Yes      |
+ * | core_spec              | Either a single logical core, a range of logical cores or a set of logical core ranges for kernel placement    | const std::variant<CoreCoord, CoreRange, CoreRangeSet> &                 |             | Yes      |
+ * | config                 | Config for data movement, compute, or ethernet kernel                                                          | const std::variant<DataMovementConfig,ComputeConfig,EthernetConfig> &    |             | Yes      |
+ * | original_path_or_hash  | Original kernel source path (string) or pre-computed hash (from ComputeKernelOriginalPathHash())               | const std::variant<std::string, size_t> &                                |             | Yes      |
+ */
+// clang-format on
+KernelHandle CreateKernelFromBinary(
+    Program& program,
+    const std::string& kernel_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config,
+    const std::variant<std::string, size_t>& original_path_or_hash);
+
+// clang-format off
+/**
+ * Set the prefix path where pre-compiled kernel binaries are located.
+ * It must preserve the original cache structure created by tt-metal, i.e.
+ * <binary_path_prefix>/<build_mask>/kernels/<kernel_name>/<kernel_hash>/...
+ *
+ * Return value: void
+ *
+ * | Argument           | Description                                   | Type                | Valid Range | Required |
+ * |--------------------|-----------------------------------------------|---------------------|-------------|----------|
+ * | device             | The device to set the binary path prefix for | IDevice*             |             | Yes      |
+ * | binary_path_prefix | The binary prefix path                        | const std::string & |             | Yes      |
+ */
+// clang-format on
+void SetKernelBinaryPathPrefix(IDevice* device, const std::string& binary_path_prefix);
+
+// clang-format off
+/**
+ * This is a helper function that allows to pass a hash of the original kernel source path to CreateKernelFromBinary.
+ * This is useful to avoid passing the original path directly.
+ *
+ * Return value: size_t
+ *
+ * | Argument      | Description                                            | Type                | Valid Range | Required |
+ * |---------------|--------------------------------------------------------|---------------------|-------------|----------|
+ * | original_path | The original path of the kernel source (the .cpp file) | const std::string & |             | Yes      |
+ */
+// clang-format on
+size_t ComputeKernelOriginalPathHash(const std::string& original_path);
+
+
+
+}  // namespace experimental
+
 }  // namespace tt_metal
 
 }  // namespace tt

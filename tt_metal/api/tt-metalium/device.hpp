@@ -222,6 +222,12 @@ public:
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
+
+    // Kernel binary path prefix for pre-compiled kernels (experimental)
+    virtual void set_kernel_binary_path_prefix(const std::string& prefix) = 0;
+    virtual const std::string& get_kernel_binary_path_prefix() const = 0;
+
+    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
 
 }  // namespace tt_metal

@@ -7,6 +7,7 @@
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <kernel_types.hpp>
+#include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/tt_stl/reflection.hpp>
 #include <algorithm>
@@ -92,12 +93,80 @@ fs::path resolve_path(const fs::path& given_file_name) {
 }
 }  // namespace
 
-KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
-    source_(source), source_type_(source_type) {
+// Unified constructor with explicit SourceType
+KernelSource::KernelSource(SourceType source_type, const std::string& source) :
+    source_(source), source_type_(source_type), original_path_or_hash_(std::string("")) {
+
     if (source_type == FILE_PATH) {
         path_ = resolve_path(source);
+    } else if (source_type == SOURCE_CODE) {
+        // No path validation needed for source code
+    } else {
+        TT_THROW("Invalid SourceType {} for 2-parameter constructor. Use 3-parameter constructor for BINARY_PATH.", source_type);
     }
-};
+}
+
+// Constructor for BINARY_PATH kernels (needs additional parameter)
+KernelSource::KernelSource(SourceType source_type, const std::string& kernel_name, const std::variant<std::string, size_t>& original_path_or_hash) :
+    source_(kernel_name), source_type_(source_type), original_path_or_hash_(original_path_or_hash) {
+
+    if (source_type != BINARY_PATH) {
+        TT_THROW("Invalid SourceType {} for 3-parameter constructor. Only BINARY_PATH is supported.", source_type);
+    }
+    path_ = kernel_name;
+}
+
+size_t KernelSource::get_original_path_hash() const {
+    return std::visit([](const auto& value) -> size_t {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, std::string>) {
+            // Use the same hash computation as the public API
+            return tt::tt_metal::experimental::ComputeKernelOriginalPathHash(value);
+        } else {
+            return value; // already a hash
+        }
+    }, original_path_or_hash_);
+}
+
+std::string KernelSource::generate_elf_path(
+    const IDevice* device,
+    const KernelImpl* kernel,
+    int processor_index,
+    const std::string& jit_target_path) const {
+
+    if (this->source_type_ == KernelSource::BINARY_PATH) {
+        // For BINARY_PATH kernels, construct path to match JIT cache structure
+        const std::string& device_prefix = device->get_kernel_binary_path_prefix();
+
+        // Extract the kernel full name which contains: kernel_name/hash/
+        // The kernel_full_name_ is set during JIT compilation as: kernel_name/hash/
+        const std::string& kernel_full_name = kernel->get_full_kernel_name();
+
+        // Use HAL jit build query to get the correct processor directory name
+        const auto& hal = MetalContext::instance().hal();
+        const auto& jit_build_query = hal.get_jit_build_query();
+        HalJitBuildQueryInterface::Params params{
+            false, // is_fw
+            kernel->get_kernel_programmable_core_type(),
+            kernel->get_kernel_processor_class(),
+            processor_index
+        };
+        std::string processor_dir = jit_build_query.target_name(params);
+
+        // Construct full path matching JIT structure: prefix/kernel_full_name/processor_dir/processor_dir.elf
+        // kernel_full_name already contains trailing slash
+        return fmt::format(
+            "{}/{}/kernels/{}{}/{}.elf",
+            device_prefix,
+            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
+            kernel_full_name,
+            processor_dir,
+            processor_dir);
+    } else {
+        // For JIT-compiled kernels, return the provided target path
+        return jit_target_path;
+    }
+}
 
 Kernel::Kernel(
     HalProgrammableCoreType programmable_core_type,
@@ -146,6 +215,8 @@ void Kernel::register_kernel_with_watcher() {
     if (this->kernel_src_.source_type_ == KernelSource::FILE_PATH) {
         this->watcher_kernel_id_ =
             MetalContext::instance().watcher_server()->register_kernel(this->kernel_src_.source_);
+    } else if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
     } else {
         TT_FATAL(this->kernel_src_.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
         this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
@@ -247,6 +318,19 @@ void KernelImpl::process_named_compile_time_args(
 }
 
 bool KernelImpl::binaries_exist_on_disk(const IDevice* device) const {
+    // If kernel source is a binary path, check if the binary actually exists
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        // Check all expected binaries for this kernel type
+        for (int i = 0; i < this->expected_num_binaries(); ++i) {
+            int processor_index = this->get_kernel_processor_type(i);
+            if (!std::filesystem::exists(
+                    this->kernel_src_.generate_elf_path(device, this, processor_index, this->kernel_src_.path_))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     const uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
@@ -271,10 +355,19 @@ std::vector<std::string> KernelImpl::file_paths(IDevice& device) const {
     auto& hal = MetalContext::instance().hal();
     uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
+
     for (int i = 0; i < this->expected_num_binaries(); i++) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device.build_id(), core_type, processor_class, this->get_kernel_processor_type(i));
-        file_paths.push_back(build_state.get_target_out_path(this->kernel_full_name_));
+        std::string jit_target_path = build_state.get_target_out_path(this->kernel_full_name_);
+
+        std::string elf_path = this->kernel_src_.generate_elf_path(
+            &device,
+            this,
+            this->get_kernel_processor_type(i),
+            jit_target_path);
+
+        file_paths.push_back(elf_path);
     }
     return file_paths;
 }
@@ -354,6 +447,9 @@ std::string ComputeKernel::config_hash() const {
 
 std::string Kernel::compute_hash() const {
     size_t define_hash_value = 0;
+    size_t kernel_src_hash = (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH)
+                                 ? this->kernel_src_.get_original_path_hash()
+                                 : std::hash<std::string>{}(this->kernel_src_.source_);
     for (const auto& [define, value] : this->defines_) {
         ttsl::hash::hash_combine(define_hash_value, std::hash<std::string>{}(define + value));
     }
@@ -362,7 +458,7 @@ std::string Kernel::compute_hash() const {
 
     return fmt::format(
         "{}_{}_{}_{}_{}",
-        std::hash<std::string>{}(this->kernel_src_.source_),
+        kernel_src_hash,
         fmt::join(this->compile_time_args_, "_"),
         define_hash_value,
         named_args_hash_value,
@@ -540,6 +636,11 @@ void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
 }
 
 void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+    // Skip generation if using pre-compiled binaries
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return;
+    }
+
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type =
@@ -553,6 +654,11 @@ void DataMovementKernel::generate_binaries(IDevice* device, JitBuildOptions& /*b
 }
 
 void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+    // Skip generation if using pre-compiled binaries
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return;
+    }
+
     jit_build_genfiles_kernel_include(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t erisc_core_type =
@@ -566,6 +672,11 @@ void EthernetKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build
 }
 
 void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_options*/) const {
+    // Skip generation if using pre-compiled binaries
+    if (this->kernel_src_.source_type_ == KernelSource::BINARY_PATH) {
+        return;
+    }
+
     jit_build_genfiles_triscs_src(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, *this, this->kernel_src_);
     uint32_t tensix_core_type =
@@ -588,7 +699,7 @@ void KernelImpl::set_binaries(uint64_t build_key, std::vector<const ll_api::memo
 }
 
 void DataMovementKernel::read_binaries(IDevice* device) {
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "cannot read binaries for kernel {}", this->name());
     std::vector<const ll_api::memory*> binaries;
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
@@ -597,12 +708,19 @@ void DataMovementKernel::read_binaries(IDevice* device) {
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
     int riscv_id = static_cast<std::underlying_type<DataMovementProcessor>::type>(this->config_.processor);
+
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
-    auto load_type =
-        MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
-    const ll_api::memory& binary_mem =
-        llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+    std::string jit_target_path = build_state.get_target_out_path(this->kernel_full_name_);
+
+    std::string binary_path = this->kernel_src_.generate_elf_path(
+        device,
+        this,
+        riscv_id,
+        jit_target_path);
+
+    auto load_type = MetalContext::instance().hal().get_jit_build_config(tensix_core_type, dm_class_idx, riscv_id).memory_load;
+    const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
     binaries.push_back(&binary_mem);
     [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
@@ -612,19 +730,27 @@ void DataMovementKernel::read_binaries(IDevice* device) {
 
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "cannot read binaries for kernel {}", this->name());
     std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     constexpr auto k_EthDmClassIndex = enchantum::to_underlying(HalProcessorClassType::DM);
     int erisc_id = enchantum::to_underlying(this->config_.processor);
+
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, k_EthDmClassIndex, erisc_id);
+    std::string jit_target_path = build_state.get_target_out_path(this->kernel_full_name_);
+
+    std::string binary_path = this->kernel_src_.generate_elf_path(
+        device,
+        this,
+        erisc_id,
+        jit_target_path);
     // TODO: fix when active eth supports relo
     auto load_type =
         MetalContext::instance().hal().get_jit_build_config(erisc_core_type, k_EthDmClassIndex, erisc_id).memory_load;
     const ll_api::memory& binary_mem = llrt::get_risc_binary(
-        build_state.get_target_out_path(this->kernel_full_name_), load_type, [this](ll_api::memory& binary_mem) {
+        binary_path, load_type, [this](ll_api::memory& binary_mem) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
                 this->config_.eth_mode != Eth::IDLE) {
                 // text_addr and some of span's addr point to IRAM base address.
@@ -647,7 +773,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
 }
 
 void ComputeKernel::read_binaries(IDevice* device) {
-    TT_ASSERT(this->binaries_exist_on_disk(device));
+    TT_FATAL(this->binaries_exist_on_disk(device), "cannot read binaries for kernel {}", this->name());
     std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -655,12 +781,19 @@ void ComputeKernel::read_binaries(IDevice* device) {
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
+        std::string jit_target_path = build_state.get_target_out_path(this->kernel_full_name_);
+
+        std::string binary_path = this->kernel_src_.generate_elf_path(
+            device,
+            this,
+            trisc_id,
+            jit_target_path);
+
         auto load_type = MetalContext::instance()
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
                              .memory_load;
-        const ll_api::memory& binary_mem =
-            llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
+        const ll_api::memory& binary_mem = llrt::get_risc_binary(binary_path, load_type);
         binaries.push_back(&binary_mem);
     }
     this->set_binaries(

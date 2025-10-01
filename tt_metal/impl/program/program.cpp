@@ -168,6 +168,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
+
     std::string compile_hash_str = fmt::format(
         "{}_{}_{}_{}",
         build_key,
