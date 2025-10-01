@@ -10,7 +10,7 @@ When performing a code review in this repository:
 - flag anytime someone uses templates excessively. Strongly discourage usage of enable_if and concepts unless absolutely necessary.
 
 ## Must-run mental model
-- Assume a **large C++20/23 codebase** with heavy headers; keep compile times in mind (avoid unnecessary includes; prefer forward declarations and PIMPL where appropriate).
+- Assume a **large C++20 codebase** with heavy headers; keep compile times in mind (avoid unnecessary includes; prefer forward declarations and PIMPL where appropriate).
 - Respect existing **clang-tidy** profile (bugprone, performance, modernize, readability, cppcoreguidelines). If suggesting changes, point to the relevant rule and a minimal diff.
 - Treat **rule-of-5/0**, **virtual destructor requirements**, and **avoid const/ref data members** issues as first-class findings; suggest safe fixes.
 
