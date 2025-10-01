@@ -575,7 +575,7 @@ def test_tg_trace_rms_fuse(
         (
             4,
             8192,
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))}),
             ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(

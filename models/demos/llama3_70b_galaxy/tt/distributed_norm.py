@@ -15,8 +15,10 @@ class DistributedNorm(LightweightModule):
         self.ccl_topology = ccl_topology
 
         if TG:
-            # core_grid_ln, grid_offset = (8, 2) if not args.qk_norm else (10, 2), ttnn.CoreCoord(1, 0)
-            core_grid_ln, grid_offset = (8, 2) if not args.qk_norm else (5, 2), ttnn.CoreCoord(1, 0)
+            if args.qk_norm:
+                core_grid_ln, grid_offset = (5, 2), ttnn.CoreCoord(1, 0)
+            else:
+                core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(2, 0)
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
