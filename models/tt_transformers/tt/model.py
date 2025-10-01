@@ -41,6 +41,8 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.tt_rot_mats_prefill_global = None
+        self.tt_rot_mats_prefill_local = None
 
         self.tt_ccl = TT_CCL(self.mesh_device)
 
@@ -128,7 +130,54 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
+        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
+            # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
+            # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
+            self.decode_sliding_mask_mat = get_decode_mask(
+                self.args,
+                self.mesh_device,
+                paged_attention_config=paged_attention_config,
+            )
+            # Then we copy a slice for a single decode position for each user on to device [bsz, n_heads_per_device, 1, seq_len]
+            # We can update this tensor on host each iteration and copy to device to save storing the large square tensor on device
+            self.device_decode_sliding_mask = ttnn.as_tensor(
+                torch.concat(
+                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(self.args.max_batch_size)],
+                    axis=0,
+                ).transpose(1, 2),
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            self.decode_sliding_mask_mat = None
+            self.device_decode_sliding_mask = None
+
+    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None, user_id=0, start_pos=0):
+        """
+        Inputs are torch tensors or python types. This function returns ttnn
+        tensors on host.
+        """
+        host_inputs = self.prepare_inputs_prefill(
+            tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            trace_enabled=True,
+            user_id=user_id,
+        )
+        return host_inputs
+
+    def transform_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table, user_id):
+        tt_tokens = self.embd(tokens)
+        tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        return tt_tokens, tt_page_table, tt_chunk_page_table, user_id
+
+    def prepare_inputs_prefill(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, user_id=0
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -140,36 +189,54 @@ class Transformer(LightweightModule):
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
-            device=self.mesh_device,
+            device=self.mesh_device if not trace_enabled else None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        tokens_embd = self.embd(tokens)
-        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
+
+        # we do it this way because we want to run this when all our inputs are on the device
+        if not trace_enabled:
+            tokens_embd = self.embd(tokens)
+            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
-        tt_rot_mats_prefill_global = [
-            self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
-        ]
+        if trace_enabled:
+            if self.tt_rot_mats_prefill_global is None:
+                self.tt_rot_mats_prefill_global = [
+                    self.rope_setup.cos_matrix[:, :, 0 : self.args.max_seq_len, :],
+                    # ovo nije fiksno, ali mora da bude fiksne velicine da spadne u sve opsege u kojima ce trace da se radi
+                    self.rope_setup.sin_matrix[:, :, 0 : self.args.max_seq_len, :],
+                ]
+        else:
+            self.tt_rot_mats_prefill_global = [
+                self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ]
 
         if hasattr(self, "rope_local_setup"):
-            tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
-            ]
+            if trace_enabled:
+                if self.tt_rot_mats_prefill_local is None:
+                    self.tt_rot_mats_prefill_local = [
+                        self.rope_local_setup.cos_matrix[:, :, 0 : self.args.max_seq_len, :],
+                        self.rope_local_setup.sin_matrix[:, :, 0 : self.args.max_seq_len, :],
+                    ]
+            else:
+                self.tt_rot_mats_prefill_local = [
+                    self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+                    self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+                ]
         else:
-            tt_rot_mats_prefill_local = None
+            self.tt_rot_mats_prefill_local = None
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=self.mesh_device,
+                device=self.mesh_device if not trace_enabled else None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -180,7 +247,7 @@ class Transformer(LightweightModule):
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=self.mesh_device,
+                device=self.mesh_device if not trace_enabled else None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -188,7 +255,25 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+        if trace_enabled:
+            user_id = ttnn.from_torch(
+                torch.tensor([user_id], dtype=torch.int32),
+                device=None,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        if trace_enabled:
+            return tokens, tt_page_table, tt_chunk_page_table, user_id
+        else:
+            return (
+                tokens_embd,
+                self.tt_rot_mats_prefill_global,
+                self.tt_rot_mats_prefill_local,
+                tt_page_table,
+                tt_chunk_page_table,
+            )
 
     def prepare_inputs_decode(self, *inputs):
         """
