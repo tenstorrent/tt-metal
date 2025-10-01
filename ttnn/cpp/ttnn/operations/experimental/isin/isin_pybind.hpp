@@ -9,7 +9,6 @@
 
 namespace ttnn::operations::experimental::isin::detail {
 
-namespace py = pybind11;
 void bind_isin_operation(py::module& module);
 
 }  // namespace ttnn::operations::experimental::isin::detail
