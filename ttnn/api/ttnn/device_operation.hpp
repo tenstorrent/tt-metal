@@ -363,6 +363,29 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     auto mesh_device = first_tensor.device();
+    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> final_placements =
+        first_tensor.tensor_topology().placements();
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&final_placements](const Tensor& tensor) {
+            const auto& tensor_placements = tensor.tensor_topology().placements();
+            for (size_t i = 0; i < tensor_placements.size(); i++) {
+                if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i])) {
+                    final_placements[i] = tensor_placements[i];
+                }
+            }
+        },
+        tensor_args);
+
+    tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
+        [&](const Tensor& output_tensor) {
+            auto topology = tt::tt_metal::TensorTopology(
+                output_tensor.tensor_topology().distribution_shape(),
+                final_placements,
+                output_tensor.tensor_topology().mesh_coords());
+            return Tensor(output_tensor.storage(), output_tensor.tensor_spec(), topology);
+        },
+        tensor_return_value);
+
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
     return tensor_return_value;
