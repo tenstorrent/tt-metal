@@ -36,6 +36,7 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 | All to all                  | 300-308              | Write transactions from multiple cores to multiple cores.                               |
 | All from all                | 310-318              | Read transactions from multiple cores to multiple cores.                                |
 | I2S Hardcoded               | 400-405              | Tests interleaved to sharded data movement operations for different memory layouts.     |
+| Transaction ID              | 600-601              | Tests the usage and effects of transaction IDs in NOC transactions.                     |
 
 ## Running Tests
 ### C++ Gtests
