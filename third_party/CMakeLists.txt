@@ -338,6 +338,8 @@ CPMAddPackage(
         "CAPNP_LITE OFF"
         "BUILD_SHARED_LIBS OFF"
         "CMAKE_CXX_EXTENSIONS ON"
+    PATCHES
+        capnproto_capture_this.patch
 )
 
 if(capnproto_ADDED)
