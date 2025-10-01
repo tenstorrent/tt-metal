@@ -1,26 +1,26 @@
 inputs:
-  device_perf_model_name:
-    required: true
-    default: ''
-    description: "Used to specify the model for a device perf test. E2E perf tests do not set this"
-  commands:
-    required: true
-    description: "Shell commands to run the test"
+  perf-models-matrix:
+    required: false
+    description: "Matrix of models to run, as JSON array"
+    default: '[]'
 runs:
   using: "composite"
+  strategy:
+    matrix:
+      model: ${{ fromJson(inputs.perf-models-matrix) }}
   steps:
     - run: |
         cd docker-job
         set -x
 
-        ${{ inputs.commands }}
+        ${{ matrix.model.commands }}
 
-        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv
+        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.model.name }}_$(date +%Y_%m_%d).csv
         python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME REPORT
-        cat Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv > Models_Device_Perf_$(date +%Y_%m_%d).csv
+        cat Models_Device_Perf_${{ matrix.model.name }}_$(date +%Y_%m_%d).csv > Models_Device_Perf_$(date +%Y_%m_%d).csv
         cat Models_Device_Perf_$(date +%Y_%m_%d).csv
         echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
-      if: ${{ inputs.device_perf_model_name != '' }}
+      if: ${{ matrix.model.name != '' }}
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
@@ -32,7 +32,7 @@ runs:
         docker_opts: ${{ env.DOCKER_OPTS }}
         install_wheel: true
         run_args: |
-          ${{ inputs.commands }}
+          ${{ matrix.model.commands }}
           status=$?
           env python3 models/perf/merge_perf_results.py REPORT
           exit $status

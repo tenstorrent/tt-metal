@@ -322,22 +322,32 @@ jobs:
               continue
             fi
 
-            # Join all commands with newlines
-            combined_commands=$(printf '%s\n' "${all_commands_for_config[@]}")
-            combined_model_names=$(printf '%s,' "${model_names[@]}")
-            combined_model_names=${combined_model_names%,}  # Remove trailing comma
+            # Create array of model objects for the action matrix
+            models_array='[]'
+            for i in "${!model_names[@]}"; do
+              model="${model_names[$i]}"
+              command="${all_commands_for_config[$i]}"
+
+              model_obj=$(jq -n \
+                --arg name "$model" \
+                --arg commands "$command" \
+                '{
+                  "name": $name,
+                  "commands": $commands
+                }')
+
+              models_array=$(jq --argjson obj "$model_obj" '. + [$obj]' <<< "$models_array")
+            done
 
             matrix_entry=$(jq -n \
               --arg config "$config" \
-              --arg models "$combined_model_names" \
               --arg device_perf_model_name "$config" \
-              --arg commands "$combined_commands" \
+              --argjson models_array "$models_array" \
               --argjson test_config "$test_config" \
               '{
                 "config": $config,
-                "models": $models,
                 "device_perf_model_name": $device_perf_model_name,
-                "commands": $commands
+                "models_array": $models_array
               } + $test_config')
 
             MATRIX_ENTRIES=$(jq --argjson entry "$matrix_entry" '. + [$entry]' <<< "$MATRIX_ENTRIES")
@@ -385,12 +395,11 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run performance tests
-        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
+        uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@davidp-add-model-select-inputs-for-single-card-workflows
         env:
           HF_HUB_CACHE: ${{ !matrix.test-info.civ2-compatible && '/mnt/MLPerf/huggingface/hub' || '' }}
         with:
-          device_perf_model_name: ${{ matrix.test-info.device_perf_model_name }}
-          commands: ${{ matrix.test-info.commands }}
+          perf-models-matrix: ${{ toJSON(matrix.test-info.models_array) }}
         if: ${{ !cancelled() }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -402,9 +411,9 @@ jobs:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
