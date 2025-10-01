@@ -42,8 +42,8 @@ def run_all_gather_impl(
     num_buffers_per_channel=None,
     allowed_pcc=1,
     skip_check=False,
-    all_gather_function=ttnn.experimental.all_gather_async,
     num_l1_banks=64,
+    all_gather_function=ttnn.experimental.all_gather_async,
 ):
     torch.manual_seed(0)
 
@@ -96,17 +96,32 @@ def run_all_gather_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    persistent_output_buffers = [
-        ttnn.from_torch(
-            torch.zeros(ag_output_shape),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ag_input_dtype,
-            memory_config=mem_config_ag,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        for _ in range(num_iters)
-    ]
+    if use_persistent_buffers:
+        if enable_trace:
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ag_input_dtype,
+                    memory_config=mem_config_ag,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+            ]
+        else:
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(ag_output_shape),
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ag_input_dtype,
+                    memory_config=mem_config_ag,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
+                for _ in range(num_iters)
+            ]
+    else:
+        persistent_output_buffers = []
 
     logger.info("Done creating persistent buffers")
 

@@ -10,13 +10,13 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
-# Test utilizes/transfers up to 3.93GB of space per device to nearly fill the dram
+# Test uses 3.932GB of space per device to nearly fill the dram
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (2, [1, 1, 20000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 24000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
     ],
 )
 @pytest.mark.parametrize(
@@ -54,26 +54,18 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_n
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}),
     ],
     indirect=["device_params"],
     ids=["fabric"],
-)
-@pytest.mark.parametrize(
-    "cluster_axis",
-    [
-        0,
-    ],
-    ids=["row"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_ddr_smoke_test(
-    bh_1d_mesh_device,
+    bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
-    cluster_axis,
     dim,
     num_links,
     ag_input_dtype,
@@ -87,11 +79,9 @@ def test_ccl_ddr_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
     # Check all the rows and columns independantly within the device
-    submesh_device = bh_1d_mesh_device.create_submesh(
-        ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, 0)
-    )
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
         num_devices,
@@ -105,7 +95,7 @@ def test_ccl_ddr_smoke_test(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=cluster_axis,
+        cluster_axis=0,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
@@ -114,18 +104,15 @@ def test_ccl_ddr_smoke_test(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-# P300 with 2 harvested columns so 100 cores are available.
+# P300 with 2 harvested columns so 110 cores are available.
 # Test utilizes 1'478'492.16 bytes per core to nearly maximize 1.5MB size
-
-
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (2, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
     ],
-    ids=["2_device_line"],
 )
 @pytest.mark.parametrize(
     "ag_input_dtype",
@@ -172,17 +159,10 @@ def test_ccl_ddr_smoke_test(
 @pytest.mark.parametrize(
     "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}),
     ],
     indirect=["device_params"],
     ids=["fabric"],
-)
-@pytest.mark.parametrize(
-    "cluster_axis",
-    [
-        0,
-    ],
-    ids=["row"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
@@ -191,7 +171,6 @@ def test_ccl_other_smoke_test(
     bh_2d_mesh_device,
     num_devices,
     ag_output_shape,
-    cluster_axis,
     dim,
     num_links,
     ag_input_dtype,
@@ -205,10 +184,8 @@ def test_ccl_other_smoke_test(
     num_workers_per_link,
     num_buffers_per_channel,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
-    submesh_device = bh_2d_mesh_device.create_submesh(
-        ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, 0)
-    )
+    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
+    submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
         num_devices,
@@ -222,11 +199,11 @@ def test_ccl_other_smoke_test(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        cluster_axis=cluster_axis,
+        cluster_axis=0,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
-        num_l1_banks=100,
+        num_l1_banks=120,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
