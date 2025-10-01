@@ -96,6 +96,7 @@ bool is_split_reader_supported(
     TensorMemoryLayout memory_layout, bool is_1d_depthwise_conv, uint32_t act_block_h_ntiles);
 
 bool is_split_reader_viable(
+    TensorMemoryLayout memory_layout,
     uint32_t act_block_h_ntiles,
     uint32_t input_channels_padded,
     uint32_t kernel_width,
