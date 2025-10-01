@@ -305,9 +305,40 @@ jobs:
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-info.model-group }}" | tr ' ' '-')
           export PERF_REPORT_FILENAME=Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          cat Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $PERF_REPORT_FILENAME CHECK
+
+          echo "=== Available device perf files ==="
+          ls -la Models_Device_Perf_*_$(date +%Y_%m_%d).csv || echo "No individual device perf files found"
+
+          echo "=== Creating consolidated file from individual model files ==="
+          # Find all individual model files and concatenate them
+          FIRST_FILE=true
+          for file in Models_Device_Perf_*_$(date +%Y_%m_%d).csv; do
+            if [ -f "$file" ] && [[ "$file" != *"${CLEAN_NAME}"* ]]; then
+              echo "Processing file: $file"
+              if [ "$FIRST_FILE" = true ]; then
+                # First file includes header
+                cat "$file" > Models_Device_Perf_$(date +%Y_%m_%d).csv
+                FIRST_FILE=false
+                echo "Added header from first file: $file"
+              else
+                # Subsequent files skip header (first line)
+                tail -n +2 "$file" >> Models_Device_Perf_$(date +%Y_%m_%d).csv
+                echo "Added data from file (no header): $file"
+              fi
+            fi
+          done
+
+          # Create the final report file for this model group
+          if [ -f "Models_Device_Perf_$(date +%Y_%m_%d).csv" ]; then
+            cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+            echo "=== Final consolidated file content ==="
+            cat Models_Device_Perf_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+            python3 models/perf/merge_device_perf_results.py $PERF_REPORT_FILENAME CHECK
+          else
+            echo "ERROR: No consolidated file was created"
+            exit 1
+          fi
+
           echo "perf_report_filename=$PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       # TODO: Fix the pipeline before enabling notifications.
