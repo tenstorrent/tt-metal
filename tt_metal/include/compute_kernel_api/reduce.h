@@ -95,6 +95,11 @@ ALWI void reduce_uninit() {
     PACK((llk_pack_reduce_mask_clear()));
 }
 
+ALWI void reduce_max_row_uninit() {
+    PACK((llk_pack_reduce_mask_clear()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
+}
+
 // clang-format off
 /**
  * Performs a reduction operation *B = reduce(A)* using reduce_func for dimension reduction on a tile in the CB at a given index and writes the
@@ -186,5 +191,43 @@ ALWI void reduce_tile_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t itile,
  */
 // clang-format on
 ALWI void reduce_tile_max_row_math(uint32_t idst) { MATH((llk_math_reduce_max_row(idst))); }
+
+// clang-format off
+/**
+ * Initialization for reduce_block_max_row operation. Must be called before reduce_block_max_row.
+ * Processes a block of tiles in the width dimension, reducing each row across the block.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ */
+// clang-format on
+template <uint32_t block_ct_dim>
+ALWI void reduce_block_max_row_init() {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim>()));
+    MATH((llk_math_reduce_block_max_row_init<block_ct_dim>()));
+    PACK((llk_pack_reduce_max_row_mask_config()));
+}
+
+// clang-format off
+/**
+ * Performs block-based max row reduction operation on a block of tiles in the width dimension.
+ * Reduces each row across the block of tiles and writes the result to DST register.
+ * The DST register buffer must be in acquired state via acquire_dst call.
+ *
+ * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
+ * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
+ * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | row_start_index           | The starting tile index for the row being processed                                     | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | idst                      | The index of the tile in DST REG for the result                                         | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <uint32_t block_ct_dim>
+ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row<block_ct_dim>(icb, icb_scaler, row_start_index)));
+    MATH((llk_math_reduce_block_max_row<block_ct_dim>(idst)));
+}
 
 }  // namespace ckernel

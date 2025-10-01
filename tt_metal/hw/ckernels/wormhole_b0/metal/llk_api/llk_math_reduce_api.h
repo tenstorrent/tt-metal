@@ -54,3 +54,14 @@ inline void llk_math_reduce_max_row_init() { _llk_math_reduce_max_row_init_(); }
 
 // OPTIMIZED, DO NOT CALL UNLESS REGULAR TILE SIZE
 inline void llk_math_reduce_max_row(const uint dst_index) { _llk_math_reduce_max_row_(dst_index); }
+
+// Block-based reduce row max functions
+template <uint32_t block_ct_dim>
+inline void llk_math_reduce_block_max_row_init() {
+    _llk_math_reduce_block_max_row_init_<block_ct_dim>();
+}
+
+template <uint32_t block_ct_dim>
+inline void llk_math_reduce_block_max_row(const uint dst_index) {
+    _llk_math_reduce_block_max_row_<block_ct_dim>(dst_index);
+}

@@ -41,9 +41,10 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    constexpr uint32_t log_2_tile_bytes = 11;  // log2(2048) = 11
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
-    const auto src_a = TensorAccessor(src_args, src_addr, tile_bytes);
+    // Use bank_id 0 as default for interleaved buffer
+    constexpr uint32_t bank_id = 0;
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.

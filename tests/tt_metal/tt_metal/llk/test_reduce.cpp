@@ -216,6 +216,9 @@ void add_reader_writer_kernels(
             std::vector<uint32_t> writer_compile_args = {};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
+            std::vector<uint32_t> writer_compile_args = {};
+            tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
+
             auto unary_writer_kernel = tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
@@ -285,6 +288,7 @@ void run_single_core_reduce_program(
     Program program = tt_metal::CreateProgram();
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -322,10 +326,6 @@ void run_single_core_reduce_program(
     uint32_t src_page_size = single_tile_bytes;
     uint32_t dst_page_size = single_tile_bytes;
 
-    distributed::DeviceLocalBufferConfig src_local_config{
-        .page_size = src_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig src_buffer_config{.size = dram_buffer_size};
-
     uint32_t output_size_bytes;
     switch (test_config.reduce_dim) {
         case ReduceDim::H: output_size_bytes = dram_buffer_size / Ht; break;
@@ -334,14 +334,19 @@ void run_single_core_reduce_program(
         default: TT_THROW("Unsupported reduce dim!");
     }
 
-    distributed::DeviceLocalBufferConfig dst_local_config{
-        .page_size = dst_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig dst_buffer_config{.size = output_size_bytes};
+    tt_metal::InterleavedBufferConfig src_dram_config{
+        .device = device,
+        .size = dram_buffer_size,
+        .page_size = src_page_size,
+        .buffer_type = tt_metal::BufferType::DRAM};
+    tt_metal::InterleavedBufferConfig dst_dram_config{
+        .device = device,
+        .size = output_size_bytes,
+        .page_size = dst_page_size,
+        .buffer_type = tt_metal::BufferType::DRAM};
 
-    std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
-        distributed::MeshBuffer::create(src_buffer_config, src_local_config, mesh_device.get());
-    std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
-        distributed::MeshBuffer::create(dst_buffer_config, dst_local_config, mesh_device.get());
+    std::shared_ptr<tt_metal::Buffer> src_dram_buffer = CreateBuffer(src_dram_config);
+    std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dst_dram_config);
 
     uint32_t src0_cb_index = 0;
     // Increase buffer size to handle NC * Ht * Wt tiles for reduce_c pattern
@@ -371,7 +376,52 @@ void run_single_core_reduce_program(
             .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
     tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
 
-    add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
+    // Create reader and writer kernels for W reduce
+    auto unary_reader_kernel = tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt_metal::NOC::RISCV_1_default,
+            .defines = {{"GENERATE_BCAST_SCALER", "1"}, {"BLOCK_SIZE", "1"}}});
+
+    std::vector<uint32_t> writer_compile_args = {};
+    tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
+
+    auto unary_writer_kernel = tt_metal::CreateKernel(
+        program_,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+        core,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = writer_compile_args});
+
+    // Set runtime args for reader kernel
+    tt_metal::SetRuntimeArgs(
+        program_,
+        unary_reader_kernel,
+        core,
+        {
+            src_dram_buffer->address(),
+            Ht,                                     // Number of rows (height in tiles)
+            Wt,                                     // Number of cols (width in tiles)
+            NC,                                     // Number of channels
+            *reinterpret_cast<uint32_t*>(&scaler),  // scaler value
+        });
+
+    // Set runtime args for writer kernel
+    uint32_t output_tiles = NC * Ht;
+    tt_metal::SetRuntimeArgs(
+        program_,
+        unary_writer_kernel,
+        core,
+        {
+            dst_dram_buffer->address(),
+            (uint32_t)0,  // dram bank id
+            output_tiles  // num tiles
+        });
 
     vector<uint32_t> compute_kernel_args = {
         uint(Ht),
@@ -414,13 +464,13 @@ void run_single_core_reduce_program(
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
 
-    distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
+    tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     // The kernel will view the input as TILED_NFACES
     std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
+    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
 
     EXPECT_EQ(result_vec.size(), num_golden_elements);
 
@@ -467,7 +517,7 @@ void run_single_core_reduce_program(
                 // Convert uint16 raw bits to bfloat16 and then to float
                 bfloat16 bf16_val;
                 std::memcpy(&bf16_val, &gold_reduced[i], sizeof(uint16_t));
-                float expected_val = bf16_val.to_float();
+                float expected_val = static_cast<float>(bf16_val);
                 log_info(LogTest, "  Row {}: {}", i, expected_val);
             }
             log_info(LogTest, "==========================================");
@@ -492,7 +542,7 @@ void run_single_core_reduce_program(
                 // Convert uint16 raw bits to bfloat16 and then to float
                 bfloat16 bf16_val;
                 std::memcpy(&bf16_val, &result_u16[i], sizeof(uint16_t));
-                float actual_val = bf16_val.to_float();
+                float actual_val = static_cast<float>(bf16_val);
                 log_info(LogTest, "  Row {}: {}", i, actual_val);
             }
             log_info(LogTest, "=============================");
