@@ -74,8 +74,13 @@ def test_all_gather_async(
     num_buffers_per_channel,
     all_gather_function,
 ):
-    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
-    cluster_axis = 0
+    if num_devices < 8:
+        submesh_shape = (1, num_devices)
+        cluster_axis = 1
+    else:
+        submesh_shape = (num_devices, 1)
+        cluster_axis = 0
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
     run_all_gather_impl(
         submesh_device,
         num_devices,
@@ -98,7 +103,98 @@ def test_all_gather_async(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-@skip_for_wormhole_b0()
+@skip_for_blackhole("This test is for wormhole")
+@pytest.mark.parametrize("num_links", [3], ids=["3links"])
+@pytest.mark.parametrize(
+    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        (4, [1, 1, 32, 896], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 8, 32, 576], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "deepseek_1",
+        "deepseek_2",
+        "deepseek_3",
+        "deepseek_4",
+        "deepseek_5",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+        (False, 1),
+    ],
+    ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize(
+    "all_gather_function",
+    [ttnn.experimental.all_gather_async],
+    ids=["normal"],
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_all_gather_deepseek(
+    mesh_device,
+    num_devices,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+    all_gather_function,
+):
+    if num_devices < 8:
+        submesh_shape = (1, num_devices)
+        cluster_axis = 1
+    else:
+        submesh_shape = (num_devices, 1)
+        cluster_axis = 0
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
+    run_all_gather_impl(
+        submesh_device,
+        num_devices,
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        all_gather_function=all_gather_function,
+    )
+    ttnn.ReadDeviceProfiler(submesh_device)
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
 @pytest.mark.parametrize("num_links", [1], ids=["1links"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
