@@ -62,6 +62,7 @@ void bind_reduction_moe_operation(py::module& module) {
                 - For the :attr:`topk_mask_tensor`, H must be 32 and W must match :attr:`k` (i.e. 32).
                 - For the :attr:`expert_mask_tensor`, H must be 32 and W must match W of the :attr:`input_tensor`.
                 - All of the shape validations are performed on padded shapes.
+                - Sharded outputs are not supported for this operation.
 
             Example:
                 N, C, H, W = 1, 1, 32, 64

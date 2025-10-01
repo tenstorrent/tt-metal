@@ -492,6 +492,9 @@ void py_module(py::module& module) {
         - In order to leverage sharded matmul implementations we can shard both `input_tensor_a` and `input_tensor_b`. The sharding strategy used will be according
           to the sharding strategy on the respective tensor. A sharded 1D matmul can be either HEIGHT or WIDTH sharded, 2D matmuls can be BLOCK sharded.
 
+          - For 1D sharded matmul variants (width- or height-sharded inputs), if a sharded :attr:`memory_config` is
+            provided for the output, its memory layout and buffer type must match those of :attr:`input_tensor_a`.
+
           Note: the broadcasting logic only looks at the batch dimensions when determining if the inputs
           are broadcastable, and not the matrix dimensions. For example, if :attr:`input_tensor_a` is a
           (`j` x `1` x `n_size` x `m_size`) tensor and :attr:`input_tensor_b` is a (`k_size` x `m_size` x `p`)

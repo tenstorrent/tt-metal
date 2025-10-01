@@ -75,6 +75,7 @@ void bind_reduction_topk_operation(py::module& module) {
                 - The padding is currently only supported for bfloat16, float32, int32, and uint32.
                 - To enable multicore execution, the width of :attr:`input_tensor` along :attr:`dim` must be ≥8192 and <65536, and :attr:`k` must be ≤64.
                 - All shape validations are performed on padded shapes.
+                - Sharded outputs are not supported for this operation.
 
             Example:
                 input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)
