@@ -208,6 +208,7 @@ void Kernel::register_kernel_with_watcher() {
         this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
     } else {
         TT_FATAL(this->kernel_src_.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
+        this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
     }
 }
 
