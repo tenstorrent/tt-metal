@@ -392,8 +392,6 @@ target_link_libraries(
         Metalium::Metal
         Metalium::TTNN
         Metalium::TTNNCPP
-        # TT::Metalium
-        # TTNN::TTNN
         Python3::Python
         fmt::fmt-header-only
         enchantum::enchantum
