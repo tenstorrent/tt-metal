@@ -512,21 +512,12 @@ class StableDiffusion3Pipeline:
                     # HACK: reshape submesh device 0 from 1D to 2D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
                 prompt_encoding_end_time = time.time()
-                logger.info("preparing timesteps...")
 
-            sigmas = torch.linspace(1, 0, num_inference_steps + 1)
-
-            assert num_inference_steps % 2 == 0
-            s = num_inference_steps
-            n = linear_quadratic_emulating_steps
-            sigmas = torch.concat(
-                [
-                    torch.linspace(1, 0, n + 1)[: s // 2],
-                    torch.linspace(0, 1, s // 2 + 1) ** 2 * (s // 2 * 1 / n - 1) - (s // 2 * 1 / n - 1),
-                ]
+            logger.info("preparing timesteps...")
+            timesteps, sigmas = _schedule(
+                step_count=num_inference_steps,
+                linear_quadratic_emulating_steps=linear_quadratic_emulating_steps,
             )
-
-            timesteps = sigmas[:-2] * 1000
 
             logger.info("preparing latents...")
 
@@ -1118,3 +1109,19 @@ def _get_t5_prompt_embeds(
     # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
     prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
     return prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+
+
+def _schedule(*, step_count: int, linear_quadratic_emulating_steps: int) -> tuple[torch.Tensor, torch.Tensor]:
+    assert step_count % 2 == 0
+
+    s = step_count
+    n = linear_quadratic_emulating_steps
+    a = s // 2 / n - 1
+
+    sigmas1 = torch.linspace(1, 0, n + 1)[: s // 2]
+    sigmas2 = torch.linspace(0, 1, s // 2 + 1).pow(2) * a - a
+
+    sigmas = torch.concat([sigmas1, sigmas2])
+    timesteps = sigmas[:-1] * 1000
+
+    return timesteps, sigmas
