@@ -179,18 +179,19 @@ jobs:
       - name: Run TTNN Pytests
         run: |
           pytest \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_all_gather_apc.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_reduce_scatter_apc.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/perf_tests.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_gather_nightly.py \
-            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all_combine_bh.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all_dispatch_bh.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_all_to_all.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_ccl_perf.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_minimal_reduce_scatter_async_bh.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_new_all_broadcast.py \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly/test_reduce_scatter_nightly.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py \
+            tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py \
             tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_async_perf.py \
             tests/ttnn/unit_tests/operations/ccl/perf/test_ccl_perf.py \
             tests/ttnn/unit_tests/operations/ccl/test_ag_rs_llama_prefill_TG.py \
