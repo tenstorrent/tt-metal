@@ -611,13 +611,7 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip_id_t 
 
 int Cluster::get_device_aiclk(const chip_id_t& chip_id) const { return this->driver_->get_chip(chip_id)->get_clock(); }
 
-uint16_t Cluster::get_bus_id(chip_id_t chip) const {
-    if (this->target_type_ == tt::TargetDevice::Mock) {
-        log_warning(tt::LogDevice, "get_bus_id is not supported for mock devices");
-        return 0;
-    }
-    return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
-}
+uint16_t Cluster::get_bus_id(chip_id_t chip) const { return this->cluster_desc_->get_bus_id(chip); }
 
 std::optional<int> Cluster::get_physical_slot(chip_id_t chip) const {
     if (this->target_type_ == tt::TargetDevice::Mock) {
