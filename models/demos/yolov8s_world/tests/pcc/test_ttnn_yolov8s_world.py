@@ -196,7 +196,7 @@ def test_max_sigmoid_attn_block(device, use_pretrained_weight, reset_seeds, mode
     ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_guide = ttnn.from_torch(guide, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_x = ttnn.permute(ttnn_x, (0, 2, 3, 1))
-
+    ttnn_x = ttnn.reshape(ttnn_x, (1, 1, ttnn_x.shape[0] * ttnn_x.shape[1] * ttnn_x.shape[2], ttnn_x.shape[-1]))
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
     )

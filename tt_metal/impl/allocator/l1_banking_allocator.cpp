@@ -6,7 +6,7 @@
 
 #include <allocator.hpp>
 #include <allocator_types.hpp>
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <algorithm>

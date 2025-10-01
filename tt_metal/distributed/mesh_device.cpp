@@ -25,7 +25,7 @@
 #include <utility>
 
 #include "allocator.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "device/device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -84,8 +84,6 @@ std::shared_ptr<ThreadPool> create_default_thread_pool(const std::vector<IDevice
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool();
-    } else if (tt::parse_env("TT_MESH_BOOST_THREAD_POOL", false)) {
-        return create_boost_thread_pool(physical_devices.size());
     } else {
         return create_device_bound_thread_pool(physical_devices);
     }
@@ -477,7 +475,11 @@ IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     TT_THROW("Physical Device ID: {} not found in assigned devices", physical_device_id);
 }
 
-std::vector<IDevice*> MeshDevice::get_devices() const { return view_->get_devices(); }
+std::vector<IDevice*> MeshDevice::get_devices() const {
+    auto devices = view_->get_devices();
+    TT_ASSERT(!devices.empty(), "Mesh Device should have at least 1 IDevice");
+    return devices;
+}
 
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {

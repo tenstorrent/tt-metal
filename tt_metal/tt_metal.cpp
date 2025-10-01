@@ -5,13 +5,12 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
-#include <kernel.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <sub_device_types.hpp>
@@ -52,7 +51,7 @@
 #include "semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include "utils.hpp"
+#include <tt_stl/enum.hpp>
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -163,8 +162,9 @@ void ConfigureKernelGroup(
     const KernelGroup* kernel_group,
     IDevice* device,
     const CoreCoord& logical_core) {
+    const auto& hal = MetalContext::instance().hal();
     uint32_t kernel_config_base =
-        MetalContext::instance().hal().get_dev_addr(programmable_core_type_index, HalL1MemAddrType::KERNEL_CONFIG);
+        hal.get_dev_addr(hal.get_programmable_core_type(programmable_core_type_index), HalL1MemAddrType::KERNEL_CONFIG);
     for (auto kernel_id : kernel_group->kernel_ids) {
         // Need the individual offsets of each bin
         // TODO: make configure take a std::span
@@ -202,7 +202,7 @@ std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange
     }
 
     if (uninitialized_sem_id.has_value()) {
-        semaphore_id = uninitialized_sem_id.value();
+        semaphore_id = uninitialized_sem_id;
     } else {
         TT_THROW("Unable to initialize semaphores on core range {}", core_range.str());
     }
@@ -212,7 +212,7 @@ std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange
 
 inline void SetRuntimeArgsImpl(
     const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
-    if (runtime_args.size() != 0) {
+    if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_runtime_args(c, runtime_args);
     }
 }
@@ -222,7 +222,7 @@ inline void SetRuntimeArgsImpl(
     KernelHandle kernel_id,
     const CoreRange& core_range,
     stl::Span<const uint32_t> runtime_args) {
-    if (runtime_args.size() != 0) {
+    if (!runtime_args.empty()) {
         auto kernel = program.impl().get_kernel(kernel_id);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
@@ -237,7 +237,7 @@ inline void SetRuntimeArgsImpl(
     KernelHandle kernel_id,
     const CoreRangeSet& core_range_set,
     stl::Span<const uint32_t> runtime_args) {
-    if (runtime_args.size() != 0) {
+    if (!runtime_args.empty()) {
         auto kernel = program.impl().get_kernel(kernel_id);
         for (const auto& core_range : core_range_set.ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
@@ -355,8 +355,8 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     return true;
 }
 
-std::string get_physical_architecture_name() {
-    return tt::get_string_lowercase(tt::tt_metal::get_physical_architecture());
+std::string get_platform_architecture_name() {
+    return tt::get_string_lowercase(tt::tt_metal::get_platform_architecture({}));
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -795,7 +795,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
             // TODO: add support for CB for ethernet cores
             if (core_type == CoreType::WORKER) {
                 const auto& cbs_on_core = program.impl().circular_buffers_on_core(logical_core);
-                if (cbs_on_core.size()) {
+                if (!cbs_on_core.empty()) {
                     // CircularBufferConfigVec -- common across all kernels, so written once to the core
                     std::vector<uint32_t> circular_buffer_config_vec(
                         program.impl().get_program_config(index).cb_size / sizeof(uint32_t));
@@ -823,7 +823,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);
                         }
                     }  // PROF_END("CBS")
-                    uint64_t kernel_config_base = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
+                    uint64_t kernel_config_base =
+                        hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
                     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                         device_id, physical_core, circular_buffer_config_vec, addr);
@@ -868,7 +869,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                 kernel->get_kernel_processor_class(),
                                 kernel->get_kernel_processor_type(0));
                             auto rta_offset = kernel_config.rta_offset()[processor_index];
-                            if (rt_args.size() > 0) {
+                            if (!rt_args.empty()) {
                                 auto rt_args_addr = kernel_config_base + rta_offset.rta_offset();
                                 log_trace(
                                     tt::LogMetal,
@@ -885,7 +886,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                             }
 
                             const auto& common_rt_args = kernel->common_runtime_args();
-                            if (common_rt_args.size() > 0) {
+                            if (!common_rt_args.empty()) {
                                 auto common_rt_args_addr = kernel_config_base + rta_offset.crta_offset();
                                 log_trace(
                                     tt::LogMetal,
@@ -1063,14 +1064,14 @@ KernelHandle CreateEthernetKernel(
     }
 
     TT_FATAL(
-        utils::underlying_type<DataMovementProcessor>(config.processor) <
-            MetalContext::instance().hal().get_processor_classes_count(eth_core_type),
+        ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
+            MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
         enchantum::to_string(config.processor),
-        MetalContext::instance().hal().get_processor_classes_count(eth_core_type));
+        MetalContext::instance().hal().get_num_risc_processors(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),
         "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
@@ -1195,7 +1196,7 @@ uint32_t CreateSemaphore(
         },
         core_spec);
     std::optional<uint32_t> semaphore_id;
-    TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+    TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
     for (const auto& core_range : crs.ranges()) {
         std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
         if (!semaphore_id.has_value()) {
@@ -1309,7 +1310,7 @@ void SetRuntimeArgs(
 
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
-    if (runtime_args.size() != 0) {
+    if (!runtime_args.empty()) {
         program.impl().get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
     }
 }
@@ -1358,18 +1359,6 @@ LightMetalBinary LightMetalEndCapture() {
     log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
     return {};
 #endif
-}
-
-void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        if (cq_id.has_value()) {
-            Finish(device->command_queue(cq_id.value()), sub_device_ids);
-        } else {
-            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-                Finish(device->command_queue(cq_id), sub_device_ids);
-            }
-        }
-    }
 }
 
 void PushCurrentCommandQueueIdForThread(uint8_t cq_id) {

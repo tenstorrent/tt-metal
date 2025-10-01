@@ -8,12 +8,22 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
-from models.utility_functions import skip_for_grayskull
 
 pytestmark = pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 
 
-def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, input_dtype, layout, tile):
+def is_unsupported_case(
+    input_shape,
+    dim,
+    mem_config,
+    num_devices,
+    num_links,
+    input_dtype,
+    layout,
+    tile,
+    num_l1_banks=64,
+    mem_config_input=None,
+):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
         return True, "Invalid combination"
 
@@ -24,7 +34,12 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
 
     ## Check that we can readback results
     fast_dispatch_page_size_limit = 55 * 1024
-    elem_size = 2 if input_dtype == ttnn.bfloat16 else 1
+    elem_size_map = {
+        ttnn.uint32: 4,
+        ttnn.bfloat16: 2,
+        ttnn.bfloat8_b: 1,
+    }
+    elem_size = elem_size_map.get(input_dtype, 4)
     if layout == ttnn.ROW_MAJOR_LAYOUT and (input_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
         # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
         # limited to ~55K pages.
@@ -34,9 +49,15 @@ def is_unsupported_case(input_shape, dim, mem_config, num_devices, num_links, in
     tensor_size_bytes = elem_size
     for i in input_shape:
         tensor_size_bytes *= i
-    num_l1_banks = 64
-    if mem_config.buffer_type == ttnn.BufferType.L1 and tensor_size_bytes > num_l1_banks * 50 * 1024:
-        return True, "L1 buffer can't support large tensor sizes"
+    L1_util = 0
+    if mem_config.buffer_type == ttnn.BufferType.L1:
+        L1_util = L1_util + tensor_size_bytes
+    if mem_config_input is not None:
+        if mem_config_input.buffer_type == ttnn.BufferType.L1:
+            L1_util += tensor_size_bytes / num_devices
+
+    if L1_util > num_l1_banks * 1536 * 1024:
+        return True, "Test_Infrastructure_Skip L1 test requires more memory than the total available in the device"
 
     # Check that each chip has a non-zero amount of data available
     if input_shape[dim] < num_devices:
@@ -299,7 +320,6 @@ def run_all_gather_on_t3000_impl_tight_loop(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -360,7 +380,6 @@ def test_all_gather_on_t3000_post_commit_looping(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -413,7 +432,6 @@ def test_all_gather_on_t3000_nightly_commit_looping(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -466,7 +484,6 @@ def test_all_gather_on_t3000_nightly_commit_looping_4chip_ring(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -511,7 +528,6 @@ def test_all_gather_on_t3000_post_commit_for_profiler_regression(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -589,7 +605,6 @@ def test_all_gather_on_t3000_post_commit(
 
 # Enumerate the post-commit cases explicitly
 @pytest.mark.skip(reason="Flaky. Sometimes fails in CI on certain runners")
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -644,7 +659,6 @@ def test_all_gather_on_t3000_post_commit_4chip_ring(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -709,7 +723,6 @@ def test_line_all_gather_on_t3000_post_commit(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -767,7 +780,6 @@ def test_line_all_gather_on_t3000_post_commit_4chip_ring(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -927,7 +939,6 @@ nightly_all_gather_shape_dim_layouts = [
 ]
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
@@ -975,7 +986,6 @@ def test_all_gather_on_t3000_nightly(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
@@ -1313,7 +1323,6 @@ def run_all_gather_sharded_n300(
 
 
 # @pytest.mark.parametrize("num_devices", [4, 8])
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1394,7 +1403,6 @@ def test_all_gather_sharded_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1479,7 +1487,6 @@ def test_all_gather_height_sharded_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1559,7 +1566,6 @@ def test_all_gather_block_sharded_post_commit(
 
 
 # @pytest.mark.parametrize("num_devices", [4, 8])
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1646,7 +1652,6 @@ def test_line_all_gather_sharded_post_commit(
 
 
 # @pytest.mark.parametrize("num_devices", [4, 8])
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1804,7 +1809,6 @@ def test_sharded_all_gather_nightly(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.skip("#7705: Hanging on various configs")
 @pytest.mark.parametrize(
     "input_shape, dim, layout",
@@ -1856,7 +1860,6 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
         assert eq, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])
@@ -1928,7 +1931,6 @@ def test_tiny_all_gather_sharded_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [

@@ -87,7 +87,7 @@ std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
         process_axis(0);  // vertical (column)
     }
 
-    TT_FATAL(neighbors.size() > 0, "No neighbors found");
+    TT_FATAL(!neighbors.empty(), "No neighbors found");
     TT_FATAL(!(axis.has_value() && neighbors.size() > 2), "Along a single axis, there can only be 2 neighbors");
 
     if (!axis.has_value()) {

@@ -218,7 +218,6 @@ def gather_single_test_perf(device, test_passed):
         logger.error("Multi-device perf is not supported. Failing.")
         return None
     # Read profiler data from device
-    # ttnn.ReadDeviceProfiler(device)
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )
@@ -328,7 +327,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
     with device_context(test_module, output_queue) as (device, device_name):
         while True:
             try:
-                test_vector = input_queue.get(block=True, timeout=1)
+                test_vector = input_queue.get(block=True, timeout=5)
             except Empty:
                 logger.info("Test suite complete")
                 return

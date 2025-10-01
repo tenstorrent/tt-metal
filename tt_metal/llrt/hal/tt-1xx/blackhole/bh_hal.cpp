@@ -329,6 +329,12 @@ void Hal::initialize_bh() {
     this->nan_ = NAN_BH;
     this->inf_ = INF_BH;
 
+    // PCIe address range for Blackhole. Includes both the direct mapping to the IOMMU address range, as well as the
+    // mapping through the outbound iATU. See
+    // https://github.com/tenstorrent/tt-isa-documentation/tree/main/BlackholeA0/PCIExpressTile for more details.
+    this->pcie_addr_lower_bound_ = 0x0000000000000000ULL;
+    this->pcie_addr_upper_bound_ = 0x13FF'FFFF'FFFF'FFFFULL;
+
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_1),

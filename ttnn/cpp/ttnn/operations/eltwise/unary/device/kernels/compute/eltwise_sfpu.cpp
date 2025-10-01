@@ -10,6 +10,7 @@
 #include "compute_kernel_api/eltwise_unary/trigonometry.h"
 #include "compute_kernel_api/mul_int32_sfpu.h"
 #include "compute_kernel_api/mul_int_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/rpow.h"
 
 namespace NAMESPACE {
 void MAIN {

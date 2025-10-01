@@ -29,7 +29,7 @@
 #include <variant>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
@@ -264,7 +264,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
                                           frequencyFit * tracyToSecRatio;
     // disable linting here; slicing is __intended__
     // NOLINTBEGIN
-    profiler_state_manager->device_profiler_map.at(device_id).device_core_sync_info.emplace(
+    profiler_state_manager->device_profiler_map.at(device_id).device_core_sync_info.insert_or_assign(
         CoreCoord(phys_core), SyncInfo(host_timestamp, device_timestamp, frequencyFit));
     // NOLINTEND
 }
@@ -515,7 +515,7 @@ void syncAllDevices(chip_id_t host_connected_device) {
             uint64_t senderBase = 0;
             uint64_t receiverBase = 0;
 
-            if (timePairs.size() > 0) {
+            if (!timePairs.empty()) {
                 senderBase = timePairs[0].first;
                 receiverBase = timePairs[0].second;
             }
@@ -536,13 +536,13 @@ void syncAllDevices(chip_id_t host_connected_device) {
 
             uint64_t shift = (double)(senderSum - freqScale * (double)receiverSum) / accumulateSampleCount +
                              (senderBase - freqScale * receiverBase);
-            deviceDeviceSyncInfo.emplace(sender.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
+            deviceDeviceSyncInfo.insert_or_assign(sender.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
             deviceDeviceSyncInfo.at(sender.first)
-                .emplace(receiver.first, (std::pair<double, int64_t>){freqScale, shift});
+                .insert_or_assign(receiver.first, (std::pair<double, int64_t>){freqScale, shift});
 
-            deviceDeviceSyncInfo.emplace(receiver.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
+            deviceDeviceSyncInfo.insert_or_assign(receiver.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
             deviceDeviceSyncInfo.at(receiver.first)
-                .emplace(sender.first, (std::pair<double, int64_t>){1.0 / freqScale, -1 * shift});
+                .insert_or_assign(sender.first, (std::pair<double, int64_t>){1.0 / freqScale, -1 * shift});
         }
     }
 
@@ -898,9 +898,6 @@ void ReadDeviceProfilerResults(
                 return;
             } else if (state == ProfilerReadState::LAST_FD_READ) {
                 profiler.setLastFDReadAsDone();
-            }
-            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
-                Finish(device->command_queue(cq_id));
             }
         }
 

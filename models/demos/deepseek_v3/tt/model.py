@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
@@ -58,8 +58,6 @@ class Model(SharedStateAddOn, AbstractModule):
                 for layer_idx in range(hf_config.num_hidden_layers)
             ]
             + [None]
-            # at last contact None in the state_dicts. get_meta_layer_mapping returns -1 for padding layer
-            # so while iterating over this state_dict we always index -1 for padding layers which should be None.
         )
 
         return {
@@ -97,9 +95,9 @@ class Model(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def get_meta_layer_mapping(
-        cls, num_rows: int, start_layer_idx: int, end_layer_idx: int | None = None
+        cls, num_mesh_rows: int, start_layer_idx: int, end_layer_idx: int | None = None
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Distribute `num_layers` evenly across `num_rows`, returning a
+        """Distribute `num_layers` evenly across `num_mesh_rows`, returning a
         list of rows where each element is either a layer index or -1
         (if padding is needed to fill the structure). The result is
         transposed such that each inner list corresponds to a layer
@@ -107,33 +105,27 @@ class Model(SharedStateAddOn, AbstractModule):
 
         Returns:
             A tuple (pad_map, mapping) where:
-            - pad_map: A list of lists of shape [num_meta_layers][num_rows], where
+            - pad_map: A list of lists of shape (num_meta_layers, num_mesh_rows), where
             each element is a boolean indicating if that position is padding (True) or a valid layer index (False).
-            - mapping: A list of lists of shape [num_meta_layers][num_rows], where
-            each element is an int (layer index) or -1 (padding).
+            - mapping: A list of lists of shape (num_meta_layers, num_mesh_rows), where
+            each element is an int (layer index) or -1 for padding positions.
         """
-        PADDING_LAYER_INDEX = -1
         if end_layer_idx is None:
             end_layer_idx = start_layer_idx
             start_layer_idx = 0
         num_layers = end_layer_idx - start_layer_idx
+        assert num_mesh_rows > 0 and num_layers >= 0
 
-        if num_rows <= 0:
-            raise ValueError("Number of rows must be greater than zero.")
-        if num_layers < 0:
-            raise ValueError("Number of layers cannot be negative.")
-        num_meta_layers = ttnn.core.divup(num_layers, num_rows)
-        total_slots = num_meta_layers * num_rows
-
-        # Create a flat list of layers, padding with -1
-        padded_layers = list(range(start_layer_idx, start_layer_idx + num_layers)) + [PADDING_LAYER_INDEX] * (
-            total_slots - num_layers
+        mapping = (
+            torch.arange(ttnn.core.roundup(num_layers, num_mesh_rows))
+            .reshape(num_mesh_rows, ttnn.core.divup(num_layers, num_mesh_rows))
+            .T
+            + start_layer_idx
         )
+        mask = mapping >= end_layer_idx
+        mapping[mask] = -1
 
-        # Reshape into [num_rows, num_meta_layers]
-        mapping = torch.tensor(padded_layers).reshape(num_rows, num_meta_layers).T
-
-        return mapping == PADDING_LAYER_INDEX, mapping
+        return mask, mapping
 
     @classmethod
     def prefill_model_config(
@@ -329,6 +321,35 @@ class Model(SharedStateAddOn, AbstractModule):
         return x
 
     @classmethod
+    def forward_decoder_blocks(
+        cls,
+        x: ttnn.Tensor,
+        num_mesh_rows: int,
+        start_layer_idx: int,
+        end_layer_idx: int,
+        block_configs: Sequence[RunDecodeConfig],
+        page_tables: Sequence[ttnn.Tensor],
+        transfer_row_cfg: RunDecodeConfig,
+        block_forward_fn: Callable[[ttnn.Tensor, int, RunDecodeConfig, ttnn.Tensor], ttnn.Tensor],
+    ) -> ttnn.Tensor:
+        is_padding_layer, meta_layer_indices = cls.get_meta_layer_mapping(num_mesh_rows, start_layer_idx, end_layer_idx)
+        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
+            zip(is_padding_layer.T, meta_layer_indices.T, strict=True)
+        ):
+            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
+                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
+            ):
+                if is_padding_layer:
+                    continue
+                x_next = block_forward_fn(x, row_idx, block_configs[meta_layer_idx], page_tables[layer_idx])
+                ttnn.deallocate(x)
+                x = x_next
+
+            # Transfer rows
+            cls.transfer_row(x, row_idx, (row_idx + 1) % num_mesh_rows, **transfer_row_cfg)
+        return x
+
+    @classmethod
     def forward_decode(
         cls,
         x: ttnn.Tensor,
@@ -341,66 +362,33 @@ class Model(SharedStateAddOn, AbstractModule):
 
         x = Embedding.forward_decode(x, cfg["embedding"])
 
-        x_hidden = []
-
-        # Stage 1: MLP Decoder Block
-        mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
-            cfg["num_rows"], cfg["num_mlp_layers"]
-        )
-        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
-            zip(mlp_is_padding_layer.transpose(0, 1), mlp_meta_layer_indices.transpose(0, 1), strict=True)
-        ):
-            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
-                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
-            ):
-                if is_padding_layer:
-                    continue
-                x_next = DecoderBlock.forward_decode(
-                    x,
-                    position_idxs,
-                    row_idx,
-                    cfg["mlp_decoder_block"][meta_layer_idx],
-                    rope_tensors,
-                    page_tables[layer_idx],
-                )
-                x_hidden.append(x_next)
-
-                ttnn.deallocate(x)
-                x = ttnn.clone(x_next)
-
-            # Transfer rows
-            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
-
-        # Stage 2: MOE Decoder Block
-        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
-            cfg["num_rows"], cfg["num_mlp_layers"], cfg["num_mlp_layers"] + cfg["num_moe_layers"]
+        x = cls.forward_decoder_blocks(
+            x,
+            cfg["num_rows"],
+            0,
+            cfg["num_mlp_layers"],
+            cfg["mlp_decoder_block"],
+            page_tables,
+            cfg["transfer_row"],
+            lambda x_in, row_idx, block_cfg, page_table: DecoderBlock.forward_decode(
+                x_in, position_idxs, row_idx, block_cfg, rope_tensors, page_table
+            ),
         )
 
-        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
-            zip(moe_is_padding_layer.transpose(0, 1), moe_meta_layer_indices.transpose(0, 1), strict=True)
-        ):
-            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
-                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
-            ):
-                if is_padding_layer:
-                    continue
-                x_next = MoEDecoderBlock.forward_decode(
-                    x,
-                    position_idxs,
-                    row_idx,
-                    cfg["moe_decoder_block"][meta_layer_idx],
-                    rope_tensors,
-                    page_tables[layer_idx],
-                )
-                x_hidden.append(x_next)
+        x = cls.forward_decoder_blocks(
+            x,
+            cfg["num_rows"],
+            cfg["num_mlp_layers"],
+            cfg["num_mlp_layers"] + cfg["num_moe_layers"],
+            cfg["moe_decoder_block"],
+            page_tables,
+            cfg["transfer_row"],
+            lambda x_in, row_idx, block_cfg, page_table: MoEDecoderBlock.forward_decode(
+                x_in, position_idxs, row_idx, block_cfg, rope_tensors, page_table
+            ),
+        )
 
-                ttnn.deallocate(x)
-                x = ttnn.clone(x_next)
-
-            # Transfer rows
-            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
-
-        x_resharded = ttnn.to_memory_config(x, **cfg["norm_reshard"])  # TODO: fix
+        x_resharded = ttnn.to_memory_config(x, **cfg["norm_reshard"])
         ttnn.deallocate(x)
 
         x_norm = DistributedRMSNorm.forward_decode(x_resharded, cfg["norm"])
@@ -431,54 +419,31 @@ class Model(SharedStateAddOn, AbstractModule):
         # Embedding
         x = Embedding.forward_prefill(x, cfg["embedding"])
 
-        # Stage 1: MLP Decoder Block
-        mlp_is_padding_layer, mlp_meta_layer_indices = cls.get_meta_layer_mapping(
-            cfg["num_rows"], cfg["num_mlp_layers"]
-        )
-        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
-            zip(mlp_is_padding_layer.transpose(0, 1), mlp_meta_layer_indices.transpose(0, 1), strict=True)
-        ):
-            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
-                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
-            ):
-                if is_padding_layer:
-                    continue
-                x = DecoderBlock.forward_prefill(
-                    x,
-                    user_id,
-                    row_idx,
-                    cfg["mlp_decoder_block"][meta_layer_idx],
-                    rope_tensors,
-                    page_tables[layer_idx],
-                )
-
-            # Transfer rows
-            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
-
-        # Stage 2: MOE Decoder Block
-        moe_is_padding_layer, moe_meta_layer_indices = cls.get_meta_layer_mapping(
-            cfg["num_rows"], cfg["num_mlp_layers"], cfg["num_mlp_layers"] + cfg["num_moe_layers"]
+        x = cls.forward_decoder_blocks(
+            x,
+            cfg["num_rows"],
+            0,
+            cfg["num_mlp_layers"],
+            cfg["mlp_decoder_block"],
+            page_tables,
+            cfg["transfer_row"],
+            lambda x_in, row_idx, block_cfg, page_table: DecoderBlock.forward_prefill(
+                x_in, user_id, row_idx, block_cfg, rope_tensors, page_table
+            ),
         )
 
-        for row_idx, (per_row_is_padding_layer, per_row_meta_layer_indices) in enumerate(
-            zip(moe_is_padding_layer.transpose(0, 1), moe_meta_layer_indices.transpose(0, 1), strict=True)
-        ):
-            for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
-                zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
-            ):
-                if is_padding_layer:
-                    continue
-                x = MoEDecoderBlock.forward_prefill(
-                    x,
-                    user_id,
-                    row_idx,
-                    cfg["moe_decoder_block"][meta_layer_idx],
-                    rope_tensors,
-                    page_tables[layer_idx],
-                )
-
-            # Transfer rows
-            cls.transfer_row(x, row_idx, (row_idx + 1) % cfg["num_rows"], **cfg["transfer_row"])
+        x = cls.forward_decoder_blocks(
+            x,
+            cfg["num_rows"],
+            cfg["num_mlp_layers"],
+            cfg["num_mlp_layers"] + cfg["num_moe_layers"],
+            cfg["moe_decoder_block"],
+            page_tables,
+            cfg["transfer_row"],
+            lambda x_in, row_idx, block_cfg, page_table: MoEDecoderBlock.forward_prefill(
+                x_in, user_id, row_idx, block_cfg, rope_tensors, page_table
+            ),
+        )
 
         # Norm (no resharding needed for prefill)
         x_norm = DistributedRMSNorm.forward_prefill(x, cfg["norm"])

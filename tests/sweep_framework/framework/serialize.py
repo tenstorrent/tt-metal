@@ -10,6 +10,8 @@ import torch
 
 TTNN_NAME = ttnn.__name__
 
+TTNN_NAME = ttnn.__name__
+
 
 def convert_enum_values_to_strings(data):
     """Convert enum integer values to human-readable strings"""
