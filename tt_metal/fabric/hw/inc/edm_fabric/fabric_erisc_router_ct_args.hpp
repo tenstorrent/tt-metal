@@ -132,7 +132,10 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 
 // the size of one of the buffers within a sender channel
 // For example if `channel_buffer_size` = 4k, with `SENDER_NUM_BUFFERS` = 2
-// then the total amount of buffering for that
+// then the total amount of buffering for that channel is 8k.
+// This `channel_buffer_size` includes packet headers in the size.
+// This should be renamed to channel_slot_size_bytes to avoid confusion/ambiguity:
+//   "is it the payload size or does it include the packet header size?"
 constexpr size_t channel_buffer_size = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 7);
 constexpr bool vc1_has_different_downstream_dest = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 8);
 constexpr bool has_tensix_extension = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 9);
@@ -162,8 +165,8 @@ constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_IDX = REMOTE_RECEIVER_NUM_BUFFERS
 constexpr std::array<size_t, NUM_DOWNSTREAM_CHANNELS> DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY =
     fill_array_with_next_n_args<size_t, DOWNSTREAM_SENDER_NUM_BUFFERS_IDX, NUM_DOWNSTREAM_CHANNELS>();
 // TODO: remove DOWNSTREAM_SENDER_NUM_BUFFERS and use TMP on downstream sender channels.
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
-constexpr size_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
+constexpr uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[0];
+constexpr uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1 = DOWNSTREAM_SENDER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1];
 
 constexpr size_t SKIP_CHANNEL_IDX = DOWNSTREAM_SENDER_NUM_BUFFERS_IDX + NUM_DOWNSTREAM_CHANNELS;
 constexpr bool skip_receiver_channel_1_connection = get_compile_time_arg_val(SKIP_CHANNEL_IDX);
@@ -452,5 +455,13 @@ constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
 static constexpr uint8_t forward_and_local_write_noc_vc = get_compile_time_arg_val(EDM_NOC_VC_IDX);
+
+// ----------------------------------------------------------------------------- //
+// --------------------------------- PLACEHOLDER ------------------------------- //
+// ---------------------- UNTIL ELASTIC CHANNELS IMPLEMENTED ------------------- //
+// --------------------------------- ISSUE #26311 ------------------------------ //
+constexpr size_t CHUNK_N_PKTS = 0;
+constexpr std::array<bool, NUM_SENDER_CHANNELS> IS_ELASTIC_SENDER_CHANNEL =
+    initialize_array<NUM_SENDER_CHANNELS, bool, false>();
 
 }  // namespace tt::tt_fabric
