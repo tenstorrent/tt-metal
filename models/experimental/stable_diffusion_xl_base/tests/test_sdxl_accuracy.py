@@ -129,7 +129,7 @@ def test_accuracy_sdxl(
         evaluation_range,
         guidance_scale,
         use_cfg_parallel=use_cfg_parallel,
-        fixed_seed_bool=True,
+        fixed_seed_for_batch=True,
     )
 
     clip = CLIPEncoder()

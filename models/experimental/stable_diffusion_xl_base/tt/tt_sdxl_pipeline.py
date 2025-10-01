@@ -298,8 +298,8 @@ class TtSDXLPipeline(LightweightModule):
         self,
         all_prompt_embeds_torch,
         torch_add_text_embeds,
-        start_latent_seed=0,
-        fixed_seed_bool=True,
+        start_latent_seed=None,
+        fixed_seed_for_batch=False,
     ):
         # Generate user input tensors for the TT model.
 
@@ -310,10 +310,14 @@ class TtSDXLPipeline(LightweightModule):
         num_channels_latents = self.torch_pipeline.unet.config.in_channels
         height = width = 1024
         assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
+        assert start_latent_seed is None or isinstance(
+            start_latent_seed, int
+        ), "start_latent_seed must be an integer or None"
 
         latents_list = []
         for index in range(self.batch_size):
-            torch.manual_seed(start_latent_seed if fixed_seed_bool else start_latent_seed + index)
+            if start_latent_seed is not None:
+                torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
             latents = self.torch_pipeline.prepare_latents(
                 1,
                 num_channels_latents,

@@ -38,7 +38,7 @@ def run_demo_inference(
     capture_trace,
     guidance_scale,
     use_cfg_parallel,
-    fixed_seed_bool,
+    fixed_seed_for_batch,
 ):
     batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
@@ -127,7 +127,7 @@ def run_demo_inference(
             all_prompt_embeds_torch,
             torch_add_text_embeds,
             start_latent_seed=0,
-            fixed_seed_bool=fixed_seed_bool,
+            fixed_seed_for_batch=fixed_seed_for_batch,
         )
 
         tt_sdxl.prepare_input_tensors(
@@ -200,7 +200,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ids=["use_cfg_parallel", "no_cfg_parallel"],
 )
 @pytest.mark.parametrize(
-    "fixed_seed_bool",
+    "fixed_seed_for_batch",
     (False,),
 )
 @pytest.mark.parametrize(
@@ -256,7 +256,7 @@ def test_demo(
     evaluation_range,
     guidance_scale,
     use_cfg_parallel,
-    fixed_seed_bool,
+    fixed_seed_for_batch,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -271,5 +271,5 @@ def test_demo(
         capture_trace,
         guidance_scale,
         use_cfg_parallel,
-        fixed_seed_bool,
+        fixed_seed_for_batch,
     )
