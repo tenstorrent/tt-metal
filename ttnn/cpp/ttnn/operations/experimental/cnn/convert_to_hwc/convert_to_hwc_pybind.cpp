@@ -20,7 +20,40 @@ void bind_convert_to_hwc(py::module& module) {
     const auto doc = R"doc(
     Convert a tensor from CHW channel ordering to HWC channel ordering.
 
-    The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM. The output is a row-major height-sharded tensor.
+    The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM.
+    The output is a row-major height-sharded tensor.
+
+    **Requirements:**
+    - Input channel dimension (C) must be a multiple of 8
+    - Input must be width-sharded
+
+    **Memory Configuration Behavior:**
+
+    - **L1 input**: Memory configuration is automatically inferred to create an optimal height-sharded output.
+      Providing an explicit `memory_config` will raise an error.
+
+    - **DRAM input**: Memory configuration must be explicitly provided via the `memory_config` parameter.
+      Omitting `memory_config` will raise an error.
+
+    This design ensures optimal performance for common L1 use cases while requiring explicit
+    configuration for complex DRAM scenarios that may need custom sharding strategies.
+
+    Args:
+        input (ttnn.Tensor): Input tensor in CHW format, width-sharded in L1 or DRAM.
+                            The channel dimension (C) must be a multiple of 8.
+        memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration.
+                                                     Required for DRAM inputs, forbidden for L1 inputs.
+        dtype (Optional[ttnn.DataType]): Output data type (defaults to input dtype)
+
+    Returns:
+        ttnn.Tensor: Output tensor in HWC format, height-sharded
+
+    Example:
+        >>> # L1 input - automatic inference
+        >>> output = ttnn.experimental.convert_to_hwc(l1_tensor, dtype=ttnn.bfloat16)
+
+        >>> # DRAM input - explicit config required
+        >>> output = ttnn.experimental.convert_to_hwc(dram_tensor, memory_config=output_config, dtype=ttnn.bfloat16)
     )doc";
 
     ttnn::bind_registered_operation(
