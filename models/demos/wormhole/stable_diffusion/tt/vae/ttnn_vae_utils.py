@@ -96,6 +96,7 @@ def split_conv_and_run(
         "groups": 1,
         "device": device,
         "conv_config": conv_config,
+        "slice_config": ttnn.Conv2dL1FullSliceConfig,
     }
 
     outputs = []

@@ -373,7 +373,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
     bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
-    log_debug(tt::LogOp, "Num Cores Channels = {}", num_cores_channels);
     uint32_t num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
     num_tiles_per_channel = tt::div_up(num_tiles_per_channel, num_cores_channels);
     TT_FATAL(
@@ -556,7 +555,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
         }
         if (num_full_rows < 0) {
             num_full_rows = 0;
-            num_tiles_this_core = 0;
         }
         log_trace(
             tt::LogOp,
