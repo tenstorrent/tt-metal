@@ -114,34 +114,43 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
         return PerfPoint{};
     }
 
-    tt::tt_metal::CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // --- IO buffers & initialization ---
-    tt::tt_metal::BufferConfig src_cfg{
-        .device = src_dev,
-        .size = p.tensor_bytes,
-        .page_size = p.page_size,
-        .buffer_type = tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::BufferConfig dst_cfg{
-        .device = dst_dev,
-        .size = p.tensor_bytes,
+    namespace Dist = tt::tt_metal::distributed;
+
+    // Mesh + view + coords (we’ll need these before I/O)
+    auto mesh = fixture->get_mesh_device();
+    auto view = mesh->get_view();
+    auto coord_of_phys = [&](chip_id_t phys) -> Dist::MeshCoordinate {
+        for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
+            if (view.get_device(c)->id() == phys) {
+                return c;
+            }
+        }
+        TT_FATAL(false, "Physical chip {} is not part of this MeshDevice", phys);
+        return Dist::MeshCoordinate(0);
+    };
+    Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
+    Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
+
+    // MeshBuffer-based IO
+    Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    Dist::DeviceLocalBufferConfig dst_local{
         .page_size = p.page_size,
         .buffer_type = p.use_dram_dst ? tt::tt_metal::BufferType::DRAM : tt::tt_metal::BufferType::L1};
-
-    auto src_buf = tt::tt_metal::CreateBuffer(src_cfg);
-    auto dst_buf = tt::tt_metal::CreateBuffer(dst_cfg);
-
-    auto& cq_src = src_dev->command_queue();
-    auto& cq_dst = dst_dev->command_queue();
+    Dist::ReplicatedBufferConfig rcfg{.size = p.tensor_bytes};
+    auto src_buf = Dist::MeshBuffer::create(rcfg, src_local, mesh.get());
+    auto dst_buf = Dist::MeshBuffer::create(rcfg, dst_local, mesh.get());
 
     const size_t n_words = p.tensor_bytes / 4;
     auto tx = make_tx_pattern(n_words);
     std::vector<uint32_t> zeros(n_words, 0u);
 
     // Blocking writes so data is resident before kernels run
-    tt::tt_metal::EnqueueWriteBuffer(cq_src, *src_buf, tx, /*blocking=*/true);
-    tt::tt_metal::EnqueueWriteBuffer(cq_dst, *dst_buf, zeros, /*blocking=*/true);
+    auto& mcq = mesh->mesh_command_queue();
+    Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
+    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
@@ -175,19 +184,19 @@ Notes:
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
     static std::optional<tt::tt_metal::GlobalSemaphore> gsemA;
     static std::optional<tt::tt_metal::GlobalSemaphore> gsemB;
+    // Create the semaphore on the MeshDevice at exactly the receiver logical core.
+    tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
     if (!gsemA) {
         gsemA = tt::tt_metal::CreateGlobalSemaphore(
-            dst_dev,
-            dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
-            /*initial_value=*/0,
-            tt::tt_metal::BufferType::L1);
+            mesh.get(),
+            rx_core_set,
+            /*initial_value=*/0);
     }
     if (!gsemB) {
         gsemB = tt::tt_metal::CreateGlobalSemaphore(
-            dst_dev,
-            dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
-            /*initial_value=*/0,
-            tt::tt_metal::BufferType::L1);
+            mesh.get(),
+            rx_core_set,
+            /*initial_value=*/0);
     }
 
     static uint32_t sem_sel = 0;
@@ -269,23 +278,6 @@ Notes:
 
     // -------------------------- end PROGRAM FACTORY --------------------------
 
-    // --- Mesh trace capture & replay ---
-    namespace Dist = tt::tt_metal::distributed;
-    auto mesh = fixture->get_mesh_device();
-    auto view = mesh->get_view();
-
-    auto coord_of_phys = [&](chip_id_t phys) -> Dist::MeshCoordinate {
-        for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
-            if (view.get_device(c)->id() == phys) {
-                return c;
-            }
-        }
-        TT_FATAL(false, "Physical chip {} is not part of this MeshDevice", phys);
-        return Dist::MeshCoordinate(0);
-    };
-    Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
-    Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
-
     // Phase A: simple E/W hops (single row); N/S = 0.
     uint16_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
     if (dst_coord[1] > src_coord[1]) {
@@ -302,17 +294,21 @@ Notes:
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
-    auto mesh_workload = Dist::CreateMeshWorkload();
-    Dist::AddProgramToMeshWorkload(mesh_workload, std::move(sender_prog), Dist::MeshCoordinateRange(src_coord));
-    Dist::AddProgramToMeshWorkload(mesh_workload, std::move(receiver_prog), Dist::MeshCoordinateRange(dst_coord));
+    // Build two workloads so the RX wait kernel is always running before TX starts.
+    auto sender_workload = Dist::MeshWorkload();
+    auto receiver_workload = Dist::MeshWorkload();
+    sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
+    receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
 
-    auto& mcq = mesh->mesh_command_queue();
-    // 1) Warm-up outside capture so loads/routes happen before tracing
-    Dist::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/true);
+    // 1) Warm-up outside capture: launch RX first so it's waiting, then TX
+    Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
+    Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
     // 2) Capture p.trace_iters enqueues back-to-back
     auto trace_id = Dist::BeginTraceCapture(mesh.get(), mcq.id());
     for (uint32_t i = 0; i < p.trace_iters; ++i) {
-        Dist::EnqueueMeshWorkload(mcq, mesh_workload, /*blocking=*/false);
+        // Maintain RX→TX order inside the capture as well
+        Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
+        Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
     }
     Dist::EndTraceCapture(mesh.get(), mcq.id(), trace_id);
     // 3) Replay measured section
@@ -323,9 +319,8 @@ Notes:
     Dist::ReleaseTrace(mesh.get(), trace_id);
 
     // Read back and verify
-    tt::tt_metal::Finish(cq_dst);
-    std::vector<uint32_t> rx;
-    tt::tt_metal::EnqueueReadBuffer(cq_dst, *dst_buf, rx, /*blocking=*/true);
+    std::vector<uint32_t> rx(n_words, 0u);
+    Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
     verify_payload_words(rx, tx);
 
     // Perf point
