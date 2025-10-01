@@ -113,7 +113,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             Example (Sharded Input):
                 .. code-block:: python
 
-                     N, C, H, W = 1, 64, 32, 1
+                    N, C, H, W = 1, 64, 32, 1
                     num_groups = 2
 
                     # Prepare random inputs
