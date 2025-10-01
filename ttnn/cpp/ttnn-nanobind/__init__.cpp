@@ -268,6 +268,12 @@ NB_MODULE(_ttnn, mod) {
     ttnn::graph::py_graph_module(m_graph);
 
 #if defined(TRACY_ENABLE)
+    // https://nanobind.readthedocs.io/en/latest/utilities.html
+    // breadcrumbs
+    // https://github.com/wjakob/nanobind/discussions/302
+    // https://github.com/wjakob/nanobind/discussions/671
+    // https://nanobind.readthedocs.io/en/latest/api_core.html#parameterized-wrapper-classes
+    // https://nanobind.readthedocs.io/en/latest/api_core.html#_CPPv4N8nanobind3sigE
     nb::callable tracy_decorator = nb::module_::import_("tracy.ttnn_profiler_wrapper").attr("callable_decorator");
 
     tracy_decorator(m_device);

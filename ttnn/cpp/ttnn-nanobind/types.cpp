@@ -51,11 +51,13 @@ void py_module_types(nb::module_& mod) {
 
     export_enum<ttnn::BcastOpMath>(mod, "BcastOpMath");
     export_enum<ttnn::BcastOpDim>(mod, "BcastOpDim");
-    export_enum<::CoreType>(mod, "CoreType");
+    auto ct_enum = export_enum<::CoreType>(mod, "CoreType");
+
+    // manually do the int cast instead of trying to allow implicit conversion
+    ct_enum.def("__int__", [](const ::CoreType& self) { return nb::int_{static_cast<int>(self)}; });
 
     nb::implicitly_convertible<nb::int_, ttnn::QueueId>();
     nb::implicitly_convertible<unsigned char, ttnn::QueueId>();
-    nb::implicitly_convertible<nb::int_, ::CoreType>();
 
     mod.attr("DRAM_MEMORY_CONFIG") = nb::cast(DRAM_MEMORY_CONFIG);
     mod.attr("L1_MEMORY_CONFIG") = nb::cast(L1_MEMORY_CONFIG);
