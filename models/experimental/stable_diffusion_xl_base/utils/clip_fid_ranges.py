@@ -13,7 +13,7 @@ get_approx = lambda range_tuple: (range_tuple[0] * 0.97, range_tuple[1] * 1.03)
 
 
 def accuracy_check_fid(score, num_prompts, mode):
-    # code 0 - invalid input, code 2 - out of range, code 3 - within range, this is for CI dashboard compatibility
+    # code 0 - invalid input, code 3 - out of range, code 2 - within range, this is for CI dashboard compatibility
     assert mode in {"valid", "approx", "delta"}, "mode should be either valid, approx, or delta"
     if num_prompts not in {100, 5000} or score == -1:
         return 0
@@ -32,13 +32,13 @@ def accuracy_check_fid(score, num_prompts, mode):
         )
     elif mode == "delta":
         delta_score = get_appr_delta_metric(score, num_prompts, "fid")
-        return 3 if delta_score <= 0.5 else 2
+        return 2 if delta_score <= 0.5 else 3
 
-    return 3 if score >= range_tuple[0] and score <= range_tuple[1] else 2
+    return 2 if score >= range_tuple[0] and score <= range_tuple[1] else 3
 
 
 def accuracy_check_clip(score, num_prompts, mode):
-    # code 0 - invalid input, code 2 - out of range, code 3 - within range, this is for CI dashboard compatibility
+    # code 0 - invalid input, code 3 - out of range, code 2 - within range, this is for CI dashboard compatibility
     assert mode in {"valid", "approx", "delta"}, "mode should be either valid, approx, or delta"
     if num_prompts not in {100, 5000} or score == -1:
         return 0
@@ -57,9 +57,9 @@ def accuracy_check_clip(score, num_prompts, mode):
         )
     elif mode == "delta":
         delta_score = get_appr_delta_metric(score, num_prompts, "clip")
-        return 3 if delta_score <= 0.5 else 2
+        return 2 if delta_score <= 0.5 else 3
 
-    return 3 if score >= range_tuple[0] and score <= range_tuple[1] else 2
+    return 2 if score >= range_tuple[0] and score <= range_tuple[1] else 3
 
 
 def get_appr_delta_metric(score, num_prompts, score_type):
