@@ -129,16 +129,17 @@ and query Metal host runtime data.</p>
 </h2>
 <p>Configure the Inspector by setting the following environment variables:</p>
 <div class="highlight-default notranslate">
-<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_INSPECTOR</span><span class="o">=</span><span class="mi">1</span>                              <span class="c1"># optional: enable/disable the Inspector. Default is `1` (enabled).</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_LOG_PATH</span><span class="o">=</span><span class="n">logging_path</span>          <span class="c1"># optional: set logging path. Default is `$TT_METAL_HOME/generated/inspector`</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT</span><span class="o">=</span><span class="mi">1</span>  <span class="c1"># optional: enable/disable stopping execution if the Inspector is not initialized properly. Default is `0` (disabled).</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS</span><span class="o">=</span><span class="mi">0</span>     <span class="c1"># optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC_SERVER_HOST</span><span class="o">=</span><span class="mf">127.0.0.1</span>      <span class="c1"># optional: set the host of the Inspector RPC server. Default is `127.0.0.1`.</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC_SERVER_PORT</span><span class="o">=</span><span class="mi">50051</span>          <span class="c1"># optional: set the port of the Inspector RPC server. Default is `50051`.</span>
-<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC</span><span class="o">=</span><span class="mi">1</span>                          <span class="c1"># optional: enable/disable the Inspector RPC server. Default is `1` (enabled).</span>
+<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_INSPECTOR</span><span class="o">=</span><span class="mi">1</span>                                  <span class="c1"># optional: enable/disable the Inspector. Default is `1` (enabled).</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_LOG_PATH</span><span class="o">=</span><span class="n">logging_path</span>              <span class="c1"># optional: set logging path. Default is `$TT_METAL_HOME/generated/inspector`</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT</span><span class="o">=</span><span class="mi">1</span>      <span class="c1"># optional: enable/disable stopping execution if the Inspector is not initialized properly. Default is `0` (disabled).</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_WARN_ON_WRITE_EXCEPTIONS</span><span class="o">=</span><span class="mi">0</span>         <span class="c1"># optional: enable/disable warnings on logging write exceptions (like disk out of space). Default is `1` (enabled).</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS</span><span class="o">=</span><span class="n">localhost</span><span class="p">:</span><span class="mi">50051</span> <span class="c1"># optional: set the address of the Inspector RPC server. Default is `localhost:50051`.</span>
+<span class="n">export</span> <span class="n">TT_METAL_INSPECTOR_RPC</span><span class="o">=</span><span class="mi">1</span>                              <span class="c1"># optional: enable/disable the Inspector RPC server. Default is `1` (enabled).</span>
 </pre></div>
 </div>
-<p>Enabling the Inspector will override <cite>TT_METAL_RISCV_DEBUG_INFO</cite> and debugging info will be generated for riscv elfs.</p>
+<p>Enabling the Inspector will override <cite>TT_METAL_RISCV_DEBUG_INFO</cite> and debugging info will be generated for riscv elfs.
+You can also use unix sockets for the RPC server by setting <cite>TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS</cite> to a unix socket path,
+e.g. <cite>unix:/tmp/inspector_socket</cite>.</p>
 </section>
 <section id="extending">
 <h2>Extending<a class="headerlink" href="#extending" title="Permalink to this heading"></a>
