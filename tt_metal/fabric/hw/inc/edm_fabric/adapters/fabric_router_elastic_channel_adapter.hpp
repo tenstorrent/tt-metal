@@ -4,19 +4,6 @@
 
 #pragma once
 
-// #include "dataflow_api.h"
-
-// #include "risc_common.h"
-// #include "fabric_stream_regs.hpp"
-// #include "fabric_edm_types.hpp"
-// // #include "hostdevcommon/fabric_common.h"
-// #include "edm_fabric_flow_control_helpers.hpp"
-// #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
-// #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
-// #include "fabric_edm_packet_header_validate.hpp"
-// #include "tt_metal/hw/inc/utils/utils.h"
-// #include "debug/assert.h"
-
 #include "tt_metal/fabric/hw/inc/edm_fabric/datastructures/fabric_circular_buffer.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/adapters/fabric_adapter_utils.hpp"
 #include "risc_attribs.h"
@@ -188,6 +175,22 @@ struct RouterElasticChannelWriterAdapter {
         if constexpr (inc_pointers) {
             post_send_payload_increment_pointers(noc);
         }
+    }
+
+    FORCE_INLINE bool new_chunk_is_available() {
+        // shouldn't be calling this when the chunk is not full
+        // We currently only support one unwritten chunk at a time
+        ASSERT(this->active_destination_chunk.is_full());
+        return *destination_chunk_address_ptr;
+    }
+
+    // consider merging with above to limit number of loads
+    FORCE_INLINE void get_next_chunk() {
+        // shouldn't be calling this when the chunk is not full
+        // We currently only support one unwritten chunk at a time
+        ASSERT(this->active_destination_chunk.is_full());
+        ASSERT(this->new_chunk_is_available());
+        this->active_destination_chunk.init(*destination_chunk_address_ptr);
     }
 
 private:
