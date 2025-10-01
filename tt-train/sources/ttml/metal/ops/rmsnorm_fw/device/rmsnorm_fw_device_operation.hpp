@@ -13,7 +13,7 @@
 namespace ttml::metal::ops::rmsnorm_fw::device {
 
 struct RMSNormForwardDeviceOperation {
-    using operation_attributes_t = operation_attributes_t;
+    using operation_attributes_t = ttml::metal::ops::rmsnorm_fw::device::operation_attributes_t;
     using tensor_args_t = tensor_args_t;
     using spec_return_value_t = spec_return_value_t;
     using tensor_return_value_t = tensor_return_value_t;
