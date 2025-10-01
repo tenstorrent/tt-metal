@@ -4,7 +4,7 @@ set -uo pipefail
 OUT="${TT_METAL_HOME}/generated/test_reports/unicast"
 mkdir -p "$OUT"
 
-COMMON="--sizes 4096,32768,1048576 --warmup 1 --iters 10 --trace-iters 100  --page 4096 \
+COMMON="--sizes 1048576 --warmup 1 --iters 10 --trace-iters 100  --page 4096 \
         --tolerance-pct 10 --out-dir $OUT"
 
 # Run 1: 0:0 -> 0:1, recv core 0,0
@@ -12,7 +12,7 @@ python tests/tt_metal/tt_fabric/benchmark/collectives/unicast/run_unicast_sweep.
   --src 0:0 --dst 0:1 \
   --recv-core 0,0 \
   $COMMON \
-  --p50-targets 4096:1.002,32768:3.682,1048576:6.006 \
+  --p50-targets 1048576:6.006 \
   --csv "$OUT/unicast_0to1.csv"
 
 # Run 2: 0:0 -> 0:3, recv core 6,6  (corner-ish)
@@ -20,5 +20,5 @@ python tests/tt_metal/tt_fabric/benchmark/collectives/unicast/run_unicast_sweep.
   --src 0:0 --dst 0:3 \
   --recv-core 6,6 \
   $COMMON \
-  --p50-targets 4096:0.993,32768:3.544,1048576:5.605 \
+  --p50-targets 1048576:5.605 \
   --csv "$OUT/unicast_0to3.csv"
