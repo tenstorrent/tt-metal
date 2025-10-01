@@ -103,7 +103,10 @@ private:
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids_;
     std::unordered_set<Buffer*> allocated_buffers_;
 
-    const AllocatorConfig config_;
+    // config_ is stored in a unique_ptr because AllocatorConfig maybe an incomplete type
+    //
+    // TODO(river): change revert this if we can sholve Allocator into impl.
+    std::unique_ptr<AllocatorConfig> config_;
 };
 
 namespace detail {
