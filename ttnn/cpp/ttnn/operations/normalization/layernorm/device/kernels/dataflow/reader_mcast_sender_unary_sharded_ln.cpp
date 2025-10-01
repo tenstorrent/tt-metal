@@ -9,7 +9,6 @@
 
 // split REDUCE across cores
 void kernel_main() {
-    DPRINT << "Sender started" << ENDL();
     uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
     uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
     constexpr uint32_t num_blocks = get_compile_time_arg_val(2);
@@ -36,8 +35,6 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
     const uint32_t start_x = get_arg_val<uint32_t>(4);
     const uint32_t start_y = get_arg_val<uint32_t>(5);
-
-    DPRINT << "Sender got inputs" << ENDL();
 
     tt_l1_ptr uint32_t* in0_remote_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(6));
     tt_l1_ptr uint32_t* in0_remote_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(6 + num_x));

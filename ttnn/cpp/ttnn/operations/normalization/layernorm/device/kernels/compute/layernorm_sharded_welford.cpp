@@ -65,11 +65,6 @@ void MAIN {
         num_blocks_reduce = num_blocks_first_stage;
     }
 
-    // Only do 1/sqrt(Var[x] + eps) if we are
-    // not doing two-stage reduce or if we are
-    // the second stage reader in a two-stage reduce
-    bool do_sqrt = !(use_two_stage_reduce && !is_second_stage_reader);
-
     // Number of tiles for block_ht results (interleaved mean and var)
     const uint32_t num_block_ht_result_tiles = 2 * block_ht;
 
@@ -147,6 +142,8 @@ void MAIN {
     constexpr uint32_t block_w = block_wt * tile_width;
     const uint32_t num_partial_tiles = num_block_ht_result_tiles;
 
+    reconfig_data_format_srca(cb_in);
+
     cb_reserve_back(cb_ex_partial, num_partial_tiles);
     transpose_wh_init_short(cb_in);
     welford_init();
@@ -161,17 +158,15 @@ void MAIN {
         // We should transpose back to columns here
         // However, transpose_wh_dest() is currently buggy.
         // So we transpose to an intermediate CB downstream
-
         tile_regs_commit();
         tile_regs_wait();
-        // pack_tile(welford_mean_dst, cb_ex_partial);
-        // pack_tile(welford_var_dst, cb_ex_partial);
-        pack_tile_block(welford_mean_dst, cb_ex_partial, 2);
+        pack_tile(welford_mean_dst, cb_ex_partial);
+        pack_tile(welford_var_dst, cb_ex_partial);
         tile_regs_release();
         index_h_offset += block_wt;
     }
-    DPRINT << "Done with partial" << ENDL();
     cb_push_back(cb_ex_partial, num_partial_tiles);
+
     // cb_wait_front(cb_ex_partial, num_partial_tiles);
     // tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
     // tt::compute::common::print_full_tile(cb_ex_partial, 1, true);
@@ -179,7 +174,7 @@ void MAIN {
     //  DPRINT << "After first pack" << ENDL();
     //  tt::compute::common::print_full_tile(cb_ex_partial, 0);
     //  tt::compute::common::print_full_tile(cb_ex_partial, 1);
-    reconfig_data_format_srca(cb_ex_external);
+    reconfig_data_format(cb_ex_partial, cb_ex_external);
 
     // Welford combine local partials with external partials
     // cb_ex <-- cb_ex_external, cb_ex_partial
@@ -202,42 +197,55 @@ void MAIN {
 
             // Make sure that the registers are zeroed out
             fill_tile_init();
-            fill_tile(tmp_dst0, 0);
-            fill_tile(tmp_dst1, 0);
-            fill_tile(mean_acc_dst, 0);
-            fill_tile(m2_acc_dst, 0);
+            fill_tile(tmp_dst0, 0.f);
+            fill_tile(tmp_dst1, 0.f);
+            fill_tile(mean_acc_dst, 0.f);
+            fill_tile(m2_acc_dst, 0.f);
 
             for (uint32_t b = 0; b < num_blocks_reduce; b++) {
                 // Wait for 1 mean tile and 1 var tile
                 cb_wait_front(cb_ex_external, 2);
 
-                // DPRINT << "External mean:" << ENDL();
-                // tt::compute::common::print_full_tile(cb_ex_external, 0, true);
-
                 // DPRINT << "external tiles:" << ENDL();
                 // tt::compute::common::print_full_tile(cb_ex_external, 0, true);
                 // tt::compute::common::print_full_tile(cb_ex_external, 1, true);
                 // TODO RM: The last block may have a smaller num_reduce_tiles_per_block_h,
-                // pass in the last value as a CTA. Don't have this depend on block_w
-                const float n_a = b * block_w;
+                // pass in the last value as a CTA. Don't have this depend on block_w.
+                // Further, if we are a second-stage reader, the final num_second_stage_blocks - 1 tiles
+                // will be the result of reducing a set that is num_blocks_first_stage wide * tile_width
+                // (adjusted for potential padding at the end of the first stage blocks)
+                // Make all these CTAs to avoid computing it here
+                const float n_a = b * tile_width;
                 // TODO RM: This should use a runtime arg where
                 // only the last core in each row has a reduced width
-                const float n_b = b == num_blocks_reduce - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
+                // const float n_b = b == num_blocks_reduce - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
+                const float n_b = b >= num_blocks_reduce - (num_blocks_second_stage - 1)
+                                      ? use_two_stage_reduce && is_second_stage_reader
+                                            ? num_blocks_first_stage * tile_width
+                                            : num_reduce_tiles_per_block_h * tile_width
+                                      : block_w;
+
+                DPRINT << "n_a: " << n_a << ENDL();
+                DPRINT << "n_b: " << n_b << ENDL();
 
                 // Copy accumulated mean (x_a) to dst0
                 copy_dest_values_init();
                 copy_dest_values(tmp_dst0, mean_acc_dst);
 
                 // Compute delta = x_b - x_a, store in dst0
-                binary_dest_reuse_tiles_init<ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex_external);
-                binary_dest_reuse_tiles<ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex_external, mean_cb_idx, tmp_dst0);
+                copy_tile_to_dst_init_short(cb_ex_external);
+                copy_tile(cb_ex_external, mean_cb_idx, tmp_dst1);
 
-                DPRINT << "x_b - x_a: " << ENDL();
-                dprint_tensix_dest_reg<true>(tmp_dst0);
+                if (b == 0) {
+                    dprint_tensix_dest_reg<true>(tmp_dst1);
+                }
 
-                // DPRINT << "x_b - x_a: " << ENDL();
-                // dprint_tensix_dest_reg<true>(tmp_dst0);
+                sub_binary_tile_init();
+                sub_binary_tile(tmp_dst1, tmp_dst0, tmp_dst0);
+
+                // binary_dest_reuse_tiles_init<ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex_external);
+                // binary_dest_reuse_tiles<ELWSUB, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                //     cb_ex_external, mean_cb_idx, tmp_dst0);
 
                 // Fill dst1 with n_b / n_ab
                 fill_tile_init();
@@ -252,13 +260,17 @@ void MAIN {
                 add_binary_tile_init();
                 add_binary_tile(mean_acc_dst, tmp_dst1, mean_acc_dst);
 
+                if (b == 0) {
+                    dprint_tensix_dest_reg<true>(mean_acc_dst);
+                }
+
                 // Square delta
                 square_tile_init();
                 square_tile(tmp_dst0);
 
                 // Fill dst1 with n_a * n_b / n_ab
                 fill_tile_init();
-                fill_tile(tmp_dst1, n_a * n_b / (n_a + n_b));
+                fill_tile(tmp_dst1, (n_a * n_b) / (n_a + n_b));
 
                 // Multiply delta^2 by n_a * n_b / n_ab, store in dst0
                 mul_binary_tile_init();
@@ -289,23 +301,31 @@ void MAIN {
 
             // Convert final M2 to var
             fill_tile_init();
-            fill_tile(tmp_dst0, W);
+            fill_tile(tmp_dst0, static_cast<float>(W));
             div_binary_tile_init();
             div_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
-            DPRINT << "final mean:" << ENDL();
-            dprint_tensix_dest_reg<true>(mean_acc_dst);
-            DPRINT << "final var:" << ENDL();
-            dprint_tensix_dest_reg<true>(m2_acc_dst);
+            // DPRINT << "Mean:" << ENDL();
+            // dprint_tensix_dest_reg<true>(mean_acc_dst);
+            // DPRINT << "Var:" << ENDL();
+            // dprint_tensix_dest_reg<true>(m2_acc_dst);
 
             // Compute 1/sqrt(Var[x] + eps).
             // This is what gets written and mcasted as var
             // since this is the eventual quantity
-            // that's used in the normalization
-            if (do_sqrt) {
+            // that's used in the normalization.
+            // Only do 1/sqrt(Var[x] + eps) if we are
+            // not doing two-stage reduce or if we are
+            // the second stage reader in a two-stage reduce.
+            if (!(use_two_stage_reduce && !is_second_stage_reader)) {
                 cb_wait_front(cb_eps, 1);
                 // DPRINT << "CB eps: " << ENDL();
                 //  tt::compute::common::print_full_tile(cb_eps, 0, false);
+                fill_tile_init();
+                fill_tile(tmp_dst0, 1e-12f);
+
+                add_binary_tile_init();
+                add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
                 // // add eps to var
                 // TODO RM: Re-enable this
@@ -324,48 +344,49 @@ void MAIN {
             if (use_two_stage_reduce && !is_second_stage_reader) {
                 // Number of second-stage tiles = 2 * (num_blocks_second_stage - 1)
                 // The -1 is the account for the row-column overlap core
-                // between first stage (row) and second stage (column).
+                // between first stage (row) and second stage (column) (if row major).
                 // The factor of 2 is because each block has 2 tiles (mean, var).
                 constexpr uint32_t num_second_stage_tiles = 2 * (num_blocks_second_stage - 1);
                 cb_wait_front(cb_ex_external, num_second_stage_tiles);
                 cb_pop_front(cb_ex_external, num_second_stage_tiles);
             }
-            // DPRINT << "Mean acc sr: " << ENDL();
+            // DPRINT << "Mean:" << ENDL();
             // dprint_tensix_dest_reg<true>(mean_acc_dst);
-            // DPRINT << "M2 acc sr: " << ENDL();
-            // dprint_tensix_dest_reg<true>(m2_acc_dst);
+
             tile_regs_commit();
             tile_regs_wait();
 
             // Pack accumulated mean and var to cb_ex
-            // pack_tile(mean_acc_dst, cb_ex);
-            // pack_tile(m2_acc_dst, cb_ex);
-            pack_tile_block(mean_acc_dst, cb_ex, 2);
+            pack_tile(mean_acc_dst, cb_ex);
+            pack_tile(m2_acc_dst, cb_ex);
             tile_regs_release();
         }
         cb_push_back(cb_ex, 2 * num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, 2 * num_tiles_per_allgather_worker);
-        // DPRINT << "Tiles" << ENDL();
-        // for (uint32_t i = 0; i < 2 * num_tiles_per_allgather_worker; i++) {
-        //     tt::compute::common::print_full_tile(cb_ex, i, true);
-        // }
+        tt::compute::common::print_full_tile(cb_ex, 0, true);
+        tt::compute::common::print_full_tile(cb_ex, 1, true);
+        // tt::compute::common::print_full_tile(cb_ex, 0, true);
+        //  DPRINT << "Tiles" << ENDL();
+        //  for (uint32_t i = 0; i < 2 * num_tiles_per_allgather_worker; i++) {
+        //      tt::compute::common::print_full_tile(cb_ex, i, true);
+        //  }
     }
 
     // Transpose mean and 1/sqrt(Var + eps) to columns
     // in chunks of num_dest_regs
-    DPRINT << "num_block_ht_result_tiles: " << num_block_ht_result_tiles << ENDL();
-    DPRINT << "num_blocks_reduce: " << num_blocks_reduce << ENDL();
-    DPRINT << "num_tiles_per_allgather_worker: " << num_tiles_per_allgather_worker << ENDL();
-    DPRINT << "block_ht: " << block_ht << ENDL();
-    DPRINT << "block_wt: " << block_wt << ENDL();
-    DPRINT << "tile_width: " << tile_width << ENDL();
-    DPRINT << "num_subblocks_w: " << num_subblocks_w << ENDL();
-    DPRINT << "subblock_wt: " << subblock_wt << ENDL();
-    DPRINT << "num_reduce_tiles_per_block_h: " << num_reduce_tiles_per_block_h << ENDL();
-    DPRINT << "num_blocks_second_stage: " << num_blocks_second_stage << ENDL();
-    DPRINT << "num_tiles_per_block: " << num_tiles_per_block << ENDL();
-    DPRINT << "W: " << W << ENDL();
-    DPRINT << "last_tile_data_width: " << last_tile_data_width << ENDL();
+    // DPRINT << "num_block_ht_result_tiles: " << num_block_ht_result_tiles << ENDL();
+    // DPRINT << "num_blocks_reduce: " << num_blocks_reduce << ENDL();
+    // DPRINT << "num_tiles_per_allgather_worker: " << num_tiles_per_allgather_worker << ENDL();
+    // DPRINT << "block_ht: " << block_ht << ENDL();
+    // DPRINT << "block_wt: " << block_wt << ENDL();
+    // DPRINT << "tile_width: " << tile_width << ENDL();
+    // DPRINT << "num_subblocks_w: " << num_subblocks_w << ENDL();
+    // DPRINT << "subblock_wt: " << subblock_wt << ENDL();
+    // DPRINT << "num_reduce_tiles_per_block_h: " << num_reduce_tiles_per_block_h << ENDL();
+    // DPRINT << "num_blocks_second_stage: " << num_blocks_second_stage << ENDL();
+    // DPRINT << "num_tiles_per_block: " << num_tiles_per_block << ENDL();
+    // DPRINT << "W: " << W << ENDL();
+    // DPRINT << "last_tile_data_width: " << last_tile_data_width << ENDL();
 
     cb_wait_front(cb_ex_global, num_block_ht_result_tiles);
     cb_reserve_back(cb_transpose, num_block_ht_result_tiles);
