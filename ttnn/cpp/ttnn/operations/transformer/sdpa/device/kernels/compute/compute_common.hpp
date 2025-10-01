@@ -57,18 +57,27 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
-
     max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
-        // Use specialized functions for MAX row reduction
-        reduce_max_row_init();
+        // Reinitialize block-based reduce for each row (needed due to potential copy_tile reconfig)
+        reduce_block_max_row_init<cols>();
+        // asm volatile ("ebreak");
+        // reduce_block_max_row_init<1>();
+        // reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        // reduce_max_row_init();
         acquire_dst();
-        for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
-        }
+        // for (uint32_t j = 0; j < cols; j += 1) {
+        reduce_block_max_row<cols>(in0_cb, scale_cb, i * cols, reduce_dst_idx);
+        // reduce_block_max_row<1>(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
+        // reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        // reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
+        // }
+        // Safe to move out of the loop since the packer config is not changed by copy calls
+        reduce_max_row_uninit();
+
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
@@ -79,8 +88,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         release_dst();
     }
 
-    // Safe to move out of the loop since the packer config is not changed by copy calls
-    reduce_uninit();
     cb_push_back(out_cb, rows);
 }
 
