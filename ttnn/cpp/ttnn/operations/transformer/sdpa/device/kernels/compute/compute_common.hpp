@@ -66,9 +66,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         reduce_max_row_init();
         acquire_dst();
         for (uint32_t j = 0; j < cols; j++) {
-            if (j == 0) {
-                reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
-            }
+            reduce_tile_max_row(in0_cb, scale_cb, i * cols + j, reduce_dst_idx);
         }
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
