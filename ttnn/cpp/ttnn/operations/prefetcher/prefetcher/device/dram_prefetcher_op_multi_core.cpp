@@ -37,7 +37,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     const std::vector<Tensor>& input_tensors,
     const uint32_t num_layers,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
-    const bool enable_performance_mode) {
+    const bool enable_performance_mode,
+    std::optional<std::vector<uint32_t>> num_blocks_per_tensor) {
     /* Buffers */
     const Buffer& global_cb_buffer = global_cb.cb_buffer();
     // tensors that with addresses
@@ -75,7 +76,15 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     uint32_t num_receivers_per_reader = sender_receiver_core_mapping.second.num_cores();
 
     uint32_t num_readers = tensors[0].shard_spec()->grid.num_cores();
-    uint32_t num_blocks = num_readers * num_receivers_per_reader;
+    uint32_t total_num_receivers = num_readers * num_receivers_per_reader;
+    std::vector<uint32_t> num_blocks(num_tensors, total_num_receivers);
+    if (num_blocks_per_tensor.has_value()) {
+        TT_FATAL(
+            num_blocks_per_tensor->size() == num_tensors,
+            "num_blocks_per_tensor must have the same size as the number of tensors ({})",
+            num_tensors);
+        num_blocks = *num_blocks_per_tensor;
+    }
 
     std::vector<uint32_t> tensor_block_num_tiles(num_tensors);
     std::vector<std::vector<uint32_t>> tensor_shapes(num_tensors, std::vector<uint32_t>(2));
@@ -84,10 +93,10 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         uint32_t height_in_tiles = tensor_buffers[t]->shard_spec().shape()[0] / tensor_tiles[t].get_tile_shape()[0];
         uint32_t width_in_tiles = tensor_buffers[t]->shard_spec().shape()[1] / tensor_tiles[t].get_tile_shape()[1];
 
-        height_in_tiles = tt::round_up(height_in_tiles, num_blocks);
+        height_in_tiles = tt::round_up(height_in_tiles, num_blocks[t]);
         tensor_shapes[t][0] = height_in_tiles;
         tensor_shapes[t][1] = width_in_tiles;
-        tensor_block_num_tiles[t] = height_in_tiles * width_in_tiles / num_blocks;
+        tensor_block_num_tiles[t] = height_in_tiles * width_in_tiles / num_blocks[t];
         tensor_tile_sizes[t] = tensor_tiles[t].get_tile_size(tensor_data_formats[t]);
     }
     uint32_t max_block_tiles = *std::max_element(tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
@@ -97,7 +106,12 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     tt::DataFormat max_tile_size_df = tensor_data_formats[max_tile_size_tensor_idx];
 
     uint32_t max_block_size_per_reader_core = max_tile_size * max_block_tiles;
-    uint32_t max_tensor_size = max_block_size_per_reader_core / num_receivers_per_reader * num_blocks;
+    // Get the max tensor size across all tensors
+    uint32_t max_tensor_size = 0;
+    for (uint32_t t = 0; t < num_tensors; ++t) {
+        uint32_t tensor_size = tensor_shapes[t][0] * tensor_shapes[t][1] / total_num_receivers * tensor_tile_sizes[t];
+        max_tensor_size = std::max(max_tensor_size, tensor_size);
+    }
 
     TT_FATAL(
         max_tensor_size <= global_cb.size(),
@@ -165,7 +179,6 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     std::vector<uint32_t> reader_ct_args = {
         num_layers,
         num_tensors,
-        num_blocks,
         reader_cb_size,
         max_block_tiles,
         max_block_size_per_reader_core,
@@ -191,7 +204,6 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     std::vector<uint32_t> writer_ct_args = {
         num_layers,
         num_tensors,
-        num_blocks,
         num_receivers_per_reader,
         max_block_tiles,
         reader_cb_index,
@@ -259,6 +271,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         }
 
         std::vector<uint32_t> reader_rt_args = {bank_id, vc, total_num_blocks_in_buffer};
+        reader_rt_args.insert(reader_rt_args.end(), num_blocks.begin(), num_blocks.end());
         reader_rt_args.insert(reader_rt_args.end(), page_sizes.begin(), page_sizes.end());
         reader_rt_args.insert(reader_rt_args.end(), block_num_pages.begin(), block_num_pages.end());
         reader_rt_args.insert(reader_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
@@ -267,12 +280,14 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
 
         /* writer kernel */
         std::vector<uint32_t> writer_rt_args;
+        writer_rt_args.insert(writer_rt_args.end(), num_blocks.begin(), num_blocks.end());
         writer_rt_args.insert(writer_rt_args.end(), coalesced_page_sizes.begin(), coalesced_page_sizes.end());
         writer_rt_args.insert(writer_rt_args.end(), coalesced_num_pages.begin(), coalesced_num_pages.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_block_num_tiles.begin(), tensor_block_num_tiles.end());
         writer_rt_args.insert(writer_rt_args.end(), tensor_tile_sizes.begin(), tensor_tile_sizes.end());
-        for (auto tensor_shape : tensor_shapes) {  // block_height_in_itles
-            writer_rt_args.push_back(tensor_shape[0] / num_blocks);
+        for (uint32_t t = 0; t < num_tensors; ++t) {
+            uint32_t block_height_in_tiles = tensor_shapes[t][0] / num_blocks[t];
+            writer_rt_args.push_back(block_height_in_tiles);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);

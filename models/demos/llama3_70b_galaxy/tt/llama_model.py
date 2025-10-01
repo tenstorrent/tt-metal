@@ -521,6 +521,13 @@ class TtTransformer(LightweightModule):
                 num_layers=self.n_layers,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
                 enable_performance_mode=self.enable_prefetcher_performance_mode,
+                num_blocks_per_tensor=[
+                    24,
+                    24,
+                    24,
+                    24,
+                    20,
+                ],  # set to 28 once padding is removed because 28 is divisible by 4
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
@@ -558,8 +565,19 @@ class TtTransformer(LightweightModule):
 
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
-
-        return self.lm_head(x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode)
+        # move AG_MM persistent buffers to DRAM
+        self.tt_ccl.all_gather_buffers["AG_MM"] = ttnn.to_memory_config(
+            self.tt_ccl.all_gather_buffers["AG_MM"],
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        lm_head_output = self.lm_head(
+            x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
+        )
+        self.tt_ccl.all_gather_buffers["AG_MM"] = ttnn.to_memory_config(
+            self.tt_ccl.all_gather_buffers["AG_MM"],
+            self.model_config["AG_MM_RECV_MEMCFG"],
+        )
+        return lm_head_output
 
     def __del__(self):
         self.tt_ccl.close()

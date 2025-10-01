@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
+// #include "dataflow_api.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -11,6 +11,8 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 
@@ -160,7 +162,8 @@ void MAIN {
     constexpr uint32_t in2_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t sync_cb = get_compile_time_arg_val(21);
     constexpr uint32_t sync_cb2 = get_compile_time_arg_val(22);
-    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = get_compile_time_arg_val(23);
+    constexpr uint32_t num_blocks_per_mcast_step = get_compile_time_arg_val(23);
+    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = get_compile_time_arg_val(24);
     constexpr std::array<uint32_t, batch> mm_out_cb_ids =
         fill_array_with_next_n_args<uint32_t, OUTPUT_CB_ARRAY_IDX, batch>();
     constexpr uint32_t INTERM_CB_ARRAY_IDX = OUTPUT_CB_ARRAY_IDX + batch;
@@ -169,6 +172,18 @@ void MAIN {
 
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
+
+    DPRINT << "in0_block_w: " << in0_block_w << ENDL();
+    DPRINT << "in0_num_subblocks: " << in0_num_subblocks << ENDL();
+    DPRINT << "in0_block_num_tiles: " << in0_block_num_tiles << ENDL();
+    DPRINT << "in0_subblock_num_tiles: " << in0_subblock_num_tiles << ENDL();
+    DPRINT << "in1_num_subblocks: " << in1_num_subblocks << ENDL();
+    DPRINT << "in1_block_num_tiles: " << in1_block_num_tiles << ENDL();
+    DPRINT << "num_blocks_per_mcast_step: " << num_blocks_per_mcast_step << ENDL();
+    DPRINT << "out_subblock_h: " << out_subblock_h << ENDL();
+    DPRINT << "out_subblock_w: " << out_subblock_w << ENDL();
+    DPRINT << "out_subblock_num_tiles: " << out_subblock_num_tiles << ENDL();
+    DPRINT << "out_block_num_tiles: " << out_block_num_tiles << ENDL();
 
     // Runtime args
     uint32_t rt_args_idx = 0;
@@ -196,6 +211,7 @@ void MAIN {
 
     mm_block_init(
         in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+
     for (uint32_t b = 0; b < batch; b++) {
 #ifdef ENABLE_GLOBAL_CB
         uint32_t in1_cb_start_addr = 0;
@@ -229,11 +245,24 @@ void MAIN {
         }
 
         // Wait to receive in1
-        cb_wait_front(sync_cb2, 1);
-        cb_pop_front(sync_cb2, 1);
+        // DeviceZoneScopedN("data waiting in1 compute kernel");
+        {
+            DeviceZoneScopedN("data waiting in1 compute kernel");
+            cb_wait_front(sync_cb2, 1);
+            cb_pop_front(sync_cb2, 1);
+        }
 
+        uint32_t curr_ring_idx = ring_idx;
         for (uint32_t block = 0; block < num_blocks; block++) {
-            const uint32_t curr_ring_idx = (ring_idx - block + ring_size) % ring_size;
+            // Update ring index
+            if (block > 0) {
+                // At multicast boundary: first decrement by 2X
+                if (block % num_blocks_per_mcast_step == 0) {
+                    curr_ring_idx = (curr_ring_idx + ring_size - 2 * num_blocks_per_mcast_step) % ring_size;
+                }
+                // Always increment by 1
+                curr_ring_idx = (curr_ring_idx + 1) % ring_size;
+            }
             // uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
             uint32_t unpadded_in0_block_w = in0_block_w;  // no need to unpad in0
 
@@ -254,8 +283,11 @@ void MAIN {
 #endif
 
             // Wait to receive in0 block
-            cb_wait_front(input0_cb_id, in0_block_num_tiles);
-
+            // DeviceZoneScopedN("data waiting in0 compute kernel");
+            {
+                DeviceZoneScopedN("data waiting in0 compute kernel");
+                cb_wait_front(input0_cb_id, in0_block_num_tiles);
+            }
 #ifdef ENABLE_GLOBAL_CB
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
                 in1_cb_id,

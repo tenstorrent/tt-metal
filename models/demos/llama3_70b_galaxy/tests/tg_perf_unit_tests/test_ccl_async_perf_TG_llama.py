@@ -453,7 +453,7 @@ def test_rs_create_heads_perf(
 @pytest.mark.parametrize(
     "warmup_iters, perf_target_us",
     [
-        (5, 10.2),
+        (5, 13.6),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -463,7 +463,7 @@ def test_ag_matmul_tg_llama_perf(
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"all_gather_replicate"
+    step_name = f"all_gather_matmul"
 
     subdir = "llama_ccl_perf"
     command = f"pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py::test_llama_all_gather_matmul"

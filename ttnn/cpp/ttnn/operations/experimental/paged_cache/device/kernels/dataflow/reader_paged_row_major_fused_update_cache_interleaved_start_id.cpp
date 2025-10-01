@@ -4,8 +4,11 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
+    DeviceZoneScopedN("Reader PCU");
+
     uint32_t rt_args_idx = 0;
     const bool has_work = get_arg_val<uint32_t>(rt_args_idx++);
     if (!has_work) {

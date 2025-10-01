@@ -23,8 +23,6 @@ from tracy import signpost
 
 SUB_DEVICE_CRS = ttnn.CoreRangeSet(
     [
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 3)),
-        # ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(0, 7)),
         ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
         ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
     ]
@@ -143,13 +141,12 @@ def run_llama_all_gather_matmul_impl(
     ##### Set up fabric stuff
     ##################################
 
-    linear = True
-    if linear:
-        all_gather_replicate_topology = ttnn.Topology.Linear
-        wrap_mesh = False
-    else:
-        all_gather_replicate_topology = ttnn.Topology.Ring
-        wrap_mesh = False
+    # if linear:
+    #     all_gather_replicate_topology = ttnn.Topology.Linear
+    #     wrap_mesh = False
+    # else:
+    all_gather_replicate_topology = ttnn.Topology.Ring
+    wrap_mesh = False
 
     worker_sub_device = ttnn.SubDevice([SUB_DEVICE_CRS])
 
@@ -187,9 +184,10 @@ def run_llama_all_gather_matmul_impl(
     logger.info(f"N_padded {N_padded}")
 
     in0_block_h = M // ttnn.TILE_SIZE
-    in0_block_w = K_in // output_num_cores // ttnn.TILE_SIZE
-    while (K_in / ttnn.TILE_SIZE) % in0_block_w != 0:
-        in0_block_w -= 1
+    in0_block_w = 3  # change this to 4 once padding is removed because 28 is divisible by 40 but not 30
+    # in0_block_w = K_in // cluster_shape[cluster_axis] // ttnn.TILE_SIZE
+    # while (K_in / ttnn.TILE_SIZE) % in0_block_w != 0:
+    #     in0_block_w -= 1
 
     out_block_h = M // ttnn.TILE_SIZE
     out_block_w = N_padded // output_num_cores // ttnn.TILE_SIZE
@@ -226,6 +224,7 @@ def run_llama_all_gather_matmul_impl(
         num_global_cb_receivers=24,
         untilize_out=False,
     )
+    print(f"program_config: {program_config}\n\n\n")
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
         math_approx_mode=True,
@@ -233,12 +232,10 @@ def run_llama_all_gather_matmul_impl(
         packer_l1_acc=packer_l1_acc,
         dst_full_sync_en=True,
     )
+    print(f"compute_kernel_config: {compute_kernel_config}\n\n\n")
 
     # Intermediate shapes
     intermediate_num_cores = cluster_shape[cluster_axis]
-    # intermediate_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-    #     ttnn.CoreCoord(1, 1), intermediate_num_cores, SUB_DEVICE_CRS, row_wise=False
-    # )
     intermediate_core_range_set = ttnn.CoreRangeSet(
         [
             ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 3)),
@@ -265,7 +262,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-
+    print(f"input_mem_config: {input_mem_config}\n\n\n")
     in1_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -275,6 +272,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    print(f"in1_sharded_mem_config: {in1_sharded_mem_config}\n\n\n")
     intermediate_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -284,6 +282,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    print(f"intermediate_mem_config: {intermediate_mem_config}\n\n\n")
     ag_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -293,6 +292,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    print(f"ag_output_mem_config: {ag_output_mem_config}\n\n\n")
     mm_output_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -302,6 +302,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    print(f"mm_output_sharded_mem_config: {mm_output_sharded_mem_config}\n\n\n")
     logger.info(f"Input shape: {in0_shape[2:]}, Padded shape: {[M, K_per_device_per_shard * input_num_cores]}")
     in0_tensor = torch.randn(in0_shape)
     tt_input_tensor = ttnn.from_torch(
@@ -314,7 +315,6 @@ def run_llama_all_gather_matmul_impl(
     )
 
     in1_tensor = torch.randn(in1_shape)
-    # in1_tensor = torch.ones(in1_shape) * 3
     tt_in1_tensor = ttnn.from_torch(
         in1_tensor,
         device=mesh_device,
@@ -323,6 +323,8 @@ def run_llama_all_gather_matmul_impl(
         memory_config=in1_sharded_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
+
+    # Intermediate tensors
     intermediate_tensor = torch.zeros(intermediate_shape)
     tt_intermediate_tensors = []
     for i in range(num_buffers):
@@ -357,7 +359,7 @@ def run_llama_all_gather_matmul_impl(
             out = ttnn.experimental.llama_all_gather_matmul_async(
                 tt_input_tensor,
                 tt_in1_tensor,
-                intermediate_tensor=tt_intermediate_tensors[i % num_buffers],
+                tt_intermediate_tensors[i % num_buffers],
                 dim=3,
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
@@ -413,19 +415,11 @@ def run_llama_all_gather_matmul_impl(
     ##################################
     def validate(tt_out_tensor, output_tensor):
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-            # get_device_tensors returns row major, so we need to select the correct golden tensor
-            # if cluster_axis == 0:
-            #     output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]]
-            # else:
-            #     output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]]
             row_index = i // cluster_shape[1]
             col_index = i % cluster_shape[1]
             output_tensor_ = output_tensor[row_index, col_index]
             tt_output_tensor = t.cpu().to_torch().squeeze(0).squeeze(0)
-            # print(f"i: {i}, row_index: {row_index}, col_index: {col_index}")
 
-            # print(f"tt_output_tensor: {tt_output_tensor}")
-            # print(f"output_tensor_: {output_tensor_}")
             if in0_dtype == ttnn.bfloat16:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
             else:

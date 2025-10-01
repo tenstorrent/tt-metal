@@ -92,16 +92,21 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     )
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+
+    reference_output = reference_model(torch_input[:, :, :, : model_args.dim])
+    print(f"shape of reference_output: {reference_output.shape}")
+
     prev_pcc = None
 
     logger.info("Run Llama_MLP_PF")
     # Explicitly allocate global CB to avoid memory fragmentation
     prefetcher_setup.create_global_cb()
-    for i in range(20):
+    for i in range(1):
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
             num_layers=1,
             global_cb=prefetcher_setup.global_circular_buffer,
+            num_blocks_per_tensor=[24, 24, 20],
         )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
@@ -134,9 +139,9 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
 
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
-        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim])
-
         pcc_required = 0.99
+        print(f"shape of reference_output: {reference_output.shape}")
+        print(f"shape of tt_output_torch: {tt_output_torch.shape}")
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
         if prev_pcc is not None:

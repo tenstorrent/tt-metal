@@ -23,7 +23,7 @@ from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
 
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -22
+DECODER_OP_END_INDEX = -24
 NUM_OPS_IN_SAMPLING = 12
 
 DECODER_PREFIX = "model"
@@ -385,6 +385,10 @@ def test_llama_TG_perf_device(
     reset_seeds,
     galaxy_type,
 ):
+    # export TT_METAL_DEVICE_PROFILER=1
+    import os
+
+    os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     perf_targets = load_perf_targets(galaxy_type)
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -421,6 +425,7 @@ def test_llama_TG_perf_device(
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
+    print(f"len(df_layers_compilation): {len(df_layers_compilation)}")
     assert len(df_layers_compilation) % num_layers == 0
 
     # first decoder layer
@@ -494,6 +499,9 @@ def test_llama_TG_perf_device(
     if len(avg_kernel_duration_model_tail_trace) != len(perf_targets["model_tail"]):
         print_dict(perf_targets["model_tail"], "perf_targets['model_tail']")
 
+    ## decoder first layers
+    print_dict(avg_kernel_duration_first_layer_trace, "avg_kernel_duration_first_layer_trace")
+
     ## decoder mid layers
     print_dict(avg_kernel_duration_mid_layers_compilation, "avg_kernel_duration_mid_layers_compilation")
     print_dict(avg_kernel_duration_mid_layers_trace, "avg_kernel_duration_mid_layers_trace")
@@ -508,6 +516,7 @@ def test_llama_TG_perf_device(
     assert len(avg_kernel_duration_mid_layers_compilation) == len(
         perf_targets["decoder"]
     ), f"Expected {len(perf_targets['decoder'])} operations, got {len(avg_kernel_duration_mid_layers_compilation)}. If the number or type of operations changed, expected times must be updated."
+
     assert len(avg_dispatch_duration_model_tail_trace) == len(
         perf_targets["model_tail"]
     ), f"Expected {len(perf_targets['model_tail'])} operations, got {len(avg_dispatch_duration_model_tail_trace)}. If the number or type of operations changed, expected times must be updated."

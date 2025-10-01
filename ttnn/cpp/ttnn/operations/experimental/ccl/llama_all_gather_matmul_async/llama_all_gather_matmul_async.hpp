@@ -7,15 +7,15 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_replicate_async/device/all_gather_replicate_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {
 
 struct ExecuteAllGatherMatmulAsync {
     static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        const ttnn::Tensor& input_tensor_b,
+        const ttnn::Tensor& input0,
+        const ttnn::Tensor& input1,
         const ttnn::Tensor& intermediate_tensor,
         const int32_t dim,
         const uint32_t cluster_axis,

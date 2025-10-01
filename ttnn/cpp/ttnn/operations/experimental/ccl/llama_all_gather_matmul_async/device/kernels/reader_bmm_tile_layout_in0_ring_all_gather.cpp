@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "debug/dprint.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 void kernel_main() {
@@ -56,56 +57,35 @@ void kernel_main() {
     constexpr uint32_t multicast_chunk_size_in_tiles = multicast_chunk_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t multicast_chunk_size_bytes = multicast_chunk_size_in_tiles * in0_single_tile_size_bytes;
 
+    DPRINT << "multicast_chunk_size_in_tiles: " << multicast_chunk_size_in_tiles << ENDL();
+    DPRINT << "multicast_chunk_width_in_tiles: " << multicast_chunk_width_in_tiles << ENDL();
+    DPRINT << "shard_height_in_tiles: " << shard_height_in_tiles << ENDL();
+    DPRINT << "chunk_indices[0]: " << chunk_indices[0] << ENDL();
+    DPRINT << "chunk_indices[1]: " << chunk_indices[1] << ENDL();
+    DPRINT << "chunk_indices[2]: " << chunk_indices[2] << ENDL();
+    DPRINT << "chunk_indices[3]: " << chunk_indices[3] << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr 0: " << fused_op_receiver_signal_semaphore_addr[chunk_indices[0]]
+           << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr 1: " << fused_op_receiver_signal_semaphore_addr[chunk_indices[1]]
+           << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr 2: " << fused_op_receiver_signal_semaphore_addr[chunk_indices[2]]
+           << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr 3: " << fused_op_receiver_signal_semaphore_addr[chunk_indices[3]]
+           << ENDL();
+
     cb_reserve_back(cb_id_in0, multicast_chunk_size_in_tiles * num_multicast_steps);
     for (uint32_t istep = 0; istep < num_multicast_steps; istep++) {
         volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 fused_op_receiver_signal_semaphore_addr[chunk_indices[istep]]);
-
-        noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
-        noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
-        cb_push_back(cb_id_in0, multicast_chunk_size_in_tiles);
-    }
-
-    /*
-    // Reserving/pushing the local shard is done in compute
-    cb_reserve_back(cb_id_in2, (ring_size - 1) * shard_size_in_tiles);
-
-    uint32_t local_shard_read_addr = get_read_ptr(cb_id_in0);
-    uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in2);
-
-    uint32_t hop_core_offset = static_cast<uint32_t>(is_hop_core);
-
-    for (uint32_t shard_cnt = hop_core_offset; shard_cnt < ring_size; shard_cnt++) {
-        uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
-        bool skip_send = unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0 && !is_hop_core;
-
-        uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt - hop_core_offset);
-        uint64_t remote_curr_shard_write_addr =
-            get_noc_addr(next_core_noc_x, next_core_noc_y, curr_shard_write_addr, noc);
-        uint32_t curr_shard_read_addr =
-            shard_cnt == 0 ? local_shard_read_addr : l1_write_addr_in0 + shard_size_bytes * (shard_cnt - 1);
-
-        // Wait for signal from previous core that data has been added to this core's in0
-        noc_semaphore_wait_min(l1_signal_sem_addr, shard_cnt);
-
-        // Send data to next core
-        if (shard_cnt < ring_size - 1 || is_hop_core) {  // Skip sending the last shard
-            if (!skip_send) {
-                noc_async_write(curr_shard_read_addr, remote_curr_shard_write_addr, shard_size_bytes, noc);
-            }
-
-            // Signal the next core that data is ready
-            noc_semaphore_inc(remote_signal_semaphore_addr, 1, noc);
+        {
+            DeviceZoneScopedN("data waiting in0");
+            noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
+            noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
         }
-
-        // Do stuff for matmul fusion here
-        if (shard_cnt > 0) {
-            cb_push_back(cb_id_in2, shard_size_in_tiles);
+        {
+            // DeviceZoneScopedN("data pushing in0");
+            cb_push_back(cb_id_in0, multicast_chunk_size_in_tiles);  // put zone scopes here
         }
     }
-
-
-    noc_async_atomic_barrier();
-    */
 }

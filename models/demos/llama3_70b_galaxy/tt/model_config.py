@@ -1159,6 +1159,7 @@ class TtModelArgs:
                     for x, y in PREFETCHER_NOC1_GRID
                 ]
             )
+            self.model_config["RING_CORE_RANGE_SET"] = ring_core_range_set
             pf_mm_out_core_range_set = ttnn.CoreRangeSet(
                 [
                     ttnn.CoreRange(
@@ -1266,7 +1267,7 @@ class TtModelArgs:
 
             # Use padded K and N
             self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=3584,
+                k=3840,  # padded from 3584,
                 n=9216 // 4,
             )
 
@@ -1325,6 +1326,28 @@ class TtModelArgs:
             self.model_config["FF2_IN_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, 3840 // RING_SIZE),  # Use padded K
                 core_grid=ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            intermediate_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 3), ttnn.CoreCoord(3, 4)),
+                ]
+            )
+
+            # intermediate_core_range_set = ttnn.CoreRangeSet(
+            #     [
+            #         ttnn.CoreRange(ttnn.CoreCoord(1,1), ttnn.CoreCoord(2, 1)),
+            #         ttnn.CoreRange(ttnn.CoreCoord(1,2), ttnn.CoreCoord(2, 2)),
+            #     ]
+            # )
+
+            self.model_config["AG_MM_RECV_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, 3840 // 4),  # K // num_of_receiver_cores 3584 -> 3840 padding
+                core_grid=intermediate_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,

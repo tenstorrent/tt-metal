@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_gather_replicate_async_pybind.hpp"
+#include "llama_all_gather_matmul_async_pybind.hpp"
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include "ttnn-pybind/decorators.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_replicate_async/all_gather_replicate_async.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -25,8 +25,8 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
         doc,
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& input_tensor_b,
+               const ttnn::Tensor& input_tensor0,
+               const ttnn::Tensor& input_tensor1,
                const ttnn::Tensor& intermediate_tensor,
                const int32_t dim,
                const uint32_t cluster_axis,
@@ -42,9 +42,9 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                const std::optional<const DataType> dtype,
                const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
-                    input_tensor,    // in0 for matmul, need AG first
-                    input_tensor_b,  // in1 for matmul
-                    intermediate_tensor,
+                    input_tensor0,        // in0 for matmul, need AG first
+                    input_tensor1,        // in1 for matmul
+                    intermediate_tensor,  // intermediate tensor for AG operation
                     dim,
                     cluster_axis,
                     mesh_device,
@@ -60,8 +60,8 @@ void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_oper
                     dtype,                  // = std::nullopt
                     global_cb);             // = std::nullopt
             },
-            py::arg("input_tensor"),
-            py::arg("input_tensor_b"),
+            py::arg("input_tensor0"),
+            py::arg("input_tensor1"),
             py::arg("intermediate_tensor"),
             py::arg("dim"),
             py::arg("cluster_axis"),
@@ -87,29 +87,37 @@ void py_bind_llama_all_gather_matmul_async(pybind11::module& module) {
         ttnn::experimental::llama_all_gather_matmul_async,
         R"doc(
 
-        Performs an all-gather-replicate operation on multi-device :attr:`input_tensor` across all devices.
+        Performs an all-gather-matml operation on multi-device :attr:`input_tensor0` and :attr:`input_tensor1` across all devices.
 
         Args:
-            input_tensor (ttnn.Tensor): multi-device tensor.
-            dim (int): Dimension to perform operation.
+            input_tensor0 (ttnn.Tensor): multi-device tensor.
+            input_tensor1 (ttnn.Tensor): multi-device tensor.
+            intermediate_tensor (ttnn.Tensor): intermediate tensor for the All-Gather operation.
+            dim (int): Dimension to perform All-Gather operation.
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather-replicate operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather-replicate operation on.
-        * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
+            topology (ttnn.Topology): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
+            multi_device_global_semaphore (ttnn.GlobalSemaphore): The global semaphore to use for the operation.
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
 
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather-replicate operation. Defaults to `1`.
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
+            ag_memory_config (ttnn.MemoryConfig, optional): Memory configuration for the All-Gather operation. Defaults to `input tensor memory config`.
+            mm_memory_config (ttnn.MemoryConfig, optional): Memory configuration for the Matmul operation. Defaults to `input tensor memory config`.
+            subdevice_id (ttnn.SubDeviceId, optional): The subdevice id to use for the operation. Defaults to `None`.
+            program_config (ttnn.MatmulProgramConfig, optional): The program configuration to use for the operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The compute kernel configuration to use for the operation. Defaults to `None`.
+            dtype (ttnn.DataType, optional): The data type to use for the operation. Defaults to `None`.
+            global_cb (ttnn.GlobalCircularBuffer, optional): The global circular buffer to use for the operation. Defaults to `None`.
+
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor generated by the All-Gather of input_tensor0 and the Matmul with input_tensor1.
 
         Example:
-            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
-            >>> physical_device_ids = ttnn.get_t3k_physical_device_ids_ring()
-            >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8), physical_device_ids=physical_device_ids[:8])
+            >>> input_tensor0 = torch.randn([1, 1, 32, 896], dtype=torch.bfloat8)
+            >>> input_tensor1 = torch.randn([1, 1, 3584, 2048], dtype=torch.bfloat8)
             >>> ttnn_tensor = ttnn.from_torch(
                             full_tensor,
                             dtype=input_dtype,
@@ -118,7 +126,7 @@ void py_bind_llama_all_gather_matmul_async(pybind11::module& module) {
                             memory_config=mem_config,
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-            >>> output = ttnn.all_gather_replicate(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
+            >>> output = ttnn.llama_all_gather_matmul_async(ttnn_tensor_a, ttnn_tensor_b, dim=0, topology=ttnn.Topology.Ring)
 
         )doc");
 }

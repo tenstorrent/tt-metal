@@ -2,9 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import ttnn
 import torch
 import os
+
+from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
+    num_cores_to_rectangle_grid,
+    round_up,
+)
 
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
@@ -165,7 +171,7 @@ class TT_CCL:
         - LAYERNORM: (1, 1, 32, 128)
         - SAMPLING_VALUES: (1, 1, 32, 256)
         - SAMPLING_INDICES: (1, 1, 32, 256)
-        - BINARY_MUL: (1, 1, 32, 3584)
+        - ALL_GATHER_MM: (1, 1, 32, 3584)
 
         """
 
@@ -230,16 +236,16 @@ class TT_CCL:
         )
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
 
-        # Binary Mult + Silu
+        # AllGather + Matmul
         tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, self.max_batch_size, 3584)),
+            torch.zeros((1, 1, self.max_batch_size, 3840)),  # 112 -> 120 => 3584 -> 3840
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            memory_config=self.model_config["AG_MM_RECV_MEMCFG"],
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        persistent_buffers["BINARY_MUL"] = tt_buffer
+        persistent_buffers["AG_MM"] = tt_buffer
 
         return persistent_buffers
 
@@ -323,7 +329,10 @@ class TT_CCL:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
-
+        # print all buffer shapes before returning
+        # print("Persistent buffers shapes:")
+        # for i, buffer in enumerate(persistent_buffers):
+        #     print(f"Buffer {i}: {buffer.shape}")
         return persistent_buffers
 
     def get_decode_reduce_scatter_buffers(self):
@@ -1022,6 +1031,98 @@ class TT_CCL:
             use_noc1_only=use_noc1_only,
         )
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return ttnn_tensor_out
+
+    def all_gather_matmul(
+        self,
+        input_tensor_mesh,
+        weight_tensor,
+        dim,
+        cluster_axis,
+        ag_memory_config,
+        mm_memory_config,
+        num_links,
+        # program_config,
+        compute_kernel_config,
+        dtype,
+        global_cb,
+        buffer_key=None,
+    ):
+        if buffer_key is None or buffer_key not in self.all_gather_buffers:
+            assert False, f"buffer_key is None or not in self.all_gather_buffers: {buffer_key}"
+
+        cluster_shape = self.mesh_device.shape
+
+        _, _, M, K = input_tensor_mesh.shape
+        N = weight_tensor.shape[-1]
+        K_per_device = K // cluster_shape[cluster_axis]
+        output_num_cores = 24
+        N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
+        N_padded = N_per_shard * output_num_cores  #
+
+        # Program config
+        storage_grid = num_cores_to_rectangle_grid(output_num_cores, self.mesh_device)
+
+        MAX_DST_TILES = 8
+        in0_block_h = M // ttnn.TILE_SIZE
+        K = K + (3840 - K)  #
+
+        # in0_block_w = K // cluster_shape[cluster_axis] // ttnn.TILE_SIZE
+        # while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
+        #     in0_block_w -= 1
+        in0_block_w = 6  # change this to 4 once padding is removed because 28 is divisible by 40 but not 30
+
+        out_block_h = M // ttnn.TILE_SIZE
+        out_block_w = N_padded // output_num_cores // ttnn.TILE_SIZE
+
+        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
+        num_blocks_x = (N_padded // ttnn.TILE_SIZE - 1) // out_block_w + 1
+        num_blocks_total = num_blocks_y * num_blocks_x
+
+        out_subblock_h = 1
+        out_subblock_w = MAX_DST_TILES
+        while out_block_w % out_subblock_w != 0:
+            out_subblock_w -= 1
+
+        HOP_GRID = ttnn.CoreRangeSet([])
+
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=storage_grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=N_padded // output_num_cores // ttnn.TILE_SIZE,
+            per_core_M=out_block_h,
+            per_core_N=out_block_w,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=False,
+            gather_in0=True,
+            hop_cores=HOP_GRID,
+            num_global_cb_receivers=24,
+            untilize_out=False,
+        )
+
+        ttnn_tensor_out = ttnn.experimental.llama_all_gather_matmul_async(
+            input_tensor_mesh,
+            weight_tensor,
+            self.all_gather_buffers[buffer_key],  # TODO: Fix this
+            dim,
+            cluster_axis,
+            self.mesh_device,
+            self.model_config["CCL_TOPOLOGY"],
+            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],  # TODO: Fix this
+            num_links=num_links,
+            ag_memory_config=ag_memory_config,
+            mm_memory_config=mm_memory_config,
+            subdevice_id=self.worker_sub_device_id,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            global_cb=global_cb,
+        )
+
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+
         return ttnn_tensor_out
 
     def line_all_reduce_host(self, input_tensor_mesh, cluster_axis, num_links, memory_config):

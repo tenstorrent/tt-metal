@@ -9,7 +9,7 @@
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/device/all_reduce_async_op.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_replicate_async/device/all_gather_replicate_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -36,11 +36,12 @@ namespace ttnn {
 
 using namespace ccl;
 
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_sharded(
     const Tensor& input_tensor,
+    const Tensor& input1,
+    Tensor& output_tensor,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
-    Tensor& output_tensor,
     IDevice* sender_device,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
@@ -50,13 +51,42 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     tt::tt_metal::Program program{};
 
     IDevice* mesh_device = input_tensor.mesh_device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }
+
+    // Section for fusion signaler initialization
+    auto tensor_slicer =
+        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, intermediate_tensor, dim, ring_index);
+    const uint32_t num_transfers = ring_size;
+    const uint32_t weight_tensor_width = input1.padded_shape()[3] / 32;
+
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
+        ttnn::experimental::ccl::MatmulFusedOpSignaler(
+            ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_ALL_GATHER);
+    matmul_fused_op_signaler->init_llama_all_gather(
+        num_transfers,
+        ring_size,
+        ring_index,
+        tensor_slicer.num_cols,
+        tensor_slicer.output_page_offset,
+        tensor_slicer.num_cols *
+            weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */,
+        tt::CB::c_in3 /* start_cb_index */
+    );
+    matmul_fused_op_signaler->init_fused_op(
+        program,
+        sender_device,
+        aggregated_tensor.memory_config().shard_spec()->grid.bounding_box(),
+        ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
+    // Section end for fusion signaler initialization
 
     const bool enable_async_intermediate_tensor = false;
 
@@ -75,6 +105,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, intermediate_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
+    if (topology == ccl::Topology::Ring) {
+        num_targets_forward = ring_size - 1;
+        num_targets_backward = 0;
+    }
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
@@ -91,19 +125,17 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     auto bbox_physical_end_core = mesh_device->worker_core_from_logical_core(bbox.end_coord);
 
     auto output_tensor_cores = output_tensor.memory_config().shard_spec()->grid;
-    log_info(tt::LogOp, "aggregated_tensor_cores: {}", aggregated_tensor_cores);
-    log_info(tt::LogOp, "bbox: {}", bbox);
-    log_info(tt::LogOp, "output_tensor_cores: {}", output_tensor_cores);
-    log_info(
-        tt::LogOp, "sub_device_core_range_set: {}", corerange_to_cores(sub_device_core_range_set, std::nullopt, true));
     auto intermediate_tensor_cores = intermediate_tensor.memory_config().shard_spec()->grid;
     auto available_cores = sub_device_core_range_set.subtract(intermediate_tensor_cores);
     available_cores = available_cores.subtract(output_tensor_cores);
 
     const auto [sender_worker_core_range, sender_worker_cores] =
         ar_choose_worker_cores(num_links, num_workers_per_link, available_cores);
-    log_info(tt::LogOp, "sender_worker_core_range: {}", sender_worker_core_range);
-    log_info(tt::LogOp, "sender_worker_cores: {}", sender_worker_cores);
+
+    // CoreRangeSet sender_worker_core_range;
+    // sender_worker_core_range = CoreRangeSet(CoreRange(CoreCoord(3,0), CoreCoord(3,3)));
+
+    // auto sender_worker_cores = corerange_to_cores(sender_worker_core_range, std::nullopt, true);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -114,15 +146,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     const auto intermediate_tensor_shard_num_pages =
         intermediate_tensor_shard_shape[0] * intermediate_tensor_shard_shape[1] / TILE_HW;
     const auto intermediate_tensor_page_size = intermediate_tensor.buffer()->page_size();
-
-    log_info(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
-    log_info(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
-    log_info(tt::LogOp, "input_tensor_shard_shape: {}", input_tensor_shard_shape);
-    log_info(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
-    log_info(tt::LogOp, "intermediate_tensor_cores: {}", intermediate_tensor_cores);
-    log_info(tt::LogOp, "intermediate_tensor_shard_shape: {}", intermediate_tensor_shard_shape);
-    log_info(tt::LogOp, "intermediate_tensor_shard_num_pages: {}", intermediate_tensor_shard_num_pages);
-    log_info(tt::LogOp, "intermediate_tensor_page_size: {}", intermediate_tensor_page_size);
 
     log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
@@ -169,6 +192,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     // KERNEL CREATION
     // Reader
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    // auto reader_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     reader_kernel_config.compile_args = {
         ring_index,                 // my_chip_id
         src0_cb_index,              // cb0_id
@@ -180,13 +204,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_reader.cpp",
         sender_worker_core_range,
         reader_kernel_config);
 
     // Writer
     auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    // auto writer_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
     writer_kernel_config.compile_args = {
         ring_index,                       // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
@@ -204,21 +229,30 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);
 
     // Receiver
+
+    // uint32_t semaphore_id_to_notify_to_start_mcast = CreateSemaphore(program, intermediate_tensor_cores, 0);
     auto receiver_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    // set noc to 1 for now
+
     receiver_kernel_config.compile_args = {
-        num_links,                  // sem_wait_val
-        inter_cb_index,             // intermediate cb index
-        op_config.get_page_size(),  // tensor0_page_size
+        num_links,                                                         // sem_wait_val
+        inter_cb_index,                                                    // intermediate cb index
+        op_config.get_page_size(),                                         // tensor0_page_size
+        ring_size,                                                         // ring_size
+        matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],  // semaphore id to notify to start mcast
+        matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1],  // semaphore id to notify to start mcast
+        matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[2],  // semaphore id to notify to start mcast
+        matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[3],  // semaphore id to notify to start mcast
     };
     auto worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/"
         "worker_receiver.cpp",
         intermediate_tensor_cores,
         receiver_kernel_config);
@@ -230,12 +264,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
          0,           // core id, corresponds to the id of which device it expect data from, will be reset later
          ring_index,  // device id
          aggregated_tensor.buffer()->address(),
-         static_cast<uint32_t>(bbox_physical_start_core.x),
-         static_cast<uint32_t>(bbox_physical_start_core.y),
          static_cast<uint32_t>(bbox_physical_end_core.x),
          static_cast<uint32_t>(bbox_physical_end_core.y),
+         static_cast<uint32_t>(bbox_physical_start_core.x),
+         static_cast<uint32_t>(bbox_physical_start_core.y),
          static_cast<uint32_t>(bbox.size()),
-         intermediate_tensor_shard_num_pages});
+         intermediate_tensor_shard_num_pages,
+         0,    // mm_core_offset
+         0,    // next_core_to_left to be notified to start mcast
+         0});  // next_core_to_right to be notified to start mcast
+
     // Kernel Runtime Args
 
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
@@ -244,6 +282,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
 
     // Set runtime args for each core
     for (uint32_t i = 0; i < intermediate_cores_vec.size(); i++) {
+        uint32_t mm_core_offset = (ring_index + ring_size - i) % ring_size;
+        uint32_t next_core_to_left = (i - 1 + ring_size) % ring_size;
+        uint32_t next_core_to_right = (i + 1 + ring_size) % ring_size;
+
         tt::tt_metal::SetRuntimeArgs(
             program,
             worker_receiver_kernel_id,
@@ -252,14 +294,16 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
              i,
              ring_index,
              aggregated_tensor.buffer()->address(),
-             static_cast<uint32_t>(bbox_physical_start_core.x),
-             static_cast<uint32_t>(bbox_physical_start_core.y),
              static_cast<uint32_t>(bbox_physical_end_core.x),
              static_cast<uint32_t>(bbox_physical_end_core.y),
+             static_cast<uint32_t>(bbox_physical_start_core.x),
+             static_cast<uint32_t>(bbox_physical_start_core.y),
              static_cast<uint32_t>(bbox.size()),
-             intermediate_tensor_shard_num_pages});
+             intermediate_tensor_shard_num_pages,
+             mm_core_offset,
+             next_core_to_left,
+             next_core_to_right});
     }
-    log_info(tt::LogOp, "LLONG cores_per_device: {}", cores_per_device);
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
 
@@ -390,23 +434,47 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
+    // Call MM program factory with matmul_fused_op_signaler
+    std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks =
+        ttnn::operations::llama_matmul::matmul_multi_core_agmm_fusion_helper(
+            program,
+            aggregated_tensor,         // in0
+            {input1},                  // in1
+            std::nullopt,              // bias
+            {output_tensor},           // out0
+            false,                     // broadcast_batch
+            compute_kernel_config,     // compute_kernel_config
+            program_config,            // program_config
+            false,                     // untilize_out
+            matmul_fused_op_signaler,  // fused_op_signaler
+            global_cb,                 // global_cb
+            sub_device_id);            // sub_device_id
+
+    std::optional<tt::tt_metal::operation::OverrideRuntimeArgumentsCallback<std::vector<Tensor>>>
+        matmul_override_runtime_arguments_callback = matmul_program_with_callbacks->override_runtime_arguments_callback;
+
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
          worker_sender_writer_kernel_id,
          worker_receiver_kernel_id,
          sender_worker_cores,
          intermediate_cores_vec,
-         ring_index](
+         ring_index,
+         matmul_override_runtime_arguments_callback](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            const auto& intermediate = input_tensors[1];
-            const auto& aggregated = input_tensors[2];
+            const auto& input1 = input_tensors[1];
 
-            auto semaphore = static_cast<const ttnn::AllGatherReplicateAsync*>(operation)->semaphore;
+            const auto& mm_output = output_tensors[0];
+            const auto& intermediate = input_tensors[2];
+            const auto& aggregated = output_tensors[1];
+
+            auto semaphore =
+                static_cast<const ttnn::LlamaAllGatherMatmulAsync*>(operation)->all_gather_params.semaphore;
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
 
@@ -432,9 +500,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded
                 worker_receiver_runtime_args[0] = semaphore.address();
                 worker_receiver_runtime_args[3] = aggregated.buffer()->address();
             }
+
+            if (matmul_override_runtime_arguments_callback.has_value()) {
+                matmul_override_runtime_arguments_callback.value()(
+                    operation,
+                    program,
+                    {aggregated, input1}, /* all gather output tensor, weight tensor */
+                    optional_input_tensors,
+                    {mm_output} /* matmul output tensor */
+                );
+            }
         };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {
+        .program = std::move(matmul_program_with_callbacks->program),
+        .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace ttnn
