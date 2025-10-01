@@ -107,6 +107,15 @@ inline auto compute_program_hash(
             tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
     }
 }
+
+inline bool is_op_profiler_enabled() {
+    bool op_profiler_is_enabled = false;
+    const char* op_profiler_enable_str = std::getenv("TTNN_OP_PROFILER");
+    if (op_profiler_enable_str != nullptr && op_profiler_enable_str[0] == '1') {
+        op_profiler_is_enabled = true;
+    }
+    return op_profiler_is_enabled;
+}
 #endif
 
 class RuntimeIDToOpName {
@@ -168,6 +177,9 @@ inline ProgramHashToOpName program_hash_to_opname_{};
 inline void start_tracy_zone(
     const std::string& source, const std::string& functName, uint32_t lineNum, uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
+    if (!is_op_profiler_enabled()) {
+        return;
+    }
     auto tracySrcLoc =
         ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
     TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(tracySrcLoc, 1);
@@ -182,6 +194,9 @@ inline void start_tracy_zone(
 inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
     bool callStackWasEmpty = true;
 #if defined(TRACY_ENABLE)
+    if (!is_op_profiler_enabled()) {
+        return callStackWasEmpty;
+    }
     if (!call_stack.empty()) {
         callStackWasEmpty = false;
         TracyCZoneCtx ctx = call_stack.top();
@@ -202,6 +217,10 @@ constexpr auto tracy_max_message_length =
     static_cast<size_t>(std::numeric_limits<uint16_t>::max());  // Tracy hard limit is 64KiB including null terminator
 
 inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
+#if defined(TRACY_ENABLE)
+    if (!is_op_profiler_enabled()) {
+        return;
+    }
     const auto truncated_size = std::min(source.size(), tracy_max_message_length - 1);
     if (source.size() > truncated_size) {
         log_warning(
@@ -212,9 +231,17 @@ inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) 
             truncated_size);
     }
     TracyMessageC(source.c_str(), truncated_size, color);
+#endif
 }
 
-inline void tracy_frame() { FrameMark; }
+inline void tracy_frame() {
+#if defined(TRACY_ENABLE)
+    if (!is_op_profiler_enabled()) {
+        return;
+    }
+    FrameMark;
+#endif
+}
 
 #if defined(TRACY_ENABLE)
 static inline json get_kernels_json(chip_id_t device_id, const Program& program) {
@@ -394,6 +421,10 @@ inline json get_base_json(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
     typename device_operation_t::tensor_return_value_t& tensor_return_value) {
+#if defined(TRACY_ENABLE)
+    if (!is_op_profiler_enabled()) {
+        return json{};
+    }
     ZoneScoped;
     json j;
     j["global_call_count"] = operation_id;
@@ -427,14 +458,24 @@ inline json get_base_json(
     j["output_tensors"] = output_tensors;
 
     return j;
+#else
+    return json{};
+#endif
 }
 
 inline std::string op_meta_data_serialized_json(
     uint32_t opID, const tt::tt_metal::operation::ExternalOperation& op, const std::vector<Tensor>& input_tensors) {
+#if defined(TRACY_ENABLE)
+    if (!is_op_profiler_enabled()) {
+        return {};
+    }
     auto j = get_base_json<true>(opID, op, input_tensors);
     j["op_type"] = enchantum::to_string(OpType::python_fallback);
     std::string ser = j.dump(4);
     return fmt::format("`TT_DNN_FALL_BACK_OP:{} ->\n{}`", j["op_code"].dump(), ser);
+#else
+    return {};
+#endif
 }
 
 template <typename device_operation_t>
@@ -446,6 +487,10 @@ inline std::string op_meta_data_serialized_json(
     const auto& operation_attributes,
     const auto& tensor_args,
     auto& tensor_return_value) {
+#if defined(TRACY_ENABLE)
+    if (!is_op_profiler_enabled()) {
+        return {};
+    }
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
 
@@ -497,45 +542,54 @@ inline std::string op_meta_data_serialized_json(
         runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
         return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
     }
+#else
+    return {};
+#endif
 }
 
-#define TracyOpTTNNDevice(                                                                                    \
-    operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)      \
-    std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                         \
-        operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
-    std::string op_text = fmt::format("id:{}", operation_id);                                                 \
-    ZoneText(op_text.c_str(), op_text.size());                                                                \
-    tt::tt_metal::op_profiler::tracy_message(op_message);
+#define TracyOpTTNNDevice(                                                                                        \
+    operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value)          \
+    if (tt::tt_metal::op_profiler::is_op_profiler_enabled()) {                                                    \
+        std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                         \
+            operation, operation_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
+        std::string op_text = fmt::format("id:{}", operation_id);                                                 \
+        ZoneText(op_text.c_str(), op_text.size());                                                                \
+        tt::tt_metal::op_profiler::tracy_message(op_message);                                                     \
+    }
 
-#define TracyOpTTNNExternal(op, input_tensors, base_op_id)                                                      \
-    /* This op runs entirely on host, but its ID must be generated using the same data-path as device-side */   \
-    /* ops, for accurate reporting by the performance post-processor. */                                        \
-    auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_op_id, 0, true);                           \
-    std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(op_id, op, input_tensors); \
-    std::string op_text = fmt::format("id:{}", op_id);                                                          \
-    ZoneText(op_text.c_str(), op_text.size());                                                                  \
-    tt::tt_metal::op_profiler::tracy_message(op_message);
+#define TracyOpTTNNExternal(op, input_tensors, base_op_id)                                                          \
+    if (tt::tt_metal::op_profiler::is_op_profiler_enabled()) {                                                      \
+        /* This op runs entirely on host, but its ID must be generated using the same data-path as device-side */   \
+        /* ops, for accurate reporting by the performance post-processor. */                                        \
+        auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_op_id, 0, true);                           \
+        std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(op_id, op, input_tensors); \
+        std::string op_text = fmt::format("id:{}", op_id);                                                          \
+        ZoneText(op_text.c_str(), op_text.size());                                                                  \
+        tt::tt_metal::op_profiler::tracy_message(op_message);                                                       \
+    }
 
-#define TracyOpMeshWorkload(                                                                                   \
-    mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)             \
-    for (const auto& [range, program] : (mesh_workload).get_programs()) {                                      \
-        auto base_program_id = program.get_runtime_id();                                                       \
-        for (auto coord : range) {                                                                             \
-            /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
-            /* regression tests well-formed data. */                                                           \
-            /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
-            if (!(mesh_device)->is_local(coord)) {                                                             \
-                continue;                                                                                      \
-            }                                                                                                  \
-            ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
-            auto device_id = (mesh_device)->get_device(coord)->id();                                           \
-            auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
-            std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
-                operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
-            std::string op_text = fmt::format("id:{}", op_id);                                                 \
-            ZoneText(op_text.c_str(), op_text.size());                                                         \
-            tt::tt_metal::op_profiler::tracy_message(op_message);                                              \
-        }                                                                                                      \
+#define TracyOpMeshWorkload(                                                                                       \
+    mesh_device, mesh_workload, operation, operation_attributes, tensor_args, tensor_return_value)                 \
+    if (tt::tt_metal::op_profiler::is_op_profiler_enabled()) {                                                     \
+        for (const auto& [range, program] : (mesh_workload).get_programs()) {                                      \
+            auto base_program_id = program.get_runtime_id();                                                       \
+            for (auto coord : range) {                                                                             \
+                /* Important! `TT_DNN_DEVICE_OP` must be used in conjunction with `TracyOpMeshWorkload` to feed */ \
+                /* regression tests well-formed data. */                                                           \
+                /* TODO: (Issue #20233): Move the zone below outside TracyOpMeshWorkload. */                       \
+                if (!(mesh_device)->is_local(coord)) {                                                             \
+                    continue;                                                                                      \
+                }                                                                                                  \
+                ZoneScopedN("TT_DNN_DEVICE_OP");                                                                   \
+                auto device_id = (mesh_device)->get_device(coord)->id();                                           \
+                auto op_id = tt::tt_metal::detail::EncodePerDeviceProgramID(base_program_id, device_id);           \
+                std::string op_message = tt::tt_metal::op_profiler::op_meta_data_serialized_json(                  \
+                    operation, op_id, device_id, program, operation_attributes, tensor_args, tensor_return_value); \
+                std::string op_text = fmt::format("id:{}", op_id);                                                 \
+                ZoneText(op_text.c_str(), op_text.size());                                                         \
+                tt::tt_metal::op_profiler::tracy_message(op_message);                                              \
+            }                                                                                                      \
+        }                                                                                                          \
     }
 
 #else
