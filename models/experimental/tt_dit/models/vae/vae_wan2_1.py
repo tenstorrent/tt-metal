@@ -644,7 +644,7 @@ class WanConv2d:
             padding_mode="zeros",
             grid_size=self.mesh_device.compute_with_storage_grid_size(),
         )
-        print(f"Loaded conv_config: {self.conv_config}")
+        logger.info(f"Loaded conv_config: {self.conv_config}")
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -841,7 +841,7 @@ class WanResample:
                     x_BT2HWC = ttnn.permute(x_BTHW2C, (0, 1, 4, 2, 3, 5))
                     x_BTHWC = ttnn.reshape(x_BT2HWC, (B, T1 * 2, H, W, C))
             else:
-                assert False, "feat_cache is None"
+                raise ValueError("feat_cache cannot be None")
 
         T2 = x_BTHWC.shape[1]
         x_NHWC = ttnn.reshape(x_BTHWC, (B * T2, H, W, C))

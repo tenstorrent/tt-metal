@@ -717,12 +717,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 else:
                     timestep = t.expand(latents.shape[0])
 
-                print(f"step {i} of {num_inference_steps}")
-                print(f"latent_model_input.shape: {latent_model_input.shape}")
-                print(f"timestep.shape: {timestep.shape}")
-                print(f"prompt_embeds.shape: {prompt_embeds.shape}")
-                print(f"negative_prompt_embeds.shape: {negative_prompt_embeds.shape}")
-                print(f"attention_kwargs: {attention_kwargs}")
+                logger.info(f"step {i} of {num_inference_steps}")
+                logger.info(f"latent_model_input.shape: {latent_model_input.shape}")
+                logger.info(f"timestep.shape: {timestep.shape}")
+                logger.info(f"prompt_embeds.shape: {prompt_embeds.shape}")
+                logger.info(f"negative_prompt_embeds.shape: {negative_prompt_embeds.shape}")
+                logger.info(f"attention_kwargs: {attention_kwargs}")
 
                 # with current_model.cache_context("cond"):
                 noise_pred = current_model(
