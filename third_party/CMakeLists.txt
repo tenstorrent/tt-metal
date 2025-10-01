@@ -12,9 +12,6 @@ add_compile_options(-Wno-unused-variable)
 # NUMA
 ############################################################################################################################
 find_library(NUMA_LIBRARY NAMES numa)
-if(NOT NUMA_LIBRARY)
-    message(FATAL_ERROR "NUMA library not found")
-endif()
 
 ############################################################################################################################
 # Boost

@@ -1,0 +1,12 @@
+include(default)
+
+[settings]
+*/*:compiler.cppstd=gnu20
+*/*:compiler.libcxx=libstdc++11
+
+[tool_requires]
+bzip2/*: cmake/[>=3.25]
+capstone/*: cmake/[>=3.25]
+expat/*: cmake/[>=3.25]
+sqlite3/*: cmake/[>=3.25]
+zlib/*: cmake/[>=3.25]
