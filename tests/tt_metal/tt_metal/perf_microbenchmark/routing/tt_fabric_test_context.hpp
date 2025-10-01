@@ -28,8 +28,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
-#include <unordered_map>
-
 // Constants
 const std::string output_dir = "generated/fabric";
 const std::string default_built_tests_dump_file = "built_tests.yaml";
@@ -1053,7 +1051,7 @@ private:
                 .num_iterations = 1,
                 .ftype = ftype_str,
                 .ntype = ntype_str,
-                .topology = enchantum::to_string(config.fabric_setup.topology).data(),
+                .topology = std::string(enchantum::to_string(config.fabric_setup.topology)),
                 .num_links = config.fabric_setup.num_links,
                 .num_packets = num_packets_first_pattern,
                 .num_devices = std::vector<uint32_t>(num_devices_set.begin(), num_devices_set.end()),
@@ -1212,7 +1210,7 @@ private:
         // Write detailed header
         summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations";
         for (BandwidthStatistics stat : stat_order_) {
-            std::string stat_name = BandwidthStatisticsHeader.at(stat);
+            const std::string& stat_name = BandwidthStatisticsHeader.at(stat);
             summary_csv_stream << "," << stat_name;
         }
         summary_csv_stream << ",tolerance_percent";
@@ -1256,8 +1254,7 @@ private:
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         // Convert cluster type enum to lowercase string
-        // NOLINTNEXTLINE(bugprone-suspicious-stringview-data-usage)
-        std::string cluster_name = enchantum::to_string(cluster_type).data();
+        std::string cluster_name = std::string(enchantum::to_string(cluster_type));
         std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
 
         std::string file_name = "golden_bandwidth_summary_" + arch_name + "_" + cluster_name + ".csv";
