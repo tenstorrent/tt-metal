@@ -236,12 +236,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_temp = get_compile_time_arg_val(16);
     constexpr uint32_t core_id = get_compile_time_arg_val(17);
     constexpr uint32_t ids_per_batch = get_compile_time_arg_val(18);
-    // Calculate chunk sizes based on total cores (32 cores per tensor)
-    constexpr uint32_t num_cores = 32;
-    constexpr uint32_t k_chunk_size = num_cores * 4;     // 4 bytes per uint32_t
-    constexpr uint32_t p_chunk_size = num_cores * 2;     // 2 bytes per uint16_t
-    constexpr uint32_t temp_chunk_size = num_cores * 2;  // 2 bytes per uint16_t
-    constexpr uint32_t out_chunk_size = num_cores * 4;   // 4 bytes per uint32_t
+    constexpr uint32_t num_cores = get_compile_time_arg_val(19);
+    constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
+    constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
+    constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
+    constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
     // read k, p, temp

@@ -267,6 +267,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
                 temp_cb_index,
                 i,
                 TILE_WIDTH,
+                num_cores,
             });
         tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
