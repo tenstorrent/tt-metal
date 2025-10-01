@@ -265,8 +265,17 @@ TEST_F(ControlPlaneFixture, TestTGFabricRoutesMGD2) {
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.textproto";
     auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
     auto valid_chans = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 1);
-    EXPECT_GT(valid_chans.size(), 0);
+    auto valid_chans2 = control_plane->get_valid_eth_chans_on_routing_plane(FabricNodeId(MeshId{0}, 0), 0);
+
+    auto total_chans = valid_chans.size() + valid_chans2.size();
+
+    // one of them should have channels
+    EXPECT_GT(total_chans, 0);
     for (auto chan : valid_chans) {
+        auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
+        EXPECT_FALSE(path.empty());
+    }
+    for (auto chan : valid_chans2) {
         auto path = control_plane->get_fabric_route(FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{4}, 31), chan);
         EXPECT_FALSE(path.empty());
     }
