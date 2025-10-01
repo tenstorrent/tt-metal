@@ -5,7 +5,7 @@
 
 """
 Usage:
-    scripts/debugging_scripts/check_eth_status.py
+    check_eth_status.py
 
 Description:
     Check status on the ethernet cores
@@ -13,18 +13,17 @@ Description:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from run_checks import run as get_run_checks
 from triage import ScriptConfig, triage_field, log_check, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device, OnChipCoordinate
 from ttexalens.register_store import read_word_from_device
-
-from check_per_device import run as get_check_per_device
-
 from ttexalens.hw.tensix.blackhole.blackhole import BlackholeDevice
 from ttexalens.hw.tensix.wormhole.wormhole import WormholeDevice
+import utils
 
 script_config = ScriptConfig(
-    depends=["check_per_device"],
+    depends=["run_checks"],
 )
 
 
@@ -126,8 +125,8 @@ class EthCore(ABC):
         )
         log_check_with_loc(
             self.location,
-            not any_pending_message,
-            f"{self.location.to_user_str()} mailbox: {output.mailbox} (pending message)",
+            output.rx_link_up == "Up",
+            f"{self.location.to_user_str()} rx link is not up: {output.rx_link_up}",
         )
 
         # MAILBOX
@@ -206,19 +205,12 @@ def get_eth_core_data(device: Device, location: OnChipCoordinate, context: Conte
         utils.ERROR(f"Unsupported architecture for check_eth_status: {device._arch}")
 
 
-def run_checks(device: Device, context: Context):
-    # Loop through all active ethernet cores
-    locations = device.get_block_locations(block_type="eth")
-    for loc in locations:
-        noc_block = device.get_block(loc)
-        if noc_block not in device.active_eth_blocks:
-            continue
-        get_eth_core_data(device, loc, context)
-
-
 def run(args, context: Context):
-    check_per_device = get_check_per_device(args, context)
-    return check_per_device.run_check(lambda device: run_checks(device, context))
+    run_checks = get_run_checks(args, context)
+    BLOCK_TYPES_TO_CHECK = ["active_eth"]
+    run_checks.run_per_block_check(
+        lambda location: get_eth_core_data(location._device, location, context), block_filter=BLOCK_TYPES_TO_CHECK
+    )
 
 
 if __name__ == "__main__":

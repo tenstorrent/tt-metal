@@ -377,7 +377,9 @@ FORCE_INLINE void send_next_data(
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
-    pkt_header->src_ch_id = sender_channel_index;
+    if constexpr (!skip_src_ch_id_update) {
+        pkt_header->src_ch_id = sender_channel_index;
+    }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         while (internal_::eth_txq_is_busy(sender_txq_id)) {
@@ -1556,10 +1558,6 @@ void run_sender_channel_step_impl(
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
         can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
-    if constexpr (enable_first_level_ack) {
-        bool sender_backpressured_from_sender_side = free_slots == 0;
-        can_send = can_send && !sender_backpressured_from_sender_side;
-    }
     if (can_send) {
         did_something = true;
         if constexpr (enable_packet_header_recording) {
@@ -1589,54 +1587,25 @@ void run_sender_channel_step_impl(
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
-        if constexpr (!enable_first_level_ack) {
-            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
-                local_sender_channel_worker_interface
-                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(
-                        completions_since_last_check);
-            } else {
-                // Connection liveness checks are only done for connections that are not persistent
-                // For those connections, it's unsafe to use free-slots counters held in stream registers
-                // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
-                // instead because these connections will be read/write counter based instead
-                local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
-                if (channel_connection_established) {
-                    local_sender_channel_worker_interface
-                        .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
-                } else {
-                    local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
-                    // If not connected, we update the read counter in L1 as well so the next connecting worker
-                    // is more likely to see space available as soon as it tries connecting
-                }
-            }
-        }
-    }
 
-    // Process ACKs from receiver
-    // ACKs are processed second to avoid any sort of races. If we process acks second,
-    // we are guaranteed to see equal to or greater the number of acks than completions
-    if constexpr (enable_first_level_ack) {
-        ASSERT(false);
-        auto acks_since_last_check = sender_channel_from_receiver_credits.get_num_unprocessed_acks_from_receiver();
-        if (acks_since_last_check > 0) {
-            if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+        if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
+            local_sender_channel_worker_interface
+                .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(
+                    completions_since_last_check);
+        } else {
+            // Connection liveness checks are only done for connections that are not persistent
+            // For those connections, it's unsafe to use free-slots counters held in stream registers
+            // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
+            // instead because these connections will be read/write counter based instead
+            local_sender_channel_worker_interface.increment_local_read_counter(completions_since_last_check);
+            if (channel_connection_established) {
                 local_sender_channel_worker_interface
-                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>();
+                    .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
             } else {
-                if (channel_connection_established) {
-                    local_sender_channel_worker_interface
-                        .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
-                } else {
-                    ASSERT(
-                        local_sender_channel_worker_interface.local_write_counter.counter >
-                        (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id)));
-                    ASSERT(SENDER_NUM_BUFFERS >= get_ptr_val(sender_channel_free_slots_stream_id));
-                    auto new_val = local_sender_channel_worker_interface.local_write_counter.counter -
-                                   (SENDER_NUM_BUFFERS - get_ptr_val(sender_channel_free_slots_stream_id));
-                    local_sender_channel_worker_interface.worker_location_info_ptr->edm_local_write_counter = new_val;
-                }
+                local_sender_channel_worker_interface.copy_read_counter_to_worker_location_info();
+                // If not connected, we update the read counter in L1 as well so the next connecting worker
+                // is more likely to see space available as soon as it tries connecting
             }
-            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
         }
     }
 
@@ -1707,24 +1676,8 @@ void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    bool unwritten_packets;
-    if constexpr (enable_first_level_ack) {
-        auto& ack_counter = receiver_channel_pointers.ack_counter;
-        bool pkts_received = pkts_received_since_last_check > 0;
-        ASSERT(receiver_channel_pointers.completion_counter - ack_counter < RECEIVER_NUM_BUFFERS);
-        if (pkts_received) {
-            // currently only support processing one packet at a time, so we only decrement by 1
-            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
-            receiver_send_received_ack(
-                receiver_channel_response_credit_sender, ack_counter.get_buffer_index(), local_receiver_channel);
-            ack_counter.increment();
-        }
-        unwritten_packets = !wr_sent_counter.is_caught_up_to(ack_counter);
-    } else {
-        unwritten_packets = pkts_received_since_last_check != 0;
-    }
+    bool unwritten_packets = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
 
     if (unwritten_packets) {
         invalidate_l1_cache();
@@ -1736,8 +1689,9 @@ void run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
-
-        receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+        if constexpr (!skip_src_ch_id_update) {
+            receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+        }
         uint32_t hop_cmd;
         bool can_send_to_all_local_chip_receivers;
         if constexpr (is_2d_fabric) {
@@ -1853,9 +1807,14 @@ void run_receiver_channel_step_impl(
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
         }
         if (can_send_completion) {
+            uint8_t src_ch_id;
+            if constexpr (skip_src_ch_id_update) {
+                src_ch_id = receiver_channel_pointers.get_src_chan_id();
+            } else {
+                src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
+            }
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
-                receiver_channel_response_credit_sender,
-                receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
+                receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
             completion_counter.increment();
         }
@@ -1956,6 +1915,10 @@ void run_fabric_edm_main_loop(
     auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<NUM_RECEIVER_CHANNELS - 1>();
     receiver_channel_pointers_ch0.reset();
     receiver_channel_pointers_ch1.reset();
+    if constexpr (skip_src_ch_id_update) {
+        receiver_channel_pointers_ch0.set_src_chan_id(BufferIndex{0}, remote_worker_sender_channel);
+        receiver_channel_pointers_ch1.set_src_chan_id(BufferIndex{0}, remote_vc1_sender_channel);
+    }
 
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
         initialize_array<NUM_SENDER_CHANNELS, bool, false>();
