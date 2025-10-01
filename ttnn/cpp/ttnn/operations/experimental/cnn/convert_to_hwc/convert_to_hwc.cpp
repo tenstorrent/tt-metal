@@ -43,18 +43,16 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
     tt::tt_metal::MemoryConfig output_memory_config;
 
     if (is_dram_input) {
-        // DRAM input: explicit memory_config is required
         TT_FATAL(
             memory_config.has_value(),
             "When input tensor is in DRAM, output memory_config must be explicitly specified");
         output_memory_config = memory_config.value();
     } else {
-        // L1 input: memory_config should not be provided (use automatic inference)
-        TT_FATAL(
-            !memory_config.has_value(),
-            "When input tensor is in L1, output memory_config is inferred using the input tensor and should not be "
-            "specified");
-        output_memory_config = infer_hwc_output_memory_config(a);
+        if (memory_config.has_value()) {
+            output_memory_config = memory_config.value();
+        } else {
+            output_memory_config = infer_hwc_output_memory_config(a);
+        }
     }
 
     auto program = ConvertToHWC{output_memory_config, dtype.value_or(a.dtype())};

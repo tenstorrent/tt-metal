@@ -26,7 +26,7 @@ void bind_convert_to_hwc(py::module& module) {
     Args:
         input (ttnn.Tensor): Input tensor in CHW format, width-sharded in L1 or DRAM.
         memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration.
-                                                     Required only for DRAM inputs
+                                                     Required only for DRAM inputs.
         dtype (Optional[ttnn.DataType]): Output data type (defaults to input dtype)
 
     Returns:
