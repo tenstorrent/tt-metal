@@ -32,6 +32,9 @@ inputs:
     description: 'If true, generate a Slack-ready alert message listing all currently failing workflows with owner mentions.'
     required: false
     default: 'false'
+  logs-index-path:
+    description: 'Path to JSON mapping run_id -> extracted logs directory (optional)'
+    required: false
 
 outputs:
   failed_workflows:
