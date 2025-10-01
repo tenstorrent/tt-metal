@@ -64,7 +64,7 @@ inline std::vector<uint32_t> create_constant_vector_of_bfp8(uint32_t num_bytes, 
     }
 
     std::vector<uint32_t> packed_result =
-        pack_as_bfp8_tiles(ttsl::make_const_span(fp32_vec), /*row_major_input=*/true, is_exp_a);
+        tt::tt_metal::pack_as_bfp8_tiles(ttsl::make_const_span(fp32_vec), /*row_major_input=*/true, is_exp_a);
 
     TT_ASSERT(packed_result.size() == packed_data_size);
 

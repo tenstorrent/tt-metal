@@ -21,13 +21,7 @@
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 
-std::vector<uint32_t> pack_fp32_vec_as_bfp4_tiles(
-    tt::stl::Span<const float> fp32_vec,
-    bool row_major_input,
-    bool is_exp_a,
-    const std::optional<tt::tt_metal::Tile>& tile) {
-    return pack_as_bfp_tiles<tt::DataFormat::Bfp4_b>(fp32_vec, row_major_input, is_exp_a, tile);
-}
+namespace tt::tt_metal {
 
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
@@ -65,6 +59,16 @@ template std::vector<uint32_t> pack_as_bfp4_tiles<uint16_t>(
     bool row_major_input,
     bool is_exp_a,
     const std::optional<tt::tt_metal::Tile>& tile);
+
+namespace {
+constexpr int log2(int n) {
+    int log = 0;
+    while (n >>= 1) {
+        ++log;
+    }
+    return log;
+}
+};  // namespace
 
 std::vector<float> unpack_bfp4_tiles_into_float_vec(
     tt::stl::Span<const uint32_t> bfp_tiles,
@@ -223,7 +227,8 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 // Flush denormals to zero
                                 // Check if shift > exp and mantissa is not zero
                                 simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector0);
-                                simde__m256i mask_nonzero_mantissa = simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
+                                simde__m256i mask_nonzero_mantissa =
+                                    simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
                                 mask_denormal0 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
 
                                 exp_vector0 = simde_mm256_blendv_epi8(
@@ -238,7 +243,8 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
                                 // Flush denormals to zero
                                 // Check if shift > exp and mantissa is not zero
                                 simde__m256i mask_shift_gt_exp = simde_mm256_cmpgt_epi32(shift_cnt, exp_vector1);
-                                simde__m256i mask_nonzero_mantissa = simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
+                                simde__m256i mask_nonzero_mantissa =
+                                    simde_mm256_xor_si256(select_mask, simde_mm256_set1_epi32(-1));
                                 mask_denormal1 = simde_mm256_and_si256(mask_shift_gt_exp, mask_nonzero_mantissa);
                                 exp_vector1 = simde_mm256_blendv_epi8(
                                     simde_mm256_sub_epi32(exp_vector1, simde_mm256_add_epi32(rebias_offset, shift_cnt)),
@@ -283,3 +289,5 @@ std::vector<float> unpack_bfp4_tiles_into_float_vec(
     }
     return float_vec;
 }
+
+};  // namespace tt::tt_metal
