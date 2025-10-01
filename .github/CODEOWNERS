@@ -287,6 +287,7 @@ models/demos/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @te
 models/perf/ @yieldthought @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/perf/benchmarking_utils.py @skhorasganiTT @williamlyTT @uaydonat @tenstorrent/metalium-codeowners-large-changes
 models/demos/utils/llm_demo_utils.py @skhorasganiTT @mtairum @uaydonat @tenstorrent/metalium-codeowners-large-changes
+models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic
 models/experimental/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 models/demos/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
 models/demos/yolov8s_world @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-codeowners-large-changes
