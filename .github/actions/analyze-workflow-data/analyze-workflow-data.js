@@ -25,41 +25,7 @@ const EMPTY_VALUE = '—';
 // This is populated when action inputs provide their paths.
 let __annotationsIndexMap = undefined;
 
-/**
- * Load a mapping from workflow run IDs to their extracted logs directories.
- * The JSON file may be either an object map of { "<runId>": "<dir>" }
- * or an array of objects like [{ run_id: 123, dir: "/abs/path" }].
- */
-function loadLogsIndexFromFile(filePath) {
-  try {
-    if (!filePath || !fs.existsSync(filePath)) return undefined;
-    const raw = fs.readFileSync(filePath, 'utf8');
-    const json = JSON.parse(raw);
-    const map = new Map();
-    // Object form: direct mapping from run id to directory
-    if (json && typeof json === 'object' && !Array.isArray(json)) {
-      for (const [k, v] of Object.entries(json)) {
-        if (typeof v === 'string' && v) map.set(String(k), v);
-      }
-      return map;
-    }
-    // Array form: list of entries with fields that identify run id and dir
-    if (Array.isArray(json)) {
-      for (const entry of json) {
-        if (!entry) continue;
-        const id = entry.run_id ?? entry.id ?? entry.runId;
-        const dir = entry.dir ?? entry.path ?? entry.extract_dir ?? entry.extractDir;
-        if (id !== undefined && typeof dir === 'string' && dir) {
-          map.set(String(id), dir);
-        }
-      }
-      return map.size ? map : undefined;
-    }
-  } catch (e) {
-    core.warning(`Failed to load logs index from ${filePath}: ${e.message}`);
-  }
-  return undefined;
-}
+
 
 /**
  * Resolve the extracted logs directory for a given run ID using the loaded index.
@@ -702,7 +668,6 @@ async function run() {
     const workflowConfigs = JSON.parse(core.getInput('workflow_configs', { required: true })); // get the json of pipelines that we want to analyze
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
     const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true'; // get the alert-all input from the action inputs
-    const logsIndexPath = core.getInput('logs-index-path', { required: false }); // optional: path to JSON mapping runId -> extracted logs dir
     const annotationsIndexPath = core.getInput('annotations-index-path', { required: false }); // optional: path to JSON mapping runId -> annotations dir
     const commitsPath = core.getInput('commits-path', { required: false }); // optional: path to commits index JSON
 
@@ -722,15 +687,6 @@ async function run() {
     const hasPrevious = previousCachePath && fs.existsSync(previousCachePath); // check if the previous cache file exists
     const previousGrouped = hasPrevious ? JSON.parse(fs.readFileSync(previousCachePath, 'utf8')) : null; // parse the previous cached data into a json object
 
-    // Optionally load the logs index mapping so we can resolve run IDs to log directories
-    if (logsIndexPath) {
-      __logsIndexMap = loadLogsIndexFromFile(logsIndexPath);
-      if (__logsIndexMap && __logsIndexMap.size) {
-        core.info(`Loaded logs index with ${__logsIndexMap.size} entries from ${logsIndexPath}`);
-      } else if (logsIndexPath) {
-        core.info(`No valid entries found in logs index file at ${logsIndexPath}`);
-      }
-    }
 
     if (annotationsIndexPath) {
       __annotationsIndexMap = loadAnnotationsIndexFromFile(annotationsIndexPath);
