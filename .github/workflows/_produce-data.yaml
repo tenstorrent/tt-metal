@@ -53,6 +53,7 @@ on:
       - "Build test and publish upstream tests"
       - "Multi-Host Deployment (Physical)"
       - "Galaxy Multi-user Isolation Tests"
+      - "Git bisect dispatch"
     types:
       - completed
 
