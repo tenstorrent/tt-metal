@@ -18,6 +18,8 @@ namespace ttnn::operations::reduction::accumulation::detail {
 void bind_reduction_cumprod_operation(py::module& module) {
     auto docstring =
         R"doc(
+        ``ttnn.cumprod(input: ttnn.Tensor, dim: int, dtype: Optional[ttnn.DataType] = None, reverse_order: bool = False, out: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
+
         Returns cumulative product of `input` along dimension `dim`
         For a given `input` of size N, the `output` will also contain N elements and be such that:
 
@@ -26,7 +28,7 @@ void bind_reduction_cumprod_operation(py::module& module) {
 
 
         Args:
-            input (ttnn.Tensor): input tensor
+            input (ttnn.Tensor): input tensor. Must be on the device.
             dim (int): dimension along which to compute cumulative product
 
         Keyword Args:
@@ -64,20 +66,20 @@ void bind_reduction_cumprod_operation(py::module& module) {
 
         Example:
 
-        .. code-block:: python
+            .. code-block:: python
 
-            import ttnn
+                import ttnn
 
-            # Create tensor
-            tensor_input = ttnn.rand((2,3,4), device=device)
+                # Create tensor
+                tensor_input = ttnn.rand((2,3,4), device=device)
 
-            # Apply ttnn.cumprod() on dim=0
-            tensor_output = ttnn.cumprod(tensor_input, dim=0)
+                # Apply ttnn.cumprod() on dim=0
+                tensor_output = ttnn.cumprod(tensor_input, dim=0)
 
-            # With preallocated output and dtype
-            preallocated_output = ttnn.from_torch(torch.rand([2, 3, 4]), dtype=ttnn.bfloat16, device=device)
+                # With preallocated output and dtype
+                preallocated_output = ttnn.from_torch(torch.rand([2, 3, 4]), dtype=ttnn.bfloat16, device=device)
 
-            tensor_output = ttnn.cumprod(tensor_input, dim=0, dtype=torch.bfloat16, output=preallocated_output)
+                tensor_output = ttnn.cumprod(tensor_input, dim=0, dtype=torch.bfloat16, output=preallocated_output)
         )doc";
 
     using OperationType = decltype(ttnn::cumprod);

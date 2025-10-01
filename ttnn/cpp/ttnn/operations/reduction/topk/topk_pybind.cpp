@@ -12,7 +12,8 @@ namespace py = pybind11;
 
 void bind_reduction_topk_operation(py::module& module) {
     auto doc =
-        R"doc(topk(input_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, ) -> Tuple[ttnn.Tensor, ttnn.Tensor]
+        R"doc(
+            ``ttnn.topk(input_tensor: ttnn.Tensor, k: int, dim: int, largest: bool, sorted: bool, out: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None, memory_config: Optional[ttnn.MemoryConfig] = None, sub_core_grids: Optional[ttnn.CoreRangeSet] = None, indices_tensor: Optional[ttnn.Tensor] = None) -> Tuple[ttnn.Tensor, ttnn.Tensor]``
 
             Returns the :attr:`k` largest or :attr:`k` smallest elements of the :attr:`input_tensor` along a given dimension :attr:`dim`.
 
@@ -51,21 +52,22 @@ void bind_reduction_topk_operation(py::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT8, BFLOAT16
-                        - TILE
+                      - TILE
 
                 .. list-table:: index_tensor
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - UINT16, UINT32
-                        - TILE
+                      - TILE
 
                 The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
 
             Limitations:
+                - Inputs must be located on-device.
                 - The op fundamentally operates on 4D tensors with shape [N, C, H, W], and with :attr:`dim` of -1. The tensor will be manipulated as needed when this is not the case, and restored afterwards.
                 - For :attr:`input_tensor`, N*C*H must be a multiple of 32
                 - W is ideally ≥64. If this is not the case the op will pad the tensor to satisfy this constraint.

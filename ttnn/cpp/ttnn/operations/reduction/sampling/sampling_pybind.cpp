@@ -15,6 +15,8 @@ namespace py = pybind11;
 void bind_reduction_sampling_operation(py::module& module) {
     auto doc =
         R"doc(
+            ``ttnn.sampling(input_values_tensor: ttnn.Tensor, input_indices_tensor: ttnn.Tensor, k: ttnn.Tensor, p: ttnn.Tensor, temp: ttnn.Tensor, seed: Optional[int] = None, sub_core_grids: Optional[ttnn.CoreRangeSet] = None, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor``
+
             Samples from the :attr:`input_values_tensor` based on provided top-k and top-p constraints.
 
             This operation samples values from the :attr:`input_values_tensor` based on the provided thresholds :attr:`k` (top-k sampling)
@@ -53,53 +55,54 @@ void bind_reduction_sampling_operation(py::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - TILE
+                      - TILE
 
 
                 .. list-table:: input_indices_tensor
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - UINT32, INT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 .. list-table:: k
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - UINT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 .. list-table:: p, temp
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 If no :attr:`output_tensor` is provided, the return tensor will be as follows:
                 .. list-table:: output_tensor (default)
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - UINT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 If :attr:`output_tensor` is provided, the supported data types and layout are:
                 .. list-table:: output_tensor (if provided)
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - INT32, UINT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
                 Limitations:
+                - Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.
                 - The input tensors must represent exactly `32 users` based on their shape (i.e. N*C*H = 32).
                 - The last dimension of:attr:`input_values_tensor` must be padded to a multiple of 32
                 - The overall shape of :attr:`input_values_tensor` must match that of :attr:`input_indices_tensor`.

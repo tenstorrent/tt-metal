@@ -18,7 +18,8 @@ namespace ttnn::operations::reduction::detail {
 
 void bind_reduction_moe_operation(py::module& module) {
     auto doc =
-        R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt) -> ttnn.Tensor
+        R"doc(
+            ``ttnn.moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int = 32, output_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor``
 
             Returns the weight of the zero-th MoE expert.
 
@@ -48,14 +49,14 @@ void bind_reduction_moe_operation(py::module& module) {
                         :header-rows: 1
 
                         * - dtype
-                            - layout
+                          - layout
                         * - BFLOAT16
-                            - TILE
+                          - TILE
 
                 The output tensor will match the data type and layout of the input tensor.
 
             Limitations:
-                - Tensors must be 4D.
+                - Tensors must be 4D with shape [N, C, H, W], and must be located on the device.
                 - For the :attr:`input_tensor`, N*C*H must be a multiple of 32. The last dimension must be a power of two and ≥64.
                 - :attr:`k` must be exactly 32.
                 - For the :attr:`topk_mask_tensor`, H must be 32 and W must match :attr:`k` (i.e. 32).
