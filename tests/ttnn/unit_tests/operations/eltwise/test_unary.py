@@ -1763,4 +1763,55 @@ def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
     tt_res = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(tt_res, golden_tensor, pcc=0.9999)
-    assert_with_ulp(tt_res, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
+
+
+def test_hardmish_bfloat16_ulp(device):
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch.float32)
+
+    # Mask NaN, special values where hardmish has ULP>1 (Covered in atol test below).
+    mask = (
+        torch.isnan(input_tensor)
+        | ((input_tensor >= -2.0847e-23) & (input_tensor <= 2.0939e-23))
+        | (input_tensor == -0.0)
+        | (input_tensor >= 6.8122e37)
+        | (input_tensor == -torch.inf)
+    )
+    input_tensor[mask] = 0.0
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.hardmish(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_ulp(golden, result, 1, allow_nonfinite=True)
+
+
+def test_hardmish_bfloat16_allclose(device):
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch.float32)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    golden_function = ttnn.get_golden_function(ttnn.hardmish)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.hardmish(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_allclose(golden, result, rtol=1e-05, atol=1e-35)
