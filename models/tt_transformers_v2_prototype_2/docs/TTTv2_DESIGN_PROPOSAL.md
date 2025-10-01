@@ -627,7 +627,7 @@ coverage_report = suite.get_coverage_report()
 
 ### 2. Model Specification & Factory
 
-Model specification to model implementation still has a gap. For example, on TT device, we typically use different implementation for prefill and decode. Model architecture specification does not typically contain such details. Such details could be considered as part of the model implementation and thus be grouped with hardware-specific configurations?
+Model specification to model implementation still has a gap. For example, on TT device, we typically use different implementation for prefill and decode. Model architecture specification does not typically contain such details. Such details could be considered as part of the model implementation and thus be grouped with hardware-specific configurations? Or it could handled specially because it is a rather stable strategy to specialize forward into prefill_forward and decode_forward?
 
 ### 3. Hardware Abstraction and configuration
 
@@ -635,3 +635,9 @@ Needs more detailed design.
 Also need to design details for hardware specific tensor caches!
 
 ### (finally) double check against the "Library, not Framework" design philosophy
+
+### 4. Code generation
+
+[forward function](TTTv2_BIDIRECTIONAL_CODE_GENERATION.py) at line 348 can be a free function that can be used to generate the source code for the class. It is currently used to generate the source code for the class.
+
+This approach could be combined with the metaclass approach to generate the source code for the class. Or we could make it simpler by specializing a compile_function for each specialized forward function. Such compile_function could generate the specialized forward function that contains concretized configurations based on the tensor shape and hardware configurations
