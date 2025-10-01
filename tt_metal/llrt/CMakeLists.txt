@@ -23,6 +23,7 @@ target_link_libraries(
         Metalium::Metal::Hardware
     PRIVATE
         HAL::1xx
+        HAL::2xx
         Tracy::TracyClient
         nlohmann_json::nlohmann_json
         Reflect::Reflect

@@ -97,8 +97,9 @@ void kernel_main() {
         starts[0] = starts[1];
         ranges[0] = ranges[1];
     }
+    uint32_t payload_size = std::min(page_size, max_packet_size);
     fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric_connection, unicast_route_id, starts, ranges, nullptr, page_size);
+        fabric_connection, unicast_route_id, starts, ranges, nullptr, payload_size);
     fabric_multicast_noc_scatter_write_set_state<
         UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
         fabric_connection,
@@ -107,8 +108,8 @@ void kernel_main() {
         ranges,
         NocUnicastScatterCommandHeader{
             {0, 0},  // ignore
-            static_cast<uint16_t>(page_size)},
-        page_size * 2);
+            static_cast<uint16_t>(payload_size)},
+        payload_size * 2);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
@@ -140,22 +141,22 @@ void kernel_main() {
 
         if constexpr (num_rows_per_packet == 1) {
             uint32_t offset = 0;
-            for (uint32_t j = 0; j < num_packets_per_row; j++) {
-                uint32_t packet_size = std::min(max_packet_size, page_size);
-                packet_size = std::min(packet_size, page_size - max_packet_size * j);
+            uint32_t bytes_remaining = page_size;
+            for (uint32_t j = 0; j < num_packets_per_row && bytes_remaining > 0; j++) {
+                uint32_t packet_size = std::min(max_packet_size, bytes_remaining);
 
-                noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(row_id, offset), packet_size);
+                noc_async_write(l1_read_addr + offset, tensor0_addrgen.get_noc_addr(row_id, offset), packet_size);
                 fabric_multicast_noc_unicast_write_with_state<
                     UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                     fabric_connection,
                     unicast_route_id,
-                    l1_read_addr,
+                    l1_read_addr + offset,
                     tt::tt_fabric::NocUnicastCommandHeader{
                         linear::addrgen_detail::get_noc_address(tensor0_addrgen, row_id, offset)},
                     packet_size);
                 noc_async_writes_flushed();
-                l1_read_addr += packet_size;
-                offset += packet_size;  // advance the noc address for the next packet
+                offset += packet_size;
+                bytes_remaining -= packet_size;
             }
             row_id++;
         } else {

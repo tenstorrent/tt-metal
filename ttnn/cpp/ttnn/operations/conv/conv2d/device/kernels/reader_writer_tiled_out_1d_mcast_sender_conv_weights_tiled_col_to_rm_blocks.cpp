@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "height_sharded_reader_common.hpp"
+#include "conv_reader_common.hpp"
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -36,9 +36,9 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr uint32_t weights_size_h = get_compile_time_arg_val(27);
 
 #ifdef ACTIVATION_REUSE
-    constexpr uint32_t weights_size_h = get_compile_time_arg_val(27);
     constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(28);
     constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(29);
     constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(30) == 1;
@@ -49,7 +49,7 @@ void kernel_main() {
     constexpr bool single_core_processes_multiple_batches = get_compile_time_arg_val(35) == 1;
     constexpr uint32_t ct_arg_idx = 36;
 #else
-    constexpr uint32_t ct_arg_idx = 27;
+    constexpr uint32_t ct_arg_idx = 28;
 #endif
 #else
     constexpr uint32_t ct_arg_idx = 18;
