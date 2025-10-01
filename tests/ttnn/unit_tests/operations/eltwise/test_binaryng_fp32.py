@@ -164,6 +164,23 @@ def test_pow_fp32(device):
     assert status
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
+def test_hypot_multi_dtype(device, dtype):
+    # Map ttnn dtypes to torch dtypes
+    torch_dtype_map = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
+    torch_dtype = torch_dtype_map[dtype]
+
+    x_torch = torch.tensor([[3.0, 4.0, 5.0, 12.0]], dtype=torch_dtype)
+    y_torch = torch.tensor([[4.0, 3.0, 12.0, 5.0]], dtype=torch_dtype)
+    golden_fn = ttnn.get_golden_function(ttnn.hypot)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_hypot = ttnn.hypot(x_tt, y_tt)  # Clean interface - no use_legacy, no activations, no dtype
+
+    assert_with_ulp(z_tt_hypot, z_torch)
+
+
 def test_add_fp32_activ(device):
     x_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32)
     y_torch = torch.ones([1, 1, 64, 64], dtype=torch.float32) * 4
