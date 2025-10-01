@@ -330,7 +330,7 @@ def test_wan_transformer_model(
 
     if load_cache:
         cache_path = get_cache_path(
-            model_name="wan2.2-t2v-a14b",
+            model_name="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
             subfolder="transformer",
             parallel_config=parallel_config,
             dtype="bf16",
