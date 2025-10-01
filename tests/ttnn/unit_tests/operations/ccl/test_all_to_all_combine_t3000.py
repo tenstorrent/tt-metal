@@ -436,6 +436,8 @@ def test_all_to_all_combine_trace(
     )
 
 
+# we import and use this function in tests.sweeps_framework.sweeps.ccl.generality.all_to_all_combine.py
+# so be sure to carry over interface changes!
 def run_all_to_all_combine_test(
     mesh_device,
     mesh_shape,
