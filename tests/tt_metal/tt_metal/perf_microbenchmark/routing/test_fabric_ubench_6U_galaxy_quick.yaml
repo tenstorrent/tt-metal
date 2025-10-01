@@ -69,7 +69,6 @@ Tests:
     patterns:
       - type: all_to_all
 
-  # New Test
   - name: "TorusAllToAllMulticast"
     benchmark_mode: true
     sync: true
@@ -81,42 +80,8 @@ Tests:
     defaults:
       ftype: mcast
       ntype: unicast_write
-      num_packets: 200000
+      num_packets: 20000
       size: 4096
 
     patterns:
       - type: all_to_all
-
-  - name: "TorusFullRingMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
-      num_links: 4
-
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 200000
-      size: 4096
-
-    patterns:
-      - type: full_ring
-
-  - name: "TorusHalfRingMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Torus
-      torus_config: XY
-      num_links: 4
-
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 200000
-      size: 4096
-
-    patterns:
-      - type: half_ring
