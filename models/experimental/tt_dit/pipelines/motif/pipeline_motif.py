@@ -658,7 +658,8 @@ class StableDiffusion3Pipeline:
                 )
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
-                torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
+                # Motif does not apply VAE shift. TODO: Check if this is done on purpose.
+                torch_latents = torch_latents / self._torch_vae_scaling_factor  # + self._torch_vae_shift_factor
 
                 torch_latents = self.transformers[0].unpatchify(
                     torch_latents, height=height // self._vae_scale_factor, width=width // self._vae_scale_factor
