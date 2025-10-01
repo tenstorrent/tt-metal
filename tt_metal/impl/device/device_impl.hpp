@@ -130,7 +130,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false) override;
+        bool minimal = false,
+        std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker = nullptr) override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 

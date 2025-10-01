@@ -165,5 +165,93 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     }
 }
 
+TEST_F(MeshDevice2x4Test, OverlappedSubmeshes) {
+    const auto submesh_range_1 = MeshCoordinateRange(MeshShape{2, 2});
+    const auto submesh_range_2 = MeshCoordinateRange(MeshCoordinate{0, 2}, MeshCoordinate{1, 3});
+    const auto submesh_range_3 = MeshCoordinateRange(MeshShape{1, 4});
+    auto submeshes = mesh_device_->create_overlapped_submeshes({submesh_range_1, submesh_range_2, submesh_range_3});
+    ASSERT_EQ(submeshes.size(), 3);
+    EXPECT_EQ(submeshes[0]->shape(), (MeshShape{2, 2}));
+    EXPECT_EQ(submeshes[1]->shape(), (MeshShape{2, 2}));
+    EXPECT_EQ(submeshes[2]->shape(), (MeshShape{1, 4}));
+
+    // Test buffer allocation behavior with overlapped submeshes
+    // Submesh dependencies: submesh1 and submesh2 don't overlap directly but both overlap with submesh3
+    // Expected: submesh1 and submesh2 should have independent allocations, but submesh3 should respect both
+
+    // Create buffer configuration for testing
+    const DeviceAddr buffer_size = 4096;  // 4KB buffer
+    const DeviceAddr page_size = 4096;    // 1KB page size
+    using namespace tt::tt_metal::distributed;
+
+    // Buffer configuration for testing
+    ReplicatedBufferConfig replicated_config{buffer_size};
+    // DRAM issues:
+    // - BankManager doesn't take in Alloc Deps
+    // - APIs don't take in Alloc id
+    // - Everything is using default, so everything independent
+    DeviceLocalBufferConfig l1_device_config{
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = std::nullopt, .bottom_up = false};
+
+    // Allocate a buffer in submesh1
+    auto buffer1 = MeshBuffer::create(replicated_config, l1_device_config, submeshes[0].get());
+    EXPECT_TRUE(buffer1->is_allocated());
+    DeviceAddr addr1 = buffer1->address();
+
+    // Allocate a buffer in submesh2 and check that address is same as submesh1
+    // NOTE: This should be the same because they don't overlap and should use independent allocators
+    auto buffer2 = MeshBuffer::create(replicated_config, l1_device_config, submeshes[1].get());
+    EXPECT_TRUE(buffer2->is_allocated());
+    DeviceAddr addr2 = buffer2->address();
+
+    // Since submesh1 and submesh2 don't overlap, they should have independent allocations
+    // and should get the same starting address (both start from beginning of their allocators)
+    EXPECT_EQ(addr2, addr1) << "Submesh1 and submesh2 should have same starting address (independent allocators)";
+
+    // Allocate another buffer in submesh2 and check that it continues after the previous buffer
+    auto buffer2_next = MeshBuffer::create(replicated_config, l1_device_config, submeshes[1].get());
+    EXPECT_TRUE(buffer2_next->is_allocated());
+    DeviceAddr addr2_next = buffer2_next->address();
+    EXPECT_EQ(addr2_next, addr2 - buffer_size) << "Second buffer in submesh2 should continue after first buffer";
+
+    // Allocate a buffer in submesh3 and check that it's in the same address as after allocations in submesh2
+    // Submesh3 overlaps with both submesh1 and submesh2, so it should respect both allocators
+    auto buffer3 = MeshBuffer::create(replicated_config, l1_device_config, submeshes[2].get());
+    EXPECT_TRUE(buffer3->is_allocated());
+    DeviceAddr addr3 = buffer3->address();
+
+    // Submesh3 should respect both submesh1 and submesh2 allocations
+    // Since both submesh1 and submesh2 have allocated buffers, submesh3 should start after the maximum
+    EXPECT_EQ(addr3, addr2_next - buffer_size) << "Submesh3 should respect both submesh1 and submesh2 allocations";
+
+    // Do the same in DRAM buffer
+    DeviceLocalBufferConfig dram_device_config{
+        .page_size = page_size, .buffer_type = BufferType::DRAM, .sharding_args = std::nullopt, .bottom_up = true};
+
+    auto buffer1_dram = MeshBuffer::create(replicated_config, dram_device_config, submeshes[0].get());
+    EXPECT_TRUE(buffer1_dram->is_allocated());
+    DeviceAddr addr1_dram = buffer1_dram->address();
+
+    auto buffer2_dram = MeshBuffer::create(replicated_config, dram_device_config, submeshes[1].get());
+    EXPECT_TRUE(buffer2_dram->is_allocated());
+    DeviceAddr addr2_dram = buffer2_dram->address();
+
+    EXPECT_EQ(addr2_dram, addr1_dram)
+        << "Submesh1 and submesh2 should have same starting address (independent allocators)";
+
+    auto buffer2_next_dram = MeshBuffer::create(replicated_config, dram_device_config, submeshes[1].get());
+    EXPECT_TRUE(buffer2_next_dram->is_allocated());
+    DeviceAddr addr2_next_dram = buffer2_next_dram->address();
+    EXPECT_EQ(addr2_next_dram, addr2_dram + buffer_size)
+        << "Second buffer in submesh2 should continue after first buffer";
+
+    auto buffer3_dram = MeshBuffer::create(replicated_config, dram_device_config, submeshes[2].get());
+    EXPECT_TRUE(buffer3_dram->is_allocated());
+    DeviceAddr addr3_dram = buffer3_dram->address();
+
+    EXPECT_EQ(addr3_dram, addr2_next_dram + buffer_size)
+        << "Submesh3 should respect both submesh1 and submesh2 allocations";
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed
