@@ -64,7 +64,7 @@ def run_conv(
             torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
 
     if shard_layout is None:
         shard_layout = (
@@ -389,7 +389,7 @@ def test_with_prepare_weights(
 
     tt_weight_tensor = ttnn.from_torch(torch_weight_tensor, dtype=ttnn.bfloat16)
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
 
     if prepare_weights:
         tt_weight_tensor = ttnn.prepare_conv_weights(

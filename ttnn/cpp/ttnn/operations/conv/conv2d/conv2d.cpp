@@ -356,13 +356,17 @@ Result conv2d_DRAM(
             dram_slice_config.num_slices,
             output_sliced_dim);
     }
-
-    const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
-    input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
-
-    TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(
-        input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        is_device_tensor(input_tensor),
+        "Input tensor (input0/activations) must be a device tensor. Use ttnn.to_device() to move the tensor to device "
+        "first.");
+
+    // Reshape the input tensor to the correct dimensions
+    const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
+    ttnn::Tensor reshaped_input_tensor = ttnn::reshape(input_tensor, unflattened_input_shape, unflattened_input_shape);
+
+    TT_FATAL(
+        reshaped_input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
 
     Tensor dram_output_tensor = tt_metal::create_device_tensor(
@@ -512,10 +516,10 @@ Result conv2d_DRAM(
                 input_slice_height,
                 input_slice_width,
                 compute_grid_size,
-                input_tensor_on_device.layout(),
-                input_tensor_on_device.dtype(),
+                reshaped_input_tensor.layout(),
+                reshaped_input_tensor.dtype(),
                 output_dtype,
-                std::make_optional(input_tensor_on_device.memory_config()),
+                std::make_optional(reshaped_input_tensor.memory_config()),
                 kernel_size,
                 dilation,
                 padding_n4,
@@ -536,11 +540,11 @@ Result conv2d_DRAM(
             ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
             mm_conv,
             compute_grid_size,
-            input_tensor_on_device.layout(),
+            reshaped_input_tensor.layout(),
             BufferType::DRAM));
 
         Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
-            input_tensor_on_device,
+            reshaped_input_tensor,
             ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
             ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
             ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
@@ -609,7 +613,7 @@ Result conv2d_DRAM(
     }
 
     if (conv_config.deallocate_activation) {
-        input_tensor_on_device.deallocate(true);
+        reshaped_input_tensor.deallocate(true);
     }
     const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
     const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
@@ -638,6 +642,11 @@ Result conv2d_L1(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
+    TT_FATAL(
+        is_device_tensor(input_tensor_),
+        "Input tensor (input0/activations) must be a device tensor. Use ttnn.to_device() to move the tensor to device "
+        "first.");
+
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor_.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -696,8 +705,7 @@ Result conv2d_L1(
             input_tensor.layout(),
             input_tensor.dtype(),
             output_dtype,
-            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                         : std::nullopt,
+            std::make_optional(input_tensor.memory_config()),
             kernel_size,
             dilation,
             padding_n4,
