@@ -184,48 +184,64 @@ function findOwnerForLabel(label) {
 
 // START OF CODE FOR ERROR HANDLING
 
-// Simple HTML escaping for rendering snippets safely in summary HTML
-// This is used to prevent XSS attacks by converting special characters to basic text that can't be rendered as HTML
-function escapeHtml(text) {
-  if (typeof text !== 'string') return text;
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
 function renderErrorsTable(errorSnippets) {
-  if (!Array.isArray(errorSnippets) || errorSnippets.length === 0) { // If the error snippets are not an array or the length is 0
-    return '<em>No error info found</em>';
+  if (!Array.isArray(errorSnippets) || errorSnippets.length === 0) {
+    return '_No error info found_';
   }
-  const rows = errorSnippets.map(obj => { // Map each object in the error snippets array to something else
-    const label = escapeHtml(obj.label || ''); // Escape the label so no security issues
-    const snippet = escapeHtml(obj.snippet || ''); // Escape the snippet so no security issues
-    // Render owner display name(s) if present; fallback to id(s); else 'no owner found'
+  const rows = errorSnippets.map(obj => {
+    const label = (obj && obj.label) ? String(obj.label).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ') : '';
+    const rawSnippet = (obj && obj.snippet) ? String(obj.snippet) : '';
+    const snippetOneLine = rawSnippet.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
     let ownerDisplay = 'no owner found';
-    if (obj.owner && Array.isArray(obj.owner) && obj.owner.length) {
-      const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean); // if the owner exists and has a name or and id that isn't falsy then make that the new owner value in the mapping
-      if (names.length) ownerDisplay = names.join(', '); // If the names array is not empty, join the names with a comma
+    if (obj && Array.isArray(obj.owner) && obj.owner.length) {
+      const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
+      if (names.length) ownerDisplay = names.join(', ');
     }
-    const owner = escapeHtml(ownerDisplay);
-    return `<tr><td style="vertical-align:top;"><pre style="white-space:pre-wrap;word-break:break-word;margin:0;">${label}</pre></td><td>${owner}</td><td><pre style="white-space:pre-wrap;margin:0;">${snippet}</pre></td></tr>`; // Return the table row. this is formatted so that word wrapping occurs
+    ownerDisplay = ownerDisplay.replace(/\|/g, '\\|');
+    return `| ${label} | ${ownerDisplay} | ${snippetOneLine} |`;
   }).join('\n');
-  return `<table><thead><tr><th style="text-align:left;">Test</th><th style="text-align:left;">Owner</th><th style="text-align:left;">Error</th></tr></thead><tbody>${rows}</tbody></table>`; // Return the table
+  return [
+    '| Test | Owner | Error |',
+    '|------|-------|-------|',
+    rows,
+    ''
+  ].join('\n');
 }
 
 function renderCommitsTable(commits) {
   if (!Array.isArray(commits) || commits.length === 0) {
-    return '<em>None</em>';
+    return '_None_';
   }
   const rows = commits.map(c => {
-    const short = escapeHtml(c.short || (c.sha ? c.sha.substring(0, 7) : '')); // Return the short SHA of the commit using c.short if available. otherwise use the first 7 characters of the SHA
-    const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : undefined); // Return the URL of the commit or build it from the sha if the url is not available
-    const who = c.author_login ? `@${escapeHtml(c.author_login)}` : escapeHtml(c.author_name || 'unknown'); // return the author login name if available, otherwise use their display name, but default to unknown if nothing is available
-    const whoHtml = c.author_login && c.author_url ? `<a href="${c.author_url}">${who}</a>` : who; // if author login and url are available, make the author login name a clickable link
-    const shaHtml = url ? `<a href="${url}"><code>${short}</code></a>` : `<code>${short}</code>`; // if the sha url is available, make the sha a clickable link
-    return `<tr><td>${shaHtml}</td><td>${whoHtml}</td></tr>`;
+    const short = c.short || (c.sha ? c.sha.substring(0, 7) : '');
+    const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : undefined);
+    const who = c.author_login ? `@${c.author_login}` : (c.author_name || 'unknown');
+    const whoMd = (c.author_login && c.author_url) ? `[@${c.author_login}](${c.author_url})` : who;
+    const shaMd = url ? `[\`${short}\`](${url})` : `\`${short}\``;
+    return `| ${shaMd} | ${whoMd} |`;
   }).join('\n');
-  return `<table><thead><tr><th>SHA</th><th>Author</th></tr></thead><tbody>${rows}</tbody></table>`;
+  return [
+    '| SHA | Author |',
+    '|-----|--------|',
+    rows,
+    ''
+  ].join('\n');
+}
+
+function renderRawCommitUrlsTable(commits) {
+  if (!Array.isArray(commits) || commits.length === 0) {
+    return '_None_';
+  }
+  const rows = commits.map(c => {
+    const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : '');
+    return `| ${url} |`;
+  }).join('\n');
+  return [
+    '| URL |',
+    '|-----|',
+    rows,
+    ''
+  ].join('\n');
 }
 
 /**
@@ -1267,7 +1283,7 @@ async function run() {
               ? `by [@${it.first_failed_author_login}](${it.first_failed_author_url})`
               : (it.first_failed_author_name ? `by ${it.first_failed_author_name}` : '');
 
-            // Render error snippets from the latest failing run as an HTML table
+            // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml, ''].join('\n');
@@ -1281,8 +1297,19 @@ async function run() {
 
             // If we found a success in the window, show commits between success and first failure
             let commitsList = '';
-            const commitsHtml = renderCommitsTable(it.commits_between || []); // render the commits as an HTML table
-            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml, ''].join('\n');
+            const commitsMd = renderCommitsTable(it.commits_between || []);
+            const rawUrlsMd = renderRawCommitUrlsTable(it.commits_between || []);
+            commitsList = [
+              '',
+              '  - Commits between last success and first failure (tables below):',
+              '',
+              commitsMd,
+              '',
+              '  - Raw commit URLs:',
+              '',
+              rawUrlsMd,
+              ''
+            ].join('\n');
 
             // Build information about the latest failing run (for normal regressions)
             const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : ''; // timestamp of latest failure
@@ -1318,7 +1345,7 @@ async function run() {
             // Format the timestamp of the first failure
             const when = it.first_failed_created_at ? new Date(it.first_failed_created_at).toISOString() : '';
 
-            // Render error snippets from the latest failing run as an HTML table
+            // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
             errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
@@ -1339,8 +1366,19 @@ async function run() {
 
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
-            const commitsHtml2 = renderCommitsTable(it.commits_between || []); // render the commits as an HTML table
-            commitsList = ['','  - Commits between last success and first failure (table below):','', commitsHtml2, ''].join('\n');
+            const commitsMd2 = renderCommitsTable(it.commits_between || []);
+            const rawUrlsMd2 = renderRawCommitUrlsTable(it.commits_between || []);
+            commitsList = [
+              '',
+              '  - Commits between last success and first failure (tables below):',
+              '',
+              commitsMd2,
+              '',
+              '  - Raw commit URLs:',
+              '',
+              rawUrlsMd2,
+              ''
+            ].join('\n');
 
             // Build information about the latest failing run
             const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : ''; // timestamp of latest failure
