@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -47,6 +47,7 @@ enum class HalL1MemAddrType : uint8_t {
     TENSIX_FABRIC_CONNECTIONS,
     TENSIX_ROUTING_PATH_1D,
     TENSIX_ROUTING_PATH_2D,
+    TENSIX_EXIT_NODE_TABLE,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 

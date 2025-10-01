@@ -32,8 +32,10 @@ The communication flow is illustrated below:
 ### Device and Program Setup
 
 ```cpp
-IDevice* device = CreateDevice(0);
-CommandQueue& cq = device->command_queue();
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram();
 ```
 
@@ -69,8 +71,9 @@ InterleavedBufferConfig dram_config{
     .device = device, .size = single_tile_size, .page_size = single_tile_size, .buffer_type = BufferType::DRAM
 };
 
-std::shared_ptr<Buffer> src_dram_buffer = CreateBuffer(dram_config);
-std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+distributed::ReplicatedBufferConfig buffer_config{.size = single_tile_size};
+auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
 const bool input_tensor_is_dram = src_dram_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 const bool output_tensor_is_dram = dst_dram_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -81,7 +84,7 @@ We initialize the input with the value `14`:
 ```cpp
 const uint16_t input_data = 14;
 std::vector<uint16_t> src_vec(1, input_data);
-EnqueueWriteBuffer(cq, src_dram_buffer, src_vec.data(), false);
+distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec.data(), false);
 ```
 
 ---
@@ -162,15 +165,16 @@ SetRuntimeArgs(program, core1_writer_kernel_id, core1, {dst_dram_buffer->address
 We enqueue the program, finish execution, and verify the output:
 
 ```cpp
-EnqueueProgram(cq, program, false);
-Finish(cq);
+workload.add_program(device_range, std::move(program));
+distributed::EnqueueMeshWorkload(cq, workload, false);
+distributed::Finish(cq);
 
 std::vector<uint16_t> result_vec;
-EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
 std::cout << "Result = " << result_vec[0] << " : Expected = " << input_data << std::endl;
 
-CloseDevice(device);
+mesh_device->close();
 ```
 
 ---

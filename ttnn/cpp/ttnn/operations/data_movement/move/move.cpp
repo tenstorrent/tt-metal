@@ -10,6 +10,7 @@
 #include "ttnn/distributed/api.hpp"
 
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/allocator.hpp>
 
 using namespace tt::tt_metal;
 
@@ -30,9 +31,9 @@ bool can_deallocate(const Tensor& input_tensor) {
 
 static inline Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
-    auto input_mem_config = input_tensor.memory_config();
+    const auto& input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
-    auto output_mem_config = mem_config.value_or(input_mem_config);
+    TensorSpec output_tensor_spec = input_tensor.tensor_spec();
 
     if (not can_deallocate(input_tensor)) {
         // TODO: Should this throw error?
@@ -46,16 +47,12 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
         DeallocateBuffer(*input_tensor.buffer());
     }
 
-    auto output_tensor = create_device_tensor(
-        TensorSpec(
-            input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                input_tensor.dtype(),
-                PageConfig(input_tensor.layout()),
-                output_mem_config,
-                input_tensor.logical_shape(),
-                input_tensor.padded_shape())),
-        input_tensor.device());
+    if (mem_config) {
+        output_tensor_spec = output_tensor_spec.with_memory_config(*mem_config);
+    }
+
+    auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
+    auto output_mem_config = output_tensor.memory_config();
 
     // get_parallelization_strategy
     bool move_within_same_mem_space = input_mem_config.buffer_type() == output_mem_config.buffer_type();
@@ -73,7 +70,7 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
     const auto num_banks = input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
-    uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(
+    uint32_t size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),
         num_banks,
@@ -83,7 +80,7 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
     // Only compute with storage cores allow CBs to be created
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
+    uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
         output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
 
     if (move_within_same_mem_space) {
@@ -121,11 +118,8 @@ static inline Tensor move(const Tensor& input_tensor, const std::optional<Memory
 
 static inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
-    auto input_mem_config = input_tensor.memory_config();
-    TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
+    TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
     [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
-    auto output_mem_config = mem_config.value_or(input_mem_config);
-    TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
     if (not can_deallocate(input_tensor)) {
         TT_FATAL(
             false,
@@ -135,9 +129,6 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         return {input_tensor};
     }
     auto shard_spec = input_tensor.shard_spec().value();
-    auto shard_grid = shard_spec.grid;
-    auto input_dtype = input_tensor.dtype();
-    auto input_layout = input_tensor.layout();
     // Special handling for Mesh vs single device. Needs to be consolidated after full
     // migration
 
@@ -146,18 +137,15 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
     } else {
         DeallocateBuffer(*input_tensor.buffer());
     }
-    // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
-    auto shard_mem_config = output_mem_config.with_shard_spec(shard_spec);
-    auto output_tensor = create_device_tensor(
-        TensorSpec(
-            input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
-                input_dtype,
-                PageConfig(input_layout),
-                shard_mem_config,
-                input_tensor.logical_shape(),
-                input_tensor.padded_shape())),
-        input_tensor.device());
+
+    auto output_tensor_spec = input_tensor.tensor_spec();
+    if (mem_config) {
+        TT_FATAL(mem_config->is_sharded(), "Expected output tensor memory config to be sharded");
+        auto output_mem_config = mem_config->with_shard_spec(shard_spec);
+        output_tensor_spec = output_tensor_spec.with_memory_config(output_mem_config);
+    }
+
+    auto output_tensor = create_device_tensor(output_tensor_spec, input_tensor.device());
     if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
         log_debug(
             tt::LogOp,
@@ -167,7 +155,8 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
     }
     MoveOpParallelizationStrategy move_op_parallelization_strategy = MoveOpParallelizationStrategy::MULTI_CORE_SHARDED;
     return operation::run(
-               MoveDeviceOperation{output_mem_config, move_op_parallelization_strategy}, {input_tensor, output_tensor})
+               MoveDeviceOperation{output_tensor.memory_config(), move_op_parallelization_strategy},
+               {input_tensor, output_tensor})
         .at(0);
 }
 

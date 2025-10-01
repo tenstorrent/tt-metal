@@ -16,13 +16,13 @@ It is important to note that this example builds on top of the previous single c
 
 The full source code for this example is available under the ``tt_metal/programming_examples/matmul/matmul_multi_core/`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_multi_core`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_matmul_multi_core`` executable in the ``build/programming_examples`` directory. For example:
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/matmul_multi_core
+    ./build/programming_examples/metal_example_matmul_multi_core
 
 .. note::
     Efficiently parallelizing matrix multiplication across multiple cores—using SPMD (Single Program, Multiple Data) or other parallelization strategies - is a broad and advanced topic, often covered in depth in advanced computer science courses. While this tutorial demonstrates how to use our API to distribute work across cores, it does not attempt to teach the fundamentals of parallel programming or SPMD concepts themselves.
@@ -34,13 +34,14 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
 Device Initialization & Program Setup
 -------------------------------------
 
-Device initialization and parameter setup are the same as in the single core example. You create a device, initialize the program with the required parameters, and compute the reference result on the CPU. This section is unchanged from the single core example; see :ref:`Device Initialization & Program Setup in the single core matrix multiplication<mm_single_core_device_initialization>` in the single core matrix multiplication example for details on device setup and program initialization.
+
+Device initialization and parameter setup are similar to the single core example, but now use the mesh API. You create a mesh device, initialize the program, and compute the reference result on the CPU. Example:
 
 .. code-block:: cpp
 
-    // Open device (use device 0)
+    // Open mesh device (use device 0)
     constexpr int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
     // Matrix dimensions (must be divisible by tile dimensions)
     constexpr uint32_t M = 640;  // Matrix A height
@@ -67,6 +68,28 @@ Device initialization and parameter setup are the same as in the single core exa
 
     std::vector<bfloat16> golden_vec(M * N, 0);
     golden_matmul(src0_vec, src1_vec, golden_vec, M, N, K);
+
+    // Convert source matrices to tiled format for device execution
+    src0_vec = tilize_nfaces(src0_vec, M, K);
+    src1_vec = tilize_nfaces(src1_vec, K, N);
+
+    // Set up mesh command queue, workload, and program
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    Program program{};
+
+    // Create DRAM buffers for input and output matrices (replicated per device across the mesh)
+    constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config_A{.size = single_tile_size * Mt * Kt};
+    distributed::ReplicatedBufferConfig buffer_config_B{.size = single_tile_size * Nt * Kt};
+    distributed::ReplicatedBufferConfig buffer_config_C{.size = single_tile_size * Mt * Nt};
+
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
 Next, convert the source matrices to tiled format before preparing for execution on the device.
 
@@ -330,31 +353,36 @@ With the work distribution calculated, you can now create the kernels and set up
 .. warning::
     If a kernel is created on a core but runtime arguments are not set for that core, the program may crash or hang as a result of undefined behavior. Always ensure that kernels are created only on the intended cores, or that runtime arguments are set for every core where a kernel is created.
 
+
 .. code-block:: cpp
 
     MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
-    std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
-    std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_multi_core/kernels/compute/mm.cpp",
+        OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/compute/mm.cpp",
         all_cores,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = {}});
 
@@ -412,19 +440,30 @@ This part is the same as in the single core example. You execute the program, wa
 
 See :ref:`Kernel execution and result verification in the single core matrix multiplication<mm_single_core_kernel_execution>` in the single core matrix multiplication example for details on how program execution, downloading results, untilize, verification, and cleanup are performed. There is no change in the API usage for these steps compared to the single core example.
 
+
 .. code-block:: cpp
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
-    EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
+    // Upload input data to DRAM buffers using mesh API
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
 
-    // outside of the fcunction, `output` is returned as `result_vec`
+    // Add program to mesh workload and execute
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    // Download results from DRAM buffer to host
+    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+
+    // outside of the function, `output` is returned as `result_vec`
     result_vec = untilize_nfaces(result_vec, M, N);
+
 
     float pearson = check_bfloat16_vector_pcc(golden_vec, result_vec);
     log_info(tt::LogVerif, "Metalium vs Golden -- PCC = {}", pearson);
     TT_FATAL(pearson > 0.97, "PCC not high enough. Result PCC: {}, Expected PCC: 0.97", pearson);
+
+    // Properly close the mesh device to release resources
+    mesh_device->close();
 
 Conclusion
 ----------

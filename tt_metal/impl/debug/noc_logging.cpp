@@ -10,7 +10,7 @@
 #include <fstream>
 #include <string>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"
@@ -27,7 +27,7 @@ using noc_data_t = std::array<uint64_t, NOC_DATA_SIZE>;
 
 namespace tt {
 
-static std::string logfile_path = "generated/noc_data/";
+constexpr auto logfile_path = "generated/noc_data/";
 void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_root_dir() + logfile_path);

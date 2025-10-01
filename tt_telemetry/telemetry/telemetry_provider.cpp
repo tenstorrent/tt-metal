@@ -2,17 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/*
+ * The telemetry collector creates a thread that collects and disseminates telemetry. Note that
+ * subscribers here are internal components. They maintain their own complete state, therefore
+ * the initial snapshot need only be sent once (the subscribers can never "disconnect") and any
+ * metrics received from remote instances are propagated via delta updates.
+ */
+
 #include <future>
 #include <queue>
 #include <unistd.h>
 
+#include <boost/functional/hash.hpp>
+
 #include <tt-logger/tt-logger.hpp>
+#include <server/collection_clients.hpp>
+#include <utils/simple_concurrent_queue.hpp>
 
 #include <telemetry/telemetry_provider.hpp>
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
-#include <telemetry/arc/arc_telemetry_reader.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 
@@ -23,7 +33,38 @@ static std::atomic<bool> stopped_{false};
 
 static char hostname_[256];
 
-void return_buffer_to_pool(TelemetrySnapshot *buffer) {
+static std::vector<std::unique_ptr<BoolMetric>> bool_metrics_;
+static std::vector<std::unique_ptr<UIntMetric>> uint_metrics_;
+static std::vector<std::unique_ptr<DoubleMetric>> double_metrics_;
+
+// Unbounded queue for storing received telemetry snapshots from aggregate endpoints
+static SimpleConcurrentQueue<std::pair<std::string, TelemetrySnapshot>> received_snapshots_;
+
+// Callback function for handling received telemetry snapshots from WebSocket clients
+static void on_snapshot_received(const std::string& endpoint, const TelemetrySnapshot& snapshot) {
+    log_debug(tt::LogAlways, "TelemetryCollector: Received snapshot from endpoint {}", endpoint);
+
+    // Add the received endpoint-snapshot pair to the queue (thread-safe)
+    received_snapshots_.push(std::make_pair(endpoint, snapshot));
+
+    log_debug(tt::LogAlways, "TelemetryCollector: Snapshot from {} added to queue", endpoint);
+}
+
+static void aggregate_remote_telemetry(TelemetrySnapshot& delta_snapshot) {
+    // Process all received snapshots from remote telemetry endpoints
+    received_snapshots_.process_all([&delta_snapshot](auto&& endpoint_snapshot_pair) {
+        auto [endpoint, snapshot] = std::move(endpoint_snapshot_pair);
+
+        log_debug(tt::LogAlways, "TelemetryCollector: Processing snapshot from endpoint {}", endpoint);
+
+        // Merge the received snapshot into the delta snapshot for this update cycle
+        delta_snapshot.merge_from(snapshot);
+
+        log_debug(tt::LogAlways, "TelemetryCollector: Added remote telemetry data from {} to delta", endpoint);
+    });
+}
+
+static void return_buffer_to_pool(TelemetrySnapshot* buffer) {
     if (stopped_.load()) {
         return;
     }
@@ -34,20 +75,20 @@ void return_buffer_to_pool(TelemetrySnapshot *buffer) {
     available_buffers_.push(buffer);
 }
 
-std::shared_ptr<TelemetrySnapshot> create_new_handoff_buffer(TelemetrySnapshot *buffer) {
+static std::shared_ptr<TelemetrySnapshot> create_new_handoff_buffer(TelemetrySnapshot* buffer) {
     return std::shared_ptr<TelemetrySnapshot>(
         buffer,
         [](TelemetrySnapshot *buffer) {
             // Custom deleter: do not delete, just return to pool. We use shared_ptr for its
             // thread-safe reference counting, allowing a buffer to be passed to multiple
             // consumers.
-            log_debug(tt::LogAlways, "TelemetryProvider: Returned buffer");
+            log_debug(tt::LogAlways, "TelemetryCollector: Returned buffer");
             return_buffer_to_pool(buffer);
         }
     );
 }
 
-std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
+static std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
     std::lock_guard<std::mutex> lock(mtx_);
 
     TelemetrySnapshot *buffer;
@@ -55,11 +96,11 @@ std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
         // Get a free buffer
         buffer = available_buffers_.front();
         available_buffers_.pop();
-        log_debug(tt::LogAlways, "TelemetryProvider: Got buffer from pool");
+        log_debug(tt::LogAlways, "TelemetryCollector: Got buffer from pool");
     } else {
         // Pool exhausted, create new buffer
         buffer = new TelemetrySnapshot();
-        log_debug(tt::LogAlways, "TelemetryProvider: Allocated new buffer");
+        log_debug(tt::LogAlways, "TelemetryCollector: Allocated new buffer");
     }
 
     // Ensure it is clear
@@ -87,23 +128,19 @@ static std::string get_cluster_wide_telemetry_path(const Metric &metric) {
     return path;
 }
 
-static void update(
-    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
-    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
-    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
-    const std::unique_ptr<tt::umd::Cluster>& cluster) {
+static void update(const std::unique_ptr<tt::umd::Cluster>& cluster) {
     log_info(tt::LogAlways, "Starting telemetry readout...");
     std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
 
-    for (auto &metric: bool_metrics) {
+    for (auto& metric : bool_metrics_) {
         metric->update(cluster, start_of_update_cycle);
     }
 
-    for (auto &metric: uint_metrics) {
+    for (auto& metric : uint_metrics_) {
         metric->update(cluster, start_of_update_cycle);
     }
 
-    for (auto& metric : double_metrics) {
+    for (auto& metric : double_metrics_) {
         metric->update(cluster, start_of_update_cycle);
     }
 
@@ -112,43 +149,30 @@ static void update(
     log_info(tt::LogAlways, "Telemetry readout took {} ms", duration_ms);
 }
 
-static void send_initial_snapshot(
-    const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers,
-    const std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
-    const std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
-    const std::vector<std::unique_ptr<DoubleMetric>>& double_metrics) {
+static void send_initial_snapshot(const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
 
-    for (size_t i = 0; i < bool_metrics.size(); i++) {
-        std::string path = get_cluster_wide_telemetry_path(*bool_metrics[i]);
-        size_t id = bool_metrics[i]->id;
-        snapshot->bool_metric_ids.push_back(id);
-        snapshot->bool_metric_names.push_back(path);
-        snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
-        snapshot->bool_metric_timestamps.push_back(bool_metrics[i]->timestamp());
+    for (size_t i = 0; i < bool_metrics_.size(); i++) {
+        std::string path = get_cluster_wide_telemetry_path(*bool_metrics_[i]);
+        snapshot->bool_metrics[path] = bool_metrics_[i]->value();
+        snapshot->bool_metric_timestamps[path] = bool_metrics_[i]->timestamp();
     }
 
-    for (size_t i = 0; i < uint_metrics.size(); i++) {
-        std::string path = get_cluster_wide_telemetry_path(*uint_metrics[i]);
-        size_t id = uint_metrics[i]->id;
-        snapshot->uint_metric_ids.push_back(id);
-        snapshot->uint_metric_names.push_back(path);
-        snapshot->uint_metric_units.push_back(static_cast<uint16_t>(uint_metrics[i]->units));
-        snapshot->uint_metric_values.push_back(uint_metrics[i]->value());
-        snapshot->uint_metric_timestamps.push_back(uint_metrics[i]->timestamp());
+    for (size_t i = 0; i < uint_metrics_.size(); i++) {
+        std::string path = get_cluster_wide_telemetry_path(*uint_metrics_[i]);
+        snapshot->uint_metrics[path] = uint_metrics_[i]->value();
+        snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metrics_[i]->units);
+        snapshot->uint_metric_timestamps[path] = uint_metrics_[i]->timestamp();
     }
 
-    for (size_t i = 0; i < double_metrics.size(); i++) {
-        std::string path = get_cluster_wide_telemetry_path(*double_metrics[i]);
-        size_t id = double_metrics[i]->id;
-        snapshot->double_metric_ids.push_back(id);
-        snapshot->double_metric_names.push_back(path);
-        snapshot->double_metric_units.push_back(static_cast<uint16_t>(double_metrics[i]->units));
-        snapshot->double_metric_values.push_back(double_metrics[i]->value());
-        snapshot->double_metric_timestamps.push_back(double_metrics[i]->timestamp());
+    for (size_t i = 0; i < double_metrics_.size(); i++) {
+        std::string path = get_cluster_wide_telemetry_path(*double_metrics_[i]);
+        snapshot->double_metrics[path] = double_metrics_[i]->value();
+        snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
+        snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
     }
 
-    // Populate unit label maps when names are populated
+    // Populate unit label maps for initial snapshot
     snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
     snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
 
@@ -157,122 +181,120 @@ static void send_initial_snapshot(
     }
 }
 
-static void send_delta(
-    const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers,
-    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
-    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
-    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics) {
-    std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
-
-    for (size_t i = 0; i < bool_metrics.size(); i++) {
-        if (!bool_metrics[i]->changed_since_transmission()) {
+static void update_delta_snapshot_with_local_telemetry(std::shared_ptr<TelemetrySnapshot> snapshot) {
+    for (size_t i = 0; i < bool_metrics_.size(); i++) {
+        if (!bool_metrics_[i]->changed_since_transmission()) {
             continue;
         }
-        snapshot->bool_metric_ids.push_back(bool_metrics[i]->id);
-        snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
-        snapshot->bool_metric_timestamps.push_back(bool_metrics[i]->timestamp());
-        bool_metrics[i]->mark_transmitted();
+        std::string path = get_cluster_wide_telemetry_path(*bool_metrics_[i]);
+        snapshot->bool_metrics[path] = bool_metrics_[i]->value();
+        snapshot->bool_metric_timestamps[path] = bool_metrics_[i]->timestamp();
+        bool_metrics_[i]->mark_transmitted();
     }
 
-    for (size_t i = 0; i < uint_metrics.size(); i++) {
-        if (!uint_metrics[i]->changed_since_transmission()) {
+    for (size_t i = 0; i < uint_metrics_.size(); i++) {
+        if (!uint_metrics_[i]->changed_since_transmission()) {
             continue;
         }
-        snapshot->uint_metric_ids.push_back(uint_metrics[i]->id);
-        snapshot->uint_metric_values.push_back(uint_metrics[i]->value());
-        snapshot->uint_metric_timestamps.push_back(uint_metrics[i]->timestamp());
-        uint_metrics[i]->mark_transmitted();
+        std::string path = get_cluster_wide_telemetry_path(*uint_metrics_[i]);
+        snapshot->uint_metrics[path] = uint_metrics_[i]->value();
+        snapshot->uint_metric_units[path] = static_cast<uint16_t>(uint_metrics_[i]->units);
+        snapshot->uint_metric_timestamps[path] = uint_metrics_[i]->timestamp();
+        uint_metrics_[i]->mark_transmitted();
     }
 
-    for (size_t i = 0; i < double_metrics.size(); i++) {
-        if (!double_metrics[i]->changed_since_transmission()) {
+    for (size_t i = 0; i < double_metrics_.size(); i++) {
+        if (!double_metrics_[i]->changed_since_transmission()) {
             continue;
         }
-        snapshot->double_metric_ids.push_back(double_metrics[i]->id);
-        snapshot->double_metric_values.push_back(double_metrics[i]->value());
-        snapshot->double_metric_timestamps.push_back(double_metrics[i]->timestamp());
-        double_metrics[i]->mark_transmitted();
+        std::string path = get_cluster_wide_telemetry_path(*double_metrics_[i]);
+        snapshot->double_metrics[path] = double_metrics_[i]->value();
+        snapshot->double_metric_units[path] = static_cast<uint16_t>(double_metrics_[i]->units);
+        snapshot->double_metric_timestamps[path] = double_metrics_[i]->timestamp();
+        double_metrics_[i]->mark_transmitted();
     }
 
-    for (auto &subscriber: subscribers) {
-        subscriber->on_telemetry_ready(snapshot);
+    // Add unit label maps to the snapshot (if not already present from remote aggregation)
+    if (snapshot->metric_unit_display_label_by_code.empty()) {
+        snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
+    }
+    if (snapshot->metric_unit_full_label_by_code.empty()) {
+        snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
     }
 }
 
-static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers) {
-    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
-    std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
-    log_info(tt::LogAlways, "Created cluster and HAL");
+static void telemetry_thread(
+    bool telemetry_enabled,
+    std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
+    const std::vector<std::string>& aggregate_endpoints) {
+    try {
+        std::unique_ptr<tt::umd::Cluster> cluster;
+        std::unique_ptr<tt::tt_metal::Hal> hal;
 
-    // Create vectors of all metrics we will monitor by value type
-    size_t id = 1;
-    std::vector<std::unique_ptr<BoolMetric>> bool_metrics;
-    std::vector<std::unique_ptr<UIntMetric>> uint_metrics;
-    std::vector<std::unique_ptr<DoubleMetric>> double_metrics;
+        if (telemetry_enabled) {
+            cluster = std::make_unique<tt::umd::Cluster>();
+            hal = create_hal(cluster);
+            log_info(tt::LogAlways, "Created cluster and HAL");
 
-    // Create Ethernet metrics
-    for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
-        for (const auto &endpoint: endpoints) {
-            bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(id++, endpoint, hal));
-            uint_metrics.push_back(std::make_unique<EthernetRetrainCountMetric>(id++, endpoint, cluster, hal));
-            if (hal->get_arch() == tt::ARCH::WORMHOLE_B0) {
-                // These are available only on Wormhole
-                uint_metrics.push_back(std::make_unique<EthernetCRCErrorCountMetric>(id++, endpoint, cluster, hal));
-                uint_metrics.push_back(std::make_unique<EthernetCorrectedCodewordCountMetric>(id++, endpoint, cluster, hal));
-                uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(id++, endpoint, cluster, hal));
+            create_ethernet_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
+            create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, hal);
+            log_info(tt::LogAlways, "Initialized metrics");
+        }
+
+        // Create collection clients to connect to aggregate endpoints (if any specified)
+        CollectionClients collection_clients(aggregate_endpoints, on_snapshot_received);
+        log_info(tt::LogAlways, "Collection clients created successfully");
+
+        // Get initial telemetry reading
+        if (telemetry_enabled) {
+            update(cluster);
+            send_initial_snapshot(subscribers);
+            log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
+        }
+
+        // Main telemetry monitoring loop
+        while (!stopped_.load()) {
+            try {
+                std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
+
+                if (telemetry_enabled) {
+                    // Collect local telemetry
+                    update(cluster);
+                }
+
+                // Aggregate from remotes and produce delta snapshot
+                std::shared_ptr<TelemetrySnapshot> delta_snapshot = get_writeable_buffer();
+                aggregate_remote_telemetry(*delta_snapshot);
+                update_delta_snapshot_with_local_telemetry(delta_snapshot);
+
+                // Send to subscribers
+                for (auto& subscriber : subscribers) {
+                    subscriber->on_telemetry_ready(delta_snapshot);
+                }
+            } catch (const std::exception& e) {
+                log_fatal(tt::LogAlways, "Exception in telemetry monitoring loop: {}", e.what());
+            } catch (...) {
+                log_fatal(tt::LogAlways, "Unknown exception in telemetry monitoring loop");
             }
         }
-    }
-    log_info(tt::LogAlways, "Created Ethernet metrics");
 
-    // Create ARC telemetry metrics for MMIO-capable chips
-    for (const auto& [chip_identifier, reader] : create_arc_telemetry_readers_for_mmio_chips(cluster)) {
-        bool_metrics.push_back(std::make_unique<ARCTelemetryAvailableMetric>(id++, reader));
-
-        // Create UInt metrics with appropriate masks and units
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::AICLK, "AIClock", 0xffff, MetricUnit::MEGAHERTZ));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::AXICLK, "AXIClock", 0xffffffff, MetricUnit::MEGAHERTZ));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::ARCCLK, "ARCClock", 0xffffffff, MetricUnit::MEGAHERTZ));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::FAN_SPEED, "FanSpeed", 0xffffffff, MetricUnit::REVOLUTIONS_PER_MINUTE));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::TDP, "TDP", 0xffff, MetricUnit::WATTS));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::TDC, "TDC", 0xffff, MetricUnit::AMPERES));
-        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, tt::umd::TelemetryTag::VCORE, "VCore", 0xffffffff, MetricUnit::MILLIVOLTS));
-
-        // Create Double metrics with appropriate masks, scale factors, and units
-        // For ASIC temperature, check architecture to determine mask and scale factor
-        uint32_t asic_temp_mask;
-        double asic_temp_scale;
-        if (reader->get_arch() == tt::ARCH::BLACKHOLE) {
-            asic_temp_mask = 0xffffffff;
-            asic_temp_scale = 1.0/65536.0;
-        } else {
-            asic_temp_mask = 0xffff;
-            asic_temp_scale = 1.0/16.0;
-        }
-        double_metrics.push_back(std::make_unique<ARCDoubleMetric>(id++, reader, tt::umd::TelemetryTag::ASIC_TEMPERATURE, "ASICTemperature", asic_temp_mask, asic_temp_scale, MetricUnit::CELSIUS, ARCDoubleMetric::Signedness::SIGNED));
-        double_metrics.push_back(std::make_unique<ARCDoubleMetric>(id++, reader, tt::umd::TelemetryTag::BOARD_TEMPERATURE, "BoardTemperature", 0xffffffff, 1.0/65536.0, MetricUnit::CELSIUS, ARCDoubleMetric::Signedness::SIGNED));
-    }
-    log_info(tt::LogAlways, "Created ARC metrics");
-    log_info(tt::LogAlways, "Initialized telemetry thread");
-
-    // Continuously monitor on a loop
-    update(bool_metrics, uint_metrics, double_metrics, cluster);
-    send_initial_snapshot(subscribers, bool_metrics, uint_metrics, double_metrics);
-    log_info(tt::LogAlways, "Obtained initial readout and sent snapshot");
-    while (!stopped_.load()) {
-        std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
-        update(bool_metrics, uint_metrics, double_metrics, cluster);
-        send_delta(subscribers, bool_metrics, uint_metrics, double_metrics);
+    } catch (const std::exception& e) {
+        log_fatal(tt::LogAlways, "Fatal exception during telemetry thread initialization: {}", e.what());
+    } catch (...) {
+        log_fatal(tt::LogAlways, "Unknown fatal exception during telemetry thread initialization");
     }
 
     log_info(tt::LogAlways, "Telemetry thread stopped");
 }
 
-void run_telemetry_provider(std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers) {
+void run_telemetry_collector(
+    bool telemetry_enabled,
+    std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
+    const std::vector<std::string>& aggregate_endpoints) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
     // Run telemetry thread
-    auto t = std::async(std::launch::async, telemetry_thread, subscribers);
+    auto t = std::async(std::launch::async, telemetry_thread, telemetry_enabled, subscribers, aggregate_endpoints);
     t.wait();
 }

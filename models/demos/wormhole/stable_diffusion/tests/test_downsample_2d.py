@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +8,7 @@ from diffusers import StableDiffusionPipeline
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull, torch_random
+from models.common.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from models.demos.wormhole.stable_diffusion.tests.parameterizations import CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO
@@ -21,7 +21,6 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "hidden_states, shard_layout, shard_end_core, shard_shape, block_index",

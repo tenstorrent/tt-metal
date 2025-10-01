@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")

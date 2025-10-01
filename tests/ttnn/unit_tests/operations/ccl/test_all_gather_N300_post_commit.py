@@ -4,7 +4,6 @@
 
 import pytest
 import ttnn
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     run_all_gather_on_n300_impl,
     run_all_gather_sharded_n300,
@@ -12,7 +11,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
@@ -79,7 +77,6 @@ def test_all_gather_on_n300_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", [2])
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("tensor_layout", [ttnn.TILE_LAYOUT])

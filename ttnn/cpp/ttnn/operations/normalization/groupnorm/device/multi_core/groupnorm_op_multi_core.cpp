@@ -12,7 +12,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 
 #include <optional>
 
@@ -175,12 +174,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         out_data_format);
 
     // tile sizes
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t gamma_beta_single_tile_size = tt::tt_metal::detail::TileSize(gamma_beta_cb_data_format);
-    uint32_t in_mask_single_tile_size = tt::tt_metal::detail::TileSize(in_mask_cb_data_format);
-    uint32_t in_negative_mask_single_tile_size = tt::tt_metal::detail::TileSize(in_negative_mask_cb_data_format);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
+    uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
+    uint32_t in_negative_mask_single_tile_size = tt::tile_size(in_negative_mask_cb_data_format);
     // shard shape per core
     uint32_t per_core_M = a.shard_spec().value().shape[0];
     uint32_t per_core_N = a.shard_spec().value().shape[1];
@@ -583,8 +582,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     if (use_welford) {
         reader_mcast_receiver_compile_time_args.push_back(block_ht * block_wt);
     }
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -1209,11 +1208,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         out_data_format);
 
     // tile sizes
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t gamma_beta_single_tile_size = tt::tt_metal::detail::TileSize(gamma_beta_cb_data_format);
-    uint32_t in_mask_single_tile_size = tt::tt_metal::detail::TileSize(in_mask_cb_data_format);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
+    uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
 
     IDevice* device = a.device();
 
@@ -1786,8 +1785,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_rows_per_batch_per_core_group_2};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_2);
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(

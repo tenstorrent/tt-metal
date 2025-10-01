@@ -21,15 +21,15 @@ pytest --disable-warnings models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s
 
 ### Model Performant with Trace+2CQ
 #### Single Device (BS=1):
-- For `640x640`, end-2-end perf is `90` FPS.
+- For `640x640`, end-2-end perf is `105` FPS.
   ```bash
-  pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_perf_yolov8s_world.py::test_perf_yolov8s_world
+  pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_e2e_performant.py::test_perf_yolov8s_world
   ```
 
 #### Multi Device (DP=2, N300):
-- For `640x640`, end-2-end perf is `175` FPS.
+- For `640x640`, end-2-end perf is `189` FPS.
   ```bash
-  pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_perf_yolov8s_world.py::test_perf_yolov8s_world_dp
+  pytest --disable-warnings models/demos/yolov8s_world/tests/perf/test_e2e_performant.py::test_perf_yolov8s_world_dp
   ```
 
 ### Demo with Trace+2CQs

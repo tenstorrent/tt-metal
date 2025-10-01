@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@ namespace tt::tt_metal {
 
 namespace {
 // This can be useful for debug. Not all data types are currently supported, can use this during developmenmt.
-void PrintHostDataType(const HostDataType& data) {
+[[maybe_unused]] void PrintHostDataType(const HostDataType& data) {
     std::visit(
         tt::stl::overloaded{
             [](const std::shared_ptr<std::vector<uint8_t>>& /*value*/) {

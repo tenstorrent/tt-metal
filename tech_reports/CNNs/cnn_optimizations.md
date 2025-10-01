@@ -129,17 +129,7 @@ Converts HWC-ordered tensor to CHW tensor.
 def postprocess_unet_output_tensor(x):
     # Convert the output tensor (in TILE layout) to RM to prevent transferring padding back to host.
     assert x.is_sharded(), "Expected output tensor to be sharded"
-    input_shard_spec = x.memory_config().shard_spec
-    output_shard_shape = (x.shape[-1], input_shard_spec.shape[0])
-    output_shard_spec = ttnn.ShardSpec(
-        input_shard_spec.grid,
-        output_shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    output_memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, output_shard_spec
-    )
-    return ttnn.experimental.convert_to_chw(x, memory_config=output_memory_config)  # fuses permute+reshard
+    return ttnn.experimental.convert_to_chw(x)  # fuses permute+reshard, automatically infers memory config
 ````
 
 

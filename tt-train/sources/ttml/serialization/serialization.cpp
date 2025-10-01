@@ -1,19 +1,18 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "serialization.hpp"
 
-#include <enchantum/enchantum.hpp>
-
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <ttnn/tensor/types.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "autograd/module_base.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "modules/module_base.hpp"
 #include "msgpack_file.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "optimizers/sgd.hpp"
@@ -178,13 +177,13 @@ void read_optimizer(MsgPackFile& file, std::string_view name, optimizers::Optimi
     optimizer->set_state_dict(state_dict);
 }
 
-void write_module(MsgPackFile& file, std::string_view name, const autograd::ModuleBase* module) {
+void write_module(MsgPackFile& file, std::string_view name, const modules::ModuleBase* module) {
     assert(module);
     auto named_parameters = module->parameters();
     write_named_parameters(file, name, named_parameters);
 }
 
-void read_module(MsgPackFile& file, std::string_view name, autograd::ModuleBase* module) {
+void read_module(MsgPackFile& file, std::string_view name, modules::ModuleBase* module) {
     assert(module);
     auto named_parameters = module->parameters();
     read_named_parameters(file, name, named_parameters);

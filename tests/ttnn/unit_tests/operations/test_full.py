@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@ import pytest
 import torch
 import torch.nn as nn
 import ttnn
-from models.utility_functions import comp_allclose, skip_for_blackhole
+from models.common.utility_functions import comp_allclose, skip_for_blackhole
 from loguru import logger
 from tests.ttnn.utils_for_testing import assert_equal, tt_dtype_to_torch_dtype
 
@@ -37,7 +37,6 @@ def test_full_int(device, input_shape, fill_value):
     assert torch.equal(torch_output, tt_output_cpu)
 
 
-@skip_for_blackhole("Does not work on BH P150. Issue #22274")
 @pytest.mark.parametrize(
     "input_shape",
     [

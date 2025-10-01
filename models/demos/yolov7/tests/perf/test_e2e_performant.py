@@ -166,7 +166,7 @@ def test_e2e_performant(
 )
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((640, 640), 125)],
+    [((640, 640), 202)],
 )
 def test_e2e_performant_dp(
     mesh_device,

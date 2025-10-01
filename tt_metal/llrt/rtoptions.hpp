@@ -37,7 +37,7 @@ enum RunTimeDebugFeatures {
     RunTimeDebugFeatureReadDebugDelay,
     RunTimeDebugFeatureWriteDebugDelay,
     RunTimeDebugFeatureAtomicDebugDelay,
-    RunTimeDebugFeatureDisableL1DataCache,
+    RunTimeDebugFeatureEnableL1DataCache,
     // NOTE: Update RunTimeDebugFeatureNames if adding new features
     RunTimeDebugFeatureCount
 };
@@ -86,6 +86,8 @@ struct InspectorSettings {
     bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
+    std::string rpc_server_address = "localhost:50051";
+    bool rpc_server_enabled = true;
 };
 
 class RunTimeOptions {
@@ -273,6 +275,10 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
+    const std::string& get_inspector_rpc_server_address() const { return inspector_settings.rpc_server_address; }
+    void set_inspector_rpc_server_address(const std::string& address) { inspector_settings.rpc_server_address = address; }
+    bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
+    void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -361,7 +367,7 @@ public:
                 } else {
                     return "false";
                 }
-            case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureEnableL1DataCache: return std::to_string(get_feature_enabled(feature));
             default: return "";
         }
     }

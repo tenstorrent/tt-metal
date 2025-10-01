@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -53,6 +53,8 @@ def get_ref_model_dype(ref_model, model_name):
         if "mistral-7b" in model_name_lower:
             return torch.bfloat16
         if "llama" in model_name_lower:
+            return torch.bfloat16
+        if "phi-3-mini" in model_name_lower or "phi-4" in model_name_lower:
             return torch.bfloat16
 
     return default_dype

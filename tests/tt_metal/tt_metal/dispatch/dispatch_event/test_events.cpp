@@ -165,14 +165,14 @@ TEST_F(UnitMeshCQEventFixture, TestEventsQueueWaitForEventBasic) {
         // Device synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
             log_debug(tt::LogTest, "Going to WaitForEvent for i: {}", i);
-            distributed::EnqueueWaitForEvent(cq, *event);
+            cq.enqueue_wait_for_event(*event);
         }
     }
 
     // A bunch of bonus syncs where event_id is mod on earlier ID's.
-    distributed::EnqueueWaitForEvent(cq, *sync_events.at(0));
-    distributed::EnqueueWaitForEvent(cq, *sync_events.at(sync_events.size() - 5));
-    distributed::EnqueueWaitForEvent(cq, *sync_events.at(4));
+    cq.enqueue_wait_for_event(*sync_events.at(0));
+    cq.enqueue_wait_for_event(*sync_events.at(sync_events.size() - 5));
+    cq.enqueue_wait_for_event(*sync_events.at(4));
     distributed::Finish(cq);
 
     std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
@@ -257,7 +257,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
         std::shared_ptr<distributed::MeshBuffer> buf =
             distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
         distributed::WriteShard(cq, buf, page, distributed::MeshCoordinate(0, 0), true);
-        distributed::EnqueueWaitForEvent(cq, *event);
+        cq.enqueue_wait_for_event(*event);
 
         if (i % 10 == 0) {
             distributed::EventSynchronize(*event);

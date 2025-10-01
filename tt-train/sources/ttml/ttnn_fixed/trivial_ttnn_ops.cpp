@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,7 @@ tt::tt_metal::Tensor log_softmax(const tt::tt_metal::Tensor& t, int dim) {
     auto t_sub_max_exp = ttnn::exp(t_sub_max);
     auto t_sum_over_dim = sum_over_dim(t_sub_max_exp, dim);
 
-    auto log_t_sum_over_dim = ttnn::log(t_sum_over_dim);
+    auto log_t_sum_over_dim = ttnn::log(t_sum_over_dim, /*fast_and_approximate_mode=*/true);
     return ttnn::subtract(t_sub_max, log_t_sum_over_dim);
 }
 

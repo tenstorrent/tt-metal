@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,12 +13,6 @@
 #include "dispatch/system_memory_manager.hpp"
 
 namespace tt::tt_metal::distributed {
-
-MeshWorkload CreateMeshWorkload() { return MeshWorkload(); }
-
-void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range) {
-    mesh_workload.add_program(device_range, std::move(program));
-}
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
@@ -42,8 +36,6 @@ MeshEvent EnqueueRecordEventToHost(
     const std::optional<MeshCoordinateRange>& device_range) {
     return mesh_cq.enqueue_record_event_to_host(sub_device_ids, device_range);
 }
-
-void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event) { mesh_cq.enqueue_wait_for_event(event); }
 
 void EventSynchronize(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
@@ -88,7 +80,7 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span
         return;
     }
     if (cq_id.has_value()) {
-        device->mesh_command_queue(*cq_id).finish(sub_device_ids);
+        device->mesh_command_queue(cq_id).finish(sub_device_ids);
     } else {
         for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             device->mesh_command_queue(cq_id).finish(sub_device_ids);

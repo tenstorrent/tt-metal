@@ -10,7 +10,7 @@ import torch
 import math
 import ttnn
 
-from models.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
+from models.common.utility_functions import comp_pcc, is_blackhole, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -2234,7 +2234,6 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
             (192, 64),
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
 

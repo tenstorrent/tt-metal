@@ -8,8 +8,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph_utils.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/module_base.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/module_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
@@ -23,6 +21,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/distributed.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/ccl_resources.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distributed/socket_manager.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/mesh_device.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/not_null.hpp
@@ -57,6 +57,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/base_transformer.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.hpp
@@ -92,6 +94,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp
@@ -108,6 +112,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
@@ -130,6 +136,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
@@ -164,6 +172,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizers/tokenizer_base.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/ttnn_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/distributed/tt_metal.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
@@ -233,6 +243,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # SDPA Forward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
@@ -351,7 +369,14 @@ add_library(ttml STATIC ${SOURCES})
 
 target_include_directories(ttml PUBLIC ${PROJECT_SOURCE_DIR})
 
-find_package(Python3 REQUIRED Development)
+find_package(
+    Python3
+    COMPONENTS
+        Development
+        Development.Module
+        Interpreter
+    REQUIRED
+)
 
 foreach(lib ${BoostPackages})
     target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
@@ -364,9 +389,8 @@ target_link_libraries(
         z
         pthread
         atomic
-        Metalium::Metal
-        Metalium::TTNN
-        Metalium::TTNNCPP
+        TT::Metalium
+        TTNN::TTNN
         Python3::Python
         fmt::fmt-header-only
         enchantum::enchantum
@@ -443,3 +467,61 @@ if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
 else()
     message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")
 endif()
+
+set(TTML_SRC_NANOBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_autograd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_bfloat16.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_export_enum.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_fwd.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_models.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_modules.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_ops.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_optimizers.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
+)
+nanobind_add_module(
+    _ttml
+    STABLE_ABI NB_SHARED LTO
+    ${TTML_SRC_NANOBIND}
+)
+target_link_libraries(
+    _ttml
+    PRIVATE
+        fmt::fmt-header-only
+        Metalium::Metal
+        Metalium::TTNN
+        Metalium::TTNNCPP
+        Python3::Python
+        ttml
+)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR})
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn/api)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/api)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd/device/api)
+target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_stl)
+target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
+install(
+    TARGETS
+        _ttml
+    ARCHIVE
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        COMPONENT tar
+)
+install(
+    TARGETS
+        _ttml
+        DESTINATION
+        ${PROJECT_SOURCE_DIR}/tt-train/sources/ttml
+        COMPONENT
+        tt_pybinds
+)

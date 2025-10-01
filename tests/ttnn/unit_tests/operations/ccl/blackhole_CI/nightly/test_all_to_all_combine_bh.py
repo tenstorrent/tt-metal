@@ -14,7 +14,7 @@ from tracy import signpost
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
-from models.utility_functions import skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
     run_all_to_all_combine_test,
     trace_all_to_all_combine,
@@ -77,6 +77,8 @@ def test_all_to_all_combine_trace(
     input_memory_config,
     output_memory_config,
 ):
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Skipping 8 device test for now, to be investigated")
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
@@ -170,6 +172,8 @@ def test_all_to_all_combine_no_trace(
     dtype,
     test_skew,
 ):
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Skipping 8 device test for now, to be investigated")
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, axis)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices

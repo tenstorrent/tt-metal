@@ -9,8 +9,8 @@ import torch.nn.functional as F
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-from models.utility_functions import skip_for_wormhole_b0, is_grayskull
-from models.utility_functions import torch_random
+from models.common.utility_functions import skip_for_wormhole_b0, is_grayskull
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -414,7 +414,6 @@ def test_softmax_sd(device):
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             [64, 256],
             ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.ShardMode.PHYSICAL,
         ),
     )
 

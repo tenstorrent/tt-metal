@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -19,8 +19,8 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_shape, pcc, vae_block",
     [
-        ((1, 4, 128, 128), 0.89, "decoder"),
-        ((1, 3, 1024, 1024), 0.967, "encoder"),
+        ((1, 4, 128, 128), 0.933, "decoder"),
+        ((1, 3, 1024, 1024), 0.977, "encoder"),
     ],
     ids=("test_decode", "test_encode"),
 )
@@ -81,4 +81,5 @@ def test_vae(device, input_shape, vae_block, pcc, is_ci_env, reset_seeds, is_ci_
     del vae
     gc.collect()
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    logger.info(f"PCC is: {pcc_message}")

@@ -14,7 +14,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -34,7 +33,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -603,7 +602,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
 
     std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer;
     if (address.has_value()) {
-        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address.value());
+        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address);
     } else {
         input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
     }
@@ -706,8 +705,7 @@ int main(int argc, char** argv) {
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
-
+        uint32_t single_tile_size = tt::tile_size(tile_format);
 
         TT_FATAL(in1_size % single_tile_size == 0, "input size is not aligned to tile size");
         ////////////////////////////////////////////////////////////////////////////
@@ -888,9 +886,9 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads;
         for (auto& program : programs) {
-            auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-            tt_metal::distributed::AddProgramToMeshWorkload(
-                mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+            auto mesh_workload = tt_metal::distributed::MeshWorkload();
+            mesh_workload.add_program(
+                tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
             mesh_workloads.push_back(std::move(mesh_workload));
         }
 
@@ -911,7 +909,7 @@ int main(int argc, char** argv) {
             }
             tt_metal::distributed::Finish(device->mesh_command_queue());
             for ([[maybe_unused]] auto& mesh_workload : mesh_workloads) {
-                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+                tt_metal::ReadMeshDeviceProfilerResults(*device);
             }
         }
 

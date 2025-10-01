@@ -39,3 +39,10 @@ Device program profiler brings visibility to execution of device side programs b
     inspector
 
 The Inspector is a tool that provides insights into Metal host runtime.
+
+.. toctree::
+    :maxdepth: 1
+
+    triage
+
+The tt-triage is a collection of Python scripts for analyzing and debugging Metal workload.

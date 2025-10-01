@@ -8,7 +8,7 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 def create_global_semaphores(mesh_device, cores, initial_value):
@@ -240,6 +240,16 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype",
     [
+        # Dim 1 tests
+        ([2, 24, 256, 256], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([2, 16, 56, 56], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([2, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # Dim 2 tests
+        ([2, 4, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([4, 1, 1024, 340], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([1, 1, 512, 512], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # Dim 3 tests
+        ([2, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         ([1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         ([3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         ([8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
@@ -255,6 +265,13 @@ def run_reduce_scatter_impl(
         ([1, 1, 29, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
+        "scatter_dim_1_test_one",
+        "scatter_dim_1_test_two",
+        "scatter_dim_1_test_three",
+        "scatter_dim_2_test_one",
+        "scatter_dim_2_test_two",
+        "scatter_dim_2_test_three",
+        "non_zero_dim_1",
         "padded_dim_2_test_one",
         "padded_dim_2_test_two",
         "batch_8",
@@ -365,7 +382,7 @@ def test_reduce_scatter_async(
         ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # # Scatter on dim 3
+        # Scatter on dim 3
         ([1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -820,4 +837,85 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         enable_trace=enable_trace,
         num_iters=num_iters,
         mem_config_intermediate=mem_config_intermediate,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "rs_input_shape, dim, layout, rs_input_dtype",
+    [
+        ([1, 1, 8, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+    ],
+    ids=[
+        "deepseek_rs",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 3),
+    ],
+    ids=["check"],
+)
+@pytest.mark.parametrize(
+    "use_barrier, use_persistent_buffers",
+    [
+        (True, False),
+    ],
+    ids=["barrier_with_no_persistent_buffers"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize("cluster_axis", [1], ids=["cluster_axis_1"])
+def test_reduce_scatter_async_2x4(
+    mesh_device,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    use_barrier,
+    use_persistent_buffers,
+    rs_topology,
+    cluster_axis,
+):
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
+    run_reduce_scatter_impl(
+        submesh_device,
+        submesh_device.get_num_devices(),
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        ones_tensor=False,
+        use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
+        cluster_axis=cluster_axis,
     )

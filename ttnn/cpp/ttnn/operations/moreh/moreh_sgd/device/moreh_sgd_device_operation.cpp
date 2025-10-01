@@ -81,13 +81,13 @@ MorehSgdOperation::tensor_return_value_t MorehSgdOperation::create_output_tensor
     std::vector<std::optional<Tensor>> ret;
 
     if (tensor_args.param_out.has_value()) {
-        ret.push_back(tensor_args.param_out.value());
+        ret.push_back(tensor_args.param_out);
     } else {
         ret.push_back(create_device_tensor(*output_specs[0], device));
     }
 
     if (tensor_args.momentum_buffer_out.has_value()) {
-        ret.push_back(tensor_args.momentum_buffer_out.value());
+        ret.push_back(tensor_args.momentum_buffer_out);
     } else if (output_specs[1].has_value()) {
         ret.push_back(create_device_tensor(*output_specs[1], device));
     } else {

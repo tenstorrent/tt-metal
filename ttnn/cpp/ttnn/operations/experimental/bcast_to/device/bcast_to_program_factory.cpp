@@ -144,7 +144,7 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
 
     auto output_shape = output.logical_shape();
 
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_data_format);
 
     // Device Setup
     auto* device = input.device();

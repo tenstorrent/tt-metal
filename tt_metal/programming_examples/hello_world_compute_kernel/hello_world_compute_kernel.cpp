@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "tt-metalium/kernel_types.hpp"
 
 using namespace tt;
@@ -23,11 +24,14 @@ int main() {
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
 
-    // Initialize Program and Device
+    // Initialize mesh device, command queue, workload, device range, and program
     constexpr CoreCoord core = {0, 0};
     int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
-    CommandQueue& cq = device->command_queue();
+    std::shared_ptr<distributed::MeshDevice> mesh_device =
+        distributed::MeshDevice::create_unit_mesh(device_id);  // 1x1 mesh
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     // Configure and create the kernel
@@ -42,12 +46,13 @@ int main() {
         core,
         ComputeConfig{});
 
-    // Configure Program and Start Program Execution on Device
+    // Configure program and enqueue it as a mesh workload (non-blocking)
     SetRuntimeArgs(program, void_compute_kernel_id, core, {});
-    EnqueueProgram(cq, program, false);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
     fmt::print("Hello, Core (0, 0) on Device 0, I am sending you a compute kernel. Standby awaiting communication.\n");
 
-    // Wait Until Program Finishes. The kernel will print the following messages:
+    // Wait Until MeshWorkload Finishes. The kernel will print the following messages:
     // 0:(x=0,y=0):TR0: Hello, I am the UNPACK core running the compute kernel
     // 0:(x=0,y=0):TR1: Hello, I am the MATH core running the compute kernel
     // 0:(x=0,y=0):TR2: Hello, I am the PACK core running the compute kernel
@@ -58,9 +63,9 @@ int main() {
     // TR1: Compute core 1 (MATH)
     // TR2: Compute core 2 (PACK)
 
-    // Wait for the program to finish execution.
-    Finish(cq);
+    // Wait for the workload to finish execution, then close the mesh device.
+    distributed::Finish(cq);
     printf("Thank you, Core {0, 0} on Device 0, for the completed task.\n");
-    CloseDevice(device);
+    mesh_device->close();
     return 0;
 }

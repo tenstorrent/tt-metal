@@ -9,7 +9,6 @@
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "tt-metalium/kernel_types.hpp"
-#include "tt-metalium/util.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -209,10 +208,9 @@ CBHandle AccumulationProgramFactory::create_cb(
     const AccumulationCB& accumulation_cb,
     const CoreRangeSet& core_range_set,
     const uint32_t& num_tiles) {
-    using tt::tt_metal::detail::TileSize;
     const uint32_t cb_id{static_cast<uint32_t>(accumulation_cb)};
     const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
-    const uint32_t single_tile_size{TileSize(cb_data_format)};
+    const uint32_t single_tile_size{tt::tile_size(cb_data_format)};
     const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
         cb_id, single_tile_size)};
     return CreateCircularBuffer(program, core_range_set, cb_config);

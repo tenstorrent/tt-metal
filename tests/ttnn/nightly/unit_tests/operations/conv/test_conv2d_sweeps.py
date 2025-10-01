@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,15 +13,13 @@ from tests.sweep_framework.sweeps.conv2d.short.conv2d_ttforge_sweep import (
     failing_parameters as failing_parameters_ttnn_forge,
 )
 
-from models.utility_functions import (
-    skip_for_grayskull,
+from models.common.utility_functions import (
     is_wormhole_b0,
 )
 
 import pytest
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("input_spec", parameters_ttnn_pytorch["short_sweep_suite_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_ttnn_pytorch_sweep(device, input_spec):
@@ -32,16 +30,15 @@ def test_ttnn_pytorch_sweep(device, input_spec):
     if input_spec in failing_parameters_ttnn_pytorch:
         pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
 
-    passed, pcc = run_conv2d_short_sweep(
+    passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
-    )[0]
+    )
     print(pcc)
     assert passed, pcc
     assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("input_spec", parameters_ttnn_forge["ttforge_sweep_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_tt_forge_sweep(device, input_spec):
@@ -52,10 +49,10 @@ def test_tt_forge_sweep(device, input_spec):
     if input_spec in failing_parameters_ttnn_forge:
         pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
 
-    passed, pcc = run_conv2d_short_sweep(
+    passed, pcc, perf, out, ref = run_conv2d_short_sweep(
         input_spec,
         device,
-    )[0]
+    )
     print(pcc)
     assert passed, pcc
     assert pcc != 1, "Conv2d with ranndomized input and wegihts can't ligitimately return PCC of 1"

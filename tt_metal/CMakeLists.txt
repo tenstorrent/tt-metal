@@ -138,6 +138,19 @@ target_sources(
             ${TT_LLK_HEADERS}
 )
 
+include(CheckFunctionExists)
+
+check_function_exists(
+    backtrace
+    HAVE_BACKTRACE
+)
+
+if(NOT HAVE_BACKTRACE)
+    find_library(EXECINFO_LIB execinfo)
+else()
+    set(EXECINFO_LIB "")
+endif()
+
 target_link_libraries(
     tt_metal
     PUBLIC
@@ -150,6 +163,7 @@ target_link_libraries(
         Reflect::Reflect
         TT::STL
         tt-logger::tt-logger
+        ${EXECINFO_LIB}
     PRIVATE
         Metalium::Metal::Impl
         metal_common_libs

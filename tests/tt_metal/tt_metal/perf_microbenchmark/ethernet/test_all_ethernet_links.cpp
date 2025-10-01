@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -605,12 +605,11 @@ void run(
             for (size_t i = 0; i < device_helper.devices.size(); i++) {
                 auto& device = device_helper.devices[i];
                 auto& program = programs[i];
-                tt_metal::distributed::MeshWorkload mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-                tt_metal::distributed::AddProgramToMeshWorkload(
-                    mesh_workload,
-                    std::move(program),
+                tt_metal::distributed::MeshWorkload mesh_workload;
+                mesh_workload.add_program(
                     tt_metal::distributed::MeshCoordinateRange(
-                        tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)));
+                        tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)),
+                    std::move(program));
                 threads.emplace_back([&]() {
                     // Use distributed::EnqueueMeshWorkload instead of LaunchProgram
                     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
@@ -624,12 +623,11 @@ void run(
                 auto& device = device_helper.devices[i];
                 auto& program = programs[i];
                 program.set_runtime_id(0);
-                tt_metal::distributed::MeshWorkload mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-                tt_metal::distributed::AddProgramToMeshWorkload(
-                    mesh_workload,
-                    std::move(program),
+                tt_metal::distributed::MeshWorkload mesh_workload;
+                mesh_workload.add_program(
                     tt_metal::distributed::MeshCoordinateRange(
-                        tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)));
+                        tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)),
+                    std::move(program));
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
             }
             log_info(tt::LogTest, "Iteration {} Calling Finish", iteration);

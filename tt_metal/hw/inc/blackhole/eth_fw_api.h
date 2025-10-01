@@ -247,6 +247,7 @@ FORCE_INLINE void disable_interrupts() {
 }
 
 FORCE_INLINE bool is_link_up() {
+#if defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)
     // Collect current link states
     // TODO: Until erisc0 is enabled, use MAILBOX_RISC1 for link status check. When both riscs are enabled, assign one
     // to use MAILBOX_OTHER Sending msgs to mailbox described in:
@@ -279,6 +280,15 @@ FORCE_INLINE bool is_link_up() {
 
     auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
     return link_status->rx_link_up == 1;
+#else
+    auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
+    if (link_status->rx_link_up != 1) {
+        // erisc0 checks link status and does retraining.  If erisc1 detects link down, wait a bit and check again
+        eth_wait_cycles(3 << 30);
+        eth_wait_cycles(2 << 30);
+    }
+    return link_status->rx_link_up == 1;
+#endif
 }
 
 FORCE_INLINE bool is_port_up() {

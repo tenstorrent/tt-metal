@@ -1484,6 +1484,9 @@ class ModelArgs:
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
+        # Sliding window attention
+        self.sliding_window = text_config.get("sliding_window", None)
+
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
@@ -2463,7 +2466,7 @@ class ModelArgs:
 
             return wrapper
 
-    def reference_attention(self):
+    def reference_attention(self, rope_embeddings="global"):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 
@@ -2476,9 +2479,14 @@ class ModelArgs:
                 "MistralAttention",
                 "Gemma3Attention",
             )
-            wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
-            )
+            if "gemma-3" in self.model_name:
+                if rope_embeddings == "local":
+                    rotary_emb = model.model.rotary_emb_local
+                else:
+                    rotary_emb = model.model.rotary_emb
+            else:
+                rotary_emb = model.model.rotary_emb
+            wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2569,6 +2577,7 @@ class HfAttentionWrapper:
         super().__init__()
         self.attention = attention
         self.past_key_value = DynamicCache()
+        # self.past_key_value = StaticCache(config=attention.config, max_batch_size=1, max_cache_len=256)
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
 

@@ -16,13 +16,12 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.experimental.gemma3_4b.tests.references import reference_transformer
 
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "device",
     [

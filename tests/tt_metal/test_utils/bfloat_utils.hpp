@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
 #include <vector>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace tt::test_utils {
 

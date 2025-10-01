@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import copy
 
 import ttnn
-from models.utility_functions import comp_allclose
+from models.common.utility_functions import comp_allclose
 from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import (
@@ -20,7 +20,7 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     to_torch,
     to_ttnn,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 def torch_layer_norm(input, *, normalized_dims=1, eps=1e-5, gamma=None, beta=None):
@@ -445,7 +445,6 @@ def run_moreh_layer_norm_backward_with_gamma_or_beta(
         assert actual_beta_grad is None
 
 
-@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "dtype",
@@ -480,7 +479,6 @@ def test_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, 
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
-@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "dtype",
@@ -515,7 +513,6 @@ def test_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affi
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")
-@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "dtype",
@@ -549,7 +546,6 @@ def test_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dim
     run_moreh_layer_norm_backward_with_gamma_or_beta(input_shape_normalized_dims, gamma_or_beta, eps, dtype, device)
 
 
-@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "dtype",
@@ -584,7 +580,6 @@ def test_moreh_layer_norm_compute_kernel_options(
     run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device, compute_kernel_options)
 
 
-@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "dtype",
@@ -621,7 +616,6 @@ def test_moreh_layer_norm_backward_compute_kernel_options(
     )
 
 
-@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "dtype",
@@ -660,7 +654,6 @@ def test_moreh_layer_norm_callback(input_shape_normalized_dims, elementwise_affi
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [0.05], ids=["0.05"])
 @pytest.mark.parametrize(
     "dtype",
@@ -699,7 +692,6 @@ def test_moreh_layer_norm_backward_callback(input_shape_normalized_dims, element
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("Using the transpose function in copy_tile causes a hang.")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize(
     "dtype",

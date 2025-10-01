@@ -20,7 +20,5 @@ void kernel_main() {
     }
     cb_push_back(cb_id_in0, 1);
 
-    DPRINT_DATA0(DPRINT << "Test Debug Print: Data0" << ENDL(); print_test_data();
-                 // Let the next core (PACK) know to start printing.
-                 DPRINT << RAISE{1};);
+    DPRINT_DATA0(DPRINT << "Test Debug Print: Data0" << ENDL(); print_test_data(););
 }

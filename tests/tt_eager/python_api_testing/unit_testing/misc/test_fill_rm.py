@@ -5,8 +5,8 @@
 import torch
 
 import ttnn
-from models.utility_functions import print_diff_argmax
-from models.utility_functions import is_wormhole_b0
+from models.common.utility_functions import print_diff_argmax
+from models.common.utility_functions import is_wormhole_b0
 
 
 def test_fill_rm(device):

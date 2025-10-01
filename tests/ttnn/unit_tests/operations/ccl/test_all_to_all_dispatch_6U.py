@@ -21,9 +21,21 @@ from tracy import signpost
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D},
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+        },
     ],
     ids=["fabric_1d_line", "fabric_1d_ring", "fabric_2d"],
     indirect=True,
@@ -31,7 +43,11 @@ from tracy import signpost
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device",
-    [pytest.param((8, 4), (8, 4), id="8x4_grid"), pytest.param((8, 8), (8, 8), id="8x8_grid")],
+    [
+        pytest.param((8, 4), (8, 4), id="8x4_grid"),
+        pytest.param((8, 8), (8, 8), id="8x8_grid"),
+        pytest.param((8, 16), (8, 16), id="8x16_grid"),
+    ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,10 +7,10 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import is_grayskull
+from models.common.utility_functions import is_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.test_utils import round_up
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 import math
 import random
 
@@ -94,7 +94,6 @@ def offset_increment_tensor(shape, offset=0, dtype=torch.int32, step=1):
     ).reshape(shape)
 
 
-@skip_for_blackhole("Fails on Blackhole. Issue #28021")
 @pytest.mark.parametrize("rank", range(1, 9))  # 1D … 8D
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_write_nd(rank, layout, device):

@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <optional>
 #include <cstdint>
 #include <map>
 #include <string_view>
@@ -13,7 +14,7 @@
 
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/util.hpp>
+#include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_metal {
 

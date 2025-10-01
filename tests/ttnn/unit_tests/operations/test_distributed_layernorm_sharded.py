@@ -7,14 +7,14 @@ import pytest
 import math
 from loguru import logger
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     skip_for_wormhole_b0,
     comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,
 )
 
-from models.utility_functions import tt2torch_tensor, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),
@@ -272,7 +272,6 @@ def run_pre_allgather_layernorm(
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("input_width", [2048])
@@ -325,7 +324,6 @@ def test_pre_allgather_layernorm(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("input_width", [1024])
@@ -367,7 +365,6 @@ def test_pre_allgather_layernorm_1d_reduce(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("eps", [1e-6])
@@ -450,7 +447,6 @@ def test_post_allgather_layernorm(
     logger.info("Post-allgather layernorm test passed for all devices")
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
 @pytest.mark.parametrize("seed", [0, 1234])
 @pytest.mark.parametrize("eps", [1e-6])

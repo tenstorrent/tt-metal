@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from loguru import logger
-from models.utility_functions import nearest_32, pad_by_zero, skip_for_grayskull
+from models.common.utility_functions import nearest_32, pad_by_zero
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 
 
@@ -225,7 +225,6 @@ def run_test_paged_fused_update_cache_decode(
         assert eq_cache and eq_update, f"Cache{cache_idx} and update slice mismatch"
 
 
-@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("paged_update", [True, False])
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
@@ -265,7 +264,6 @@ def test_paged_fused_update_cache_decode(
     )
 
 
-@skip_for_grayskull("Grayskull does not support paged cache")
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize("paged_update", [True, False])
 @pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])

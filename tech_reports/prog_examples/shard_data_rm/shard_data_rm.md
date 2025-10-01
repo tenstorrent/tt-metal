@@ -16,14 +16,16 @@ export TT_METAL_HOME=$(pwd)
 
 ``` cpp
 int device_id = 0;
-Device *device = CreateDevice(device_id);
-CommandQueue& cq = device->command_queue();
-Program program = CreateProgram();
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+distributed::Program program = distributed::CreateProgram();
 ```
 
-We start the source code by creating an object that designates the hardware device that we will be using for the program. For this example, we select the device with an ID of 0.
-In order to dispatch commands to the device for execution we must also retrieve the `CommandQueue` object associated with `device`. Commands will be dispatched through this object to be executed on the device.
-The `Program` object is created to encapsulate our kernels and buffers.
+We start the source code by creating an object that designates the physical mesh of devices that we will be using for the program. For this example, we select the device with an ID of 0 to create a 1x1 mesh.
+In order to dispatch commands to the device for execution we must also retrieve the `MeshCommandQueue` object associated with `mesh_device`. Commands will be dispatched through this object to be executed on the mesh.
+The `Program` object is created to encapsulate our kernels and buffers. We also create a `MeshWorkload` object to encapsulate the program and the range of devices that we will be using for the program.
 
 # Initialize source data
 
@@ -180,14 +182,15 @@ Once the data is written to the circular buffer, `cb_push_back` is called to mak
 # Program execution
 
 ``` cpp
-EnqueueWriteBuffer(cq, src_buffer, src_vec.data(), false);
-EnqueueProgram(cq, program, false);
-Finish(cq);
-CloseDevice(device);
+distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec.data(), false);
+workload.add_program(device_range, std::move(program));
+distributed::EnqueueMeshWorkload(cq, workload, false);
+distributed::Finish(cq);
+mesh_device->close();
 ```
 
-`EnqueueWriteBuffer` is called in order to load the source vector into the interleaved DRAM buffer.
-`EnqueueProgram` is then called to dispatch the program to the device for execution. Upon conclusion of the program execution, the device is closed.
+`EnqueueWriteMeshBuffer` is called in order to load the source vector into the interleaved DRAM buffer on the unit mesh.
+`EnqueueMeshWorkload` is then called to dispatch the program to the device for execution. Upon conclusion of the program execution, the device is closed.
 
 # Conclusion
 

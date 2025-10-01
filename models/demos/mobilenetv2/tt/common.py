@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -107,6 +107,7 @@ class TtMobileNetV2Conv2D:
             input_height=input_height,
             input_width=input_width,
             conv_config=self.conv_config,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=self.compute_config,
             groups=self.groups,
             return_weights_and_bias=True,

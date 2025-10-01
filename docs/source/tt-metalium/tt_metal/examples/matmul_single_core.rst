@@ -9,13 +9,13 @@ This example introduces the concept of using separate data movement and compute 
 
 We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/matmul/matmul_single_core/`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/metal_example_programming_examples`` directory. For example:
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/matmul_single_core
+    ./build/programming_examples/metal_example_matmul_single_core
 
 .. _mm_single_core_device_initialization:
 
@@ -28,7 +28,7 @@ After standard device and command queue initialization, the matrix dimensions M,
 
     // Open device (we use device 0, the first available device)
     constexpr int device_id = 0;
-    IDevice* device = CreateDevice(device_id);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
     // Matrix dimensions (must be divisible by tile dimensions)
     constexpr uint32_t M = 640;  // Matrix A height
@@ -40,9 +40,7 @@ After standard device and command queue initialization, the matrix dimensions M,
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
 
-.. code-block:: cpp
-
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     Program program{};
     CoreCoord core({0, 0});  // Single core at position {0, 0}
 
@@ -93,30 +91,18 @@ Three DRAM buffers are allocated: ``src0_dram_buffer`` for the M×K input matrix
 
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;
 
-    // Buffer for matrix A (M×K)
-    tt_metal::InterleavedBufferConfig dram_config_A{
-        .device = device,
-        .size = sizeof(bfloat16) * a.size(),
+    // Buffer configs for matrix A, B, and C
+    distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+        .buffer_type = tt_metal::BufferType::DRAM
+    };
+    distributed::ReplicatedBufferConfig buffer_config_A{.size = sizeof(bfloat16) * a.size()};
+    distributed::ReplicatedBufferConfig buffer_config_B{.size = sizeof(bfloat16) * b.size()};
+    distributed::ReplicatedBufferConfig buffer_config_C{.size = sizeof(bfloat16) * output.size()};
 
-    // Buffer for matrix B (K×N)
-    tt_metal::InterleavedBufferConfig dram_config_B{
-        .device = device,
-        .size = sizeof(bfloat16) * b.size(),
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-
-    // Buffer for output matrix C (M×N)
-    tt_metal::InterleavedBufferConfig dram_config_C{
-        .device = device,
-        .size = sizeof(bfloat16) * output.size(),
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-
-    std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config_A);
-    std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config_B);
-    std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config_C);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config_A, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config_B, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config_C, dram_config, mesh_device.get());
 
 Circular Buffer Orchestration for Pipelined MatMul
 --------------------------------------------------
@@ -165,20 +151,20 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 
     // Reader kernel - reads tiles from DRAM into circular buffers
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
+        "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
     // Writer kernel - writes result tiles from circular buffer to DRAM
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
+        "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
 
@@ -187,7 +173,7 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
     std::vector<uint32_t> compute_compile_time_args = {Mt, Kt, Nt};
     auto matmul_single_core_kernel_id = tt_metal::CreateKernel(
         program,
-        "tt_metal/programming_examples/matmul_single_core/kernels/compute/mm.cpp",
+        "matmul/matmul_single_core/kernels/compute/mm.cpp",
         core,
         tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_compile_time_args});
 
@@ -354,9 +340,9 @@ Kernel execution and result verification
 On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
 The overall execution flow is managed by enqueuing commands:
 
-1.  ``EnqueueWriteBuffer``: Transfers input matrices A and B from host memory to their respective DRAM buffers on the device.
-2.  ``EnqueueProgram``: Launches the compiled program (reader, compute, and writer kernels) on the designated core.
-3.  ``EnqueueReadBuffer``: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
+1.  ``EnqueueWriteMeshBuffer``: Transfers input matrices A and B from host memory to their respective DRAM buffers on the Mesh Device (a 1x1 Mesh Device in this example).
+2.  ``EnqueueMeshWorkload``: Launches the compiled workload (reader, compute, and writer kernels) on the designated core on the Unit Mesh Device.
+3.  ``EnqueueReadMeshBuffer``: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
 
 .. code-block:: cpp
 
@@ -369,13 +355,20 @@ The overall execution flow is managed by enqueuing commands:
     tt_metal::SetRuntimeArgs(program, writer_id, core, {dst_addr, Mt, Nt}); // Note: Writer kernel uses Mt, Nt for output C
     // Don't need to set runtime args for compute kernel, as everything is passed as compile-time args
 
-    // Upload input data, execute program, and read results
-    EnqueueWriteBuffer(cq, src0_dram_buffer, a.data(), false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, b.data(), false);
-    EnqueueProgram(cq, program, false);
-    EnqueueReadBuffer(cq, dst_dram_buffer, output.data(), true);
+    // Upload input data to device
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b.data(), false);
+
+    // execute program, and read results
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::EnqueueReadMeshBuffer(cq, output.data(), dst_dram_buffer, true);
 
 After the program execution, the ``output.data()`` (which is ``result_vec`` in the ``main`` function of the C++ example) contains the result matrix C from the device's DRAM. However, this data is still in the tiled format used by the Tenstorrent hardware. To verify its correctness against the ``golden_vec`` (which is in a standard row-major format), two steps are necessary:
+
+    pass &= mesh_device->close();
 
 1.  **Data Untilization**: The `untilize_nfaces` function is used to convert the tiled output data back into a row-major format. This is the inverse operation of ``tilize_nfaces`` performed on the input data.
 

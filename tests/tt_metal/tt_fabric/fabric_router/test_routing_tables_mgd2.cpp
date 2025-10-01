@@ -31,18 +31,6 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
     return control_plane;
 }
 
-std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(
-    const std::filesystem::path& graph_desc,
-    const std::map<tt::tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
-        graph_desc.string(), logical_mesh_chip_id_to_physical_chip_id_mapping);
-    control_plane->initialize_fabric_context(kFabricConfig);
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
-
-    return control_plane;
-}
-
 // Deep-compare helper for IntraMeshConnectivity
 void expect_intra_mesh_connectivity_equal(
     const tt::tt_fabric::IntraMeshConnectivity &lhs, const tt::tt_fabric::IntraMeshConnectivity &rhs) {
@@ -97,17 +85,6 @@ void expect_inter_mesh_connectivity_equal(
                     << "Connected chip IDs differ at mesh " << mesh_idx << ", chip " << chip_idx;
             }
         }
-    }
-}
-
-void expect_mesh_to_chip_ids_equal(
-    const std::map<tt::tt_fabric::MeshId, tt::tt_fabric::MeshContainer<chip_id_t>>& lhs, const std::map<tt::tt_fabric::MeshId, tt::tt_fabric::MeshContainer<chip_id_t>>& rhs) {
-    ASSERT_EQ(lhs.size(), rhs.size()) << "Number of meshes differ";
-    for (const auto& [mesh_id, mesh_container] : lhs) {
-        const auto& rhs_mesh_container = rhs.at(mesh_id);
-        EXPECT_EQ(mesh_container.shape(), rhs_mesh_container.shape());
-        EXPECT_EQ(mesh_container.size(), rhs_mesh_container.size());
-        EXPECT_EQ(mesh_container, rhs_mesh_container);
     }
 }
 

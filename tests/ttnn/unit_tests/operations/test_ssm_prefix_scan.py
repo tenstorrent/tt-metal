@@ -7,7 +7,7 @@ import torch
 import ttnn
 import pytest
 from loguru import logger
-from models.utility_functions import tt2torch_tensor, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor, comp_pcc
 
 
 def sequential_prefix_scan(a, bx, h_prev):
@@ -70,7 +70,6 @@ def run_ssm_prefix_scan(L: int, E: int, N: int, num_cores: int, dtype, device):
     assert passing_pcc
 
 
-@skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b],
@@ -152,7 +151,6 @@ def run_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_cor
     logger.debug(f"Output pcc={output_pcc}")
 
 
-@skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize(
     "dtype",
     [ttnn.bfloat8_b],
@@ -170,7 +168,6 @@ def test_chunked_ssm_prefix_scan(L: int, E: int, N: int, chunk_size: int, num_co
     run_chunked_ssm_prefix_scan(L, E, N, chunk_size, num_cores, dtype, device)
 
 
-@skip_for_grayskull("Grayskull not supported")
 def test_ssm_prefix_scan_with_program_cache(device):
     L, E, N = 32, 64, 32
     num_cores = 1

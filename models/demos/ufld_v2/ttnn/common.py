@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -85,5 +85,6 @@ class TtnnUFLDV2Conv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.conv_output_dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         return x, output_height, output_width

@@ -14,6 +14,13 @@ from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 from models.demos.yolov9c.tt.model_preprocessing import get_mesh_mappers
 
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
+
 
 def run_yolov9c_inference(
     model_location_generator,
@@ -45,11 +52,17 @@ def run_yolov9c_inference(
     input_shape = (batch_size, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
 
+    if use_signpost:
+        signpost(header="start")
+
     t0 = time.time()
     for _ in range(10):
         _ = performant_runner.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
+
+    if use_signpost:
+        signpost(header="stop")
 
     performant_runner.release()
     inference_time_avg = round((t1 - t0) / 10, 6)

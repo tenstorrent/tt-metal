@@ -29,7 +29,7 @@ GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_f
 
 void GatherDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return validate_on_program_cache_miss(attributes, tensor_args);
+    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void GatherDeviceOperation::validate_on_program_cache_miss(

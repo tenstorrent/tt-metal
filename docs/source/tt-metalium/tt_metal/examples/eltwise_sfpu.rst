@@ -9,14 +9,14 @@ This example is similar to the previous example of adding two vectors using the 
 
 We'll go through this code section by section. The fully source code for this example is available under the ``tt_metal/programming_examples/eltwise_sfpu`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``eltwise_sfpu`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_eltwise_sfpu`` executable in the ``build/programming_examples`` directory. For example:
 
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh
-    ./build/programming_examples/eltwise_sfpu
+    ./build/programming_examples/metal_example_eltwise_sfpu
 
 Program setup
 -------------
@@ -27,18 +27,20 @@ Like the previous examples, setting up programs running on the accelerator is si
 * Allocate circular buffers for communication between kernels
 * Setup both data movement and compute kernels
 
-First, allocate the buffers using the interleaved config with page size set to the tile size (in bytes). This is the most common buffer type and configuration used in Metalium as it fits how the compute engine expects data to be sent in. Then data is generated and written to the source buffer. The destination buffer is not initialized as it will be filled with the results later.
+
+First, allocate the buffers using the mesh buffer API. This uses a two-layer configuration: ``DeviceLocalBufferConfig`` for per-device properties and `ReplicatedBufferConfig` for mesh-wide distribution. Page size is set to the tile size (in bytes), which matches how the compute engine expects data. The destination buffer is not initialized as it will be filled with results later.
 
 .. code-block:: cpp
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = tile_size_bytes * n_tiles,
+    distributed::DeviceLocalBufferConfig dram_config{
         .page_size = tile_size_bytes,
-        .buffer_type = tt_metal::BufferType::DRAM};
-
-    std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-    std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+        .buffer_type = tt::tt_metal::BufferType::DRAM
+    };
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = n_tiles * tile_size_bytes
+    };
+    auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
     // Fill a host buffer with random data and upload to the device.
     std::mt19937 rng(std::random_device{}());
@@ -48,7 +50,7 @@ First, allocate the buffers using the interleaved config with page size set to t
         v = bfloat16(dist(rng));
     }
 
-    EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
 
 Then we allocate the circular buffers. Again page size is set to tile size. There is 2 pages in each circular buffer to allow overlapping of data movement and compute operations. (data movement kernels will send/consume 1 tile at a time in this example).
 
@@ -76,23 +78,23 @@ Next, create the kernels. Nothing different from the previous examples besides b
 .. code-block:: cpp
 
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/read_tile.cpp",
+        "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_sfpu/kernels/dataflow/write_tile.cpp",
+        "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
     KernelHandle eltwise_sfpu_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
+        "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
         core,
         ComputeConfig{
             .math_approx_mode = false,
@@ -229,15 +231,19 @@ For this program, the runtime arguments are similar to the previous examples. Th
 Program execution and final check
 ---------------------------------
 
-Finally we can run the program. The program is enqueued to the command queue and the results are read back from the device. Then compared against the expected results.
+
+Finally we can run the program. The program is enqueued to the mesh command queue and the results are read back from the device. Then compared against the expected results.
 
 .. code-block:: cpp
 
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<bfloat16> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     for(uint32_t i = 0; i < result_vec.size(); ++i) {
         float expected = bfloat16(std::exp(src0_vec[i].to_float())).to_float();
@@ -247,7 +253,7 @@ Finally we can run the program. The program is enqueued to the command queue and
             tt::log_error(tt::LogTest, "Result mismatch at index {}: {} != {}", i, expected, result);
         }
     }
-    pass &= CloseDevice(device);
+    pass &= mesh_device->close();
 
 Conclusion
 ----------

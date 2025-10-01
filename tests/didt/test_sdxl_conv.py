@@ -9,7 +9,7 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
-from models.utility_functions import skip_for_blackhole, is_blackhole
+from models.common.utility_functions import skip_for_blackhole, is_blackhole
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 NUM_DEVICES = ttnn.distributed.get_num_devices()
@@ -217,7 +217,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 64,
-        "slice_type": ttnn.Conv2dSliceWidth,
+        "slice_type": ttnn.Conv2dDRAMSliceWidth,
         "num_slices": 8,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -233,7 +233,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 64,
-        "slice_type": ttnn.Conv2dSliceWidth,
+        "slice_type": ttnn.Conv2dDRAMSliceWidth,
         "num_slices": 8,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -265,7 +265,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 0,
-        "slice_type": ttnn.Conv2dSliceWidth,
+        "slice_type": ttnn.Conv2dDRAMSliceWidth,
         "num_slices": 2,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -281,7 +281,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 0,
-        "slice_type": ttnn.Conv2dSliceWidth,
+        "slice_type": ttnn.Conv2dDRAMSliceWidth,
         "num_slices": 8,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -297,7 +297,7 @@ conv_test_cases = [
         "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False,
         "act_block_h_override": 64,
-        "slice_type": ttnn.Conv2dSliceWidth,
+        "slice_type": ttnn.Conv2dDRAMSliceWidth,
         "num_slices": 16,
         "math_fidelity": ttnn.MathFidelity.LoFi,
         "input_mem_config": ttnn.DRAM_MEMORY_CONFIG,

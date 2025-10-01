@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import skip_for_grayskull
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 TILE_HEIGHT = 32
@@ -174,7 +173,6 @@ def run_all_reduce_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -246,7 +244,6 @@ def test_ring_all_reduce_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",

@@ -4,60 +4,13 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
-#include "height_sharded_reader_common.hpp"
-
+#include "conv_reader_common.hpp"
 #define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
 #include "debug/dprint_pages.h"
 #endif
-
-constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);  // Input filter window height
-constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);  // Input filter window width
-
-template <int window_height, int window_width>
-FORCE_INLINE void read_dilated_channels(
-    uint32_t& l1_write_addr_act,
-    const uint32_t act_l1_read_addr,
-    const uint32_t reader_channel_idx,
-    const uint32_t conv_act_c_bytes,
-    const uint32_t stride_h_bytes,
-    const uint32_t stride_w_bytes) {
-    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_bytes);
-#pragma GCC unroll weight_size_h
-    for (uint32_t outer = 0; outer < window_height; outer++) {
-        uint32_t act_l1_read_addr_row_offset = act_l1_read_addr_plus_offset;
-#pragma GCC unroll weight_size_w
-        for (uint32_t inner = 0; inner < window_width; inner++) {
-            // Read the partial depth.
-            noc_async_read_one_packet_with_state<true>(act_l1_read_addr_row_offset, l1_write_addr_act);
-            // Increment by full depth to go to the next pixel
-            l1_write_addr_act += conv_act_c_bytes;
-            act_l1_read_addr_row_offset += stride_w_bytes;
-        }
-        // Go to the next row
-        act_l1_read_addr_plus_offset += stride_h_bytes;
-    }
-}
-
-FORCE_INLINE
-void read_channels(
-    uint32_t& l1_write_addr_act,
-    const uint32_t act_l1_read_addr,
-    const uint32_t reader_channel_idx,
-    const uint32_t conv_act_c_read_bytes,
-    const uint32_t coalesced_read_bytes,
-    const uint32_t stride_h_bytes) {
-    uint32_t act_l1_read_addr_plus_offset = act_l1_read_addr + (reader_channel_idx * conv_act_c_read_bytes);
-#pragma GCC unroll weight_size_h
-    for (uint32_t inner = 0; inner < weight_size_h; inner++) {
-        noc_async_read_one_packet_with_state<true>(act_l1_read_addr_plus_offset, l1_write_addr_act);
-        l1_write_addr_act += coalesced_read_bytes;
-        // +2 is hard-coded, TODO: generalize
-        act_l1_read_addr_plus_offset += stride_h_bytes;
-    }
-}
 
 constexpr uint32_t DILATION_W = get_compile_time_arg_val(1);
 void kernel_main() {
@@ -66,6 +19,9 @@ void kernel_main() {
     constexpr uint32_t stride_w = get_compile_time_arg_val(2);
     constexpr uint32_t conv_act_c_read_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t window_outer = get_compile_time_arg_val(4);
+    constexpr uint32_t act_block_num_tiles_read = get_compile_time_arg_val(6);
+    constexpr uint32_t weight_size_h = get_compile_time_arg_val(7);
+    constexpr uint32_t weight_size_w = get_compile_time_arg_val(8);
     constexpr uint32_t padded_conv_act_size_w = get_compile_time_arg_val(9);
     constexpr uint32_t act_block_w_extra_align_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
@@ -152,57 +108,29 @@ void kernel_main() {
         uint32_t reader_offset = act_l1_read_addr;
         for (uint32_t outer = 0; outer < window_outer; outer++) {
             reader_idx = start_reader_idx;
-
-            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
+            cb_reserve_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
 
-                if constexpr (sliced_inner_dim) {
-                    read_sticks<
-                        dilation_w,
-                        coalesced_read_bytes,
-                        conv_act_c_read_bytes,
-                        act_block_w_extra_align_bytes,
-                        stride_w_bytes,
-                        weight_size_w,
-                        stride_w>(packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
-                } else {
-                    uint16_t num_elems = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                    while (num_elems--) {
-                        reader_idx++;
-                        uint16_t start_ind = packed_reader_indices_ptr[reader_idx] & 0xffff;
-                        uint16_t end_ind = packed_reader_indices_ptr[reader_idx] >> 16;
-                        for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
-                            if constexpr (DILATION_W == 1) {
-                                read_channels(
-                                    l1_write_addr_act,
-                                    act_l1_read_addr,
-                                    ind,
-                                    conv_act_c_read_bytes,
-                                    coalesced_read_bytes,
-                                    stride_h_bytes);
-                                if constexpr (act_block_w_extra_align_bytes) {
-                                    l1_write_addr_act += act_block_w_extra_align_bytes;
-                                }
-                            } else {
-                                read_dilated_channels<weight_size_h, weight_size_w>(
-                                    l1_write_addr_act,
-                                    act_l1_read_addr,
-                                    ind,
-                                    conv_act_c_read_bytes,
-                                    stride_h_bytes,
-                                    stride_w_bytes);
-                            }
-                        }
-                    }
-                    reader_idx++;
-                }
-
-                noc_async_read_barrier();
+                read_activation_data<
+                    sliced_inner_dim,
+                    dilation_w,
+                    coalesced_read_bytes,
+                    conv_act_c_read_bytes,
+                    act_block_w_extra_align_bytes,
+                    stride_w_bytes,
+                    weight_size_w,
+                    stride_w,
+                    weight_size_h,
+                    window_outer_offset>(
+                    packed_reader_indices_ptr,
+                    reader_offset,
+                    l1_write_addr_act,
+                    reader_idx,
+                    act_l1_read_addr,
+                    stride_h_bytes);
             }
-            cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles);
-
-            reader_offset += window_outer_offset;
+            cb_push_back(cb_id_act_row_major_bfloat16, act_block_num_tiles_read);
 
 #ifndef SKIP_MCAST
             // Round robin self-mcast and receive tilized act matrix in cb_id_act
@@ -308,6 +236,10 @@ void kernel_main() {
 #endif
         }
         start_reader_idx = reader_idx;
+#ifdef SPLIT_READER
+        // Increment reader index for the next number of segments (number of segments for other reader)
+        start_reader_idx += (static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1);
+#endif
     }
 
     noc_async_write_barrier();

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -10,10 +10,9 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_results_batch_norm,
 )
 from itertools import product
-from models.utility_functions import skip_for_grayskull, comp_pcc
+from models.common.utility_functions import comp_pcc
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "input_shapes",
     [
@@ -120,7 +119,6 @@ def test_batch_norm_tests_fp32(
     assert comp_BN_Output
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("eps", [1.0, 1e-05])
 @pytest.mark.parametrize("channel_size", [1, 4])
 @pytest.mark.parametrize("weight", [True, False])
@@ -164,7 +162,6 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
     assert status_2 and status_1
 
 
-@skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize(
     "input_shapes",
     [

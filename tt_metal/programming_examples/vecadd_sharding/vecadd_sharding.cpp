@@ -15,6 +15,7 @@
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/constants.hpp"
+#include <tt-metalium/distributed.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -36,24 +37,35 @@ struct DistributionConfig {
     uint32_t num_cores_x;
 };
 
-std::shared_ptr<Buffer> MakeShardedL1BufferBFP16(
-    IDevice* device, size_t size, const DistributionConfig& config, const ShardSpecBuffer& shard_config) {
-    return CreateBuffer(ShardedBufferConfig{
-        .device = device,
-        .size = size,
+std::shared_ptr<distributed::MeshBuffer> MakeShardedL1MeshBufferBFP16(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    size_t size,
+    const DistributionConfig& config,
+    const ShardSpecBuffer& shard_config) {
+    BufferShardingArgs sharding_args = BufferShardingArgs(shard_config, config.layout);
+    distributed::DeviceLocalBufferConfig local_config{
         .page_size = tt::constants::TILE_HW * sizeof(bfloat16),
-        .buffer_layout = config.layout,
-        .shard_parameters = shard_config});
+        .buffer_type = BufferType::L1,
+        .sharding_args = sharding_args,
+    };
+    distributed::ReplicatedBufferConfig buffer_config{
+        .size = size,
+    };
+    return distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 }
 
 CBHandle MakeCircularBufferBFP16(
-    Program& program, const CoreSpec& core, tt::CBIndex cb, uint32_t n_tiles, const std::shared_ptr<Buffer>& l1_buf) {
+    Program& program,
+    const CoreSpec& core,
+    tt::CBIndex cb,
+    uint32_t n_tiles,
+    const std::shared_ptr<distributed::MeshBuffer>& l1_buf) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_HW;
     CircularBufferConfig cb_config = CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}})
                                          .set_page_size(cb, tile_size)
                                          // IMPORTANT: assign L1 buffer address to circular buffer directly so that
                                          // no extra allocation and data copy
-                                         .set_globally_allocated_address(*l1_buf);
+                                         .set_globally_allocated_address(*(l1_buf->get_backing_buffer()));
     return CreateCircularBuffer(program, core, cb_config);
 }
 
@@ -128,7 +140,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    IDevice* device = CreateDevice(device_id);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     const auto& config = test_configs.at(sharding_type);
@@ -170,9 +184,9 @@ int main(int argc, char** argv) {
 
     // Create the input and output buffers that lives on L1(SRAM)
     size_t size_bytes = n_tiles_y * n_tiles_x * tt::constants::TILE_HW * sizeof(bfloat16);
-    auto a = MakeShardedL1BufferBFP16(device, size_bytes, config, spec);
-    auto b = MakeShardedL1BufferBFP16(device, size_bytes, config, spec);
-    auto c = MakeShardedL1BufferBFP16(device, size_bytes, config, spec);
+    auto a = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
+    auto b = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
+    auto c = MakeShardedL1MeshBufferBFP16(mesh_device, size_bytes, config, spec);
 
     // Data to fill the input buffers.
     std::mt19937 rng(seed);
@@ -205,19 +219,20 @@ int main(int argc, char** argv) {
             .compile_args = {tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2}});
 
     // copy data from host to L1 directly
-    CommandQueue& cq = device->command_queue();
-    EnqueueWriteBuffer(cq, a, a_data, false);
-    EnqueueWriteBuffer(cq, b, b_data, false);
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    EnqueueWriteMeshBuffer(cq, a, a_data, false);
+    EnqueueWriteMeshBuffer(cq, b, b_data, false);
 
     // Setup arguments and run the program.
     SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
-    EnqueueProgram(cq, program, true);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     fmt::print("Kernel execution finished. Reading results...\n");
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    EnqueueReadBuffer(cq, c, c_data, true);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)
@@ -260,6 +275,6 @@ int main(int argc, char** argv) {
     }
 
     // Finally, we close the device.
-    CloseDevice(device);
+    mesh_device->close();
     return 0;
 }

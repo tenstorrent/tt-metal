@@ -4,7 +4,6 @@
 
 import pytest
 import ttnn
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     run_all_gather_on_n300_impl,
     run_all_gather_on_t3000_impl_tight_loop,
@@ -20,7 +19,6 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
 )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, output_shape, dim, layout",
     [
@@ -75,7 +73,6 @@ def test_all_gather_on_n300(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, input_shape, dim, layout",
     [
@@ -129,7 +126,6 @@ def test_all_gather_on_t3000(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
@@ -193,7 +189,6 @@ def test_reduce_scatter_on_t3000(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
@@ -254,7 +249,6 @@ def test_reduce_scatter_on_n300(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [
@@ -314,7 +308,6 @@ def test_all_gather_on_tg(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, dim, layout",
     [

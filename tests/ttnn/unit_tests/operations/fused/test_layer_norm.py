@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole
 
 
 def skip_welford_blackhole(use_welford):

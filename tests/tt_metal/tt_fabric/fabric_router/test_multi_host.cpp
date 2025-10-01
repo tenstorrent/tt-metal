@@ -115,5 +115,101 @@ TEST(MultiHost, TestDualGalaxyFabric1DSanity) {
     }
 }
 
+TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path quad_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_mesh_graph_descriptor.yaml";
+    auto control_plane = std::make_unique<ControlPlane>(quad_galaxy_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, TestQuadGalaxyFabric2DSanity) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Validate control plane apis
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 3);
+    FabricNodeId dst_node_id(MeshId{0}, 12);  // On host rank 3
+    MeshCoordinate dst_mesh_coord(0, 12);
+
+    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
+    if (host_local_coord_range.contains(src_mesh_coord)) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_EQ(direction, RoutingDirection::E);
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::E);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+
+    if (host_local_coord_range.contains(dst_mesh_coord)) {
+        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
+        EXPECT_EQ(reverse_direction, RoutingDirection::W);
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::W);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+    }
+}
+
+TEST(MultiHost, TestQuadGalaxyFabric1DSanity) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Validate control plane apis
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 3);
+    FabricNodeId dst_node_id(MeshId{0}, 12);  // On host rank 3
+    MeshCoordinate dst_mesh_coord(0, 12);
+
+    auto host_local_coord_range = control_plane.get_coord_range(MeshId{0}, MeshScope::LOCAL);
+    if (host_local_coord_range.contains(src_mesh_coord)) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_EQ(direction, RoutingDirection::E);
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, RoutingDirection::E);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+
+    if (host_local_coord_range.contains(dst_mesh_coord)) {
+        const auto& reverse_direction = control_plane.get_forwarding_direction(dst_node_id, src_node_id);
+        EXPECT_EQ(reverse_direction, RoutingDirection::W);
+
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(dst_node_id, src_node_id, RoutingDirection::W);
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+    }
+}
+
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric

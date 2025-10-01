@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
+from models.common.utility_functions import is_grayskull, is_wormhole_b0, is_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import run_prefetcher_mm
 
 LLAMA_INPUT_SHAPES = [(2304, 1536), (1536, 2304), (2304, 3840), (2304, 3840), (3840, 2304)]

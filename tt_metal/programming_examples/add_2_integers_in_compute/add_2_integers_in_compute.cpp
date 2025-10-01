@@ -7,6 +7,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include "tt-metalium/constants.hpp"
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -22,12 +23,21 @@ int main() {
             "Movement kernels.\n");
         fmt::print("WARNING: For example, export TT_METAL_DPRINT_CORES=0,0\n");
     }
-    // Initialize a device
-    IDevice* device = CreateDevice(0);
+
+    // A MeshDevice is a software concept that allows developers to virtualize a cluster of connected devices as a
+    // single object, maintaining uniform memory and runtime state across all physical devices. A UnitMesh is a 1x1
+    // MeshDevice that allows users to interface with a single physical device.
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
     // In Metalium, submitting operations to the device is done through a command queue. This includes
     // uploading/downloading data to/from the device, and executing programs.
-    CommandQueue& cq = device->command_queue();
+    // A MeshCommandQueue is a software concept that allows developers to submit operations to a MeshDevice.
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+
+    // A MeshWorkload is a collection of programs that are executed on a MeshDevice.
+    // The specific physical devices that the workload is executed on are determined by the MeshCoordinateRange.
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
     // same kernel at a given time. Metalium allows you to run different kernels on different cores
     // simultaneously.
@@ -41,17 +51,23 @@ int main() {
     constexpr uint32_t n_elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_WIDTH;
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * n_elements_per_tile;
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,               // Device which owns the buffer
-        .size = single_tile_size,       // Size of the buffer in bytes
+    // MeshBuffer Creation:
+    // To create a MeshBuffer, we need to specify the page size, the buffer type, and the size of the buffer.
+    // For this example, we will be using a DRAM buffer.
+    // A DeviceLocalBufferConfig is a configuration object that specifies the properties of a buffer that is allocated
+    // on a single device. A ReplicatedBufferConfig is a configuration object that specifies the properties of a buffer
+    // that is replicated across all devices in the Mesh.
+    distributed::DeviceLocalBufferConfig dram_config{
         .page_size = single_tile_size,  // Number of bytes when round-robin between banks. Usually this is the same
                                         // as the tile size for efficiency.
         .buffer_type = tt_metal::BufferType::DRAM};  // Type of buffer (DRAM or L1(SRAM))
-
+    distributed::ReplicatedBufferConfig distributed_buffer_config{
+        .size = single_tile_size  // Size of the buffer in bytes
+    };
     // Create 3 buffers in DRAM to hold the 2 input tiles and 1 output tile.
-    auto src0_dram_buffer = CreateBuffer(dram_config);
-    auto src1_dram_buffer = CreateBuffer(dram_config);
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto src0_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+    auto src1_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
+    auto dst_dram_buffer = distributed::MeshBuffer::create(distributed_buffer_config, dram_config, mesh_device.get());
 
     // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are
     // used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute
@@ -117,21 +133,29 @@ int main() {
     // is not released before the operation is complete.
     // In this case, we will wait for the program to finish eventually in the same scope, so we can set it
     // to false safely.
-    EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
+    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
-    SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer->address(), src1_dram_buffer->address()});
+    SetRuntimeArgs(
+        program,
+        binary_reader_kernel_id,
+        core,
+        {(uint32_t)src0_dram_buffer->address(), (uint32_t)src1_dram_buffer->address()});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address()});
+    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_buffer->address()});
 
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    // Add the program to the workload and execute it.
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
-    // Read the results from the destination DRAM buffer into host memory.
+    // Data can be read from a MeshBuffer using the ReadShard function. This function is used to read data from a
+    // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
+    // operation is blocking or not.
     std::vector<bfloat16> result_vec;
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     // compare the results with the expected values.
     bool success = true;
@@ -148,5 +172,5 @@ int main() {
     } else {
         fmt::print("Success: Result matches expected value!\n");
     }
-    CloseDevice(device);
+    mesh_device->close();
 }

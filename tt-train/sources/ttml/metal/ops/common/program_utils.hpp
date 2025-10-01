@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,6 +24,9 @@ inline uint32_t pack_two_bfloat16_to_uint32(float value) {
     return casted_uint16_data | (casted_uint16_data << 16U);
 }
 
+/**
+ *   Create and configure a circular buffer, returning both the configuration and the handle.
+ */
 inline tt::tt_metal::CBHandle create_circular_buffer(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,
@@ -39,6 +42,9 @@ inline tt::tt_metal::CBHandle create_circular_buffer(
     return cb_handle;
 }
 
+/**
+ *   Create a reader kernel with the given compile-time arguments.
+ */
 inline tt::tt_metal::KernelHandle create_reader_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,
@@ -49,6 +55,9 @@ inline tt::tt_metal::KernelHandle create_reader_kernel(
         program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
 }
 
+/**
+ *   Create a writer kernel with the given compile-time arguments.
+ */
 inline tt::tt_metal::KernelHandle create_writer_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,
@@ -59,6 +68,9 @@ inline tt::tt_metal::KernelHandle create_writer_kernel(
         program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
 }
 
+/**
+ * Create a compute kernel with the given compile-time arguments.
+ */
 inline tt::tt_metal::KernelHandle create_compute_kernel(
     tt::tt_metal::Program& program,
     const tt::tt_metal::CoreRangeSet& core_ranges,

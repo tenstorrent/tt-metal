@@ -8,12 +8,11 @@
  * Stores telemetry data, named by slash-delimited paths, in a hierarchical tree. Leaf nodes
  * contain actual reported telemetry data and intermediate nodes are aggregated from children.
  *
- * TODO:
- * -----
- * - Better handling of value types. The isBoolValue param on addPath() needs to go!
- * - Better detection of health vs. non-health metrics when rendering (don't just check value
- *   type, need some attribute along with them).
+ * Updated to use string-based paths directly (no more integer IDs) for much simpler processing
+ * of telemetry snapshots.
  */
+
+import { arrayOfPairsToMap } from './utils.js';
 
 export function isBool(value) {
     return typeof value === "boolean" || value instanceof Boolean;
@@ -25,10 +24,6 @@ function isInt(value) {
 
 export class HierarchicalTelemetryStore {
     constructor() {
-        // Full path by ID. Telemetry updates are transmitted by ID number in order to keep
-        // messages compact. This allows us to map back to path.
-        this._pathById = new Map();
-
         // Telemetry data (value + timestamp + unit info) hashed by path. Partial paths are also tracked and are the
         // aggregate value of all children (ANDed together for bools). Timestamps for intermediate nodes
         // are the most recent timestamp of their children.
@@ -100,17 +95,10 @@ export class HierarchicalTelemetryStore {
     // Updates telemetry state for a particular boolean-valued node. Will set the value directly
     // and then propagate upwards if changed. If the value did not already exist and this is the
     // first insertion, propagation will occur.
-    updateBoolValue(id, value, timestamp = null) {
+    updateBoolValue(path, value, timestamp = null) {
         const isBoolean = isBool(value) || value === 1 || value === 0;
         if (!isBoolean) {
             console.error(`[HierarchicalTelemetryStore] Value is not bool (${typeof value})`);
-        }
-
-        const path = this._pathById.get(id);
-        if (!path) {
-            // Invalid telemetry data, does not map to any known path
-            console.error(`[HierarchicalTelemetryStore] Invalid id ${id}, cannot update bool value`);
-            return;
         }
 
         // Convert value to bool type if it is not
@@ -151,16 +139,9 @@ export class HierarchicalTelemetryStore {
     // Updates telemetry state for a particular uint-valued node. Will set the value directly
     // and then propagate upwards if changed. If the value did not already exist and this is the
     // first insertion, propagation will occur.
-    updateUIntValue(id, value, timestamp = null) {
+    updateUIntValue(path, value, timestamp = null) {
         if (!isInt(value)) {
             console.error(`[HierarchicalTelemetryStore] Value is not uint (${typeof value})`);
-        }
-
-        const path = this._pathById.get(id);
-        if (!path) {
-            // Invalid telemetry data, does not map to any known path
-            console.error(`[HierarchicalTelemetryStore] Invalid id ${id}, cannot update uint value`);
-            return;
         }
 
         // Convert timestamp to Date if provided, otherwise use current time
@@ -200,16 +181,9 @@ export class HierarchicalTelemetryStore {
     // Updates telemetry state for a particular double-valued node. Will set the value directly
     // and then propagate upwards if changed. If the value did not already exist and this is the
     // first insertion, propagation will occur.
-    updateDoubleValue(id, value, timestamp = null) {
+    updateDoubleValue(path, value, timestamp = null) {
         if (typeof value !== "number") {
             console.error(`[HierarchicalTelemetryStore] Value is not double (${typeof value})`);
-        }
-
-        const path = this._pathById.get(id);
-        if (!path) {
-            // Invalid telemetry data, does not map to any known path
-            console.error(`[HierarchicalTelemetryStore] Invalid id ${id}, cannot update double value`);
-            return;
         }
 
         // Convert timestamp to Date if provided, otherwise use current time
@@ -248,25 +222,23 @@ export class HierarchicalTelemetryStore {
 
     // Update function for unit label maps - iterates through the provided maps
     // and updates the internal ones (overwriting existing values and adding new ones)
+    // Note: nlohmann::json serializes std::unordered_map<uint16_t, string> as array of pairs
     updateUnitLabelMaps(displayLabelMap, fullLabelMap) {
-        let displayCount = 0;
-        let fullCount = 0;
-
         if (displayLabelMap) {
-            for (const [code, label] of Object.entries(displayLabelMap)) {
+            const displayMap = arrayOfPairsToMap(displayLabelMap);
+            for (const [code, label] of displayMap) {
                 this._unitDisplayLabelByCode.set(parseInt(code), label);
-                displayCount++;
             }
         }
 
         if (fullLabelMap) {
-            for (const [code, label] of Object.entries(fullLabelMap)) {
+            const fullMap = arrayOfPairsToMap(fullLabelMap);
+            for (const [code, label] of fullMap) {
                 this._unitFullLabelByCode.set(parseInt(code), label);
-                fullCount++;
             }
         }
 
-        console.log(`[HierarchicalTelemetryStore] Updated ${displayCount} display labels and ${fullCount} full labels`);
+        console.log(`[HierarchicalTelemetryStore] Updated unit label maps`);
     }
 
     // Helper method to get unit labels for a given unit code
@@ -286,15 +258,7 @@ export class HierarchicalTelemetryStore {
     }
 
     // Adds a new telemetry value to the store for the first time.
-    addPath(path, id, initialValue, isBoolValue, timestamp = null, unitCode = null) {
-        if (this._pathById.has(id)) {
-            const existingPath = this._pathById.get(id);
-            console.error(`[HierarchicalTelemetryStore] Cannot add (${id}, ${path}) to id -> path mapping because (${id}, ${existingPath}) already exists there`);
-            return;
-        }
-
-        this._pathById.set(id, path);
-
+    addPath(path, initialValue, isBoolValue, timestamp = null, unitCode = null) {
         // Now update path component maps. Note that terminal part of path must have no children.
         const parts = path.split("/");
         let map = this._pathChildren;
@@ -307,7 +271,7 @@ export class HierarchicalTelemetryStore {
             map = map.get(currentPart);
         }
 
-        console.log(`[HierarchicalTelemetryStore] Added ${id}:${path} (value=${initialValue})`);
+        console.log(`[HierarchicalTelemetryStore] Added ${path} (value=${initialValue})`);
 
         // Get unit labels for this metric
         const { unitDisplayLabel, unitFullLabel } = this._getUnitLabels(unitCode);
@@ -357,16 +321,9 @@ export class HierarchicalTelemetryStore {
         return currentMap ? [ ...currentMap.keys() ] : [];
     }
 
-    // Gets telemetry data (value + timestamp + unit info). The path (a string) or ID (a number) may be supplied.
+    // Gets telemetry data (value + timestamp + unit info) by path.
     // Returns { value: any, timestamp: Date, unitDisplayLabel: string|null, unitFullLabel: string|null } or null if not found.
-    getData(idOrPath) {
-        const isPath = typeof(idOrPath) === "string" || idOrPath instanceof String;
-        const path = isPath ? idOrPath : this._pathById.get(idOrPath);
-        if (!path) {
-            // Invalid telemetry data, does not map to any known path
-            console.error(`[HierarchicalTelemetryStore] Unknown id ${idOrPath}`);
-            return null;
-        }
+    getData(path) {
         const data = this._dataByPath.get(path);
         if (!data) {
             return null;
@@ -374,6 +331,68 @@ export class HierarchicalTelemetryStore {
 
         console.log(`[HierarchicalTelemetryStore] Get data ${path} = ${data.value} at ${data.timestamp.toISOString()} (units: ${data.unitDisplayLabel}/${data.unitFullLabel})`);
         return data;
+    }
+
+    // Processes a telemetry snapshot in the new format (string-based paths)
+    processSnapshot(snapshot) {
+        let didUpdate = false;
+
+        // Update unit label maps if present
+        if (snapshot.metric_unit_display_label_by_code || snapshot.metric_unit_full_label_by_code) {
+            this.updateUnitLabelMaps(
+                snapshot.metric_unit_display_label_by_code,
+                snapshot.metric_unit_full_label_by_code
+            );
+        }
+
+        // Process bool metrics
+        if (snapshot.bool_metrics) {
+            for (const [path, value] of Object.entries(snapshot.bool_metrics)) {
+                const timestamp = snapshot.bool_metric_timestamps ? snapshot.bool_metric_timestamps[path] : null;
+
+                // Check if this is a new path
+                if (!this._dataByPath.has(path)) {
+                    this.addPath(path, value, true, timestamp);
+                } else {
+                    this.updateBoolValue(path, value, timestamp);
+                }
+                didUpdate = true;
+            }
+        }
+
+        // Process uint metrics
+        if (snapshot.uint_metrics) {
+            for (const [path, value] of Object.entries(snapshot.uint_metrics)) {
+                const timestamp = snapshot.uint_metric_timestamps ? snapshot.uint_metric_timestamps[path] : null;
+                const unitCode = snapshot.uint_metric_units ? snapshot.uint_metric_units[path] : null;
+
+                // Check if this is a new path
+                if (!this._dataByPath.has(path)) {
+                    this.addPath(path, value, false, timestamp, unitCode);
+                } else {
+                    this.updateUIntValue(path, value, timestamp);
+                }
+                didUpdate = true;
+            }
+        }
+
+        // Process double metrics
+        if (snapshot.double_metrics) {
+            for (const [path, value] of Object.entries(snapshot.double_metrics)) {
+                const timestamp = snapshot.double_metric_timestamps ? snapshot.double_metric_timestamps[path] : null;
+                const unitCode = snapshot.double_metric_units ? snapshot.double_metric_units[path] : null;
+
+                // Check if this is a new path
+                if (!this._dataByPath.has(path)) {
+                    this.addPath(path, value, false, timestamp, unitCode);
+                } else {
+                    this.updateDoubleValue(path, value, timestamp);
+                }
+                didUpdate = true;
+            }
+        }
+
+        return didUpdate;
     }
 }
 

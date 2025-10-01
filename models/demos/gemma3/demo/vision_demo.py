@@ -65,6 +65,7 @@ def create_multimodal_model(
     checkpoint=None,
     optimizations=None,
     num_layers=None,
+    paged_attention_config=None,
 ):
     from models.demos.gemma3.tt.gemma_e2e_model import TtGemmaModel
     from models.demos.gemma3.tt.model_config import ModelArgs
@@ -95,6 +96,7 @@ def create_multimodal_model(
             dtype=ttnn.bfloat8_b,
             args=tt_model_args,
             use_paged_kv_cache=use_paged_kv_cache,
+            paged_attention_config=paged_attention_config,
         )
     else:
         model = CrossAttentionTransformer(
