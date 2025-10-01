@@ -56,7 +56,7 @@ std::unique_ptr<BidirectionalFabricSocket> BidirectionalFabricSocket::create(
         return std::make_unique<BidirectionalFabricSocket>(mesh_device, sender_socket_config, recv_socket_config);
     }
     // else
-    return std::make_unique<BidirectionalFabricSocket>(mesh_device, recv_socket_config, sender_socket_config);
+    return std::make_unique<BidirectionalFabricSocket>(mesh_device, sender_socket_config, recv_socket_config);
 }
 
 }  // namespace ttnn::distributed
