@@ -54,6 +54,7 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
+        :param ttnn.Conv2dSliceConfig, None slice_config: Configuration for slicing the input & output tensors when they are in DRAM. If this is set to None, and the input is in DRAM, DRAM Slicing will be automatically enabled. Default: None
         :param bool return_output_dim:  If true, the op also returns the height and width of the output tensor in [N, H, W, C] format,
         :param bool return_weights_and_bias:  If true, the op also returns the preprocessed weight and bias on device .
 
@@ -179,7 +180,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("input_dtype"),
         py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
+        py::arg("compute_config") = std::nullopt,
+        py::arg("slice_config") = std::nullopt);
 
     module.def(
         "convert_conv_weight_tensor_to_tiled_layout",
@@ -287,8 +289,9 @@ void py_bind_conv2d(py::module& module) {
         | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
         )doc");
     py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
-        .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
-        .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);
+        .value("L1Full", Conv2dSliceConfig::SliceType::L1_FULL)
+        .value("DRAMSliceHeight", Conv2dSliceConfig::SliceType::DRAM_HEIGHT)
+        .value("DRAMSliceWidth", Conv2dSliceConfig::SliceType::DRAM_WIDTH);
 
     auto py_conv_config = py::class_<Conv2dConfig>(
         module,

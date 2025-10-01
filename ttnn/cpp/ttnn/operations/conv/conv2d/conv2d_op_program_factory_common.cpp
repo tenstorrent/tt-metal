@@ -76,6 +76,7 @@ std::vector<CBInfo> get_cb_info(
                                                         ? tt::tt_metal::DataType::FLOAT32
                                                         : tt::tt_metal::DataType::BFLOAT16;
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+
     const tt::DataFormat conv_input_df = datatype_to_dataformat_converter(conv_input_dtype);
     const uint32_t input_tile_size = tt::tile_size(datatype_to_dataformat_converter(conv_input_dtype));
 
