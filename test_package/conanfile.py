@@ -26,7 +26,6 @@ class TestPackageConan(ConanFile):
 
     def build(self):
         cmake = CMake(self)
-        cmake.configure(cli_args=["-DCMAKE_FIND_DEBUG_MODE=ON", "--graphviz=build-visual.dot"])
         cmake.build()
 
     def generate(self):
@@ -34,6 +33,7 @@ class TestPackageConan(ConanFile):
 
         tc = CMakeToolchain(self)
         tc.generator = "Ninja"
+        tc.blocks["rpath"].skip_rpath = False
         tc.generate()
 
         runenv = VirtualRunEnv(self)
