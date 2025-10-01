@@ -123,7 +123,6 @@ Checks: >
   -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
   -misc-unconventional-assign-operator,
-  -misc-uniqueptr-reset-release,
   -misc-unused-parameters,
   -misc-unused-using-decls,
   -misc-use-anonymous-namespace,
