@@ -644,7 +644,6 @@ public:
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
-    bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
     FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
     bool dateline_connection = false;
