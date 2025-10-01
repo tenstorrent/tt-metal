@@ -80,6 +80,7 @@ RunTimeOptions::RunTimeOptions() {
     test_mode_enabled = (getenv("TT_METAL_WATCHER_TEST_MODE") != nullptr);
 
     profiler_enabled = false;
+    ttnn_op_profiler_enabled = false;
     profile_dispatch_cores = false;
     profiler_sync_enabled = false;
     profiler_mid_run_dump = false;
@@ -105,6 +106,11 @@ RunTimeOptions::RunTimeOptions() {
         if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
             profiler_mid_run_dump = true;
         }
+    }
+
+    const char* ttnn_op_profiler_enabled_str = std::getenv("TT_METAL_TTNN_OP_PROFILER");
+    if (ttnn_op_profiler_enabled_str != nullptr && ttnn_op_profiler_enabled_str[0] == '1') {
+        ttnn_op_profiler_enabled = true;
     }
 
     const char *profiler_noc_events_str = std::getenv("TT_METAL_DEVICE_PROFILER_NOC_EVENTS");
