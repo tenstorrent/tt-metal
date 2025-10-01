@@ -1198,8 +1198,6 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     }
 
     this->program_transfer_info.num_active_cores = num_active_cores;
-
-    return;
 }
 
 ProgramConfig& detail::ProgramImpl::get_program_config(uint32_t programmable_core_type_index) {

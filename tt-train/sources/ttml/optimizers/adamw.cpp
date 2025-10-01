@@ -5,13 +5,13 @@
 #include "adamw.hpp"
 
 #include "autograd/autocast_tensor.hpp"
-#include "autograd/module_base.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
 #include "serialization/serializable.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
+
 namespace {
 
 const std::string kFirstMoment = "first_moment";
