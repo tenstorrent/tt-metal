@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>                                                     // for get
+#include <umd/device/driver_atomics.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -388,6 +389,7 @@ void Cluster::start_driver(tt_device_params &device_params) const {
             ll_api::configure_static_tlbs(
                 this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
         }
+        tt_driver_atomics::sfence();
     }
 
     this->driver_->start_device(device_params);

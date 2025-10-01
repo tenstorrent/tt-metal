@@ -294,14 +294,14 @@ FORCE_INLINE bool is_port_up() {
     return ((eth_status_t*)(MEM_SYSENG_ETH_STATUS))->port_status == port_status_e::PORT_UP;
 }
 
-FORCE_INLINE void service_eth_msg() {
+static void service_eth_msg() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     invalidate_l1_cache();
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
 #endif
 }
 
-void update_boot_results_eth_link_status_check() {
+static void update_boot_results_eth_link_status_check() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     uint64_t curr_timestamp = eth_read_wall_clock();
     // Debounce to only be called at every interval
