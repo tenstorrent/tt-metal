@@ -193,6 +193,7 @@ def run_all_to_all_dispatch_test(
     cluster_axis=1,
     use_optional_output_tensors=False,
     test_skew=False,
+    shard_dim=0,
 ):
     torch.manual_seed(2005)
     random.seed(2005)
@@ -221,11 +222,11 @@ def run_all_to_all_dispatch_test(
     output_tensor_goldens_list = []
     output_metadata_goldens_list = []
     if cluster_axis is None:
-        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
     elif cluster_axis == 1:
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_shape)
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, shard_dim), mesh_shape=mesh_shape)
     elif cluster_axis == 0:
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape)
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape)
     else:
         raise ValueError(f"Invalid cluster_axis: {cluster_axis}")
 
@@ -288,7 +289,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=dtype,
             memory_config=output_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
         )
 
         tt_metadata_tensor = ttnn.from_torch(
@@ -297,7 +298,7 @@ def run_all_to_all_dispatch_test(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint16,
             memory_config=output_memory_config,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim),
         )
 
         if iter == 0:
@@ -432,12 +433,12 @@ def run_all_to_all_dispatch_test(
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_torch_tensor = ttnn.to_torch(
             tt_out_tensor_list[tensor_index],
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
 
         tt_metadata_tensor = ttnn.to_torch(
             tt_metadata_list[tensor_index],
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=shard_dim),
         )
 
         batch = tt_torch_tensor.shape[1]
@@ -990,4 +991,72 @@ def test_all_to_all_dispatch_skew(
         cluster_axis=cluster_axis,
         topology=topology,
         test_skew=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("cluster_axis", [1], ids=["cluster_col"])
+@pytest.mark.parametrize("experts", [8])
+@pytest.mark.parametrize("select_experts_k", [2])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize(
+    "batch, seq_len, num_iters, warmup_iters",
+    [
+        (1, 8, 1, 1),
+    ],
+    ids=["b1s8"],
+)
+@pytest.mark.parametrize("num_links", ["MAX_LINKS"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+def test_all_to_all_dispatch_no_trace_batch1(
+    mesh_device,
+    trace_mode,
+    mesh_shape,
+    cluster_axis,
+    batch,
+    experts,
+    select_experts_k,
+    hidden_size,
+    seq_len,
+    num_iters,
+    warmup_iters,
+    num_links,
+    dtype,
+    input_memory_config,
+    output_memory_config,
+    device_params,
+):
+    if num_links == "MAX_LINKS":
+        num_links = get_max_links(cluster_axis, device_params["fabric_config"])
+
+    run_all_to_all_dispatch_test(
+        mesh_device,
+        mesh_shape,
+        batch,
+        experts,
+        select_experts_k,
+        hidden_size,
+        seq_len,
+        num_iters,
+        warmup_iters,
+        trace_mode,
+        num_links=num_links,
+        scheme="random",
+        input_memory_config=input_memory_config,
+        output_memory_config=output_memory_config,
+        dtype=dtype,
+        cluster_axis=cluster_axis,
+        shard_dim=1,
     )
