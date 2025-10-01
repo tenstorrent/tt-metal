@@ -38,6 +38,19 @@ void kernel_main() {
     uint32_t noc_y_start = get_arg_val<uint32_t>(rt_arg_idx++);
     auto hop_info = get_hop_info_from_args<is_chip_multicast, num_send_dir>(rt_arg_idx);
 
+#ifdef API_TYPE_Mesh
+    // Build MeshMcastRange array from hop_info once
+    MeshMcastRange ranges[num_send_dir];
+    if constexpr (is_chip_multicast) {
+        for (uint32_t i = 0; i < num_send_dir; i++) {
+            ranges[i].e = hop_info.mcast.e[i];
+            ranges[i].w = hop_info.mcast.w[i];
+            ranges[i].n = hop_info.mcast.n[i];
+            ranges[i].s = hop_info.mcast.s[i];
+        }
+    }
+#endif
+
     auto route_id = PacketHeaderPool::allocate_header_n(num_send_dir);
     tt::tt_fabric::RoutingPlaneConnectionManager connections;
     open_connections(connections, num_send_dir, rt_arg_idx);
@@ -167,6 +180,59 @@ void kernel_main() {
         }
 #elif defined(API_TYPE_Mesh)
         if constexpr (is_chip_multicast) {
+            switch (noc_send_type) {
+                case NOC_UNICAST_ATOMIC_INC: {
+                    if constexpr (with_state) {
+                        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                            connections,
+                            route_id,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader(
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address), 0, 0, false));
+                    } else {
+                        fabric_multicast_noc_unicast_atomic_inc(
+                            connections,
+                            route_id,
+                            ranges,
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                1,
+                                std::numeric_limits<uint16_t>::max(),
+                                true});
+                    }
+                } break;
+                case NOC_FUSED_UNICAST_ATOMIC_INC: {
+                    if constexpr (with_state) {
+                        fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
+                            UnicastFusedAtomicIncUpdateMask::WriteDstAddr |
+                            UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
+                            connections,
+                            route_id,
+                            source_l1_buffer_address,
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                                get_noc_addr(noc_x_start, noc_y_start, target_address),
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                0,
+                                0,
+                                false));
+                    } else {
+                        fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                            connections,
+                            route_id,
+                            ranges,
+                            source_l1_buffer_address,
+                            packet_payload_size_bytes,
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                                get_noc_addr(noc_x_start, noc_y_start, target_address),
+                                get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                                1,
+                                std::numeric_limits<uint16_t>::max(),
+                                true});
+                    }
+                } break;
+                default: {
+                    ASSERT(false);
+                } break;
+            }
         } else {
             switch (noc_send_type) {
                 case NOC_UNICAST_ATOMIC_INC: {
