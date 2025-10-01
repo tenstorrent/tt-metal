@@ -429,3 +429,6 @@ tests:
       of the performance when compared to our L1 Interleaved Page Read Numbers. The reason for this is the
       large number of get_noc_addr(stick_id, s0) calls. Without them, we get ~14.3B/cycle, compared
       to the expected ~18B/cycle. The same reasoning as in the previous test applies here.
+
+  600:
+    name: "Transaction ID - Read After Write"
