@@ -94,16 +94,18 @@ COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 # Copy requirements from tt-metal folders for sweeps (requirements-sweeps.txt)
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
+COPY /tools/triage/requirements.txt ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
 RUN umask 000 && python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt
 
-COPY /scripts/install_debugger.sh /opt/tt_metal_infra/scripts/install_debugger.sh
-COPY /scripts/ttexalens_ref.txt /opt/tt_metal_infra/scripts/ttexalens_ref.txt
+COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
+COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
 RUN if [ "$UBUNTU_VERSION" = "22.04" ]; then \
     echo "Installing debugger for Ubuntu 22.04..." && \
-    /opt/tt_metal_infra/scripts/install_debugger.sh && \
+    ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh && \
     echo "Debugger installation completed" && \
     python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
     fi

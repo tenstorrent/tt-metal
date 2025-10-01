@@ -220,7 +220,12 @@ TEST(Cluster, ReportIntermeshLinks) {
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (all_intermesh_links.find(chip_id) != all_intermesh_links.end()) {
             auto links = all_intermesh_links.at(chip_id);
-            log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
+            log_info(
+                tt::LogTest,
+                "Chip {} {} : {} inter-mesh ethernet links",
+                chip_id,
+                get_physical_loc_str(chip_id, cluster.get_cluster_type()),
+                links.size());
             for (const auto& [channel, remote_connection] : links) {
                 tt::umd::CoreCoord eth_core =
                     cluster.get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
@@ -375,12 +380,14 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 4;
         num_connections_per_side = 2;
-    } else if (
-        cluster_type == tt::tt_metal::ClusterType::GALAXY ||
-        cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+    } else if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         num_expected_chips = 32;
         num_expected_mmio_chips = 32;
         num_connections_per_side = 4;
+    } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        num_expected_chips = 32;
+        num_expected_mmio_chips = 32;
+        num_connections_per_side = 2;
     } else if (cluster_type == tt::tt_metal::ClusterType::P150_X2) {
         num_expected_chips = 2;
         num_expected_mmio_chips = 2;

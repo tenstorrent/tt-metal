@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -27,7 +26,7 @@ operation::ProgramWithCallbacks paged_fill_cache_multi_core(
     Program program{};
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     // input_tensor: [1, num_heads, input_seq_len, head_dim]
     // cache_tensor: [max_num_blocks, 1, block_size, head_dim]

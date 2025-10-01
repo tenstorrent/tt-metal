@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_lcm_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::lcm, APPROXIMATE>(

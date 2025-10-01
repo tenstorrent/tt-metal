@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,9 +9,9 @@ import numpy as np
 import ttnn
 
 from loguru import logger
-from models.utility_functions import is_blackhole, torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

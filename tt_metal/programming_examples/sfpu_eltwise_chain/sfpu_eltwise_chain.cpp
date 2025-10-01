@@ -6,6 +6,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include <cmath>
 #include <random>
@@ -97,10 +98,12 @@ inline float check_bfloat16_vector_pcc(const std::vector<bfloat16>& vec_a, const
 
 int main() {
     // Device setup
-    IDevice* device = CreateDevice(0);
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
 
     // Device command queue and program setup
-    CommandQueue& cq = device->command_queue();
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     Program program = CreateProgram();
 
     // Core range setup
@@ -130,16 +133,16 @@ int main() {
 
     // Dram buffer config
     constexpr uint32_t single_tile_size = sizeof(bfloat16) * constants::TILE_HEIGHT * constants::TILE_WIDTH;
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = sizeof(bfloat16) * src_vec.size(),
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    std::shared_ptr<Buffer> src_dram_buffer = CreateBuffer(dram_config);  // Input buffer
-    std::shared_ptr<Buffer> dst_dram_buffer = CreateBuffer(dram_config);  // Output buffer
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = sizeof(bfloat16) * src_vec.size()};
+    std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
+        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // Input buffer
+    std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
+        distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());  // Output buffer
 
     // DRAM transfer
-    EnqueueWriteBuffer(cq, src_dram_buffer, src_vec.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
 
     // L1 circular buffer setup
     constexpr uint32_t src_cb_index = CBIndex::c_0;
@@ -190,12 +193,13 @@ int main() {
     SetRuntimeArgs(program, writer_kernel_id, core, {dst_dram_buffer->address()});
 
     // Program enqueue
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     // Data transfer back to host machine
     std::vector<bfloat16> result_vec(constants::TILE_HW, 0);
-    EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);  // Blocking call to ensure data is read before proceeding
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     // Reverse the tilization to get the result in the row-major format that the CPU expects
     result_vec = untilize_nfaces(result_vec, constants::TILE_WIDTH, constants::TILE_HEIGHT);
@@ -207,5 +211,5 @@ int main() {
     fmt::print("Metalium vs Golden -- PCC = {}\n", pearson);
     TT_FATAL(pearson > 0.999, "PCC not high enough. Result PCC: {}, Expected PCC: 0.999", pearson);
 
-    CloseDevice(device);
+    mesh_device->close();
 }

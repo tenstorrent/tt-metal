@@ -3,7 +3,7 @@ This is the FeedForward submodule for vision block in Gemma-3-4b-it
 We have reused the TtLlamaImageFeedForward with few changes in CoreGrid and program_config configurations
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 

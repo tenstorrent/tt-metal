@@ -8,14 +8,14 @@ import sys
 
 import torch
 
-from models.utility_functions import print_diff_argmax
+from models.common.utility_functions import print_diff_argmax
 import pytest
 import ttnn
 from loguru import logger
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal, comp_allclose
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     is_wormhole_b0,
     is_blackhole,
 )

@@ -4,7 +4,7 @@
 #include "pool_utils.hpp"
 #include <limits>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "tt-metalium/constants.hpp"
 

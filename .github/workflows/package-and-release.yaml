@@ -116,7 +116,7 @@ jobs:
       contents: read
     steps:
       - name: Download ALL wheels (separate folders)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           pattern: eager-dist-*
           path: artifacts
@@ -170,7 +170,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Download changelog
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: changelog
       - name: Create note about generating pipeline
@@ -211,11 +211,11 @@ jobs:
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: release-notes
       - name : Download changelog
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: changelog
       - name: Release (skipped for dry run)
