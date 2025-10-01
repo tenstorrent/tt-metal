@@ -26,6 +26,10 @@ def get_config(path: str):
     return config
 
 
+def round_up_to_tile(value: int, tile: int = 32) -> int:
+    return ((int(value) + int(tile) - 1) // int(tile)) * int(tile)
+
+
 class DeviceConfig:
     def __init__(self, yaml_config):
         device_config = yaml_config.get("device_config", {})
@@ -59,7 +63,13 @@ class ModelConfig:
         gcfg.num_heads = self.transformer_config.get("num_heads", 6)
         gcfg.embedding_dim = self.transformer_config.get("embedding_dim", 384)
         gcfg.num_blocks = self.transformer_config.get("num_blocks", 6)
-        gcfg.vocab_size = self.transformer_config.get("vocab_size", 256)
+        vs = self.transformer_config.get("vocab_size", 256)
+        if self.device_config.enable_tp:
+            num_devices = self.device_config.total_devices()
+            vs = round_up_to_tile(vs, num_devices * 32)
+        else:
+            vs = round_up_to_tile(vs, 32)
+        gcfg.vocab_size = vs
         gcfg.max_sequence_length = self.transformer_config.get("max_sequence_length", 256)
         gcfg.dropout_prob = self.transformer_config.get("dropout_prob", 0.2)
         # Optional runner type: accept enum or string names; fallback to defaults if absent
@@ -69,6 +79,8 @@ class ModelConfig:
                 gcfg.runner_type = ttml.models.RunnerType.MemoryEfficient
             else:
                 gcfg.runner_type = ttml.models.RunnerType.Default
+        if self.device_config.enable_tp:
+            return ttml.models.distributed.gpt2.create_gpt2_model(gcfg)
         return ttml.models.gpt2.create_gpt2_model(gcfg)
 
     def _create_llama(self):
@@ -80,7 +92,14 @@ class ModelConfig:
         lcfg.num_groups = tc.get("num_groups", 3)
         lcfg.embedding_dim = tc.get("embedding_dim", 384)
         lcfg.num_blocks = tc.get("num_blocks", 6)
-        lcfg.vocab_size = tc.get("vocab_size", 256)
+        # Adjust vocab size for TP divisibility like in C++
+        vs = tc.get("vocab_size", 256)
+        if self.device_config.enable_tp:
+            num_devices = self.device_config.total_devices()
+            vs = round_up_to_tile(vs, num_devices * 32)
+        else:
+            vs = round_up_to_tile(vs, 32)
+        lcfg.vocab_size = vs
         lcfg.max_sequence_length = tc.get("max_sequence_length", 256)
         lcfg.dropout_prob = tc.get("dropout_prob", 0.0)
 
@@ -112,6 +131,8 @@ class ModelConfig:
             if "original_context_length" in rope:
                 lcfg.original_context_length = rope["original_context_length"]
 
+        if self.device_config.enable_tp:
+            return ttml.models.distributed.llama.create_llama_model(lcfg)
         return ttml.models.llama.create_llama_model(lcfg)
 
     def create_model(self):
@@ -171,7 +192,7 @@ def get_batch_ttml(ids, seq_len, batch_size, use_ddp=False):
     return tt_x, tt_y
 
 
-def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp=False):
+def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp=False, use_tp=False):
     loss_fn = ttml.ops.loss.cross_entropy_loss
     reduce = ttml.ops.ReduceType.MEAN
 
@@ -182,7 +203,7 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
 
     # Create composer for distributed tensors if using DDP
     composer = None
-    if use_ddp:
+    if use_ddp or use_tp:
         device = ttml.autograd.AutoContext.get_instance().get_device()
         composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
@@ -266,6 +287,11 @@ def main(config: str):
     set_seed(yaml_config["training_config"].get("seed", 42))
     train_ids, val_ids, vocab_size, decode = prepare_data()
 
+    # Use vocab_size from data instead of config
+    training_config = yaml_config.setdefault("training_config", {})
+    transformer_config = training_config.setdefault("transformer_config", {})
+    transformer_config["vocab_size"] = int(vocab_size)
+
     initialize_device(yaml_config)
     device = ttml.autograd.AutoContext.get_instance().get_device()
 
@@ -275,7 +301,9 @@ def main(config: str):
 
     training_cfg = TrainingConfig(yaml_config)
     device_config = DeviceConfig(yaml_config)
-    train_losses, val_losses = train(training_cfg, model, optimizer, train_ids, val_ids, device_config.enable_ddp)
+    train_losses, val_losses = train(
+        training_cfg, model, optimizer, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
+    )
 
     ttml.autograd.AutoContext.get_instance().close_device()
 
