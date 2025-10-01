@@ -184,7 +184,6 @@ set(GPP_FLAGS_common
 foreach(ARCH IN LISTS ARCHS)
     # These are the set of object files we are to build foreach ARCH
     set(HW_OBJ_SRC_PAIRS
-        "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
         "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
     )
@@ -202,8 +201,10 @@ foreach(ARCH IN LISTS ARCHS)
 
     if(ARCH STREQUAL "quasar")
         list(APPEND HW_OBJ_SRC_PAIRS "noc.o:tt_metal/hw/firmware/src/tt-2xx/noc.c")
+        list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/firmware/src/tt-2xx/${ARCH}/crt0.S")
     else()
         list(APPEND HW_OBJ_SRC_PAIRS "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c")
+        list(APPEND HW_OBJ_SRC_PAIRS "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S")
     endif()
 
     # Set GPP_FLAGS based on ARCH

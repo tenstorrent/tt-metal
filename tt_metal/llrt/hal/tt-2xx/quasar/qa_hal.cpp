@@ -64,16 +64,16 @@ public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw) {
-            objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
+            objs.push_back("runtime/hw/lib/quasar/tmu-crt0.o");
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
             (params.core_type == HalProgrammableCoreType::IDLE_ETH and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
             // Brisc and Idle Erisc.
-            objs.push_back("runtime/hw/lib/blackhole/noc.o");
+            objs.push_back("runtime/hw/lib/quasar/noc.o");
         }
-        objs.push_back("runtime/hw/lib/blackhole/substitutes.o");
+        objs.push_back("runtime/hw/lib/quasar/substitutes.o");
         return objs;
     }
 
