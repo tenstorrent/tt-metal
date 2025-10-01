@@ -15,23 +15,16 @@ using namespace ttnn;
 void bind_isin_operation(py::module& module) {
     auto doc =
         R"doc(
-            This operator returns a uint32 tensor of the same specification as
-            the elements tensor (dtype, shape, layout, memory config) with those of the elements filled out with 0xFFFFFFFF (fully filled sized bitmask)
-            value (this rule can be inverted with the invert flag) that correspond
-            to those of the values from the elements tensor that are contained in the
-            test_elements tensor - in other words, this operator returns a tensor like input tensor containing answers to "does this element belong to anywhere inside test_elements tensor?".
-
+            This operator returns a uint32 tensor with the same shape, layout, and memory config as the elements tensor, where elements are filled with 0xFFFFFFFF (true) or 0x00000000 (false) based on their presence in test_elements.
             Parameters:
-                * `elements` (Tensor): integers to be masked with 0s or 1s depending no their existence in test_elements and the invert flag
-                * `test_elements` (Tensor): all integers for which the output tensor should have 0xFFFFFFFF as the corresponding output value
-
+                * `elements` (Tensor): Tensor of integers to be checked for presence in test_elements. The output will have 0xFFFFFFFF (true) or 0x00000000 (false) at each position depending on whether the corresponding element is present in test_elements (and the invert flag).
+                * `test_elements` (Tensor): Tensor containing the values to be checked against. If an element from `elements` is present in `test_elements`, the corresponding output value will be 0xFFFFFFFF (unless inverted).
             Keyword Arguments:
-                * `invert` (bool): invert nonzero output with zeroes and vice versa
-
+                * `invert` (bool): If True, inverts the output so that elements present in test_elements are marked with 0x00000000 and others with 0xFFFFFFFF.
             Notes:
-                * `assume_unique` (bool): does nothing for the time being, but is reserved for potential future optimizations
-                * The input tensors should be interleaved and in DRAM
-                * Both input tensors can be of any specification
+                * `assume_unique` (bool): Currently has no effect, but is reserved for potential future optimizations.
+                * The input tensors should be interleaved and in DRAM.
+                * Both input tensors can be of any specification.
 
             Example:
                 >>> device = ttnn.open_device(device_id=0)
