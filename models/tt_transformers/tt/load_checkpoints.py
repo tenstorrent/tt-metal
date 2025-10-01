@@ -102,96 +102,56 @@ def convert_hf_to_meta_mllama(state_dict, head_dim, config):
     return state_dict
 
 
-def map_vision_hf_to_meta_keys(loaded_weights, head_dim):
-    hf_to_meta = {
-        # vision MLP
-        "fc1.weight": "c_fc.weight",
-        "fc1.bias": "c_fc.bias",
-        "fc2.weight": "c_proj.weight",
-        "fc2.bias": "c_proj.bias",
-        # vision attention
-        "q_proj.weight": "wq.weight",
-        "k_proj.weight": "wk.weight",
-        "v_proj.weight": "wv.weight",
-        "out_proj.weight": "wo.weight",
-        "q_proj.bias": "wq.bias",
-        "k_proj.bias": "wk.bias",
-        "v_proj.bias": "wv.bias",
-        "out_proj.bias": "wo.bias",
-        # vision encoder
-        "self_attn.q_proj.weight": "attn.wq.weight",
-        "self_attn.k_proj.weight": "attn.wk.weight",
-        "self_attn.v_proj.weight": "attn.wv.weight",
-        "self_attn.out_proj.weight": "attn.wo.weight",
-        "self_attn.q_proj.bias": "attn.wq.bias",
-        "self_attn.k_proj.bias": "attn.wk.bias",
-        "self_attn.v_proj.bias": "attn.wv.bias",
-        "self_attn.out_proj.bias": "attn.wo.bias",
-        "layer_norm1.weight": "ln_1.weight",
-        "layer_norm1.bias": "ln_1.bias",
-        "layer_norm2.weight": "ln_2.weight",
-        "layer_norm2.bias": "ln_2.bias",
-        "mlp.fc1.weight": "mlp.c_fc.weight",
-        "mlp.fc1.bias": "mlp.c_fc.bias",
-        "mlp.fc2.weight": "mlp.c_proj.weight",
-        "mlp.fc2.bias": "mlp.c_proj.bias",
-        # Top level
-        # vision transformer
-        "encoder.layers.{layer}.self_attn.q_proj.weight": "encoder.layers.{layer}.attn.wq.weight",
-        "encoder.layers.{layer}.self_attn.k_proj.weight": "encoder.layers.{layer}.attn.wk.weight",
-        "encoder.layers.{layer}.self_attn.v_proj.weight": "encoder.layers.{layer}.attn.wv.weight",
-        "encoder.layers.{layer}.self_attn.out_proj.weight": "encoder.layers.{layer}.attn.wo.weight",
-        "encoder.layers.{layer}.self_attn.q_proj.bias": "encoder.layers.{layer}.attn.wq.bias",
-        "encoder.layers.{layer}.self_attn.k_proj.bias": "encoder.layers.{layer}.attn.wk.bias",
-        "encoder.layers.{layer}.self_attn.v_proj.bias": "encoder.layers.{layer}.attn.wv.bias",
-        "encoder.layers.{layer}.self_attn.out_proj.bias": "encoder.layers.{layer}.attn.wo.bias",
-        "post_layernorm.weight": "ln_post.weight",
-        "post_layernorm.bias": "ln_post.bias",
-        "weight": "_linear.weight",
-        "bias": "_linear.bias",
-        "weight": "positional_embedding",  # pos_emb # --> WTF???? 2 linije iznad je drugo
-        "visual.embeddings.patch_embedding.weight": "visual.embeddings.patch_embedding._linear.weight",
-        "visual.embeddings.patch_embedding.bias": "visual.embeddings.patch_embedding._linear.bias",
-        "visual.embeddings.position_embedding.weight": "visual.embeddings.position_embedding.positional_embedding",
-        "visual.encoder.layers.{layer}.self_attn.q_proj.weight": "visual.encoder.layers.{layer}.attn.wq.weight",
-        "visual.encoder.layers.{layer}.self_attn.k_proj.weight": "visual.encoder.layers.{layer}.attn.wk.weight",
-        "visual.encoder.layers.{layer}.self_attn.v_proj.weight": "visual.encoder.layers.{layer}.attn.wv.weight",
-        "visual.encoder.layers.{layer}.self_attn.out_proj.weight": "visual.encoder.layers.{layer}.attn.wo.weight",
-        "visual.encoder.layers.{layer}.self_attn.q_proj.bias": "visual.encoder.layers.{layer}.attn.wq.bias",
-        "visual.encoder.layers.{layer}.self_attn.k_proj.bias": "visual.encoder.layers.{layer}.attn.wk.bias",
-        "visual.encoder.layers.{layer}.self_attn.v_proj.bias": "visual.encoder.layers.{layer}.attn.wv.bias",
-        "visual.encoder.layers.{layer}.self_attn.out_proj.bias": "visual.encoder.layers.{layer}.attn.wo.bias",
-        "visual.encoder.layers.{layer}.layer_norm1.weight": "visual.encoder.layers.{layer}.ln_1.weight",
-        "visual.encoder.layers.{layer}.layer_norm1.bias": "visual.encoder.layers.{layer}.ln_1.bias",
-        "visual.encoder.layers.{layer}.layer_norm2.weight": "visual.encoder.layers.{layer}.ln_2.weight",
-        "visual.encoder.layers.{layer}.layer_norm2.bias": "visual.encoder.layers.{layer}.ln_2.bias",
-        "visual.encoder.layers.{layer}.mlp.fc1.weight": "visual.encoder.layers.{layer}.mlp.c_fc.weight",
-        "visual.encoder.layers.{layer}.mlp.fc1.bias": "visual.encoder.layers.{layer}.mlp.c_fc.bias",
-        "visual.encoder.layers.{layer}.mlp.fc2.weight": "visual.encoder.layers.{layer}.mlp.c_proj.weight",
-        "visual.encoder.layers.{layer}.mlp.fc2.bias": "visual.encoder.layers.{layer}.mlp.c_proj.bias",
-        "visual.post_layernorm.weight": "visual.ln_post.weight",
-        "visual.post_layernorm.bias": "visual.ln_post.bias",
-    }
+def map_hf_to_meta_keys_vision_only(state_dict):
+    """
+    Map Hugging Face checkpoint keys to Meta checkpoint keys.
+    You can use this to support other models by adding more mappings.
+    See replace_keys for more details on the format of replacements.
+    """
+    replacements = [
+        ("self_attn", "attn"),
+        ("q_proj", "wq"),
+        ("k_proj", "wk"),
+        ("v_proj", "wv"),
+        ("o_proj", "wo"),
+        ("out_proj", "wo"),
+        ("q_norm", "q_norm"),
+        ("k_norm", "k_norm"),
+        ("fc1", "c_fc"),
+        ("fc2", "c_proj"),
+        ("layer_norm1", "ln_1"),
+        ("layer_norm2", "ln_2"),
+        ("post_layernorm", "ln_post"),
+        ("embeddings.patch_embedding._linear", "embeddings.patch_embedding"),
+        ("embeddings.patch_embedding", "embeddings.patch_embedding._linear"),
+        # ("embeddings.position_embedding.positional_embedding.weight", "embeddings.position_embedding.positional_embedding"),
+        ("embeddings.position_embedding.weight", "embeddings.position_embedding.positional_embedding"),
+    ]
 
-    remapped = {}
-    for key, tensor in loaded_weights.items():
-        if key in hf_to_meta:
-            remapped[hf_to_meta[key]] = tensor
-        elif "visual.encoder.layers." in key:
-            parts = key.split(".")
-            layer_num = parts[3]  # e.g. "0" in "visual.encoder.layers.0.layer_norm1.weight"
-            template_key = "visual.encoder.layers.{layer}." + ".".join(parts[4:])
-            if template_key in hf_to_meta:
-                remapped[hf_to_meta[template_key].format(layer=layer_num)] = tensor
+    return replace_keys(state_dict, replacements)
+
+
+def map_vision_hf_to_meta_keys(state_dict, head_dim):
+    vision_state_dict = dict()
+    text_state_dict = dict()
+    other_state_dict = dict()
+
+    for k, v in state_dict.items():
+        if k.startswith("model.vision_tower"):
+            selected_dict = vision_state_dict
+        elif k.startswith("model.language_model"):
+            selected_dict = text_state_dict
         else:
-            remapped[key] = tensor
+            selected_dict = other_state_dict
 
-    # Remove language_model keys
-    non_text_weights = {k: v for k, v in remapped.items() if not k.startswith("model.")}
-    text_weights = {k: v for k, v in loaded_weights.items() if k.startswith("model.") or k.startswith("lm_head.")}
-    text_weights = convert_hf_qkv_to_meta_format(text_weights, head_dim)
-    remapped_text = map_hf_to_meta_keys(text_weights)
-    return {**non_text_weights, **remapped_text}
+        selected_dict[k] = v
+
+    text_state_dict = convert_hf_qkv_to_meta_format(text_state_dict, head_dim)
+    text_state_dict = map_hf_to_meta_keys(text_state_dict)
+
+    vision_state_dict = map_hf_to_meta_keys_vision_only(vision_state_dict)
+
+    return {**vision_state_dict, **text_state_dict, **other_state_dict}
 
 
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
@@ -380,18 +340,10 @@ def convert_meta_to_hf(state_dict, head_dim, fuse_qkv=False, fuse_mlp=False):
     if fuse_mlp:
         state_dict = fuse_mlp_meta(state_dict)
 
-    old = map_meta_to_hf_keys(state_dict)
-    new = smarter_map_meta_to_hf_keys(state_dict)
+    # stojko - this one is rewritten
+    state_dict = map_meta_to_hf_keys(state_dict)
 
-    new_s = set(new.keys())
-    old_s = set(old.keys())
-    print(len(old), len(new), len(old_s & new_s))
-
-    for key in old.keys():
-        if (new[key] != old[key]).any():
-            print(key)
-
-    return new
+    return state_dict
 
 
 def replace_keys(state_dict, replacements):
