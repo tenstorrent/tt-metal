@@ -16,6 +16,11 @@
 namespace tt::tt_fabric {
 namespace multi_host_tests {
 
+namespace {
+constexpr auto kFabricConfig = FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto kReliabilityMode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+}  // namespace
+
 // Helper function to get all intermesh traffic pairs from connectivity
 std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intermesh_traffic_for_cycle_detection(
     const ControlPlane& control_plane) {
@@ -31,7 +36,7 @@ std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_intermesh_traffic_for
                     traffic_pairs.push_back(
                         {FabricNodeId(
                              MeshId(static_cast<unsigned int>(mesh_id_val)), static_cast<std::uint32_t>(chip_id)),
-                         FabricNodeId(MeshId(*dst_mesh_id), dst_chip_id)});
+                         FabricNodeId(dst_mesh_id, dst_chip_id)});
                 }
             }
         }
@@ -51,11 +56,18 @@ TEST(MultiHost, TestDualGalaxyCycleDetectionNoCycles) {
         GTEST_SKIP();
     }
 
+    // Configure ethernet cores for fabric routing
+    uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
+    tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+        kFabricConfig, num_routing_planes);
+
     const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
 
     auto control_plane = std::make_unique<ControlPlane>(dual_galaxy_mesh_graph_desc_path.string());
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     // Get all intermesh connections - these include bidirectional links between the two Galaxy meshes
     auto intermesh_pairs = get_all_intermesh_traffic_for_cycle_detection(*control_plane);
@@ -81,11 +93,18 @@ TEST(MultiHost, TestDual2x4CycleDetectionNoCycles) {
         GTEST_SKIP();
     }
 
+    // Configure ethernet cores for fabric routing
+    uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
+    tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+        kFabricConfig, num_routing_planes);
+
     const std::filesystem::path dual_t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.yaml";
 
     auto control_plane = std::make_unique<ControlPlane>(dual_t3k_mesh_graph_desc_path.string());
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     auto intermesh_pairs = get_all_intermesh_traffic_for_cycle_detection(*control_plane);
 
@@ -109,11 +128,18 @@ TEST(MultiHost, TestSplit2x2CycleDetectionNoCycles) {
         GTEST_SKIP();
     }
 
+    // Configure ethernet cores for fabric routing
+    uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
+    tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+        kFabricConfig, num_routing_planes);
+
     const std::filesystem::path split_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
 
     auto control_plane = std::make_unique<ControlPlane>(split_2x2_mesh_graph_desc_path.string());
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     auto intermesh_pairs = get_all_intermesh_traffic_for_cycle_detection(*control_plane);
 
@@ -135,11 +161,18 @@ TEST(MultiHost, TestBigMesh2x4CycleDetectionNoCycles) {
         GTEST_SKIP();
     }
 
+    // Configure ethernet cores for fabric routing
+    uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
+    tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+        kFabricConfig, num_routing_planes);
+
     const std::filesystem::path big_mesh_2x4_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
 
     auto control_plane = std::make_unique<ControlPlane>(big_mesh_2x4_mesh_graph_desc_path.string());
+    control_plane->initialize_fabric_context(kFabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(kFabricConfig, kReliabilityMode);
 
     auto intermesh_pairs = get_all_intermesh_traffic_for_cycle_detection(*control_plane);
 
