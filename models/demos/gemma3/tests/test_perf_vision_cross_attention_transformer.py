@@ -12,36 +12,16 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import skip_for_grayskull
 from models.demos.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
-from models.demos.gemma3.tt.model_config import ModelArgs
+from models.demos.gemma3.tt.model_config import ModelArgs, determine_device_name
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.ccl import TT_CCL
 
 NR_ITER_E2E = 1
-NR_FORWARD_ITERATIONS = 15
-THRESHOLD_PERCENT = 10
-TEST_FORWARD_INFERENCE_ONLY = True
+THRESHOLD_PERCENT = 5
 
-DEBUG_SAVE_AND_PRINT = False
+SAVE_NEW_PERF_TARGETS_AND_DEBUG_PRINT = False
 
 
-class BenchmarkProfilerWrapper:
-    def __init__(self, device):
-        self.device = device
-        self.profiler_backbone = BenchmarkProfiler()
-
-    def start(self, *args, **kwargs):
-        ttnn.synchronize_device(self.device)
-        self.profiler_backbone.start(*args, **kwargs)
-
-    def end(self, *args, **kwargs):
-        ttnn.synchronize_device(self.device)
-        self.profiler_backbone.end(*args, **kwargs)
-
-    def get_duration(self, *args, **kwargs):
-        return self.profiler_backbone.get_duration(*args, **kwargs)
-
-
-# copied most of pytest parameters from https://github.com/tenstorrent/tt-metal/blob/1566d9ae155c4aba5432f874d375dfbae5d551cd/models/demos/gemma3/tests/test_vision_cross_attention_transformer.py#L30C5-L30C22
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"fabric_config": True, "l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
@@ -49,12 +29,10 @@ class BenchmarkProfilerWrapper:
     [{"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
-@pytest.mark.parametrize("bsz", [1])
-def test_perf_gemma_vision(
-    mesh_device,
-    bsz,
-):
-    profiler = BenchmarkProfilerWrapper(device=mesh_device)
+@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("nr_forward_iterations", [15])
+def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iteration):
+    profiler = BenchmarkProfiler(device=mesh_device)
 
     keys_e2e = ["total_run", "model_load_and_initialization", "postprocessing_and_transfer"]
     key_model_forward = "model_forward"
@@ -69,7 +47,7 @@ def test_perf_gemma_vision(
         profiler.start("total_run" + str(cur_e2e_iteration), iteration=cur_e2e_iteration)
         run_model(
             mesh_device=mesh_device,
-            bsz=bsz,
+            batch_size=batch_size,
             profiler=profiler,
             cur_e2e_iteration=cur_e2e_iteration,
             nr_forward_iterations=nr_forward_iterations_actual,
@@ -93,7 +71,7 @@ def test_perf_gemma_vision(
         mean = sum(val) / len(val)
         measurements_summarised[key] = mean
 
-    if DEBUG_SAVE_AND_PRINT:
+    if SAVE_NEW_PERF_TARGETS_AND_DEBUG_PRINT:
         for key, val in measurements.items():
             mean = measurements_summarised[key]
             std = (sum([(i - mean) ** 2 for i in val]) / len(val)) ** (0.5)
@@ -104,31 +82,19 @@ def test_perf_gemma_vision(
             print()
             print()
 
-        helper_write_to_json(os.environ.get("MESH_DEVICE"), measurements_summarised)
+        helper_write_to_json(determine_device_name(mesh_device), measurements_summarised)
 
     targets = load_targets(
         "models/demos/gemma3/tests/targets_test_benchmark_vision_cross_attention_transformer.json",
-        device_type=get_device_name(mesh_device),
+        device_type=determine_device_name(mesh_device),
     )
 
-    if TEST_FORWARD_INFERENCE_ONLY:
-        metric_keys_to_test = ["model_forward_inference"]
-    else:
-        metric_keys_to_test = [k for k in targets.keys()]
+    for key in measurements_summarised:
+        logger.info(f"measurement {key}: {measurements_summarised[key]}")
 
-    for key in metric_keys_to_test:
-        threshold = targets[key] * (1 + THRESHOLD_PERCENT / 100)
-        measured_value = measurements_summarised[key]
-        assert measured_value < threshold
-
-
-def get_image_features(vision_tower, projector, input_tensor):
-    """
-    Get image features from the vision tower and projector.
-    """
-    vision_token = vision_tower(input_tensor).last_hidden_state
-    image_features = projector(vision_token)
-    return image_features
+    threshold = targets["model_forward_inference"] * (1 + THRESHOLD_PERCENT / 100)
+    measured_value = measurements_summarised[key]
+    assert measured_value < threshold
 
 
 def helper_write_to_json(device_type, measurements, output_filename=None):
@@ -147,20 +113,20 @@ def helper_write_to_json(device_type, measurements, output_filename=None):
         json.dump(data, f, indent=4)
 
 
-def run_model(mesh_device, bsz, profiler, cur_e2e_iteration, nr_forward_iterations, key_model_forward):
-    # copied large part of the function from https://github.com/tenstorrent/tt-metal/blob/1566d9ae155c4aba5432f874d375dfbae5d551cd/models/demos/gemma3/tests/test_vision_cross_attention_transformer.py#L30C5-L30C22
-
-    profiler.start("model_load_and_initialization" + str(cur_e2e_iteration), cur_e2e_iteration)
+def run_model(mesh_device, batch_size, profiler, cur_e2e_iteration, nr_forward_iterations, key_model_forward):
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device)
+    profiler.start("weight_loading" + str(cur_e2e_iteration), cur_e2e_iteration)
     state_dict = model_args.load_state_dict()
+    profiler.end("weight_loading" + str(cur_e2e_iteration), cur_e2e_iteration)
 
     image_size = model_args.vision_chunk_size
     in_channels = model_args.vision_in_channels
 
-    input_tensor = torch.rand((bsz, in_channels, image_size, image_size))
+    input_tensor = torch.rand((batch_size, in_channels, image_size, image_size))
 
-    test_gemma_vision = TtGemmaTransformerVision(
+    profiler.start("weight_transfer_to_device_and_model_initialization" + str(cur_e2e_iteration), cur_e2e_iteration)
+    model = TtGemmaTransformerVision(
         mesh_device,
         tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
@@ -169,8 +135,7 @@ def run_model(mesh_device, bsz, profiler, cur_e2e_iteration, nr_forward_iteratio
         configuration=model_args,
         return_intermediate=False,
     )
-
-    profiler.end("model_load_and_initialization" + str(cur_e2e_iteration), cur_e2e_iteration)
+    profiler.end("weight_transfer_to_device_and_model_initialization" + str(cur_e2e_iteration), cur_e2e_iteration)
 
     for cur_forward_iteration in range(nr_forward_iterations):
         if cur_forward_iteration == 0:
@@ -182,8 +147,12 @@ def run_model(mesh_device, bsz, profiler, cur_e2e_iteration, nr_forward_iteratio
             )  # i-1 instead of i because we want to be able to iterate from 0 so its more clean
             index_for_profiler = cur_forward_iteration - 1
 
+        torch.cuda.synchronize()
         profiler.start(str_for_profiler, index_for_profiler)
-        test_output = test_gemma_vision(input_tensor)
+
+        test_output = model(input_tensor)
+
+        torch.cuda.synchronize()
         profiler.end(str_for_profiler, index_for_profiler)
 
     profiler.start("postprocessing_and_transfer" + str(cur_e2e_iteration), cur_e2e_iteration)
@@ -213,18 +182,3 @@ def load_targets(filename, device_type):
     dict_targets = targets[device_type]
 
     return dict_targets
-
-
-def get_device_name(mesh_device):
-    total = 1
-    for i in mesh_device.shape:
-        total *= i
-
-    if total == 1:
-        return "N150"
-    elif total == 2:
-        return "N300"
-    elif total == 8:
-        return "T3K"
-    else:
-        assert False

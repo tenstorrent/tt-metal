@@ -1,0 +1,14 @@
+{
+    "T3K": {
+        "model_forward_compile": 4.578898142857144,
+        "model_forward_inference": 0.5988920000000001
+    },
+    "N150": {
+        "model_forward_compile": 3.763446000000001,
+        "model_forward_inference": 0.7977291428571428
+    },
+    "N300": {
+        "model_forward_compile": 22.705544,
+        "model_forward_inference": 0.5401455714285713
+    }
+}
