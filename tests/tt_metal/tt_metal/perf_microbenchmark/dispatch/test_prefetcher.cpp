@@ -74,7 +74,6 @@ constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 
 constexpr uint32_t DRAM_DATA_SIZE_BYTES = 16 * 1024 * 1024;
 constexpr uint32_t DRAM_DATA_SIZE_WORDS = DRAM_DATA_SIZE_BYTES / sizeof(uint32_t);
-constexpr uint32_t DRAM_DATA_BASE_ADDR = 1024 * 1024;
 
 constexpr uint32_t PCIE_TRANSFER_SIZE_DEFAULT = 4096;
 
@@ -492,13 +491,14 @@ void gen_dram_packed_read_cmd(
 
     uint32_t page_size = 1 << log_page_size;
     int count = 0;
+    uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     for (auto length : lengths) {
         TT_ASSERT(length <= num_dram_banks_g * page_size);
         TT_ASSERT((length & (MetalContext::instance().hal().get_alignment(HalMemType::DRAM) - 1)) == 0);
         CQPrefetchRelayPagedPackedSubCmd sub_cmd{};
         sub_cmd.start_page = 0;  // TODO: randomize?
         sub_cmd.log_page_size = log_page_size;
-        sub_cmd.base_addr = DRAM_DATA_BASE_ADDR + count * page_size;
+        sub_cmd.base_addr = dram_data_base_addr + count * page_size;
         sub_cmd.length = length;
         sub_cmds.push_back(sub_cmd);
         count++;
@@ -506,7 +506,7 @@ void gen_dram_packed_read_cmd(
         // Model the packed paged read in this function by updating worker data with interleaved/paged DRAM data, for
         // validation later.
         uint32_t length_words = length / sizeof(uint32_t);
-        uint32_t base_addr_words = (sub_cmd.base_addr - DRAM_DATA_BASE_ADDR) / sizeof(uint32_t);
+        uint32_t base_addr_words = (sub_cmd.base_addr - dram_data_base_addr) / sizeof(uint32_t);
         uint32_t page_size_words = page_size / sizeof(uint32_t);
 
         // Get data from DRAM map, add to all workers, but only set valid for cores included in workers range.
@@ -570,11 +570,12 @@ void gen_dram_read_cmd(
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH, dispatch_cmds);
 
     auto prior_end = prefetch_cmds.size();
+    uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     add_prefetcher_paged_read_cmd(
         prefetch_cmds,
         cmd_sizes,
         start_page,
-        base_addr + DRAM_DATA_BASE_ADDR,
+        base_addr + dram_data_base_addr,
         page_size,
         pages,
         is_dram,
@@ -1043,6 +1044,7 @@ void gen_dram_ringbuffer_read_cmd(
     int count = 0;
 
     std::vector<CQPrefetchRelayRingbufferSubCmd> sub_cmds;
+    uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     for (auto length : lengths) {
         constexpr uint32_t max_page_offset = 5;
         CQPrefetchCmd cmd{};
@@ -1054,7 +1056,7 @@ void gen_dram_ringbuffer_read_cmd(
         }
         ringbuffer_cmd.start_page = rand() % max_page_offset;
         ringbuffer_cmd.log2_page_size = log_page_size;
-        ringbuffer_cmd.base_addr = DRAM_DATA_BASE_ADDR + count * page_size;
+        ringbuffer_cmd.base_addr = dram_data_base_addr + count * page_size;
         ringbuffer_cmd.length = length;
         ringbuffer_cmd.wp_offset_update = length;
         count++;
@@ -1064,7 +1066,7 @@ void gen_dram_ringbuffer_read_cmd(
         // Model the paged to ringbuffer read in this function by updating worker data with interleaved/paged DRAM data,
         // for validation later.
         uint32_t length_words = length / sizeof(uint32_t);
-        uint32_t base_addr_words = (ringbuffer_cmd.base_addr - DRAM_DATA_BASE_ADDR) / sizeof(uint32_t);
+        uint32_t base_addr_words = (ringbuffer_cmd.base_addr - dram_data_base_addr) / sizeof(uint32_t);
         uint32_t page_size_words = page_size / sizeof(uint32_t);
 
         // Get data from DRAM map, add to worker.
@@ -1613,6 +1615,7 @@ void gen_relay_linear_h_test(
         64;
 
     bool done = false;
+    uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     while (!done) {
         // Generate random read size, ensure it's aligned
         auto dram_alignment = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
@@ -1647,7 +1650,7 @@ void gen_relay_linear_h_test(
             [[maybe_unused]] auto offset = device->allocator()->get_bank_offset(BufferType::DRAM, dram_bank_id);
             // Read from DRAM result data address where data is stored
             // DeviceData uses the logical coordinates as keys
-            cmd.relay_linear_h.addr = DRAM_DATA_BASE_ADDR + offset;
+            cmd.relay_linear_h.addr = dram_data_base_addr + offset;
             cmd.relay_linear_h.length = length;
 
             // Add the command
@@ -2422,7 +2425,7 @@ int main(int argc, char** argv) {
             device,
             all_workers_g,
             l1_buf_base_g,
-            DRAM_DATA_BASE_ADDR,
+            device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
             (uint32_t*)host_hugepage_completion_buffer_base_g,
             false,
             DRAM_DATA_SIZE_WORDS);
