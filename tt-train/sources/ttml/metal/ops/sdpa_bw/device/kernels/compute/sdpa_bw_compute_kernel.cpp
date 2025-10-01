@@ -45,25 +45,26 @@ constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);    // used to 
 
 // Circular buffer indices
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;       // Gradient w.r.t. output
-constexpr uint32_t cb_query = tt::CBIndex::c_1;            // Original query
-constexpr uint32_t cb_key = tt::CBIndex::c_2;              // Original key
-constexpr uint32_t cb_value = tt::CBIndex::c_3;            // Original value
-constexpr uint32_t cb_mask = tt::CBIndex::c_4;             // Original mask
-constexpr uint32_t cb_intermediates = tt::CBIndex::c_5;     // Forward pass intermediates
+constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;      // Attention output from forward pass
+constexpr uint32_t cb_query = tt::CBIndex::c_2;            // Original query
+constexpr uint32_t cb_key = tt::CBIndex::c_3;              // Original key
+constexpr uint32_t cb_value = tt::CBIndex::c_4;            // Original value
+constexpr uint32_t cb_mask = tt::CBIndex::c_5;             // Original mask
+constexpr uint32_t cb_intermediates = tt::CBIndex::c_6;     // Forward pass intermediates
 
 // Intermediate computation buffers
-constexpr uint32_t cb_attention_weights = tt::CBIndex::c_6;  // Recomputed attention weights
-constexpr uint32_t cb_grad_attention = tt::CBIndex::c_7;     // Gradient w.r.t. attention
-constexpr uint32_t cb_grad_scores = tt::CBIndex::c_8;        // Gradient w.r.t. QK scores
+constexpr uint32_t cb_attention_weights = tt::CBIndex::c_7;  // Recomputed attention weights
+constexpr uint32_t cb_grad_attention = tt::CBIndex::c_8;     // Gradient w.r.t. attention
+constexpr uint32_t cb_grad_scores = tt::CBIndex::c_9;        // Gradient w.r.t. QK scores
 
-// Output buffers  
-constexpr uint32_t cb_grad_query = tt::CBIndex::c_9;        // Output: grad_Q
-constexpr uint32_t cb_grad_key = tt::CBIndex::c_10;         // Output: grad_K
-constexpr uint32_t cb_grad_value = tt::CBIndex::c_11;       // Output: grad_V
+// Output buffers
+constexpr uint32_t cb_grad_query = tt::CBIndex::c_10;       // Output: grad_Q
+constexpr uint32_t cb_grad_key = tt::CBIndex::c_11;         // Output: grad_K
+constexpr uint32_t cb_grad_value = tt::CBIndex::c_12;       // Output: grad_V
 
 // Temporary/utility buffers
-constexpr uint32_t cb_temp = tt::CBIndex::c_12;             // Temporary computations
-constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_13; // Reduction scaler
+constexpr uint32_t cb_temp = tt::CBIndex::c_13;             // Temporary computations
+constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_14; // Reduction scaler
 
 const uint32_t onetile = 1U;
 

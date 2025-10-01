@@ -31,6 +31,7 @@ struct SDPABackwardDeviceOperation {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& grad_output,
+        const ttnn::Tensor& attn_output,
         const ttnn::Tensor& query_tensor,
         const ttnn::Tensor& key_tensor,
         const ttnn::Tensor& value_tensor,

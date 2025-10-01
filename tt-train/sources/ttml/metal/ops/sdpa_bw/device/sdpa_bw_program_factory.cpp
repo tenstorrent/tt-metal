@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cmath>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
@@ -23,35 +24,37 @@ constexpr auto kComputeKernelPath =
 
 // Reader runtime args
 constexpr uint32_t kGradOutputBufferIdx = 0;
-constexpr uint32_t kQueryBufferIdx = 1U;
-constexpr uint32_t kKeyBufferIdx = 2U;
-constexpr uint32_t kValueBufferIdx = 3U;
-constexpr uint32_t kMaskBufferIdx = 4U;
-constexpr uint32_t kIntermediatesBufferIdx = 5U;
+constexpr uint32_t kAttnOutputBufferIdx = 1U;
+constexpr uint32_t kQueryBufferIdx = 2U;
+constexpr uint32_t kKeyBufferIdx = 3U;
+constexpr uint32_t kValueBufferIdx = 4U;
+constexpr uint32_t kAttnMaskBufferIdx = 5U;
+constexpr uint32_t kIntermediatesBufferIdx = 6U;
 
-// Writer runtime args  
+// Writer runtime args
 constexpr uint32_t kGradQueryBufferIdx = 0;
 constexpr uint32_t kGradKeyBufferIdx = 1U;
 constexpr uint32_t kGradValueBufferIdx = 2U;
 
 // Circular buffer indices
 constexpr auto kGradOutputCbIndex = tt::CBIndex::c_0;
-constexpr auto kQueryCbIndex = tt::CBIndex::c_1;
-constexpr auto kKeyCbIndex = tt::CBIndex::c_2;
-constexpr auto kValueCbIndex = tt::CBIndex::c_3;
-constexpr auto kMaskCbIndex = tt::CBIndex::c_4;
-constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_5;
+constexpr auto kAttnOutputCbIndex = tt::CBIndex::c_1;
+constexpr auto kQueryCbIndex = tt::CBIndex::c_2;
+constexpr auto kKeyCbIndex = tt::CBIndex::c_3;
+constexpr auto kValueCbIndex = tt::CBIndex::c_4;
+constexpr auto kMaskCbIndex = tt::CBIndex::c_5;
+constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
 
-constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_6;
-constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_7;
-constexpr auto kGradScoresCbIndex = tt::CBIndex::c_8;
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_7;
+constexpr auto kGradAttentionCbIndex = tt::CBIndex::c_8;
+constexpr auto kGradScoresCbIndex = tt::CBIndex::c_9;
 
-constexpr auto kGradQueryCbIndex = tt::CBIndex::c_9;
-constexpr auto kGradKeyCbIndex = tt::CBIndex::c_10;
-constexpr auto kGradValueCbIndex = tt::CBIndex::c_11;
+constexpr auto kGradQueryCbIndex = tt::CBIndex::c_10;
+constexpr auto kGradKeyCbIndex = tt::CBIndex::c_11;
+constexpr auto kGradValueCbIndex = tt::CBIndex::c_12;
 
-constexpr auto kTempCbIndex = tt::CBIndex::c_12;
-constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_13;
+constexpr auto kTempCbIndex = tt::CBIndex::c_13;
+constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_14;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kSingleTileBuffer = 1U;
@@ -79,6 +82,7 @@ void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const SDPABackwardKernels& kernels,
     const tt::tt_metal::Buffer* grad_output_buffer,
+    const tt::tt_metal::Buffer* attn_output_buffer,
     const tt::tt_metal::Buffer* query_buffer,
     const tt::tt_metal::Buffer* key_buffer,
     const tt::tt_metal::Buffer* value_buffer,
@@ -93,7 +97,6 @@ void assign_per_core_runtime_args(
     uint32_t num_rows_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
-    
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
         tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -113,6 +116,7 @@ void assign_per_core_runtime_args(
             kernels.reader,
             core,
             {grad_output_buffer->address(),
+             attn_output_buffer->address(),
              query_buffer->address(),
              key_buffer->address(),
              value_buffer->address(),
@@ -142,6 +146,7 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
     const auto& grad_output = tensor_args.grad_output;
+    const auto& attn_output = tensor_args.attn_output;
     const auto& query = tensor_args.query;
     const auto& key = tensor_args.key;
     const auto& value = tensor_args.value;
@@ -158,13 +163,14 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     auto [qB, qNH, qS, qEmbd] = grad_output.padded_shape().to_array_4D();
     auto [kB, kNH, kS, kEmbd] = key.padded_shape().to_array_4D();
     auto [vB, vNH, vS, vEmbd] = value.padded_shape().to_array_4D();
-    
+
     TT_FATAL(
         grad_output.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
             query.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
             key.physical_volume() % tt::constants::TILE_WIDTH == 0 &&
             value.physical_volume() % tt::constants::TILE_WIDTH == 0,
-        "Physical volume of input tensors must be multiple of TILE_WIDTH. Got grad_output {}, query {}, key {}, value {}",
+        "Physical volume of input tensors must be multiple of TILE_WIDTH. Got grad_output {}, query {}, key {}, value "
+        "{}",
         grad_output.physical_volume(),
         query.physical_volume(),
         key.physical_volume(),
@@ -239,11 +245,14 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     auto cb_grad_output = create_circular_buffer(
         program, all_cores, kGradOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
+    auto cb_attn_output = create_circular_buffer(
+        program, all_cores, kAttnOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+
     auto cb_query = create_circular_buffer(
         program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    auto cb_key = create_circular_buffer(
-        program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
+    auto cb_key =
+        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
 
     auto cb_value = create_circular_buffer(
         program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
@@ -265,8 +274,8 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     auto cb_grad_query = create_circular_buffer(
         program, all_cores, kGradQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, qWt);
 
-    auto cb_grad_key = create_circular_buffer(
-        program, all_cores, kGradKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, kWt);
+    auto cb_grad_key =
+        create_circular_buffer(program, all_cores, kGradKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, kWt);
 
     auto cb_grad_value = create_circular_buffer(
         program, all_cores, kGradValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kWt);
@@ -283,6 +292,7 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
     // -------------------------------------------------------------------------
 
     auto* grad_output_buffer = grad_output.buffer();
+    auto* attn_output_buffer = attn_output.buffer();
     auto* query_buffer = query.buffer();
     auto* key_buffer = key.buffer();
     auto* value_buffer = value.buffer();
@@ -306,42 +316,41 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,               // query width in tiles
-        kWt,               // key/value width in tiles
-        St,                // sequence length in tiles
-        block_size,        // block size
-        qNH,               // number of query heads
-        heads_per_group,   // heads per group
-        qB,                // num of batches
-        scaler,            // sqrt(Et) - sdpa scale factor
-        minus_one,         // used to transform mask from 1/0 to 0/-1
-        custom_inf         // used to transform mask from 0/-1 to 0/-1e9F
+        qWt,              // query width in tiles
+        kWt,              // key/value width in tiles
+        St,               // sequence length in tiles
+        block_size,       // block size
+        qNH,              // number of query heads
+        heads_per_group,  // heads per group
+        qB,               // num of batches
+        scaler,           // sqrt(Et) - sdpa scale factor
+        minus_one,        // used to transform mask from 1/0 to 0/-1
+        custom_inf        // used to transform mask from 0/-1 to 0/-1e9F
     };
     tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(attn_output_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(reader_compile_args);
 
-    kernels.reader = create_reader_kernel(
-        program, all_cores, reader_compile_args, defines, kReaderKernelPath);
+    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, defines, kReaderKernelPath);
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
-        qWt,               // query width in tiles
-        kWt,               // key/value width in tiles
-        St,                // sequence length in tiles
-        block_size,        // block size
-        qNH,               // number of query heads
-        heads_per_group    // heads per group
+        qWt,             // query width in tiles
+        kWt,             // key/value width in tiles
+        St,              // sequence length in tiles
+        block_size,      // block size
+        qNH,             // number of query heads
+        heads_per_group  // heads per group
     };
     tt::tt_metal::TensorAccessorArgs(grad_query_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(grad_key_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(grad_value_buffer).append_to(writer_compile_args);
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, writer_compile_args, defines, kWriterKernelPath);
+    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, defines, kWriterKernelPath);
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels
@@ -390,6 +399,7 @@ SDPABackwardProgramFactory::cached_program_t SDPABackwardProgramFactory::create(
         program,
         kernels,
         grad_output_buffer,
+        attn_output_buffer,
         query_buffer,
         key_buffer,
         value_buffer,
@@ -434,6 +444,7 @@ void SDPABackwardProgramFactory::override_runtime_arguments(
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
     const auto* grad_output_buffer = tensor_args.grad_output.buffer();
+    const auto* attn_output_buffer = tensor_args.attn_output.buffer();
     const auto* query_buffer = tensor_args.query.buffer();
     const auto* key_buffer = tensor_args.key.buffer();
     const auto* value_buffer = tensor_args.value.buffer();
@@ -454,10 +465,11 @@ void SDPABackwardProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
             runtime_args[kGradOutputBufferIdx] = grad_output_buffer->address();
+            runtime_args[kAttnOutputBufferIdx] = attn_output_buffer->address();
             runtime_args[kQueryBufferIdx] = query_buffer->address();
             runtime_args[kKeyBufferIdx] = key_buffer->address();
             runtime_args[kValueBufferIdx] = value_buffer->address();
-            runtime_args[kMaskBufferIdx] = mask_buffer != nullptr ? mask_buffer->address() : 0;
+            runtime_args[kAttnMaskBufferIdx] = mask_buffer != nullptr ? mask_buffer->address() : 0;
             runtime_args[kIntermediatesBufferIdx] = intermediates_buffer->address();
         }
 

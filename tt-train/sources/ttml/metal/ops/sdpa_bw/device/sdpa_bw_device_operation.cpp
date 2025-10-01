@@ -166,6 +166,7 @@ ttsl::hash::hash_t SDPABackwardDeviceOperation::compute_program_hash(
 std::tuple<SDPABackwardDeviceOperation::operation_attributes_t, SDPABackwardDeviceOperation::tensor_args_t>
 SDPABackwardDeviceOperation::invoke(
     const ttnn::Tensor& grad_output,
+    const ttnn::Tensor& attn_output,
     const ttnn::Tensor& query_tensor,
     const ttnn::Tensor& key_tensor,
     const ttnn::Tensor& value_tensor,
@@ -181,6 +182,7 @@ SDPABackwardDeviceOperation::invoke(
 
     tensor_args_t tensor_args{
         .grad_output = grad_output,
+        .attn_output = attn_output,
         .query = query_tensor,
         .key = key_tensor,
         .value = value_tensor,
