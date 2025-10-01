@@ -252,12 +252,12 @@ int main() {
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec);
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec);
     // Synchronize
-    MeshEvent write_event = EnqueueRecordEvent(data_movement_cq);
+    MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
     // =========== Step 8: Run MeshTrace on MeshCQ0 ===========
     ReplayTrace(mesh_device.get(), workload_cq_id, trace_id, false);
     // Synchronize
-    MeshEvent trace_event = EnqueueRecordEvent(workload_cq);
+    MeshEvent trace_event = workload_cq.enqueue_record_event();
     data_movement_cq.enqueue_wait_for_event(trace_event);
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
     std::vector<bfloat16> add_dst_vec = {};

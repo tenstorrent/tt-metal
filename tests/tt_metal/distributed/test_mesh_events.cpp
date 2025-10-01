@@ -56,7 +56,7 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
         // Writes on CQ 0
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), buf, src_vec);
         // Device to Device Synchronization
-        auto write_event = EnqueueRecordEvent(mesh_device_->mesh_command_queue(0));
+        auto write_event = mesh_device_->mesh_command_queue(0).enqueue_record_event();
         mesh_device_->mesh_command_queue(1).enqueue_wait_for_event(write_event);
 
         // Reads on CQ 1
@@ -103,7 +103,7 @@ TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
             EventSynchronize(write_event);
         } else {
             // Test Device <-> Device synchronization
-            auto write_event = EnqueueRecordEvent(mesh_device_->mesh_command_queue(0));
+            auto write_event = mesh_device_->mesh_command_queue(0).enqueue_record_event();
             mesh_device_->mesh_command_queue(1).enqueue_wait_for_event(write_event);
         }
         // Reads on CQ 1
@@ -164,14 +164,14 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
             EventSynchronize(write_event);
         } else {
             // Test Device <-> Device Synchronization
-            auto write_event = EnqueueRecordEvent(mesh_device_->mesh_command_queue(1));
+            auto write_event = mesh_device_->mesh_command_queue(1).enqueue_record_event();
             mesh_device_->mesh_command_queue(0).enqueue_wait_for_event(write_event);
         }
         // Issue workloads on MeshCQ 0
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(0), mesh_workload, false);
         if (iter % 2) {
             // Test Device <-> Device Synchronization
-            auto op_event = EnqueueRecordEvent(mesh_device_->mesh_command_queue(0));
+            auto op_event = mesh_device_->mesh_command_queue(0).enqueue_record_event();
             mesh_device_->mesh_command_queue(1).enqueue_wait_for_event(op_event);
         } else {
             // Test Host <-> Device Synchronization
@@ -231,7 +231,7 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
         std::vector<std::vector<uint32_t>> readback_vecs = {};
 
         mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_0, false);
-        auto event0 = EnqueueRecordEvent(mesh_device_->mesh_command_queue(1), {}, devices_0);
+        auto event0 = mesh_device_->mesh_command_queue(1).enqueue_record_event({}, devices_0);
         mesh_device_->mesh_command_queue(0).enqueue_wait_for_event(event0);
 
         for (const auto& coord : devices_0) {
