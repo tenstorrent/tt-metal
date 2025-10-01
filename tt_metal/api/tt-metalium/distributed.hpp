@@ -102,14 +102,6 @@ void EnqueueReadMeshBuffer(
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 
-// Make the specified MeshCommandQueue record an event.
-// Host is not notified when this event completes.
-// Can be used for CQ to CQ synchronization.
-MeshEvent EnqueueRecordEvent(
-    MeshCommandQueue& mesh_cq,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-
 // Make the specified MeshCommandQueue record an event and notify the host when it completes.
 // Can be used for CQ to CQ and host to CQ synchronization.
 MeshEvent EnqueueRecordEventToHost(

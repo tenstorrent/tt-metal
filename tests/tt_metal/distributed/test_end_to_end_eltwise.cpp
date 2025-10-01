@@ -505,13 +505,13 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec);
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec);
 
-    MeshEvent write_event = EnqueueRecordEvent(data_movement_cq);
+    MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
 
     ReplayTrace(mesh_device_.get(), kWorkloadCqId, trace_id, false);
 
     // Synchronize
-    MeshEvent trace_event = EnqueueRecordEvent(workload_cq);
+    MeshEvent trace_event = workload_cq.enqueue_record_event();
     data_movement_cq.enqueue_wait_for_event(trace_event);
 
     std::vector<bfloat16> add_dst_vec = {};
