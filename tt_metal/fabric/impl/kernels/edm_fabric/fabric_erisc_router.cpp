@@ -1676,9 +1676,8 @@ void run_receiver_channel_step_impl(
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender) {
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    bool unwritten_packets = pkts_received_since_last_check != 0;
+    bool unwritten_packets = get_ptr_val<to_receiver_pkts_sent_id>() != 0;
 
     if (unwritten_packets) {
         invalidate_l1_cache();
