@@ -621,29 +621,42 @@ def test_demo_for_conditional_generation(
     )
 
     metrics_dictionary = {
-        1: {"prefill_t/s/u": 4.1, "decode_t/s/u": 53.2},
-        2: {"prefill_t/s/u": 3.7, "decode_t/s/u": 51.1},
-        8: {"prefill_t/s/u": 3.5, "decode_t/s/u": 42.1},
-        32: {"prefill_t/s/u": 2.8, "decode_t/s/u": 43.1},
+        1: {"prefill_time_to_token": 0.24, "decode_t/s/u": 53.2},
+        2: {"prefill_time_to_token": 0.27, "decode_t/s/u": 51.1},
+        8: {"prefill_time_to_token": 0.28, "decode_t/s/u": 42.1},
+        32: {"prefill_time_to_token": 0.35, "decode_t/s/u": 43.1},
     }
-    if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
+    if (
+        is_ci_env
+        and model_repo == "distil-whisper/distil-large-v3"
+        and mesh_device.get_num_devices() == available_devices
+    ):
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_t/s/u": 7.85, "decode_t/s/u": 87.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.127, "decode_t/s/u": 87.0}
             else:
-                expected_perf_metrics = {"prefill_t/s/u": 8.40, "decode_t/s/u": 94.0}
+                expected_perf_metrics = {"prefill_time_to_token": 0.119, "decode_t/s/u": 94.0}
         else:  # wormhole_b0
             expected_perf_metrics = metrics_dictionary[mesh_device.get_num_devices()]
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
-        expected_perf_metrics["prefill_t/s"] = expected_perf_metrics["prefill_t/s/u"] * total_batch
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"] * total_batch
         measurements = {
-            "prefill_t/s": (1 / ttft) * total_batch,
-            "prefill_t/s/u": (1 / ttft),
+            "prefill_time_to_token": ttft,
             "decode_t/s": decode_throughput * total_batch,
             "decode_t/s/u": decode_throughput,
         }
-        verify_perf(measurements, expected_perf_metrics)
+        expected_measurements = {
+            "prefill_time_to_token": True,
+            "decode_t/s": True,
+            "decode_t/s/u": True,
+        }
+        lower_is_better_metrics = {"prefill_time_to_token"}
+        verify_perf(
+            measurements,
+            expected_perf_metrics,
+            expected_measurements=expected_measurements,
+            lower_is_better_metrics=lower_is_better_metrics,
+        )
 
 
 @pytest.mark.parametrize(
