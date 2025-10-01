@@ -70,6 +70,7 @@ target_sources(
         server/web_server.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
+        topology/topology.cpp
         telemetry/ethernet/chip_identifier.cpp
         telemetry/ethernet/ethernet_endpoint.cpp
         telemetry/ethernet/ethernet_helpers.cpp

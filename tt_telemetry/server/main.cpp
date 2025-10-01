@@ -415,7 +415,8 @@ int main(int argc, char* argv[]) {
     } else {
         // Real telemetry
         log_info(tt::LogAlways, "Using real hardware telemetry data");
-        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints);
+        auto rtoptions = tt::llrt::RunTimeOptions();
+        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions);
     }
 
     // Run until finished

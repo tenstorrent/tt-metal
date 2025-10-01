@@ -4,6 +4,7 @@
 
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
+#include <topology/topology.hpp>
 #include <chrono>
 
 /**************************************************************************************************
@@ -16,6 +17,7 @@ void create_ethernet_metrics(
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<TopologyTranslation>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
     for (const auto& [chip_id, endpoints] : get_ethernet_endpoints_by_chip(cluster)) {
         for (const auto& endpoint : endpoints) {

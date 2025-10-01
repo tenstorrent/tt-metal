@@ -13,9 +13,11 @@
 #include <map>
 #include <unordered_map>
 
-#include <third_party/umd/device/api/umd/device/cluster.hpp>
-
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
+
+namespace tt::umd {
+class Cluster;
+}
 
 std::map<
     tt::umd::chip_id_t,

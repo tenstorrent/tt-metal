@@ -21,6 +21,8 @@
 #include <telemetry/metric.hpp>
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
 
+class TopologyTranslation;
+
 class EthernetEndpointUpMetric: public BoolMetric {
 public:
     static constexpr std::chrono::seconds FORCE_REFRESH_LINK_STATUS_TIMEOUT{120};
@@ -114,4 +116,5 @@ void create_ethernet_metrics(
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::unique_ptr<TopologyTranslation>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal);
