@@ -12,7 +12,12 @@ class TtHead:
         self.parameters = parameters
 
         self.conv1 = TtConv2d(
-            create_conv2d_config(conv_args.c1, parameters.c1.weight, parameters.c1.bias),
+            create_conv2d_config(
+                conv_args.c1,
+                parameters.c1.weight,
+                parameters.c1.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
 
@@ -21,31 +26,66 @@ class TtHead:
             device=device,
         )
         self.conv3 = TtConv2d(
-            create_conv2d_config(conv_args.c3, parameters.c3.weight, parameters.c3.bias),
+            create_conv2d_config(
+                conv_args.c3,
+                parameters.c3.weight,
+                parameters.c3.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv4 = TtConv2d(
-            create_conv2d_config(conv_args.c4, parameters.c4.weight, parameters.c4.bias),
+            create_conv2d_config(
+                conv_args.c4,
+                parameters.c4.weight,
+                parameters.c4.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv5 = TtConv2d(
-            create_conv2d_config(conv_args.c5, parameters.c5.weight, parameters.c5.bias),
+            create_conv2d_config(
+                conv_args.c5,
+                parameters.c5.weight,
+                parameters.c5.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv6 = TtConv2d(
-            create_conv2d_config(conv_args.c6, parameters.c6.weight, parameters.c6.bias),
+            create_conv2d_config(
+                conv_args.c6,
+                parameters.c6.weight,
+                parameters.c6.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv7 = TtConv2d(
-            create_conv2d_config(conv_args.c7, parameters.c7.weight, parameters.c7.bias),
+            create_conv2d_config(
+                conv_args.c7,
+                parameters.c7.weight,
+                parameters.c7.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv8 = TtConv2d(
-            create_conv2d_config(conv_args.c8, parameters.c8.weight, parameters.c8.bias),
+            create_conv2d_config(
+                conv_args.c8,
+                parameters.c8.weight,
+                parameters.c8.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv9 = TtConv2d(
-            create_conv2d_config(conv_args.c9, parameters.c9.weight, parameters.c9.bias),
+            create_conv2d_config(
+                conv_args.c9,
+                parameters.c9.weight,
+                parameters.c9.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv10 = TtConv2d(
@@ -53,32 +93,67 @@ class TtHead:
             device=device,
         )
         self.conv11 = TtConv2d(
-            create_conv2d_config(conv_args.c11, parameters.c11.weight, parameters.c11.bias),
+            create_conv2d_config(
+                conv_args.c11,
+                parameters.c11.weight,
+                parameters.c11.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
 
         self.conv12 = TtConv2d(
-            create_conv2d_config(conv_args.c12, parameters.c12.weight, parameters.c12.bias),
+            create_conv2d_config(
+                conv_args.c12,
+                parameters.c12.weight,
+                parameters.c12.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv13 = TtConv2d(
-            create_conv2d_config(conv_args.c13, parameters.c13.weight, parameters.c13.bias),
+            create_conv2d_config(
+                conv_args.c13,
+                parameters.c13.weight,
+                parameters.c13.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv14 = TtConv2d(
-            create_conv2d_config(conv_args.c14, parameters.c14.weight, parameters.c14.bias),
+            create_conv2d_config(
+                conv_args.c14,
+                parameters.c14.weight,
+                parameters.c14.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv15 = TtConv2d(
-            create_conv2d_config(conv_args.c15, parameters.c15.weight, parameters.c15.bias),
+            create_conv2d_config(
+                conv_args.c15,
+                parameters.c15.weight,
+                parameters.c15.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv16 = TtConv2d(
-            create_conv2d_config(conv_args.c16, parameters.c16.weight, parameters.c16.bias),
+            create_conv2d_config(
+                conv_args.c16,
+                parameters.c16.weight,
+                parameters.c16.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv17 = TtConv2d(
-            create_conv2d_config(conv_args.c17, parameters.c17.weight, parameters.c17.bias),
+            create_conv2d_config(
+                conv_args.c17,
+                parameters.c17.weight,
+                parameters.c17.bias,
+                activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, 0.1),
+            ),
             device=device,
         )
         self.conv18 = TtConv2d(
@@ -88,12 +163,10 @@ class TtHead:
 
     def __call__(self, input_tensor):
         output_tensor = self.conv1(input_tensor[0])
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor_left_1 = self.conv2(output_tensor)
 
         output_tensor = self.conv3(input_tensor[0])
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
         outfrom_Neck1 = input_tensor[2]
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -108,27 +181,20 @@ class TtHead:
         output_tensor = ttnn.concat([output_tensor, outfrom_Neck1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = self.conv4(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv5(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv6(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv7(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv8(output_tensor)
-        output_tensor_split = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
+        output_tensor_split = self.conv8(output_tensor)
 
         output_tensor = self.conv9(output_tensor_split)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor_left_2 = self.conv10(output_tensor)
 
         output_tensor = self.conv11(output_tensor_split)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         outfromNeck2 = input_tensor[1]
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
@@ -142,22 +208,16 @@ class TtHead:
         output_tensor = ttnn.concat([output_tensor, outfromNeck2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = self.conv12(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv13(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv14(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv15(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv16(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv17(output_tensor)
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor_left_3 = self.conv18(output_tensor)
 

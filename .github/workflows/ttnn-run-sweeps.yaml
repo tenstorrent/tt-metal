@@ -597,12 +597,14 @@ jobs:
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-n150-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -635,7 +637,7 @@ jobs:
           echo "Run ID: ${{ github.run_id }}"
           echo "Run Number: ${{ github.run_number }}"
           echo "Run Attempt: ${{ github.run_attempt }}"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: sweeps-vectors
           path: /tmp/vectors
@@ -713,7 +715,7 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Download sweep vectors
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
@@ -786,7 +788,7 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Download sweep vectors
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: sweeps-vectors
           path: /work/tests/sweep_framework/vectors_export/
@@ -837,7 +839,7 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Download all sweep results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           pattern: sweeps-results*
           path: /work/tests/sweep_framework/results_export
@@ -865,7 +867,7 @@ jobs:
           sparse-checkout: |
             .github/actions
       - name: Download sweep results
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           name: sweeps-run-result
           path: tests/sweep_framework/results_export

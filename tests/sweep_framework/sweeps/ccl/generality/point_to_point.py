@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -62,11 +62,12 @@ parameters = {
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    mesh_shape, (coord0, coord1) = test_vector["mesh_shape_and_coords"]
+
     # hardcode for 6U
-    if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
+    if mesh_shape in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
 
-    _, (coord0, coord1) = test_vector["mesh_shape_and_coords"]
     if test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_2D and (
         coord0[0] != coord1[0] and coord0[1] != coord1[1]
     ):

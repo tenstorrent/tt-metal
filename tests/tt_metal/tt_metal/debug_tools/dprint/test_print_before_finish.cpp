@@ -20,7 +20,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the finish command can wait for the last dprint.
@@ -29,13 +28,17 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+namespace {
+
+void RunTest(DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -89,3 +92,7 @@ TEST_F(DPrintMeshFixture, TensixTestPrintFinish) {
     // issues on multi-device setups.
     this->RunTestOnDevice(RunTest, mesh_devices.at(0));
 }
+
+}  // namespace
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,13 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
-from tests.sweep_framework.sweep_utils.ccl_common import device_context, get_mem_config, mesh_shape_iterator
+from tests.sweep_framework.sweep_utils.ccl_common import (
+    device_context,
+    get_mem_configs,
+    get_serializable_shard_specs,
+    mesh_shape_iterator,
+    validate_serializable_shard_spec,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 
@@ -22,8 +28,30 @@ NUM_DEVICES = ttnn.get_num_devices()
 
 FABRIC_CONFIGS = [
     ttnn.FabricConfig.FABRIC_1D,
+    ttnn.FabricConfig.FABRIC_1D_RING,
+    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
+LEAD_MODEL_SHARD_SPECS = [
+    get_serializable_shard_specs(
+        input_shape=(32, 64),
+        input_cores=(4, 6),
+        input_strategy="w",
+        output_shape=None,  # (32, 128) in production on Galaxy
+        output_cores=(2, 5),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 1280]],
+    ),
+    get_serializable_shard_specs(
+        input_shape=(32, 160),
+        input_cores=(4, 6),
+        input_strategy="w",
+        output_shape=None,  # (32, 32) in production on Galaxy
+        output_cores=(5, 6),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 3200]],
+    ),
+]
 
 parameters = {
     "generality_suite": {
@@ -43,8 +71,7 @@ parameters = {
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "buffer_type": [ttnn.BufferType.DRAM],
-        "shard_shape": [None],
-        "shard_shape": [None],
+        "shard_specs": [None],
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
@@ -54,16 +81,15 @@ parameters = {
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 2880],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
-            [1, 1, 32, 32],  # Qwen3 dim: 1 cluster_axis: 1
+            [1, 1, 32, 1280],  # Qwen3 dim: 1 cluster_axis: 1
             [1, 1, 32, 3200],  # Qwen3 dim: 3 cluster_axis: 1
         ],
-        "dim": [1, 3],
+        "dim": [2, 3],
         "cluster_axis": [0, 1],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "buffer_type": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
-        "shard_shape": [None],  # TODO (32,128)],
-        "shard_strategy": [None],  # TODO ttnn.TensorMemoryLayout.WIDTH_SHARDED)],
+        "shard_specs": [None] + LEAD_MODEL_SHARD_SPECS,
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
@@ -75,22 +101,23 @@ def _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape, **kwargs):
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    # Kind of hardcode the model specific sharding configs
-    input_shape = test_vector["input_shape"]
-    shard_shape = test_vector["shard_shape"]
-    if shard_shape is not None:
-        if input_shape not in [[1, 1, 32, 32], [1, 1, 32, 3200]]:
-            return True, "Invalid application of shard config"
+    # L1 sharding only
+    if test_vector["shard_specs"] is not None and test_vector["buffer_type"] == ttnn.BufferType.DRAM:
+        return True, "L1 Sharding only"
 
-    cluster_axis = test_vector["cluster_axis"]
-    if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
-        return True, "Only one device along axis"
+    input_shape = test_vector["input_shape"]
+    if not validate_serializable_shard_spec(input_shape, test_vector["shard_specs"]):
+        return True, "Invalid shard spec"
 
     # hardcode for 6U
     if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
 
-    if test_vector["dim"] >= len(test_vector["input_shape"]):
+    cluster_axis = test_vector["cluster_axis"]
+    if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
+        return True, "Only one device along axis"
+
+    if test_vector["dim"] >= len(input_shape):
         return True, "Dim greater than rank"
     if (
         test_vector["topology"] == ttnn.Topology.Ring
@@ -122,25 +149,15 @@ def _get_tensors(
     dim,
     cluster_axis,
     dtype,
-    layout,
     buffer_type,
-    shard_shape,
-    shard_strategy,
+    shard_specs,
+    layout,
     device,
     math_op=ttnn.ReduceType.Sum,
 ):
     assert _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape)
 
-    mem_config = get_mem_config(buffer_type, shard_shape, shard_strategy, device)
-
     torch_input = torch.randn(input_shape).bfloat16()
-    tt_input = ttnn.from_torch(
-        torch_input,
-        layout=layout,
-        memory_config=mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        device=device,
-    )
 
     replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
     per_device_dim = input_shape[dim] // replicate_dim
@@ -148,7 +165,17 @@ def _get_tensors(
     torch_reference = torch_input.unsqueeze(0).repeat([replicate_dim] + [1] * len(input_shape))
     torch_references = _reference_map_op(math_op)(torch_reference, dim=0).split(per_device_dim, dim=dim)
 
-    return tt_input, torch_references
+    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_references[0].shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        device=device,
+    )
+
+    return tt_input, torch_references, output_memory_config
 
 
 def run(
@@ -161,8 +188,7 @@ def run(
     input_dtype,
     layout,
     buffer_type,
-    shard_shape,
-    shard_strategy,
+    shard_specs,
     num_iters,
     topology,
     *,
@@ -180,16 +206,15 @@ def run(
 
         logger.info("device set up")
 
-        tt_input, torch_references = _get_tensors(
+        tt_input, torch_references, output_memory_config = _get_tensors(
             input_shape,
             mesh_shape,
             dim,
             cluster_axis,
             input_dtype,
-            layout,
             buffer_type,
-            shard_shape,
-            shard_strategy,
+            shard_specs,
+            layout,
             device,
         )
 
@@ -209,6 +234,7 @@ def run(
                     cluster_axis=cluster_axis,
                     topology=topology,
                     num_links=num_links,
+                    memory_config=output_memory_config,
                 )
                 e2e_perf = stop_measuring_time(start_time)
             except Exception as e:
@@ -221,7 +247,10 @@ def run(
             tt_output_tensor = ttnn.to_torch(t)
             logger.info(f"Brought tensor {i} back from host. Shape: {tt_output_tensor.shape}")
 
-            eq, output = comp_pcc(tt_output_tensor, ref)
+            if input_dtype == ttnn.bfloat16:
+                eq, output = comp_equal(tt_output_tensor, ref)
+            else:
+                eq, output = comp_pcc(tt_output_tensor, ref)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
             return [(eq, output), e2e_perf]

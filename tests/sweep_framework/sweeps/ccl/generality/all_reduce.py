@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,13 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
-from tests.sweep_framework.sweep_utils.ccl_common import device_context, mesh_shape_iterator
+from tests.sweep_framework.sweep_utils.ccl_common import (
+    device_context,
+    get_mem_configs,
+    get_serializable_shard_specs,
+    mesh_shape_iterator,
+    validate_serializable_shard_spec,
+)
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 # Override the default timeout in seconds for hang detection.
@@ -20,7 +26,9 @@ TIMEOUT = 45
 # Get the number of available devices to dynamically generate mesh shapes
 NUM_DEVICES = ttnn.get_num_devices()
 
-MODEL_SHAPES = [
+# parameters from:
+# https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
+TRAINING_SHAPES = [
     [1, 1, 1, 4096],
     [1, 1, 1, 2048],
     ["B", 32, 2048, 8],
@@ -42,7 +50,7 @@ MODEL_SHAPES = [
     [1, 1, 16, 16],
 ]
 
-MODEL_BATCH = [1, 4, 8, 16, 32]
+TRAINING_BATCH = [1, 4, 8, 16, 32]
 
 
 def _model_shape_iterator(model_shapes, batch_params):
@@ -54,11 +62,43 @@ def _model_shape_iterator(model_shapes, batch_params):
             yield shape
 
 
+# TODO set up test suite with training shapes
+
+LEAD_MODEL_SHARD_SPECS = [
+    get_serializable_shard_specs(
+        input_shape=(32, 64),
+        input_cores=(4, 6),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(1, 10),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 1280]],
+    ),
+    get_serializable_shard_specs(
+        input_shape=(32, 128),
+        input_cores=(4, 6),
+        input_strategy="w",
+        output_shape=None,
+        output_cores=(1, 10),
+        output_strategy="w",
+        valid_tensor_shapes=[[1, 1, 32, 2560]],
+    ),
+]
+
+
+FABRIC_CONFIGS = [
+    ttnn.FabricConfig.FABRIC_1D,
+    ttnn.FabricConfig.FABRIC_1D_RING,
+    ttnn.FabricConfig.FABRIC_2D,
+    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+]
+
+
 # Define the parameter space for the sweep test
 parameters = {
     "generality_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D_RING],
+        "fabric_config": FABRIC_CONFIGS,
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 32],
@@ -73,23 +113,26 @@ parameters = {
         "math_op": [ttnn.ReduceType.Sum],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
+        "buffer_type": [ttnn.BufferType.DRAM],
+        "shard_specs": [None],
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
-    # parameters from:
-    # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
-    "model_suite": {
-        "mesh_shape": [(4, 1)],
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
+    "lead_model_suite": {
+        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+        "fabric_config": FABRIC_CONFIGS,
         "num_links": [1],
-        "input_shape": _model_shape_iterator(MODEL_SHAPES, MODEL_BATCH),
-        "cluster_axis": [0, 1, None],
+        "input_shape": [
+            [1, 1, 32, 1280],  # Qwen3 Galaxy. cluster_axis: 0
+            [1, 1, 32, 2560],  # Qwen3 2x8. Cluster axis 0
+        ],
+        "cluster_axis": [0],
         "math_op": [ttnn.ReduceType.Sum],
-        "layout": [ttnn.TILE_LAYOUT],
+        "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
-        "topology": [ttnn.Topology.Linear],
+        "buffer_type": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
+        "shard_specs": [None] + LEAD_MODEL_SHARD_SPECS,
+        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
 }
@@ -103,9 +146,13 @@ def _get_num_devices_in_cluster(cluster_axis, mesh_shape):
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    """
-    Prunes the test space by invalidating known unsupported or problematic configurations.
-    """
+    # L1 sharding only
+    if test_vector["shard_specs"] is not None and test_vector["buffer_type"] == ttnn.BufferType.DRAM:
+        return True, "L1 Sharding only"
+
+    if not validate_serializable_shard_spec(test_vector["input_shape"], test_vector["shard_specs"]):
+        return True, "Invalid shard spec"
+
     mesh_shape, cluster_axis = test_vector["mesh_shape"], test_vector["cluster_axis"]
     if cluster_axis and mesh_shape[cluster_axis] == 1:
         return True, "Unit cluster axis"
@@ -134,7 +181,7 @@ def _reference_map_op(math_op):
         raise NotImplementedError(f"Math op: {math_op} not yet implemented in sweep")
 
 
-def _get_tensors(input_shape, cluster_axis, mesh_shape, math_op, dtype, layout, device):
+def _get_tensors(input_shape, cluster_axis, mesh_shape, math_op, dtype, layout, buffer_type, shard_specs, device):
     """
     Generates a replicated input tensor for the mesh and computes the golden reference tensor.
     """
@@ -145,16 +192,24 @@ def _get_tensors(input_shape, cluster_axis, mesh_shape, math_op, dtype, layout, 
         torch_input = torch.randint(0, 100, input_shape, dtype=torch.int32)
     else:
         torch_input = torch.rand(input_shape).bfloat16()
-    tt_input = ttnn.from_torch(
-        torch_input, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(device), device=device, dtype=dtype
-    )
 
     # For all-reduce, the golden output is the sum of all replicated inputs.
     # Since the input is the same on all devices, this is equivalent to input * num_devices.
     # The final result is then replicated back to all devices.
     torch_reference = _reference_map_op(math_op)(torch.stack([torch_input] * num_devices_in_cluster), dim=0)
 
-    return tt_input, torch_reference
+    input_memory_config, output_memory_config = get_mem_configs(buffer_type, shard_specs, torch_reference.shape)
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=layout,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        memory_config=input_memory_config,
+        device=device,
+        dtype=dtype,
+    )
+
+    return tt_input, torch_reference, output_memory_config
 
 
 def run(
@@ -165,7 +220,8 @@ def run(
     num_links,
     input_dtype,
     layout,
-    mem_config,
+    buffer_type,
+    shard_specs,
     num_iters,
     topology,
     math_op,
@@ -184,8 +240,8 @@ def run(
         assert tuple(device.shape) == mesh_shape
         logger.info(f"Running test with vector: {locals()}")
 
-        tt_input, torch_reference = _get_tensors(
-            input_shape, cluster_axis, mesh_shape, math_op, input_dtype, layout, device
+        tt_input, torch_reference, output_memory_config = _get_tensors(
+            input_shape, cluster_axis, mesh_shape, math_op, input_dtype, layout, buffer_type, shard_specs, device
         )
 
         compute_grid_size = device.compute_with_storage_grid_size()
@@ -207,7 +263,7 @@ def run(
                     ag_global_semaphores=semaphores[5:],
                     math_op=math_op,
                     num_links=num_links,
-                    memory_config=mem_config,
+                    memory_config=output_memory_config,
                     topology=topology,
                 )
                 e2e_perf = stop_measuring_time(start_time)

@@ -388,7 +388,7 @@ static bool reader_datacopy_writer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& cq = mesh_device->mesh_command_queue();
 
     // Prepare reader kernel and get input DRAM buffer

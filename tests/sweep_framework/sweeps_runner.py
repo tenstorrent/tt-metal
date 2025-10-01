@@ -23,8 +23,8 @@ import enlighten
 from faster_fifo import Queue
 
 # tt
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
+from tracy.common import PROFILER_LOGS_DIR
+from tracy.process_ops_logs import get_device_data_generate_report
 from framework.device_fixtures import default_device
 from framework.elastic_config import *
 from framework.statuses import VectorValidity, TestStatus
@@ -33,8 +33,6 @@ from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
 from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
-from tracy.process_ops_logs import get_device_data_generate_report
-from tracy.common import PROFILER_LOGS_DIR
 from sweep_utils.roofline_utils import get_updated_message
 
 
@@ -62,7 +60,7 @@ class SweepsConfig:
     summary: bool = False
     run_contents: str = None
     arch_name: Optional[str] = None
-    debug: bool = False
+    main_proc_verbose: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -84,7 +82,7 @@ def create_config_from_args(args) -> SweepsConfig:
         skip_on_timeout=args.skip_on_timeout,
         keep_invalid=args.keep_invalid,
         summary=args.summary,
-        debug=args.debug,
+        main_proc_verbose=args.main_proc_verbose,
     )
 
     if args.vector_source == "elastic" or args.result_dest == "elastic":
@@ -341,7 +339,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
     with device_context(test_module, output_queue) as (device, device_name):
         while True:
             try:
-                test_vector = input_queue.get(block=True, timeout=1)
+                test_vector = input_queue.get(block=True, timeout=5)
             except Empty:
                 logger.info("Test suite complete")
                 return
@@ -355,7 +353,7 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
                     status, message = results
                     e2e_perf = None
             except Exception as e:
-                if config.debug:
+                if config.main_proc_verbose:
                     logger.exception(e)
                 status, message = False, str(e)
                 e2e_perf = None
@@ -377,7 +375,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     timeout = get_timeout(module_name)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(config.arch_name)
-    child_mode = not config.dry_run and not config.vector_id
+    child_mode = not (config.dry_run and not config.vector_id and not config.main_proc_verbose)
     timeout_before_rejoin = 5
 
     if child_mode:
@@ -395,9 +393,9 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
-        validity = deserialize(test_vector["validity"])
         result["start_time_ts"] = dt.datetime.now()
-        if validity.value == "INVALID":
+        validity = deserialize(test_vector["validity"]).split(".")[-1]
+        if validity == VectorValidity.INVALID:
             invalid_vectors_count += 1
             if not config.keep_invalid:
                 # Skip this vector entirely - don't add to results
@@ -457,6 +455,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                                 logger.info("retrying test after control plane error")
                             else:
                                 logger.info("giving up on retrying on control plane error")
+
                     # Set base result message
                     result["message"] = message
 
@@ -468,30 +467,27 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                                 result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
                             else:
                                 result["status"] = TestStatus.PASS
-                                result["device_perf"] = device_perf
                         else:
-                            result["status"] = TestStatus.PASS
-                    else:
-                        # Test failed - categorize the failure
-                        result["exception"] = message
+                            # Test failed - categorize the failure
+                            result["exception"] = message
 
-                        # Log device exceptions
-                        if "DEVICE EXCEPTION" in message:
-                            logger.error(
-                                f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
-                            )
-                            logger.info("Device error detected. The suite will be aborted after this test.")
+                            # Log device exceptions
+                            if "DEVICE EXCEPTION" in message:
+                                logger.error(
+                                    f"DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: {message}"
+                                )
+                                logger.info("Device error detected. The suite will be aborted after this test.")
 
-                        # Set failure status based on error type
-                        if "Out of Memory: Not enough space to allocate" in message:
-                            result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
-                        elif "Watcher" in message:
-                            result["status"] = TestStatus.FAIL_WATCHER
-                        else:
-                            result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
+                            # Set failure status based on error type
+                            if "Out of Memory: Not enough space to allocate" in message:
+                                result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
+                            elif "Watcher" in message:
+                                result["status"] = TestStatus.FAIL_WATCHER
+                            else:
+                                result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
 
-                    # Set performance metrics if available
-                    result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
+                        # Set performance metrics if available
+                        result["e2e_perf"] = e2e_perf if (e2e_perf and config.measure_perf) else None
             except Empty as e:
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
@@ -668,6 +664,7 @@ def run_sweeps(
                     test_vectors, pbar_manager, suite, module_name, header_info, config
                 )
                 total_invalid_vectors += invalid_vectors_count
+
                 suite_end_time = dt.datetime.now()
                 logger.info(f"Completed tests for module {module_name}, suite {suite}.")
 
@@ -914,10 +911,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--debug",
+        "--main-proc-verbose",
         action="store_true",
         required=False,
-        help="Run tests on main process and log test exceptions",
+        help="Run tests on main process and print test exceptions to stdout",
     )
 
     args = parser.parse_args(sys.argv[1:])

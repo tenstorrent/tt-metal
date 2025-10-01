@@ -4,7 +4,6 @@
 
 import ttnn
 import json
-from tests.sweep_framework.framework.statuses import VectorValidity, VectorStatus
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 from ttnn._ttnn.tensor import DataType, Layout  # make eval("DataType.*"/"Layout.*") resolvable
 
@@ -75,7 +74,7 @@ def _ttnn_type_from_name(type_name):
     try:
         the_type = getattr(ttnn, uq_type_name)
     except AttributeError as e:
-        logger.debug(f"Hopefully not an enum {e}")
+        logger.debug(f"Not an enum. No attribute {uq_type_name} in {ttnn} : {e}")
 
     return the_type
 

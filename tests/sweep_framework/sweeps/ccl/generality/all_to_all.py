@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -23,7 +23,6 @@ NUM_DEVICES = ttnn.get_num_devices()
 FABRIC_CONFIGS = [
     ttnn.FabricConfig.FABRIC_1D,
     ttnn.FabricConfig.FABRIC_1D_RING,
-    ttnn.FabricConfig.FABRIC_2D,
     ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
@@ -44,7 +43,6 @@ parameters = {
         ],
         "in_dim": [0, 1, 2, 3, 4],
         "out_dim": [0, 1, 2, 3, 4],
-        "cluster_axis": [0, 1, None],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
@@ -58,6 +56,11 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     """
     Prunes the test space by invalidating known unsupported or problematic configurations.
     """
+
+    # hardcode for 6U
+    if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
+        return True, "Invalid mesh shape for 6U"
+
     if test_vector["in_dim"] >= len(test_vector["input_shape"]) or test_vector["out_dim"] >= len(
         test_vector["input_shape"]
     ):
@@ -84,9 +87,6 @@ def _get_tensors(input_shape, in_dim, out_dim, mesh_shape, dtype, layout, device
     """
     Generates sharded input tensors for the mesh and computes the golden reference tensors.
     """
-    # hardcode for 6U
-    if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
-        return True, "Invalid mesh shape for 6U"
 
     num_devices = prod(mesh_shape)
     if dtype == ttnn.uint32:
