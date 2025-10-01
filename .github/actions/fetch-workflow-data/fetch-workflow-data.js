@@ -191,6 +191,58 @@ async function run() {
       if (!found) {
         throw new Error(`[TEST MODE] Could not find workflow-data.json in any artifacts for run_id=${runId}`);
       }
+      // Additionally fetch the logs artifact from the same run, if present
+      try {
+        const logsArtifact = artifacts.find(a => a && a.name === 'workflow-logs');
+        const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+        const logsRoot = path.join(workspace, 'logs');
+        if (!fs.existsSync(logsRoot)) fs.mkdirSync(logsRoot, { recursive: true });
+        let logsIndexPath = path.join(logsRoot, 'logs-index.json');
+        if (logsArtifact) {
+          // Download and extract to a temp folder, then copy the contained logs directory
+          const logsZipPath = path.join(tmpDir, `${logsArtifact.name}.zip`);
+          const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: logsArtifact.id, archive_format: 'zip' });
+          fs.writeFileSync(logsZipPath, Buffer.from(respLogs.data));
+          const extractLogsDir = path.join(tmpDir, `${logsArtifact.name}-extract`);
+          if (!fs.existsSync(extractLogsDir)) fs.mkdirSync(extractLogsDir, { recursive: true });
+          execFileSync('unzip', ['-o', logsZipPath, '-d', extractLogsDir], { stdio: 'ignore' });
+          // Find the logs-index.json inside the extracted tree
+          const stack = [extractLogsDir];
+          let foundIndex;
+          while (stack.length && !foundIndex) {
+            const dir = stack.pop();
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const ent of entries) {
+              const p = path.join(dir, ent.name);
+              if (ent.isDirectory()) {
+                stack.push(p);
+              } else if (ent.isFile() && ent.name === 'logs-index.json') {
+                foundIndex = p;
+                break;
+              }
+            }
+          }
+          if (foundIndex) {
+            // The parent directory of logs-index.json should be the logs root in the artifact
+            const artifactLogsRoot = path.dirname(foundIndex);
+            // Copy extracted logs into our workspace logs directory
+            // Use fs.cpSync (Node 16+) to preserve tree structure
+            fs.cpSync(artifactLogsRoot, logsRoot, { recursive: true });
+            logsIndexPath = path.join(logsRoot, 'logs-index.json');
+            core.info(`[TEST MODE] Restored logs to ${logsRoot}`);
+          } else {
+            core.info('[TEST MODE] No logs-index.json found in logs artifact; creating empty index');
+            if (!fs.existsSync(logsIndexPath)) fs.writeFileSync(logsIndexPath, JSON.stringify({}));
+          }
+        } else {
+          core.info('[TEST MODE] No workflow-logs artifact found in selected run; creating empty logs index');
+          if (!fs.existsSync(logsIndexPath)) fs.writeFileSync(logsIndexPath, JSON.stringify({}));
+        }
+        core.setOutput('logs-root', logsRoot);
+        core.setOutput('logs-index-path', logsIndexPath);
+      } catch (e) {
+        core.warning(`[TEST MODE] Failed to restore logs artifact: ${e.message}`);
+      }
       // Exit early
       return;
     }
@@ -240,10 +292,78 @@ async function run() {
     }
     // Save grouped runs to artifact file
     fs.writeFileSync(outputPath, JSON.stringify(Array.from(grouped.entries())));
+
+    // Download logs for the latest failing run per workflow and build an index
+    // Constraint: Only fetch logs when the latest run for that workflow (on target branch)
+    // is failing (i.e., conclusion neither success nor skipped/cancelled).
+    // The logs will be extracted under a dedicated directory so downstream steps
+    // can parse them without performing network calls again.
+    const owner = github.context.repo.owner;
+    const repo = github.context.repo.repo;
+    const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
+    const logsRoot = path.join(workspace, 'logs');
+    if (!fs.existsSync(logsRoot)) {
+      fs.mkdirSync(logsRoot, { recursive: true });
+    }
+    const logsIndex = {};
+    for (const [name, runs] of grouped.entries()) {
+      try {
+        // Consider only the target branch and sort newest first
+        const branchRuns = (runs || [])
+          .filter(r => r && r.head_branch === branch)
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        // Scan newest→older, skipping skipped/cancelled runs until either:
+        // A) we find a success (stop; no logs), or
+        // B) we find a failing run (download logs), or
+        // C) we run out of runs (stop; no logs).
+        let targetRun = undefined;
+        for (const run of branchRuns) {
+          const conc = run && run.conclusion;
+          if (conc === 'skipped' || conc === 'cancelled') {
+            continue; // ignore skipped/cancelled and check next older
+          }
+          if (conc === 'success') {
+            targetRun = undefined; // found a success → do not fetch logs for this workflow
+            break;
+          }
+          // Any other conclusion at this point is considered failing for log fetching purposes
+          targetRun = run;
+          break;
+        }
+        if (!targetRun) continue;
+
+        // Perform the GitHub API call to download the logs zip for the selected failing run
+        const resp = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
+
+        // Layout: logs/<run_id>/{run_logs.zip, extract/}
+        const runDir = path.join(logsRoot, String(targetRun.id));
+        if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
+        const zipPath = path.join(runDir, 'run_logs.zip');
+        fs.writeFileSync(zipPath, Buffer.from(resp.data));
+
+        // Extract the archive to a stable directory for downstream parsing
+        const extractDir = path.join(runDir, 'extract');
+        if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+        execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+
+        // Use a relative path so the index remains portable across jobs when
+        // uploaded and downloaded as an artifact
+        const relativeExtract = path.relative(workspace, extractDir) || extractDir;
+        logsIndex[String(targetRun.id)] = relativeExtract;
+        core.info(`Fetched logs for failing run ${targetRun.id} into ${relativeExtract}`);
+      } catch (e) {
+        core.warning(`Failed to fetch logs for latest failing run in workflow '${name}': ${e.message}`);
+      }
+    }
+    // Persist the index file alongside the logs directory
+    const logsIndexPath = path.join(logsRoot, 'logs-index.json');
+    fs.writeFileSync(logsIndexPath, JSON.stringify(logsIndex));
     // Set output
     core.setOutput('total-runs', mergedRuns.length);
     core.setOutput('workflow-count', grouped.size);
     core.setOutput('cache-path', outputPath);
+    core.setOutput('logs-root', logsRoot);
+    core.setOutput('logs-index-path', logsIndexPath);
     // Log remaining GitHub API rate limit
     const rateLimit = await octokit.rest.rateLimit.get();
     const remaining = rateLimit.data.resources.core.remaining;

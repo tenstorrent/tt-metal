@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       cache-path: ${{ steps.fetch.outputs.cache-path }}
+      logs-index-path: ${{ steps.fetch.outputs.logs-index-path }}
+      logs-root: ${{ steps.fetch.outputs.logs-root }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
 
@@ -35,6 +37,15 @@ jobs:
         with:
           name: workflow-data
           path: ${{ github.workspace }}/workflow-data.json
+          retention-days: 1
+
+      - name: Upload logs artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-logs
+          path: |
+            ${{ steps.fetch.outputs.logs-root }}/
+            ${{ steps.fetch.outputs.logs-root }}/logs-index.json
           retention-days: 1
 
       - name: Debug cache file
@@ -102,6 +113,11 @@ jobs:
         with:
           name: workflow-data
           path: ${{ github.workspace }}
+      - name: Download logs (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-logs
+          path: ${{ github.workspace }}/logs
       - name: Analyze workflow data
         id: analyze
         uses: ./.github/actions/analyze-workflow-data
@@ -110,6 +126,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
+          logs-index-path: ${{ github.workspace }}/logs/logs-index.json
           alert-all: 'true'
           workflow_configs: |
             [
