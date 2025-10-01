@@ -56,6 +56,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       failed_workflows: ${{ steps.analyze.outputs.failed_workflows }}
+      regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
+      alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
       - name: Discover previous successful run id
@@ -150,21 +152,23 @@ jobs:
           path: ${{ steps.analyze.outputs.status_changes_path }}
           retention-days: 1
 
-      - name: Post regressions to Slack
-        if: ${{ steps.analyze.outputs.regressed_workflows != '[]' || steps.analyze.outputs.alert_all_message != '' }}
-        uses: ./.github/actions/slack-report-analyze-workflow-data
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
-          regressed_workflows: ${{ steps.analyze.outputs.regressed_workflows }}
-          alert_all_message: ${{ steps.analyze.outputs.alert_all_message }}
+      # Slack notification moved to handle-failures job
 
   handle-failures:
     needs: analyze-data
     if: ${{ fromJson(needs.analyze-data.outputs.failed_workflows) != '[]' }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
       - name: Handle failed workflows
         run: |
           echo "The following workflows have failed:"
           echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here
+      - name: Post regressions to Slack
+        if: ${{ needs.analyze-data.outputs.regressed_workflows != '[]' || needs.analyze-data.outputs.alert_all_message != '' }}
+        uses: ./.github/actions/slack-report-analyze-workflow-data
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
+          regressed_workflows: ${{ needs.analyze-data.outputs.regressed_workflows }}
+          alert_all_message: ${{ needs.analyze-data.outputs.alert_all_message }}
