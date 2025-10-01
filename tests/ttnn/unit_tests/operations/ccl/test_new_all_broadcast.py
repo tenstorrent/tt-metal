@@ -71,7 +71,12 @@ def run_all_broadcast_impl(
     output_shard_grid=None,
     tensor_mem_layout=None,
     cluster_axis=None,
+    mesh_mapper_config=None,
 ):
+    if mesh_mapper_config is None:
+        mesh_mapper_config = ttnn.MeshMapperConfig(
+            [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
+        )
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
 
@@ -168,9 +173,7 @@ def run_all_broadcast_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.create_mesh_mapper(
                 mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)], ttnn.MeshShape(1, num_devices)
-                ),
+                mesh_mapper_config,
             ),
         )
 
