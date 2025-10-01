@@ -1303,7 +1303,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->wait_for_host_signal ? 1 : 0,
 
         this->firmware_context_switch_interval,
-        this->enable_first_level_ack,
         this->fuse_receiver_flush_and_completion_ptr,
         fabric_context.need_deadlock_avoidance_support(this->direction),
         this->dateline_connection,
