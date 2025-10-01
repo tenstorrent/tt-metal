@@ -24,13 +24,7 @@ class Allocator;
 class BankManager;
 
 // Setup what each core-type is
-enum class AllocCoreType {
-    Dispatch,
-    StorageOnly,
-    ComputeOnly,
-    ComputeAndStore,
-    Invalid,
-};
+enum class AllocCoreType;
 
 using BankMapping = std::vector<uint32_t>;
 
@@ -59,11 +53,6 @@ struct AllocatorConfig {
     bool disable_interleaved = false;
     void reset();
     ~AllocatorConfig() { reset(); }
-};
-
-enum class MemoryAllocator {
-    BASIC = 0,
-    L1_BANKING = 1,
 };
 
 struct Statistics {
