@@ -40,18 +40,16 @@ void kernel_main() {
                 cb_push_back(i, j);
             }
 
-            master_sem.set(1);
-            subordinate_sem.wait(1);
-            // noc_semaphore_set(subordinate_sem_addr, 0);
+            master_sem.up(1);
+            subordinate_sem.down(1);
             for (int32_t k = 0; k < n_pages; k++) {
                 bool result = cb_pages_reservable_at_back(i, k);
                 output_buffer[get_idx(j, k)] = static_cast<uint8_t>(result);
             }
 
             // Notify that reader can expect the appropriate number of pages to be available
-            master_sem.set(2);
-            subordinate_sem.wait(2);
-            subordinate_sem.set(0);
+            master_sem.up(1);
+            subordinate_sem.down(1);
 
             // snap back to alignment
             if (j > 0) {
