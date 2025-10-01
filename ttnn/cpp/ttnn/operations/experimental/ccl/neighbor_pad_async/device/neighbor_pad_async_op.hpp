@@ -63,11 +63,11 @@ struct NeighborPadAsync {
         final_semaphore(final_semaphore),
         barrier_semaphore(barrier_semaphore),
         num_links(num_links),
-        output_mem_config(output_mem_config),
+        output_mem_config(std::move(output_mem_config)),
         topology(topology),
         ring_size(ring_size),
         secondary_cluster_axis(secondary_cluster_axis),
-        secondary_mesh_shape(secondary_mesh_shape) {}
+        secondary_mesh_shape(std::move(secondary_mesh_shape)) {}
 
     // Add attributes method for reflection
     auto attributes() const {
