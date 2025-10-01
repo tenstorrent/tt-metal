@@ -185,7 +185,7 @@ protected:
         if (slow_dispatch) {
             log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
             this->slow_dispatch_ = true;
-            GTEST_SKIP();
+            // GTEST_SKIP();
         }
 
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());

@@ -30,6 +30,7 @@
 #include "debug/waypoint.h"
 #include "debug/stack_usage.h"
 #include "debug/dprint.h"
+#include "debug/ring_buffer.h"
 
 uint8_t noc_index;
 
@@ -103,6 +104,18 @@ void __attribute__((noinline)) Application(void) {
     configure_csr();
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
+    // uint32_t debug_feature_disable = READ_REG(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
+    // debug_feature_disable |= (1 << 3); // Bit 3: SERIALIZE_L1_ATOMICS
+    // debug_feature_disable |= (1 << 5); // Bit 5: LFSR_ENABLE
+    // WRITE_REG(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, debug_feature_disable);
+
+    // constexpr uint32_t reg_base = 0xFFB96000;
+    // constexpr uint32_t eth_ctrl_addr = reg_base + 0x94;
+    // uint32_t eth_ctrl = READ_REG(eth_ctrl_addr);
+    // eth_ctrl |= (1 << 13); // enable bit 13 ecc scrubber
+    // WRITE_REG(eth_ctrl_addr, eth_ctrl);
+
+    ((volatile uint32_t*)(0x20))[0]++;
 
     disable_interrupts();
     update_next_link_status_check_timestamp();
@@ -130,14 +143,12 @@ void __attribute__((noinline)) Application(void) {
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
-    // Add an invalidate before the first read of mailboxes->go_messages[0].signal
-    invalidate_l1_cache();
-
     while (1) {
         // Wait...
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
+        invalidate_l1_cache();
         while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
             invalidate_l1_cache();
 
@@ -185,10 +196,35 @@ void __attribute__((noinline)) Application(void) {
                 flush_erisc_icache();
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
-                uint32_t kernel_lma =
-                    kernel_config_base +
+                uint32_t kernel_text_offset =
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
-                reinterpret_cast<void (*)()>(kernel_lma)();
+                uint32_t kernel_lma = kernel_config_base + kernel_text_offset;
+
+                // uint32_t sp_before_asm;
+                // asm volatile("mv %0, sp" : "=r"(sp_before_asm));
+                // ((volatile uint32_t*)0x20)[0] = sp_before_asm;       // SP before assembly call
+
+                // __asm__ volatile(
+                //     "jalr ra, %0, 0     \n\t"
+                //     :
+                //     : "r"(kernel_lma)
+                //     : "ra", "memory"
+                // );
+
+                // uint32_t sp_after_asm;
+                // asm volatile("mv %0, sp" : "=r"(sp_after_asm));
+                // ((volatile uint32_t*)0x20)[1] = sp_after_asm;        // SP after assembly return
+
+                // uint32_t sp_before_func;
+                // asm volatile("mv %0, sp" : "=r"(sp_before_func));
+                // ((volatile uint32_t*)0x20)[0] = sp_before_func;      // SP before function call
+                // __asm__ volatile("" : : : "memory");
+                reinterpret_cast<volatile void (*)()>(kernel_lma)();
+                // uint32_t sp_after_func;
+                // asm volatile("mv %0, sp" : "=r"(sp_after_func));
+                // ((volatile uint32_t*)0x20)[1] = sp_after_func;       // SP after function return
+
+                // Kernel returned successfully!
                 WAYPOINT("D");
             }
 

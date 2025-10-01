@@ -131,6 +131,27 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
+
+/*
+#if defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_SUBORDINATE_AERISC)
+    . = ALIGN(16);
+    *(.f1)
+    . = ALIGN(16);
+    *(.f2)
+    . = ALIGN(16);
+    *(.f3)
+    . = ALIGN(16);
+    *(.f4)
+    . = ALIGN(16);
+    *(.f5)
+    . = ALIGN(16);
+    *(.f6)
+    . = ALIGN(16);
+    *(.f7)
+    . = ALIGN(16);
+    *(.f8)
+#endif
+*/
     . = ALIGN(4);
   } :text
   .empty.init.fini :

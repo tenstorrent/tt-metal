@@ -450,6 +450,12 @@ KernelGroup::KernelGroup(
             auto processor_index = hal.get_processor_index(
                 hal.get_programmable_core_type(programmable_core_type_index), processor_class, processor_type);
             kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
+            log_info(
+                tt::LogMetal,
+                "KernelGroup: Enable Processor {} on kernel {} runtime ID {}",
+                processor_index,
+                kernel->name(),
+                program.get_runtime_id());
             kernel_config.enables() |= 1u << processor_index;
         }
         auto class_id = kernel->dispatch_class();
