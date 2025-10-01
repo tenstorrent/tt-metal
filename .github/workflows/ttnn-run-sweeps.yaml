@@ -11,6 +11,14 @@ on:
         options:
           - ALL SWEEPS (Nightly)
           - add
+          - ccl.generality.all_broadcast
+          - ccl.generality.all_gather
+          - ccl.generality.all_reduce
+          - ccl.generality.all_to_all_combine
+          - ccl.generality.all_to_all_dispatch
+          - ccl.generality.all_to_all
+          - ccl.generality.point_to_point
+          - ccl.generality.reduce_scatter
           - composite.binary.gcd.gcd
           - composite.binary.lcm.lcm
           - conv2d.full.conv2d_misc
@@ -589,12 +597,14 @@ jobs:
         ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent"
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: tt-ubuntu-2204-n150-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
