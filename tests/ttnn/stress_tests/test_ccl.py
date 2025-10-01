@@ -15,9 +15,9 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (4, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
-        (4, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
-        (2, [1, 1, 16384, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+        (2, [1, 1, 10000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
 )
 @pytest.mark.parametrize(
@@ -48,7 +48,7 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 2),
     ],
     ids=["non-trace"],
 )
@@ -127,9 +127,9 @@ def test_ccl_ddr_smoke_test(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
-        (4, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
-        (4, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
-        (2, [1, 1, 4096, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
+        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+        (2, [1, 1, 6016, 2048], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear),
     ],
     ids=["4 device line", "4_device_ring", "2_device_line"],
 )
