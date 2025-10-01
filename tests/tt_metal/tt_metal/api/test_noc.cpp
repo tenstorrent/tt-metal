@@ -167,7 +167,7 @@ TEST(NOC, TensixVerifyNocNodeIDs) {
 }
 TEST(NOC, TensixVerifyNocIdentityTranslationTable) {
     auto arch = tt::get_arch_from_string(get_umd_arch_name());
-    if (arch == tt::ARCH::BLACKHOLE) {
+    if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
         GTEST_SKIP();
     }
     std::shared_ptr<distributed::MeshDevice> mesh_device;
