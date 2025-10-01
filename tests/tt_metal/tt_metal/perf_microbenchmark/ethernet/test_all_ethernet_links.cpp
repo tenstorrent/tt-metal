@@ -36,6 +36,8 @@
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
 #include <enchantum/enchantum.hpp>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tests/tt_metal/test_utils/stimulus.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -671,62 +673,192 @@ void run(
 }
 
 int main(int argc, char** argv) {
-    std::size_t arg_idx = 1;
-    uint32_t benchmark_type = (uint32_t)std::stoi(argv[arg_idx++]);
+    // std::size_t arg_idx = 1;
+    // uint32_t benchmark_type = (uint32_t)std::stoi(argv[arg_idx++]);
 
-    auto benchmark_type_enum = enchantum::cast<BenchmarkType>(benchmark_type);
-    TT_FATAL(
-        benchmark_type_enum.has_value(),
-        "Unsupported benchmark {} specified, check BenchmarkType enum for supported values",
-        benchmark_type);
+    // auto benchmark_type_enum = enchantum::cast<BenchmarkType>(benchmark_type);
+    // TT_FATAL(
+    //     benchmark_type_enum.has_value(),
+    //     "Unsupported benchmark {} specified, check BenchmarkType enum for supported values",
+    //     benchmark_type);
 
-    std::size_t num_packets = std::stoi(argv[arg_idx++]);
-    std::size_t packet_size = std::stoi(argv[arg_idx++]);
-    std::size_t num_buffer_slots = std::stoi(argv[arg_idx++]);
+    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    std::vector<chip_id_t> ids(num_devices, 0);
+    std::iota(ids.begin(), ids.end(), 0);
 
-    bool test_latency = std::stoi(argv[arg_idx++]);
-    bool disable_trid = std::stoi(argv[arg_idx++]);
-    uint32_t num_iterations = std::stoi(argv[arg_idx++]);
+    auto devices = tt_metal::distributed::MeshDevice::create_unit_meshes(
+        ids,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
 
-    TestParams params{
-        .benchmark_type = benchmark_type_enum.value(),
-        .num_packets = num_packets,
-        .packet_size = packet_size,
-        .num_buffer_slots = num_buffer_slots,
-        .test_latency = test_latency,
-        .disable_trid = disable_trid,
-        .num_iterations = num_iterations};
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        tt::tt_metal::MetalContext::instance().get_cluster().get_driver(),
+        tt::tt_metal::MetalContext::instance().get_distributed_context_ptr(),
+        tt::tt_metal::MetalContext::instance().hal_ptr(),
+        tt::tt_metal::MetalContext::instance().rtoptions(),
+        true);
 
-    log_info(tt::LogTest, "Setting up test fixture");
-    ConnectedDevicesHelper device_helper(params);
-    log_info(tt::LogTest, "Done setting up test fixture");
-    if (device_helper.num_devices < 2) {
-        log_info(tt::LogTest, "Need at least 2 devices to run this test");
-        return 0;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& unique_chip_ids = cluster.get_unique_chip_ids();
+    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
+
+    for (const auto& [chip_id, asic_id] : unique_chip_ids) {
+        asic_id_to_chip_id[asic_id] = chip_id;
     }
 
-    // Add more configurations here until proper argc parsing added
-    bool success = false;
-    success = true;
-    log_info(tt::LogTest, "STARTING");
-    try {
-        log_info(
-            tt::LogTest,
-            "benchmark type: {}, measurement type: {}, num_packets: {}, packet_size: {} B, num_buffer_slots: {}",
-            enchantum::to_string(benchmark_type_enum.value()),
-            enchantum::to_string(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
-            num_packets,
-            packet_size,
-            num_buffer_slots);
+    std::unordered_map<chip_id_t, tt_metal::Program> programs;
+    const auto& asic_topology = physical_system_descriptor.get_asic_topology(physical_system_descriptor.my_host_name());
 
-        auto programs = build(device_helper, params);
-        run(device_helper, programs, params);
+    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t dst_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED);
 
-    } catch (std::exception& e) {
-        log_error(tt::LogTest, "Caught exception: {}", e.what());
-        device_helper.TearDown();
-        return -1;
+    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, 4);
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> kernel_coords;
+
+    for (const auto& [asic_id, asic_connections] : asic_topology) {
+        auto sender_chip_id = asic_id_to_chip_id[*asic_id];
+        auto sender_device = devices[sender_chip_id];
+        auto& sender_program = programs[sender_chip_id];
+        std::cout << "Sender chip id: " << sender_chip_id << std::endl;
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            auto receiver_chip_id = asic_id_to_chip_id[*dst_asic_id];
+            auto receiver_device = devices[receiver_chip_id];
+            auto& receiver_program = programs[receiver_chip_id];
+
+            for (const auto& eth_connection : eth_connections) {
+                auto src_chan = eth_connection.src_chan;
+                auto dst_chan = eth_connection.dst_chan;
+                std::cout << "Connected to " << receiver_chip_id << " over: " << +src_chan << " -> " << +dst_chan
+                          << std::endl;
+
+                const auto& sender_soc_desc = cluster.get_soc_desc(sender_chip_id);
+                const auto& receiver_soc_desc = cluster.get_soc_desc(receiver_chip_id);
+                auto sender_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+                auto receiver_coord = receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
+
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    sender_chip_id,
+                    sender_device->ethernet_core_from_logical_core(sender_coord),
+                    inputs,
+                    src_eth_l1_byte_address);
+                std::vector<uint32_t> all_zeros(inputs.size(), 0);
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    receiver_chip_id,
+                    receiver_device->ethernet_core_from_logical_core(receiver_coord),
+                    all_zeros,
+                    dst_eth_l1_byte_address);
+
+                auto sender_kernel = tt_metal::CreateKernel(
+                    sender_program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
+                    sender_coord,
+                    tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {16, 16 >> 4}});
+                tt_metal::SetRuntimeArgs(
+                    sender_program,
+                    sender_kernel,
+                    sender_coord,
+                    {src_eth_l1_byte_address, dst_eth_l1_byte_address, 16});
+
+                auto receiver_kernel = tt_metal::CreateKernel(
+                    receiver_program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
+                    receiver_coord,
+                    tt_metal::EthernetConfig{
+                        .noc = tt_metal::NOC::NOC_0,
+                    });
+                tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_coord, {16});
+                kernel_coords[sender_chip_id].push_back(sender_coord);
+                kernel_coords[receiver_chip_id].push_back(receiver_coord);
+            }
+        }
+        break;
     }
 
-    return success ? 0 : -1;
+    std::unordered_map<chip_id_t, tt_metal::distributed::MeshWorkload> mesh_workloads;
+    for (auto& [device_id, program] : programs) {
+        mesh_workloads[device_id] = tt_metal::distributed::MeshWorkload();
+        mesh_workloads[device_id].add_program(
+            tt_metal::distributed::MeshCoordinateRange(
+                tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)),
+            std::move(program));
+        std::cout << "Run Mesh Workload on: " << device_id << std::endl;
+        tt_metal::distributed::EnqueueMeshWorkload(
+            devices[device_id]->mesh_command_queue(), mesh_workloads[device_id], false);
+    }
+
+    for (auto& [device_id, mesh_workload] : mesh_workloads) {
+        auto device = devices[device_id];
+        std::cout << "Calling wait Program Done on: " << device_id << std::endl;
+        tt_metal::detail::WaitProgramDone(device->get_devices()[0], mesh_workload.get_programs().begin()->second);
+        std::cout << "Wait Program Done on: " << device_id << " done" << std::endl;
+        for (const auto& kernel_coord : kernel_coords[device_id]) {
+            auto result_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device_id, device->ethernet_core_from_logical_core(kernel_coord), src_eth_l1_byte_address, 16);
+            if (result_vec != inputs) {
+                std::cout << "Mismatch at Device: " << device_id << " Core: " << kernel_coord.str() << std::endl;
+            } else {
+                std::cout << "Match at Device: " << device_id << " Core: " << kernel_coord.str() << std::endl;
+            }
+        }
+    }
+    // for (auto& [device_id, device] : devices) {
+    //     std::cout << "Finish on: " << device->get_devices()[0]->id() << std::endl;
+    //     tt_metal::distributed::Finish(device->mesh_command_queue());
+    //     std::cout << "Finish on: " << device->get_devices()[0]->id() << " done" << std::endl;
+    // }
+
+    // std::size_t num_packets = std::stoi(argv[arg_idx++]);
+
+    // std::size_t packet_size = std::stoi(argv[arg_idx++]);
+    // std::size_t num_buffer_slots = std::stoi(argv[arg_idx++]);
+
+    // bool test_latency = std::stoi(argv[arg_idx++]);
+    // bool disable_trid = std::stoi(argv[arg_idx++]);
+    // uint32_t num_iterations = std::stoi(argv[arg_idx++]);
+
+    // TestParams params{
+    //     .benchmark_type = benchmark_type_enum.value(),
+    //     .num_packets = num_packets,
+    //     .packet_size = packet_size,
+    //     .num_buffer_slots = num_buffer_slots,
+    //     .test_latency = test_latency,
+    //     .disable_trid = disable_trid,
+    //     .num_iterations = num_iterations};
+
+    // log_info(tt::LogTest, "Setting up test fixture");
+    // ConnectedDevicesHelper device_helper(params);
+    // log_info(tt::LogTest, "Done setting up test fixture");
+    // if (device_helper.num_devices < 2) {
+    //     log_info(tt::LogTest, "Need at least 2 devices to run this test");
+    //     return 0;
+    // }
+
+    // // Add more configurations here until proper argc parsing added
+    // bool success = false;
+    // success = true;
+    // log_info(tt::LogTest, "STARTING");
+    // try {
+    //     log_info(
+    //         tt::LogTest,
+    //         "benchmark type: {}, measurement type: {}, num_packets: {}, packet_size: {} B, num_buffer_slots: {}",
+    //         enchantum::to_string(benchmark_type_enum.value()),
+    //         enchantum::to_string(test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth),
+    //         num_packets,
+    //         packet_size,
+    //         num_buffer_slots);
+
+    //     auto programs = build(device_helper, params);
+    //     run(device_helper, programs, params);
+
+    // } catch (std::exception& e) {
+    //     log_error(tt::LogTest, "Caught exception: {}", e.what());
+    //     device_helper.TearDown();
+    //     return -1;
+    // }
+    // return success ? 0 : -1;
+    return 0;
 }
