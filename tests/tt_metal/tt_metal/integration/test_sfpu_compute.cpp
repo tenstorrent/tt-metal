@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include "impl/dispatch/command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <algorithm>
