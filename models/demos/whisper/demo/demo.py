@@ -620,17 +620,17 @@ def test_demo_for_conditional_generation(
         input_path, ttnn_model, mesh_device, num_inputs, model_repo, batch_size_per_device
     )
 
-    metrics_dictionary = {
-        1: {"prefill_time_to_token": 0.24, "decode_t/s/u": 53.2},
-        2: {"prefill_time_to_token": 0.27, "decode_t/s/u": 51.1},
-        8: {"prefill_time_to_token": 0.28, "decode_t/s/u": 42.1},
-        32: {"prefill_time_to_token": 0.35, "decode_t/s/u": 43.1},
-    }
     if (
         is_ci_env
         and model_repo == "distil-whisper/distil-large-v3"
         and mesh_device.get_num_devices() == available_devices
     ):
+        metrics_dictionary = {
+            1: {"prefill_time_to_token": 0.24, "decode_t/s/u": 53.2},
+            2: {"prefill_time_to_token": 0.27, "decode_t/s/u": 51.1},
+            8: {"prefill_time_to_token": 0.28, "decode_t/s/u": 42.1},
+            32: {"prefill_time_to_token": 0.35, "decode_t/s/u": 43.1},
+        }
         if is_blackhole():
             if mesh_device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
                 expected_perf_metrics = {"prefill_time_to_token": 0.127, "decode_t/s/u": 87.0}
@@ -650,13 +650,7 @@ def test_demo_for_conditional_generation(
             "decode_t/s": True,
             "decode_t/s/u": True,
         }
-        lower_is_better_metrics = {"prefill_time_to_token"}
-        verify_perf(
-            measurements,
-            expected_perf_metrics,
-            expected_measurements=expected_measurements,
-            lower_is_better_metrics=lower_is_better_metrics,
-        )
+        verify_perf(measurements, expected_perf_metrics, expected_measurements=expected_measurements)
 
 
 @pytest.mark.parametrize(
