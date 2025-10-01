@@ -240,6 +240,7 @@ public:
 
     // Returns host `Storage`.
     // Throws if the tensor is not on host.
+    HostStorage& host_storage() &;
     const HostStorage& host_storage() const&;
     const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 

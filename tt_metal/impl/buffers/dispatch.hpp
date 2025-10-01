@@ -114,7 +114,9 @@ void write_to_device_buffer(
     uint32_t cq_id,
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
-    tt::stl::Span<const SubDeviceId> sub_device_ids);
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    bool& use_pinned_transfer,
+    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory = nullptr);
 
 ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     Buffer& buffer, uint32_t cq_id, tt::stl::Span<const uint32_t> expected_num_workers_completed);

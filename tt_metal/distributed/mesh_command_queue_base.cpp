@@ -169,14 +169,15 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     const void* host_data,
     const MeshCoordinateRange& device_range,
     bool blocking,
-    std::optional<BufferRegion> region) {
+    std::optional<BufferRegion> region,
+    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory) {
     auto lock = lock_api_function_();
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
         // rely on TTNN to perform sharding and call enqueue_write_shards
-        auto dispatch_lambda = [this, &buffer, host_data, &region](const MeshCoordinate& coord) {
-            this->write_shard_to_device(buffer, coord, host_data, region);
+        auto dispatch_lambda = [this, &buffer, host_data, &region, pinned_memory](const MeshCoordinate& coord) {
+            this->write_shard_to_device(buffer, coord, host_data, region, {}, pinned_memory);
         };
         for (const auto& coord : device_range) {
             if (mesh_device_->is_local(coord)) {
@@ -195,9 +196,13 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
 }
 
 void MeshCommandQueueBase::enqueue_write_mesh_buffer(
-    const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
+    const std::shared_ptr<MeshBuffer>& buffer,
+    const void* host_data,
+    bool blocking,
+    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory) {
     MeshCoordinateRange mesh_device_extent(buffer->device()->shape());
-    this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
+    this->enqueue_write_shard_to_sub_grid(
+        *buffer, host_data, mesh_device_extent, blocking, std::nullopt, pinned_memory);
 }
 
 void MeshCommandQueueBase::enqueue_read_mesh_buffer(
@@ -230,7 +235,12 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     auto dispatch_lambda = [&shard_data_transfers, &buffer, this](uint32_t shard_idx) {
         auto& shard_data_transfer = shard_data_transfers[shard_idx];
         this->write_shard_to_device(
-            *buffer, shard_data_transfer.shard_coord, shard_data_transfer.host_data, shard_data_transfer.region);
+            *buffer,
+            shard_data_transfer.shard_coord,
+            shard_data_transfer.host_data,
+            shard_data_transfer.region,
+            {},
+            shard_data_transfer.pinned_memory);
     };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
@@ -267,6 +277,7 @@ void MeshCommandQueueBase::enqueue_write(
             shard_data_transfers.push_back(
                 {.shard_coord = host_buffer_coord,
                  .host_data = buf->view_bytes().data(),
+                 .pinned_memory = buf->get_pinned_memory(),
                  .region = BufferRegion(0, buf->view_bytes().size())});
         }
     }

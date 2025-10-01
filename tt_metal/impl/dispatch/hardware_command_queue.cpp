@@ -331,8 +331,15 @@ void HWCommandQueue::enqueue_write_buffer(
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
 
     auto dispatch_core_type = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type();
+    bool use_pinned_transfer{false};
     buffer_dispatch::write_to_device_buffer(
-        data, *buffer_obj, this->id_, this->expected_num_workers_completed_, dispatch_core_type, sub_device_ids);
+        data,
+        *buffer_obj,
+        this->id_,
+        this->expected_num_workers_completed_,
+        dispatch_core_type,
+        sub_device_ids,
+        use_pinned_transfer);
 
     if (blocking) {
         this->finish(sub_device_ids);
