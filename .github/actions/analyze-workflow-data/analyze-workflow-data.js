@@ -21,9 +21,9 @@ const SUCCESS_EMOJI = '✅';
 const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
 
-// Optional logs index mapping (runId -> extracted logs directory)
-// This is populated when the action input `logs-index-path` is provided.
-let __logsIndexMap = undefined;
+// Optional annotations index mapping (runId -> directory)
+// This is populated when action inputs provide their paths.
+let __annotationsIndexMap = undefined;
 
 /**
  * Load a mapping from workflow run IDs to their extracted logs directories.
@@ -64,11 +64,27 @@ function loadLogsIndexFromFile(filePath) {
 /**
  * Resolve the extracted logs directory for a given run ID using the loaded index.
  */
-function getLogsDirForRunId(runId) {
+function loadAnnotationsIndexFromFile(filePath) {
   try {
-    if (!__logsIndexMap) return undefined;
+    if (!filePath || !fs.existsSync(filePath)) return undefined;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const json = JSON.parse(raw);
+    const map = new Map();
+    if (json && typeof json === 'object' && !Array.isArray(json)) {
+      for (const [k, v] of Object.entries(json)) {
+        if (typeof v === 'string' && v) map.set(String(k), v);
+      }
+      return map;
+    }
+  } catch (_) { /* ignore */ }
+  return undefined;
+}
+
+function getAnnotationsDirForRunId(runId) {
+  try {
+    if (!__annotationsIndexMap) return undefined;
     const key = String(runId);
-    return __logsIndexMap.get(key);
+    return __annotationsIndexMap.get(key);
   } catch (_) {
     return undefined;
   }
@@ -275,23 +291,38 @@ async function fetchCommitAuthor(_octokit, _context, _commitSha) {
  * Download workflow run logs and extract up to N error snippets.
  * Returns an array of strings (snippets).
  */
-async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = undefined) {
+async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, _logsDirPath = undefined, annotationsDirPath = undefined) {
   try {
     await core.startGroup(`Extracting error snippets for run ${runId}`); // start a group to log the error snippets (we log this to the console)
-    // IMPORTANT: This function no longer downloads logs.
-    // It expects a path to the already-extracted logs directory. This can be
-    // supplied explicitly via `logsDirPath` or resolved via the optional
-    // `logs-index-path` input (loaded into `__logsIndexMap`).
-    const resolvedDir = logsDirPath || getLogsDirForRunId(runId);
+    // Primary: use annotations if available
+    const annDir = annotationsDirPath || getAnnotationsDirForRunId(runId);
     let snippets = [];
-    if (resolvedDir && fs.existsSync(resolvedDir)) {
-      snippets = findErrorSnippetsInDir(resolvedDir, maxSnippets); // parse error snippets from provided logs directory
-    } else {
-      core.info(`No logs directory available for run ${runId}; skipping log parsing`);
+    if (annDir && fs.existsSync(annDir)) {
+      try {
+        const filePath = path.join(annDir, 'annotations.json');
+        if (fs.existsSync(filePath)) {
+          const raw = fs.readFileSync(filePath, 'utf8');
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            for (const a of arr) {
+              const job = a.job_name || '';
+              const title = a.title || '';
+              const level = a.annotation_level || '';
+              const message = a.message || '';
+              if (String(level).toLowerCase() !== 'failure' && String(level).toLowerCase() !== 'error') continue;
+              const label = `${job}${title ? `: ${title}` : ''} [${level}]`;
+              snippets.push({ label, snippet: message });
+              if (snippets.length >= maxSnippets) break;
+            }
+          }
+        }
+      } catch (e) {
+        core.warning(`Failed reading annotations for run ${runId}: ${e.message}`);
+      }
     }
-    core.info(`Total snippets collected: ${snippets.length}`); // log the total number of snippets collected
-
-    return snippets;
+    // Fallback: none (we no longer parse logs). If needed, could fallback to logs here.
+    core.info(`Total snippets collected from annotations: ${snippets.length}`);
+    return snippets || [];
   } catch (e) {
     core.info(`Failed to obtain run logs for ${runId}: ${e.message}`);
     return [];
@@ -308,14 +339,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
   const infoRegex = /info:/;
   const backtraceRegex = /backtrace:/;
   // Failure markers used both in primary and fallback passes
-  const failureMarkers = [
-    /\bFAILED\b/,          // pytest summary and generic FAILED
-    /\[\s*FAILED\s*\]/,  // gtest [  FAILED  ]
-    /\bERROR\b/i,           // generic ERROR
-    /Traceback\b/i,         // python tracebacks
-    /AssertionError\b/i,
-    /Segmentation fault/i
-  ];
+  const failureMarkers = [];
 
   const collected = [];
   const stack = [rootDir]; // trace of the stack to use when recursing through the directories
@@ -385,46 +409,7 @@ function findErrorSnippetsInDir(rootDir, maxCount) {
     }
   }
 
-  // Fallback: if no snippets collected via primary heuristics, try to at least
-  // return names (and a small context) of log files that clearly indicate failure.
-  if (collected.length === 0) {
-
-    const stack2 = [rootDir]; // set up new stack
-    while (stack2.length && collected.length < maxCount) { // while the stack is not empty and the collected snippets are less than the max count
-      const dir = stack2.pop(); // remove the last directory from the stack
-      const entries = fs.readdirSync(dir, { withFileTypes: true }); // list all the files and directories in the directory
-      for (const ent of entries) {
-        const p = path.join(dir, ent.name); // join the directory and the entry name to get the path to the entry
-        if (ent.isDirectory()) { // if the entry is a directory
-          stack2.push(p); // add the path to the stack
-        } else if (ent.isFile() && (p.endsWith('.txt') || p.endsWith('.log') || !path.basename(p).includes('.'))) {
-          try { // try to read the file
-            // Simple fallback: Only consider lines where 'FAILED' is the first word after
-            // stripping leading timestamps and whitespace.
-            const text = fs.readFileSync(p, 'utf8'); // read the file as utf8
-            const rawLines = text.split(/\r?\n/); // split the text into lines
-            const timestampPrefix = /^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/; // regex to match the timestamp prefix
-            const FAILED_AT_START = /^FAILED\b/; // case-sensitive, first word is FAILED
-            for (let i = 0; i < rawLines.length && collected.length < maxCount; i++) { // iterate through the lines
-              const original = rawLines[i];
-              const modified = rawLines.slice(i, i + 2).join('\n'); // join two consecutive lines into a single string (safe because slice doesn't throw an error if the index is out of bounds)
-              const stripped = original.replace(timestampPrefix, '').replace(/^\s+/, ''); // remove the timestamp prefix and leading whitespace
-              if (FAILED_AT_START.test(stripped)) { // if the line starts with FAILED (this logic is flawed)
-                const fileBase = path.basename(p).split('.')[0]; // get the base name of the log file
-                collected.push({ // add the snippet to the collected snippets
-                  label: `${fileBase}:\nFAILED line`,
-                  // Return the original line (full context), truncated
-                  snippet: original.length > 600 ? original.slice(0, 600) + '…' : modified,
-                });
-                break; // one per file is enough
-              }
-            }
-          } catch (_) { /* ignore */ }
-        }
-        if (collected.length >= maxCount) break; // if the collected snippets are greater than or equal to the max count, break the loop
-      }
-    }
-  }
+  // Remove legacy log-based fallback: annotations are the primary mechanism now
   // TODO: the failure markers are incorrectly flagging the line below them when the failing test
   // is actually far above them. the logic above needs to be changed
 
@@ -866,6 +851,7 @@ async function run() {
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
     const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true'; // get the alert-all input from the action inputs
     const logsIndexPath = core.getInput('logs-index-path', { required: false }); // optional: path to JSON mapping runId -> extracted logs dir
+    const annotationsIndexPath = core.getInput('annotations-index-path', { required: false }); // optional: path to JSON mapping runId -> annotations dir
     const commitsPath = core.getInput('commits-path', { required: false }); // optional: path to commits index JSON
 
     // Validate inputs
@@ -891,6 +877,15 @@ async function run() {
         core.info(`Loaded logs index with ${__logsIndexMap.size} entries from ${logsIndexPath}`);
       } else if (logsIndexPath) {
         core.info(`No valid entries found in logs index file at ${logsIndexPath}`);
+      }
+    }
+
+    if (annotationsIndexPath) {
+      __annotationsIndexMap = loadAnnotationsIndexFromFile(annotationsIndexPath);
+      if (__annotationsIndexMap && __annotationsIndexMap.size) {
+        core.info(`Loaded annotations index with ${__annotationsIndexMap.size} entries from ${annotationsIndexPath}`);
+      } else if (annotationsIndexPath) {
+        core.info(`No valid entries found in annotations index file at ${annotationsIndexPath}`);
       }
     }
 
@@ -975,8 +970,9 @@ async function run() {
           const errs = await fetchErrorSnippetsForRun(
             latestFail.id,
             20,
-            getLogsDirForRunId(latestFail.id)
-          ); // get the error snippets for the latest failing run using pre-extracted logs if available
+            undefined,
+            getAnnotationsDirForRunId(latestFail.id)
+          ); // get the error snippets for the latest failing run using annotations if available
           errorSnippetsCache.set(latestFail.id, errs); // cache the error snippets for reuse
           // Aggregate owners from snippets
           const ownerSet = new Map(); // ownerSet will contain the mappings from an owner's id and name to the owner object
@@ -1099,7 +1095,8 @@ async function run() {
             item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
               item.run_id,
               20,
-              getLogsDirForRunId(item.run_id)
+              undefined,
+              getAnnotationsDirForRunId(item.run_id)
             );
             if (!errorSnippetsCache.has(item.run_id)) {
               errorSnippetsCache.set(item.run_id, item.error_snippets);
@@ -1162,7 +1159,8 @@ async function run() {
             item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
               item.run_id,
               20,
-              getLogsDirForRunId(item.run_id)
+              undefined,
+              getAnnotationsDirForRunId(item.run_id)
             );
             if (!errorSnippetsCache.has(item.run_id)) {
               errorSnippetsCache.set(item.run_id, item.error_snippets);

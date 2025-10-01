@@ -191,57 +191,51 @@ async function run() {
       if (!found) {
         throw new Error(`[TEST MODE] Could not find workflow-data.json in any artifacts for run_id=${runId}`);
       }
-      // Additionally fetch the logs artifact from the same run, if present
+      // Additionally fetch the annotations artifact from the same run, if present
       try {
-        const logsArtifact = artifacts.find(a => a && a.name === 'workflow-logs');
+        const owner = github.context.repo.owner;
+        const repo = github.context.repo.repo;
+        const annotationsArtifact = artifacts.find(a => a && a.name === 'workflow-annotations');
         const workspace = process.env.GITHUB_WORKSPACE || process.cwd();
-        const logsRoot = path.join(workspace, 'logs');
-        if (!fs.existsSync(logsRoot)) fs.mkdirSync(logsRoot, { recursive: true });
-        let logsIndexPath = path.join(logsRoot, 'logs-index.json');
-        if (logsArtifact) {
-          // Download and extract to a temp folder, then copy the contained logs directory
-          const logsZipPath = path.join(tmpDir, `${logsArtifact.name}.zip`);
-          const respLogs = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: logsArtifact.id, archive_format: 'zip' });
-          fs.writeFileSync(logsZipPath, Buffer.from(respLogs.data));
-          const extractLogsDir = path.join(tmpDir, `${logsArtifact.name}-extract`);
-          if (!fs.existsSync(extractLogsDir)) fs.mkdirSync(extractLogsDir, { recursive: true });
-          execFileSync('unzip', ['-o', logsZipPath, '-d', extractLogsDir], { stdio: 'ignore' });
-          // Find the logs-index.json inside the extracted tree
-          const stack = [extractLogsDir];
+        const annotationsRoot = path.join(workspace, 'annotations');
+        if (!fs.existsSync(annotationsRoot)) fs.mkdirSync(annotationsRoot, { recursive: true });
+        let annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
+        if (annotationsArtifact) {
+          const annZipPath = path.join(tmpDir, `${annotationsArtifact.name}.zip`);
+          const respAnn = await octokit.rest.actions.downloadArtifact({ owner, repo, artifact_id: annotationsArtifact.id, archive_format: 'zip' });
+          fs.writeFileSync(annZipPath, Buffer.from(respAnn.data));
+          const extractAnnDir = path.join(tmpDir, `${annotationsArtifact.name}-extract`);
+          if (!fs.existsSync(extractAnnDir)) fs.mkdirSync(extractAnnDir, { recursive: true });
+          execFileSync('unzip', ['-o', annZipPath, '-d', extractAnnDir], { stdio: 'ignore' });
+          // Find the annotations-index.json inside the extracted tree
+          const stack = [extractAnnDir];
           let foundIndex;
           while (stack.length && !foundIndex) {
             const dir = stack.pop();
             const entries = fs.readdirSync(dir, { withFileTypes: true });
             for (const ent of entries) {
               const p = path.join(dir, ent.name);
-              if (ent.isDirectory()) {
-                stack.push(p);
-              } else if (ent.isFile() && ent.name === 'logs-index.json') {
-                foundIndex = p;
-                break;
-              }
+              if (ent.isDirectory()) stack.push(p);
+              else if (ent.isFile() && ent.name === 'annotations-index.json') { foundIndex = p; break; }
             }
           }
           if (foundIndex) {
-            // The parent directory of logs-index.json should be the logs root in the artifact
-            const artifactLogsRoot = path.dirname(foundIndex);
-            // Copy extracted logs into our workspace logs directory
-            // Use fs.cpSync (Node 16+) to preserve tree structure
-            fs.cpSync(artifactLogsRoot, logsRoot, { recursive: true });
-            logsIndexPath = path.join(logsRoot, 'logs-index.json');
-            core.info(`[TEST MODE] Restored logs to ${logsRoot}`);
+            const artifactAnnRoot = path.dirname(foundIndex);
+            fs.cpSync(artifactAnnRoot, annotationsRoot, { recursive: true });
+            annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
+            core.info(`[TEST MODE] Restored annotations to ${annotationsRoot}`);
           } else {
-            core.info('[TEST MODE] No logs-index.json found in logs artifact; creating empty index');
-            if (!fs.existsSync(logsIndexPath)) fs.writeFileSync(logsIndexPath, JSON.stringify({}));
+            core.info('[TEST MODE] No annotations-index.json found; creating empty index');
+            if (!fs.existsSync(annotationsIndexPath)) fs.writeFileSync(annotationsIndexPath, JSON.stringify({}));
           }
         } else {
-          core.info('[TEST MODE] No workflow-logs artifact found in selected run; creating empty logs index');
-          if (!fs.existsSync(logsIndexPath)) fs.writeFileSync(logsIndexPath, JSON.stringify({}));
+          core.info('[TEST MODE] No workflow-annotations artifact found in selected run; creating empty index');
+          if (!fs.existsSync(annotationsIndexPath)) fs.writeFileSync(annotationsIndexPath, JSON.stringify({}));
         }
-        core.setOutput('logs-root', logsRoot);
-        core.setOutput('logs-index-path', logsIndexPath);
+        core.setOutput('annotations-root', annotationsRoot);
+        core.setOutput('annotations-index-path', annotationsIndexPath);
       } catch (e) {
-        core.warning(`[TEST MODE] Failed to restore logs artifact: ${e.message}`);
+        core.warning(`[TEST MODE] Failed to restore annotations artifact: ${e.message}`);
       }
 
       // Additionally fetch the commits artifact from the same run, if present
@@ -347,7 +341,7 @@ async function run() {
     if (!fs.existsSync(logsRoot)) {
       fs.mkdirSync(logsRoot, { recursive: true });
     }
-    const logsIndex = {};
+    const annotationsIndex = {};
     for (const [name, runs] of grouped.entries()) {
       try {
         // Consider only the target branch and sort newest first
@@ -374,32 +368,64 @@ async function run() {
         }
         if (!targetRun) continue;
 
-        // Perform the GitHub API call to download the logs zip for the selected failing run
-        const resp = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
-
-        // Layout: logs/<run_id>/{run_logs.zip, extract/}
-        const runDir = path.join(logsRoot, String(targetRun.id));
-        if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
-        const zipPath = path.join(runDir, 'run_logs.zip');
-        fs.writeFileSync(zipPath, Buffer.from(resp.data));
-
-        // Extract the archive to a stable directory for downstream parsing
-        const extractDir = path.join(runDir, 'extract');
-        if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
-        execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
-
-        // Use a relative path so the index remains portable across jobs when
-        // uploaded and downloaded as an artifact
-        const relativeExtract = path.relative(workspace, extractDir) || extractDir;
-        logsIndex[String(targetRun.id)] = relativeExtract;
-        core.info(`Fetched logs for failing run ${targetRun.id} into ${relativeExtract}`);
+        // Fetch check-run annotations for this failing run
+        try {
+          // List jobs and extract check_run_ids
+          const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
+          const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
+          const checkRunIds = [];
+          for (const j of jobs) {
+            const cru = j && j.check_run_url;
+            if (typeof cru === 'string' && cru.includes('/check-runs/')) {
+              const idStr = cru.split('/check-runs/')[1];
+              const id = idStr ? parseInt(idStr, 10) : NaN;
+              if (!Number.isNaN(id)) checkRunIds.push({ id, job_name: j.name });
+            }
+          }
+          const annRoot = path.join(workspace, 'annotations', String(targetRun.id));
+          if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
+          const allAnnotations = [];
+          for (const { id: checkRunId, job_name } of checkRunIds) {
+            let page = 1;
+            const budget = 500; // safety cap per run
+            while (allAnnotations.length < budget) {
+              const perPage = Math.min(100, budget - allAnnotations.length);
+              const { data } = await octokit.rest.checks.listAnnotations({ owner, repo, check_run_id: checkRunId, per_page: perPage, page });
+              const arr = Array.isArray(data) ? data : [];
+              if (!arr.length) break;
+              for (const a of arr) {
+                allAnnotations.push({
+                  job_name,
+                  path: a.path,
+                  start_line: a.start_line,
+                  end_line: a.end_line,
+                  annotation_level: a.annotation_level,
+                  message: a.message,
+                  title: a.title,
+                  raw_details: a.raw_details,
+                });
+              }
+              if (arr.length < perPage) break;
+              page += 1;
+            }
+          }
+          const annPath = path.join(annRoot, 'annotations.json');
+          fs.writeFileSync(annPath, JSON.stringify(allAnnotations));
+          const relativeAnn = path.relative(workspace, annRoot) || annRoot;
+          annotationsIndex[String(targetRun.id)] = relativeAnn;
+          core.info(`Fetched annotations for failing run ${targetRun.id} → ${allAnnotations.length} items`);
+        } catch (e) {
+          core.warning(`Failed to fetch annotations for run ${targetRun.id}: ${e.message}`);
+        }
       } catch (e) {
         core.warning(`Failed to fetch logs for latest failing run in workflow '${name}': ${e.message}`);
       }
     }
-    // Persist the index file alongside the logs directory
-    const logsIndexPath = path.join(logsRoot, 'logs-index.json');
-    fs.writeFileSync(logsIndexPath, JSON.stringify(logsIndex));
+    // Persist annotations index alongside annotations directory
+    const annotationsRoot = path.join(workspace, 'annotations');
+    if (!fs.existsSync(annotationsRoot)) fs.mkdirSync(annotationsRoot, { recursive: true });
+    const annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
+    fs.writeFileSync(annotationsIndexPath, JSON.stringify(annotationsIndex));
 
     // Build a commits index for the main branch within the last N days
     // The index is an array of commits sorted by commit author/commit date ascending.
@@ -445,7 +471,8 @@ async function run() {
     core.setOutput('workflow-count', grouped.size);
     core.setOutput('cache-path', outputPath);
     core.setOutput('logs-root', logsRoot);
-    core.setOutput('logs-index-path', logsIndexPath);
+    core.setOutput('annotations-root', annotationsRoot);
+    core.setOutput('annotations-index-path', annotationsIndexPath);
     core.setOutput('commits-path', commitsPath);
     // Log remaining GitHub API rate limit
     const rateLimit = await octokit.rest.rateLimit.get();

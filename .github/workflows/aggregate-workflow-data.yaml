@@ -17,9 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       cache-path: ${{ steps.fetch.outputs.cache-path }}
-      logs-index-path: ${{ steps.fetch.outputs.logs-index-path }}
-      logs-root: ${{ steps.fetch.outputs.logs-root }}
       commits-path: ${{ steps.fetch.outputs.commits-path }}
+      annotations-root: ${{ steps.fetch.outputs.annotations-root }}
+      annotations-index-path: ${{ steps.fetch.outputs.annotations-index-path }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
 
@@ -40,13 +40,13 @@ jobs:
           path: ${{ github.workspace }}/workflow-data.json
           retention-days: 1
 
-      - name: Upload logs artifact (if any)
+      - name: Upload annotations artifact (if any)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
         with:
-          name: workflow-logs
+          name: workflow-annotations
           path: |
-            ${{ steps.fetch.outputs.logs-root }}/
-            ${{ steps.fetch.outputs.logs-root }}/logs-index.json
+            ${{ steps.fetch.outputs.annotations-root }}/
+            ${{ steps.fetch.outputs.annotations-index-path }}
           retention-days: 1
 
       - name: Upload commits artifact
@@ -123,11 +123,11 @@ jobs:
         with:
           name: workflow-data
           path: ${{ github.workspace }}
-      - name: Download logs (if any)
+      - name: Download annotations (if any)
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: workflow-logs
-          path: ${{ github.workspace }}/logs
+          name: workflow-annotations
+          path: ${{ github.workspace }}/annotations
       - name: Download commits index
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
@@ -141,7 +141,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           cache-path: ${{ github.workspace }}/workflow-data.json
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
-          logs-index-path: ${{ github.workspace }}/logs/logs-index.json
+          annotations-index-path: ${{ github.workspace }}/annotations/annotations-index.json
           commits-path: ${{ github.workspace }}/commits-main.json
           alert-all: 'true'
           workflow_configs: |
