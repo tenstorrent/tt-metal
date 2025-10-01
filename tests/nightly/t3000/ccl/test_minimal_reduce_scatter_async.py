@@ -240,6 +240,16 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "rs_input_shape, dim, layout, rs_input_dtype",
     [
+        # Dim 1 tests
+        ([2, 24, 256, 256], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([2, 16, 56, 56], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([2, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # Dim 2 tests
+        ([2, 4, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([4, 1, 1024, 340], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        ([1, 1, 512, 512], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        # Dim 3 tests
+        ([2, 4, 1024, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         ([1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         ([3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         ([8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
@@ -255,6 +265,13 @@ def run_reduce_scatter_impl(
         ([1, 1, 29, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
+        "scatter_dim_1_test_one",
+        "scatter_dim_1_test_two",
+        "scatter_dim_1_test_three",
+        "scatter_dim_2_test_one",
+        "scatter_dim_2_test_two",
+        "scatter_dim_2_test_three",
+        "non_zero_dim_1",
         "padded_dim_2_test_one",
         "padded_dim_2_test_two",
         "batch_8",
@@ -365,7 +382,7 @@ def test_reduce_scatter_async(
         ([1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # # Scatter on dim 3
+        # Scatter on dim 3
         ([1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
