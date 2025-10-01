@@ -15,7 +15,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <telemetry/arc/arc_metrics.hpp>
-#include <telemetry/ethernet/ethernet_endpoint.hpp>
 #include <topology/topology.hpp>
 
 #include <chrono>
@@ -32,14 +31,10 @@ void create_arc_metrics(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<TopologyTranslation>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
-    // Get all chips
     tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 
-    // Get all chips using get_ethernet_endpoints_by_chip
-    auto ethernet_endpoints_by_chip = get_ethernet_endpoints_by_chip(cluster);
-
     // Iterate through all chips and create ARC metrics for MMIO-capable ones
-    for (chip_id_t chip_id : cluster->get_cluster_description()->get_all_chips()) {
+    for (chip_id_t chip_id : cluster_descriptor->get_all_chips()) {
         // Check if this chip has MMIO capability (is a local chip)
         if (cluster_descriptor->is_chip_mmio_capable(chip_id)) {
             tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
