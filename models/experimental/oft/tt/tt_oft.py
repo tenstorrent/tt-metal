@@ -14,6 +14,59 @@ from models.experimental.oft.reference.oft import EPSILON
 from models.experimental.oft.reference.utils import perspective
 
 
+def calculate_per_core_dims(n, h, w, in_ch, out_ch, core_grid, sharding_strategy):
+    nhw = n * h * w
+    if sharding_strategy == "height":
+        per_core_M = (nhw // (core_grid.y * core_grid.x) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        per_core_N = (out_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    else:
+        per_core_M = (nhw // core_grid.y + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        per_core_N = (out_ch // core_grid.x + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+    return per_core_M, per_core_N
+
+
+def calculate_shard_dims(per_core_M, per_core_N, in_ch, out_ch, core_grid, sharding_strategy):
+    if sharding_strategy == "height":
+        shard_height = per_core_M * ttnn.TILE_SIZE
+        in_shard_width = (in_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+        out_shard_width = (out_ch + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+    else:
+        shard_height = per_core_M * ttnn.TILE_SIZE
+        in_shard_width = (in_ch // core_grid.x + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+        out_shard_width = per_core_N * ttnn.TILE_SIZE
+    return shard_height, in_shard_width, out_shard_width
+
+
+def get_matmul_config(core_grid, in0_block_w, out_subblock, per_core_M, per_core_N, out_block, sharding_strategy):
+    if sharding_strategy == "height":
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock[0],
+            out_subblock_w=out_subblock[1],
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            out_block_h=out_block[0],
+            out_block_w=out_block[1],
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            mcast_in0=False,
+        )
+    else:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock[0],
+            out_subblock_w=out_subblock[1],
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            out_block_h=out_block[0],
+            out_block_w=out_block[1],
+            fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            transpose_mcast=False,
+        )
+
+
 def calculate_initialization_parameters(
     device, channels, cell_size, grid_height, feature_shape_hw, calib, grid, scale, use_precomputed_grid
 ):
@@ -97,7 +150,8 @@ def calculate_initialization_parameters(
     btm_left_bc_tt = ttnn.reshape(btm_left_bc_tt, [batch_size, grid_h, 1, grid_w * btm_left_bc_tt.shape[-1]])
 
     visible_tt = ttnn.from_torch(visible_nhwc, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    area_tt = ttnn.from_torch(area_nhwc * visible_nhwc, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    area = torch.nn.functional.pad(area_nhwc * visible_nhwc, ((0, 0, 0, 63, 0, 0, 0, 0)), value=0.0)
+    area_tt = ttnn.from_torch(area, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     return (
         [top_left_bc_tt, btm_right_bc_tt, top_right_bc_tt, btm_left_bc_tt],
         visible_tt,
@@ -127,6 +181,8 @@ class OFT:
         self.scale = scale
         self.use_precomputed_grid = use_precomputed_grid
         self.features_shape_hw = features_shape_hw
+
+        self.num_slices = 11
 
         self.bbox_corners, self.visible, self.area, self.shape = calculate_initialization_parameters(
             device, channels, cell_size, grid_height, features_shape_hw, calib, grid, self.scale, use_precomputed_grid
@@ -179,57 +235,183 @@ class OFT:
             use_precomputed_grid=self.use_precomputed_grid,
             batch_output_channels=True,
         )
-        # top_left = ttnn.permute(top_left, (0, 2, 1, 3))
+
         top_left = ttnn.reshape(top_left, [top_left.shape[0], top_left.shape[2], top_left.shape[1], top_left.shape[3]])
-        top_left = ttnn.to_layout(top_left, ttnn.TILE_LAYOUT)
+        n, h, w, in_ch = top_left.shape
+        top_left = ttnn.tilize_with_val_padding(top_left, [n, h, w + 63, in_ch], 0.0)
+
         btm_right = ttnn.grid_sample(
             integral_image,
             self.bbox_corners[1],
             use_precomputed_grid=self.use_precomputed_grid,
             batch_output_channels=True,
         )
-        # btm_right = ttnn.permute(btm_right, (0, 2, 1, 3))
         btm_right = ttnn.reshape(
             btm_right, [btm_right.shape[0], btm_right.shape[2], btm_right.shape[1], btm_right.shape[3]]
         )
-        btm_right = ttnn.to_layout(btm_right, ttnn.TILE_LAYOUT)
+        btm_right = ttnn.tilize_with_val_padding(btm_right, [n, h, w + 63, in_ch], 0.0)
+
         top_right = ttnn.grid_sample(
             integral_image,
             self.bbox_corners[2],
             use_precomputed_grid=self.use_precomputed_grid,
             batch_output_channels=True,
         )
-        # top_right = ttnn.permute(top_right, (0, 2, 1, 3))
         top_right = ttnn.reshape(
             top_right, [top_right.shape[0], top_right.shape[2], top_right.shape[1], top_right.shape[3]]
         )
-        top_right = ttnn.to_layout(top_right, ttnn.TILE_LAYOUT)
+        top_right = ttnn.tilize_with_val_padding(top_right, [n, h, w + 63, in_ch], 0.0)
+
         btm_left = ttnn.grid_sample(
             integral_image,
             self.bbox_corners[3],
             use_precomputed_grid=self.use_precomputed_grid,
             batch_output_channels=True,
         )
-        # btm_left = ttnn.permute(btm_left, (0, 2, 1, 3))
         btm_left = ttnn.reshape(btm_left, [btm_left.shape[0], btm_left.shape[2], btm_left.shape[1], btm_left.shape[3]])
-        btm_left = ttnn.to_layout(btm_left, ttnn.TILE_LAYOUT)
+        btm_left = ttnn.tilize_with_val_padding(btm_left, [n, h, w + 63, in_ch], 0.0)
 
-        vox_feats = (top_left - top_right + btm_right - btm_left) * self.area
+        integral_image = ttnn.to_memory_config(integral_image, ttnn.DRAM_MEMORY_CONFIG)
 
-        n, h, w, c = vox_feats.shape
-        logger.debug(f"TTNN: {n=}, {h=}, {w=}, {c=}")
+        grid_size = device.compute_with_storage_grid_size()
+        core_grid = ttnn.CoreGrid(y=grid_size.y, x=grid_size.x)
 
-        if vox_feats.get_layout() != ttnn.TILE_LAYOUT:
-            vox_feats = ttnn.to_layout(vox_feats, ttnn.TILE_LAYOUT)
-        ortho_feats = ttnn.linear(
-            vox_feats,
-            self.linear_weight,
-            bias=self.linear_bias,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            activation="relu",
-            dtype=ttnn.bfloat16,
+        w = w + 63  # val padding doesn't change original w
+        out_ch = self.linear_weight.shape[1]
+        w_sliced = w // self.num_slices
+
+        sharding_strategy = "block"
+        in0_block_w = 4
+        out_subblock = (1, 2)
+
+        input_dtype = ttnn.bfloat16
+        output_dtype = ttnn.bfloat16
+        weight_dtype = ttnn.bfloat16
+
+        per_core_M, per_core_N = calculate_per_core_dims(n, h, w_sliced, in_ch, out_ch, core_grid, sharding_strategy)
+        shard_height, in_shard_width, out_shard_width = calculate_shard_dims(
+            per_core_M, per_core_N, in_ch, out_ch, core_grid, sharding_strategy
         )
-        ttnn.deallocate(vox_feats)
+
+        out_block = (per_core_M, per_core_N)
+
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+            dst_full_sync_en=False,
+        )
+
+        matmul_config = get_matmul_config(
+            core_grid, in0_block_w, out_subblock, per_core_M, per_core_N, out_block, sharding_strategy
+        )
+        shard_strategy = ttnn.ShardStrategy.HEIGHT if sharding_strategy == "height" else ttnn.ShardStrategy.BLOCK
+
+        output_mem_config = ttnn.create_sharded_memory_config(
+            (shard_height, out_shard_width),
+            core_grid,
+            shard_strategy,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        logger.debug(f"OFT Block per_core_M: {per_core_M}, per_core_N: {per_core_N}")
+        logger.debug(
+            f"OFT Block shard_height: {shard_height}, in_shard_width: {in_shard_width}, out_shard_width: {out_shard_width}"
+        )
+
+        out_initial = torch.randn([n, h, w, out_ch], dtype=torch.float32)
+        ortho_feats = ttnn.from_torch(
+            out_initial, input_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        slice_memory_layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            if sharding_strategy == "height"
+            else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
+
+        for i in range(self.num_slices):
+            vox_feats_slice = ttnn.interleaved_to_sharded_partial(
+                top_left,
+                (core_grid.x, core_grid.y),
+                [shard_height, in_shard_width],
+                self.num_slices,
+                i,
+                slice_memory_layout,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+            top_right_slice = ttnn.interleaved_to_sharded_partial(
+                top_right,
+                (core_grid.x, core_grid.y),
+                [shard_height, in_shard_width],
+                self.num_slices,
+                i,
+                slice_memory_layout,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+            ttnn.sub_(vox_feats_slice, top_right_slice)
+
+            ttnn.deallocate(top_right_slice)
+
+            bottom_right_slice = ttnn.interleaved_to_sharded_partial(
+                btm_right,
+                (core_grid.x, core_grid.y),
+                [shard_height, in_shard_width],
+                self.num_slices,
+                i,
+                slice_memory_layout,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+            ttnn.add_(vox_feats_slice, bottom_right_slice)
+            ttnn.deallocate(bottom_right_slice)
+
+            bottom_left_slice = ttnn.interleaved_to_sharded_partial(
+                btm_left,
+                (core_grid.x, core_grid.y),
+                [shard_height, in_shard_width],
+                self.num_slices,
+                i,
+                slice_memory_layout,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+            ttnn.sub_(vox_feats_slice, bottom_left_slice)
+            ttnn.deallocate(bottom_left_slice)
+
+            area_slice = ttnn.interleaved_to_sharded_partial(
+                self.area,
+                (core_grid.x, core_grid.y),
+                [shard_height, in_shard_width],
+                self.num_slices,
+                i,
+                slice_memory_layout,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+            ttnn.mul_(vox_feats_slice, area_slice)
+            ttnn.deallocate(area_slice)
+
+            vox_feats_slice = ttnn.linear(
+                vox_feats_slice,
+                self.linear_weight,
+                bias=self.linear_bias,
+                program_config=matmul_config,
+                memory_config=output_mem_config,
+                dtype=output_dtype,
+                compute_kernel_config=compute_config,
+            )
+
+            ttnn.sharded_to_interleaved_partial(
+                vox_feats_slice, ortho_feats, self.num_slices, i, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+        ortho_feats = ortho_feats[:, :, : w - 63, :]
 
         if use_signpost:
             signpost(header="OFT block ended")

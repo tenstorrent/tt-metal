@@ -15,18 +15,18 @@ from loguru import logger
     [
         # fmt: off
         # feats8 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  False, 0.999, 0.875),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.811),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.999, 0.683),
-        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.646),
-        # feats16 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.526),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.456),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.350),
-        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.335),
-        # feats32 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.298),
-        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.292),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,  False, 0.999, 0.872),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.float32,   True, 0.999, 0.808),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16, False, 0.999, 0.679),
+        ((1, 256, 48, 160), 256, 0.5, 4, 1 / 8, torch.bfloat16,  True, 0.999, 0.637),
+        # # feats16 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,  False, 0.999, 0.522),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.float32,   True, 0.999, 0.453),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16, False, 0.999, 0.348),
+        ((1, 256, 24, 80), 256, 0.5, 4, 1 / 16, torch.bfloat16,  True, 0.999, 0.334),
+        # # feats32 {float32,bfloat16} x {use_precomputed_grid, no_use_precomputed_grid}
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,  False, 0.999, 0.296),
+        ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.float32,   True, 0.999, 0.290),
         ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16, False, 0.999, 0.236),
         ((1, 256, 12, 40), 256, 0.5, 4, 1 / 32, torch.bfloat16,  True, 0.999, 0.229),
         # fmt: on
