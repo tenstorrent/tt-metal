@@ -25,7 +25,6 @@
 namespace ttnn::operations::experimental {
 
 using namespace isin::common;
-using isin::IsInCB;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {

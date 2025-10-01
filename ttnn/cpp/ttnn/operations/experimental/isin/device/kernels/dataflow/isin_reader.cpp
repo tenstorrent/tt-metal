@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -19,12 +18,12 @@ namespace {
 */
 template <typename elements_number_type>
 FORCE_INLINE void isin_subchunks(
-    const uint32_t& elements_l1_read_addr,
-    const uint32_t& test_elements_l1_read_addr,
-    const uint32_t& output_l1_write_addr,
-    const uint32_t& elements_subchunk_size,
-    const uint32_t& test_elements_subchunk_size,
-    const bool& invert) {
+    uint32_t elements_l1_read_addr,
+    uint32_t test_elements_l1_read_addr,
+    uint32_t output_l1_write_addr,
+    uint32_t elements_subchunk_size,
+    uint32_t test_elements_subchunk_size,
+    bool invert) {
     volatile tt_l1_ptr elements_number_type* elements_subchunk_ptr =
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(elements_l1_read_addr);
     volatile tt_l1_ptr elements_number_type* test_elements_subchunk_ptr =
@@ -50,8 +49,7 @@ FORCE_INLINE void isin_subchunks(
     then retuened to DRAM
 */
 template <typename elements_number_type>
-FORCE_INLINE void prefill_output(
-    const uint32_t& output_l1_write_addr, const uint32_t& output_subchunk_size, const bool& invert) {
+FORCE_INLINE void prefill_output(uint32_t output_l1_write_addr, uint32_t output_subchunk_size, bool invert) {
     volatile tt_l1_ptr elements_number_type* output_chunk_begin_ptr =
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
     for (uint32_t i = 0; i < output_subchunk_size; ++i) {

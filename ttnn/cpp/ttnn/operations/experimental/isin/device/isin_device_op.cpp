@@ -60,7 +60,7 @@ IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_te
     if (tensor_args.optional_out) {
         TT_FATAL(
             tensor_args.optional_out->dtype() == OUTPUT_TENSOR_DATA_TYPE,
-            "Preallocated output should be of uint8 dtype");
+            "Preallocated output should be of uint32 dtype");
         return *tensor_args.optional_out;
     }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.elements_tensor.device());
