@@ -49,7 +49,6 @@ conv_ttnn_params = [
 ]
 conv_feature_ids = [0, 2, 5, 7, 10, 12, 14, 17, 19, 21, 24, 26, 28]
 classifier_ids = [0, 3, 6]
-h_override = [None, None, None, None, None, 7 * 32, 7 * 32, None, None, None, None, None, None]
 
 
 def ttnn_vgg16(
@@ -65,10 +64,8 @@ def ttnn_vgg16(
             l = list(tt_x.shape)
             in_n, in_c, in_h, in_w = list(tt_x.shape)
 
-            tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
-            ttact_d = ttnn.to_device(tt_x, device)
             tt_x = ttnn.max_pool2d(
-                input_tensor=ttact_d,
+                input_tensor=tt_x,
                 batch_size=batch_size,
                 input_h=int(math.sqrt(in_h / batch_size)),
                 input_w=int(math.sqrt(in_h / batch_size)),
@@ -78,8 +75,6 @@ def ttnn_vgg16(
                 padding=[0, 0],
                 dilation=[1, 1],
             )
-            ttnn.deallocate(ttact_d)
-            tt_x = ttnn.from_device(tt_x)
 
         else:
             h_sharding = True
@@ -97,8 +92,6 @@ def ttnn_vgg16(
                 reshard_if_not_optimal=True,
                 enable_weights_double_buffer=True,
             )
-            if h_override[iter_conv_id] is not None:
-                conv_config.act_block_h_override = h_override[iter_conv_id]
             compute_config = ttnn.init_device_compute_kernel_config(
                 device.arch(),
                 math_fidelity=model_config["MATH_FIDELITY"],
@@ -149,7 +142,7 @@ def ttnn_vgg16(
                 tt_weight = ttnn.to_device(tt_weight, device)
                 tt_bias = ttnn.to_device(tt_bias, device)
             # Call ttnn.conv
-            tt_output_tensor_on_device = ttnn.conv2d(
+            tt_x = ttnn.conv2d(
                 input_tensor=tt_x,
                 weight_tensor=tt_weight,
                 bias_tensor=tt_bias,
@@ -158,11 +151,9 @@ def ttnn_vgg16(
                 dtype=model_config["ACTIVATIONS_DTYPE"],
                 slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
-            tt_x = ttnn.from_device(tt_output_tensor_on_device)
-            ttnn.deallocate(tt_output_tensor_on_device)
             iter_conv_id += 1
 
-    tt_x = ttnn.to_device(tt_x, device)
+    tt_x = ttnn.to_memory_config(tt_x, ttnn.L1_MEMORY_CONFIG)
     tt_x = ttnn.to_layout(tt_x, ttnn.TILE_LAYOUT)
     tt_x = ttnn.permute(tt_x, (0, 3, 1, 2))
     tt_x = ttnn.reshape(tt_x, (batch_size, 1, 1, -1))
@@ -203,7 +194,6 @@ conv_ttnn_params_2 = [
     [512, 512, 14, 14],
     [512, 512, 14, 14],
 ]
-height_override_11 = [None, None, None, 7 * 32, None, None, None, None]
 
 
 def ttnn_vgg11(
@@ -220,10 +210,8 @@ def ttnn_vgg11(
 
             in_n, in_c, in_h, in_w = list(tt_x.shape)
 
-            tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT)
-            ttact_d = ttnn.to_device(tt_x, device)
             tt_x = ttnn.max_pool2d(
-                input_tensor=ttact_d,
+                input_tensor=tt_x,
                 batch_size=batch_size,
                 input_h=int(math.sqrt(in_h / batch_size)),
                 input_w=int(math.sqrt(in_h / batch_size)),
@@ -233,25 +221,23 @@ def ttnn_vgg11(
                 padding=[0, 0],
                 dilation=[1, 1],
             )
-            tt_x = ttnn.from_device(tt_x)
-            ttnn.deallocate(ttact_d)
 
         else:
             h_sharding = True
             if conv_ttnn_params_2[iter_conv_id][0] > 128:
                 h_sharding = False
+            shard_layout = (
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            )
             conv_config = ttnn.Conv2dConfig(
                 weights_dtype=model_config["WEIGHTS_DTYPE"],
                 activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
                 deallocate_activation=False,
                 reallocate_halo_output=False,
-                shard_layout=(
-                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED if h_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-                ),
+                shard_layout=shard_layout,
                 enable_weights_double_buffer=True,
+                reshard_if_not_optimal=True if tt_x.memory_config().memory_layout != shard_layout else False,
             )
-            if height_override_11[iter_conv_id] is not None:
-                conv_config.act_block_h_override = height_override_11[iter_conv_id]
 
             compute_config = ttnn.init_device_compute_kernel_config(
                 device.arch(),
@@ -302,7 +288,7 @@ def ttnn_vgg11(
                 tt_bias = ttnn.to_device(tt_bias, device)
 
             # Call ttnn.conv
-            tt_output_tensor_on_device = ttnn.conv2d(
+            tt_x = ttnn.conv2d(
                 input_tensor=tt_x,
                 weight_tensor=tt_weight,
                 bias_tensor=tt_bias,
@@ -311,11 +297,9 @@ def ttnn_vgg11(
                 compute_config=compute_config,
                 dtype=model_config["ACTIVATIONS_DTYPE"],
             )
-            tt_x = ttnn.from_device(tt_output_tensor_on_device)
-            ttnn.deallocate(tt_output_tensor_on_device)
             iter_conv_id += 1
 
-    tt_x = ttnn.to_device(tt_x, device)
+    tt_x = ttnn.to_memory_config(tt_x, ttnn.L1_MEMORY_CONFIG)
     tt_x = ttnn.to_layout(tt_x, ttnn.TILE_LAYOUT)
     tt_x = ttnn.permute(tt_x, (0, 3, 1, 2))
     tt_x = ttnn.reshape(tt_x, (batch_size, 1, 1, -1))

@@ -232,14 +232,13 @@ def run_conv(
         )
     if slice_config is not None:
         use_dram_slicing = True
-    requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None or use_dram_slicing
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         input_dtype,
         mesh_mapper=input_mesh_mapper,
         layout=input_layout,
-        device=device if requires_device_placement else None,
+        device=device,  # Always create tensor on device since conv2d requires it
     )
 
     if sharded_cfg:
@@ -513,7 +512,7 @@ def run_conv_with_split(
                 torch_input_tensor,
                 output_dtype,
                 layout=input_layout,
-                device=device if output_dtype == ttnn.bfloat8_b else None,
+                device=device,  # Always create tensor on device since conv2d requires it
             )
             [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
                 input_tensor=tt_input_tensor,
@@ -960,8 +959,9 @@ def test_conv_ws(
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16)
 
     tt_input_tensor = ttnn.reshape(tt_input_tensor, [1, 1, input_height * input_width * batch_size, input_channels])
+    # Always move tensor to device since conv2d requires device tensors
+    tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
     if tilized_input:
-        tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
         tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
     conv_config = ttnn.Conv2dConfig(
@@ -2801,7 +2801,7 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
         tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
     else:
         torch_input_nhwc = torch.permute(torch_input, (0, 2, 3, 1))
-        tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.bfloat16)
+        tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.bfloat16, device=device)
 
     if tiled_input:
         tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)

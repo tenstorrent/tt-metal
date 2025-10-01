@@ -49,6 +49,11 @@ Result conv2d_L1(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
+    TT_FATAL(
+        is_device_tensor(input_tensor_),
+        "Input tensor (input0/activations) must be a device tensor. Use ttnn.to_device() to move the tensor to device "
+        "first.");
+
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor_.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
@@ -117,8 +122,7 @@ Result conv2d_L1(
             input_tensor.layout(),
             input_tensor.dtype(),
             output_dtype,
-            tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                         : std::nullopt,
+            std::make_optional(input_tensor.memory_config()),
             kernel_size,
             stride,
             dilation,
