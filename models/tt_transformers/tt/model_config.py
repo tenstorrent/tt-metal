@@ -2274,6 +2274,8 @@ class ModelArgs:
             block_h=self.tile_padded_batch_rows // self.tile_size,
             block_w=block_w,
             inplace=False,
+            legacy_reduction=True,
+            legacy_rsqrt=True,
         )
 
     def detect_checkpoint_type(self) -> CheckpointType:
