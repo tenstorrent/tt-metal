@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <command_queue.hpp>
+#include "dispatch/command_queue.hpp"
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <atomic>
