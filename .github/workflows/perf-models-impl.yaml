@@ -46,10 +46,10 @@ jobs:
       DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       DOCKER_OPTS: |
         -v /mnt/MLPerf:/mnt/MLPerf:ro
-        -e TT_METAL_HOME=/workspace
+        -e TT_METAL_HOME=/work
         -e ARCH_NAME=${{ matrix.test-info.arch }}
-        -e LD_LIBRARY_PATH=/workspace/build/lib
-        -e GTEST_OUTPUT=xml:/workspace/generated/test_reports/
+        -e LD_LIBRARY_PATH=/work/build/lib
+        -e GTEST_OUTPUT=xml:/work/generated/test_reports/
         -e GITHUB_ACTIONS=true
         -e LOGURU_LEVEL=INFO
         ${{ (matrix.test-info.arch == 'wormhole_b0' || (matrix.test-info.arch == 'blackhole' && matrix.test-info.model-group == 'other_mlperf_required')) && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
