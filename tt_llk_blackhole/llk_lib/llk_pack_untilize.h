@@ -162,8 +162,6 @@ inline void _llk_pack_untilize_init_(
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
 
     std::uint32_t output_addr_offset;
-
-    // After each row of the block gets packed, the output address is updated to point to the next row.
     if constexpr (narrow_row)
     {
         output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * row_num_datums);
@@ -173,7 +171,19 @@ inline void _llk_pack_untilize_init_(
         output_addr_offset = SCALE_DATUM_SIZE(pack_dst_format, full_ct_dim * ((num_faces > 1) ? (num_faces >> 1) : 1) * FACE_C_DIM);
     }
 
-    TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET)); // store 16B aligned row offset address
+    // Store 16B aligned row offset address
+    TT_SETDMAREG(0, LOWER_HALFWORD(output_addr_offset / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
+
+    // Always include setup calls for safety (as recommended by maintainer)
+    // Program packer to pack out the correct number of datums per row
+    if constexpr (narrow_row)
+    {
+        TT_SETADCXX(p_setadc::PAC, row_num_datums - 1, 0x0);
+    }
+    else
+    {
+        TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    }
 }
 
 template <
@@ -224,4 +234,10 @@ inline void _llk_pack_untilize_(
 
     TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);                             // reset z counters
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset); // reset w counter
+}
+
+inline void _llk_pack_untilize_uninit_(const std::uint32_t pack_src_format)
+{
+    const uint z_stride = SCALE_DATUM_SIZE(pack_src_format, FACE_R_DIM * FACE_C_DIM);
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(z_stride);
 }
