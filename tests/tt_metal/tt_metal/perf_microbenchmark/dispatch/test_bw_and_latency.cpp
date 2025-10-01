@@ -401,7 +401,7 @@ int main(int argc, char** argv) {
                 start = std::chrono::system_clock::now();
             }
             if (hammer_write_reg_g || hammer_pcie_g) {
-                auto sync_event = tt::tt_metal::distributed::EnqueueRecordEvent(cq);
+                auto sync_event = cq.enqueue_record_event();
 
                 bool done = false;
                 uint32_t addr = 0xfafafafa;
