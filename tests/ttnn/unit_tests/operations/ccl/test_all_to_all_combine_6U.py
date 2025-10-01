@@ -45,8 +45,8 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_combine_t3000 import (
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("axis", [0, 1])
-@pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7000])
 @pytest.mark.parametrize("seq", [1, 2])
@@ -63,7 +63,7 @@ def test_all_to_all_combine_no_trace(
     mesh_shape,
     axis,
     batches_per_device,
-    experts_per_device,
+    experts,
     select_experts_k,
     hidden_size,
     seq,
@@ -78,9 +78,7 @@ def test_all_to_all_combine_no_trace(
     if seq == 2 and ttnn.L1_MEMORY_CONFIG in (input_memory_config, output_memory_config):
         pytest.skip("Prefill needs to run in DRAM")
 
-    devices = mesh_shape[0] * mesh_shape[1]
-    batch = batches_per_device * devices
-    experts = experts_per_device * devices
+    batch = batches_per_device * mesh_shape[axis]
 
     run_all_to_all_combine_test(
         mesh_device,
@@ -116,8 +114,8 @@ def test_all_to_all_combine_no_trace(
     "mesh_shape, mesh_device", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("batches_per_device", [8])
-@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
@@ -136,7 +134,7 @@ def test_perf(
     mesh_shape,
     cluster_axis,
     batches_per_device,
-    experts_per_device,
+    experts,
     select_experts_k,
     hidden_size,
     seq_len,
@@ -155,7 +153,6 @@ def test_perf(
         dispatch_devices = mesh_shape[cluster_axis]
 
     batch = batches_per_device * dispatch_devices
-    experts = experts_per_device * dispatch_devices
 
     trace_all_to_all_combine(
         mesh_device,
