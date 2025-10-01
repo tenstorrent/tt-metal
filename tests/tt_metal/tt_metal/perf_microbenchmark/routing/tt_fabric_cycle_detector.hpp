@@ -15,7 +15,7 @@
 #include "tt_fabric_test_interfaces.hpp"  // For IRouteManager, etc.
 #include <tt-metalium/mesh_graph.hpp>     // For InterMeshConnectivity
 #include <tt-metalium/control_plane.hpp>  // For ControlPlane access
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "tt-logger/tt-logger.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
