@@ -7,7 +7,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 240
+        default: 480
       draft:
         description: 'Create PR as draft'
         required: false
@@ -24,7 +24,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 240
+        default: 480
       draft:
         description: 'Create PR as draft'
         required: false
@@ -41,7 +41,7 @@ on:
 env:
   BRANCH_NAME: llk-submodule-uplift
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
-  WORKFLOW_TIMEOUT: 240
+  WORKFLOW_TIMEOUT: 480
   MAX_RETRIES: 3
 
 permissions:
@@ -276,7 +276,7 @@ jobs:
                     gh pr comment "$PR_NUMBER" --body "✅ **$DISPLAY_NAME** passed: [View run]($run_url)" --repo "${{ github.repository }}"
                     return 0
                   else
-                    gh pr comment "$PR_NUMBER" --body "❌ **$DISPLAY_NAME** failed (attempt $((retries + 1))): [View run]($run_url)" --repo "${{ github.repository }}"
+                    gh pr comment "$PR_NUMBER" --body "❌ **$DISPLAY_NAME** failed (attempt $((retries + 1))): [View run]($run_url/attempts/$((retries + 1)))" --repo "${{ github.repository }}"
                     break
                   fi
                 fi
