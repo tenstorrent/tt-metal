@@ -23,19 +23,31 @@ import enlighten
 from faster_fifo import Queue
 
 # tt
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR
-from tt_metal.tools.profiler.process_ops_logs import get_device_data_generate_report
-from framework.device_fixtures import default_device
-from framework.elastic_config import *
+import argparse
+import sys
+import os
+import pathlib
+import enlighten
+import importlib
+import datetime as dt
+from multiprocessing import Process
+from faster_fifo import Queue
+from queue import Empty
+import builtins
 from framework.statuses import VectorValidity, TestStatus
 import framework.tt_smi_util as tt_smi_util
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from framework.result_destination import ResultDestinationFactory
 from framework.serialize import deserialize, deserialize_vector_structured
+import subprocess
+from dataclasses import dataclass
+from typing import Optional
+from framework.result_destination import ResultDestinationFactory
 from tracy.process_ops_logs import get_device_data_generate_report
 from tracy.common import PROFILER_LOGS_DIR
 from sweep_utils.roofline_utils import get_updated_message
+from framework.device_fixtures import default_device
+from time import sleep
 
 
 @dataclass

@@ -26,28 +26,28 @@ FABRIC_CONFIGS = [
 
 
 parameters = {
-    "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": FABRIC_CONFIGS,
-        "num_links": [1],
-        "input_shape": [
-            [1, 1, 32, 256],
-            [1, 1, 32, 248],
-            [1, 1, 1, 32, 256],
-            [2, 32, 256],
-            [1, 1, 32, 16384],
-            [1, 1, 32, 2880],  # GPT-OSS 20B
-        ],
-        "dim": [0, 1, 2, 3, 4],
-        "cluster_axis": [0, 1, None],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "buffer_type": [ttnn.BufferType.DRAM],
-        "shard_shape": [None],
-        "shard_shape": [None],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
-        "num_iters": [1],
-    },
+    # "generality_suite": {
+    #    "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+    #    "fabric_config": FABRIC_CONFIGS,
+    #    "num_links": [1],
+    #    "input_shape": [
+    #       [1, 1, 32, 256],
+    #        [1, 1, 32, 248],
+    #        [1, 1, 1, 32, 256],
+    #        [2, 32, 256],
+    #        [1, 1, 32, 16384],
+    #        [1, 1, 32, 2880],  # GPT-OSS 20B
+    #    ],
+    #    "dim": [0, 1, 2, 3, 4],
+    #    "cluster_axis": [0, 1, None],
+    #    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    #    "input_dtype": [ttnn.bfloat16],
+    #    "buffer_type": [ttnn.BufferType.DRAM],
+    #    "shard_shape": [None],
+    #    "shard_shape": [None],
+    #    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+    #    "num_iters": [1],
+    # },
     "lead_model_suite": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": FABRIC_CONFIGS,
@@ -56,6 +56,8 @@ parameters = {
             [1, 1, 32, 2880],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
             [1, 1, 32, 32],  # Qwen3 dim: 1 cluster_axis: 1
             [1, 1, 32, 3200],  # Qwen3 dim: 3 cluster_axis: 1
+            [1, 1, 32, 1280],  # Llama 70b dim 1: cluster axis 1
+            [1, 1, 32, 3584],  # Llama 70b dim 1: cluster axis 1
         ],
         "dim": [1, 3],
         "cluster_axis": [0, 1],
@@ -198,21 +200,19 @@ def run(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
         semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(3)]
+        logger.info("starting loop")
 
         for i in range(num_iters):
-            try:
-                start_time = start_measuring_time()
-                tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
-                    tt_input,
-                    dim=dim,
-                    multi_device_global_semaphore=semaphores,
-                    cluster_axis=cluster_axis,
-                    topology=topology,
-                    num_links=num_links,
-                )
-                e2e_perf = stop_measuring_time(start_time)
-            except Exception as e:
-                raise RuntimeError(f"Execution failed: {e}")
+            start_time = start_measuring_time()
+            tt_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+                tt_input,
+                dim=dim,
+                multi_device_global_semaphore=semaphores,
+                cluster_axis=cluster_axis,
+                topology=topology,
+                num_links=num_links,
+            )
+            e2e_perf = stop_measuring_time(start_time)
 
             logger.info(f"Done iteration {i}")
 

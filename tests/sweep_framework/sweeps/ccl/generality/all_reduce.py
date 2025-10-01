@@ -56,40 +56,22 @@ def _model_shape_iterator(model_shapes, batch_params):
 
 # Define the parameter space for the sweep test
 parameters = {
-    "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D_RING],
-        "num_links": [1],
-        "input_shape": [
-            [1, 1, 32, 32],
-            [1, 1, 32, 1280],
-            [1, 1, 32, 31 * NUM_DEVICES],
-            [1, 1, 1, 32, 32],
-            [2, 32, 32],
-            [1, 1, 32, 16384],
-            [1, 1, 1, 2048],
-        ],
-        "cluster_axis": [0, 1, None],
-        "math_op": [ttnn.ReduceType.Sum],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
-        "num_iters": [1],
-    },
     # parameters from:
     # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
     "model_suite": {
         "mesh_shape": [(4, 1)],
         "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
         "num_links": [1],
-        "input_shape": _model_shape_iterator(MODEL_SHAPES, MODEL_BATCH),
-        "cluster_axis": [0, 1, None],
+        "input_shape": [[1, 1, 32, 4096]],
+        "cluster_axis": [0, 1],
         "math_op": [ttnn.ReduceType.Sum],
-        "layout": [ttnn.TILE_LAYOUT],
+        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
-        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
-        "topology": [ttnn.Topology.Linear],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ],
+        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
 }

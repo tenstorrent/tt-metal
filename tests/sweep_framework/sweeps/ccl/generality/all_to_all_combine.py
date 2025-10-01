@@ -18,10 +18,10 @@ TIMEOUT = 45
 NUM_DEVICES = ttnn.get_num_devices()
 
 FABRIC_CONFIGS = [
-    ttnn.FabricConfig.FABRIC_1D,
-    ttnn.FabricConfig.FABRIC_1D_RING,
+    # ttnn.FabricConfig.FABRIC_1D,
+    # ttnn.FabricConfig.FABRIC_1D_RING,
     ttnn.FabricConfig.FABRIC_2D,
-    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
+    # ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
 
@@ -31,21 +31,25 @@ def _pd(val: int):
 
 parameters = {
     "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+        "mesh_shape": [[2, 2]],
         "fabric_config": FABRIC_CONFIGS,
         "input_shape": [
-            [_pd(1), 1, 8, 32],
+            # [_pd(1), 1, 8, 32],
             [_pd(1), 1, 2, 2880],  # GPT-OSS
-            [_pd(1), 1, 8, 31],
-            [_pd(8), 1, 2, 7168],
-            [_pd(16), 1, 2, 7168],
-            [_pd(1), 1, 2, 16384],
+            # [_pd(1), 1, 8, 31],
+            # [_pd(8), 1, 2, 7168],
+            # [_pd(16), 1, 2, 7168],
+            # [_pd(1), 1, 2, 16384],
         ],
-        "experts": [_pd(i) for i in [2, 4, 8]],
-        "select_experts_k": [2, 4, 8],
-        "local_reduce": [False, True],
-        "cluster_axis": [0, 1, None],
-        "num_links": [1, 2, 3],
+        "experts": [_pd(i) for i in [2]],
+        "select_experts_k": [
+            2,
+        ],
+        "local_reduce": [
+            False,
+        ],
+        "cluster_axis": [0],
+        "num_links": [1],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
         "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],

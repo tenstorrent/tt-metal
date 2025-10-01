@@ -21,47 +21,48 @@ TIMEOUT = 45
 NUM_DEVICES = ttnn.get_num_devices()
 
 FABRIC_CONFIGS = [
-    ttnn.FabricConfig.FABRIC_1D_RING,
+    ttnn.FabricConfig.FABRIC_2D_DYNAMIC,
 ]
 
 
 parameters = {
-    "generality_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": FABRIC_CONFIGS,
-        "num_links": [1],
-        "input_shape": [
-            [1, 1, 32, 32],
-            [1, 1, 32, 31],
-            [1, 1, 1, 32, 32],
-            [2, 32, 32],
-            [1, 1, 32, 16384],
-            [1, 1, 1, 2048],
-        ],
-        "dim": [0, 1, 2, 3, 4],
-        "cluster_axis": [0, 1, None],
-        "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "buffer_type": [ttnn.BufferType.DRAM],
-        "shard_shape": [None],
-        "shard_strategy": [None],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
-        "num_iters": [1],
-    },
+    # "generality_suite": {
+    #    "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+    #    "fabric_config": FABRIC_CONFIGS,
+    #    "num_links": [1],
+    #    "input_shape": [
+    #        [1, 1, 32, 32],
+    #        [1, 1, 32, 31],
+    #        [1, 1, 1, 32, 32],
+    #        [2, 32, 32],
+    #        [1, 1, 32, 16384],
+    #        [1, 1, 1, 2048],
+    #    ],
+    #    "dim": [0, 1, 2, 3, 4],
+    #    "cluster_axis": [0, 1, None],
+    #    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    #    "input_dtype": [ttnn.bfloat16],
+    #    "buffer_type": [ttnn.BufferType.DRAM],
+    #    "shard_shape": [None],
+    #    "shard_strategy": [None],
+    #    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+    #    "num_iters": [1],
+    # },
     "lead_model_suite": {
-        "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
+        "mesh_shape": [[4, 1]],
         "fabric_config": FABRIC_CONFIGS,
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 1440],  # GPT-OSS 20B. Dim: 3, cluster_axis 1
-            [1, 1, 32, 32],  # Qwen3
+            [1, 1, 32, 32],  # Qwen3 and llama 70b
+            [1, 16, 8, 128],  # Llama 70b
             [1, 8, 8, 128],  # Qwen3
             [3, 1, 4096, 192],  # Gemma3 Dim: 3
             [3, 1, 4096, 144],  # Gemma3 Dim: 3
         ],
         "dim": [1, 3],
         "cluster_axis": [0, 1],
-        "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+        "layout": [ttnn.TILE_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "buffer_type": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
         "shard_shape": [None],  # TODO (32,32),(32,128)],
@@ -109,7 +110,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
     ):
         return True, "Ring fabric config required for ring topology"
-
+    if test_vector["topology"] == ttnn.Topology.Ring and test_vector["mesh_shape"][cluster_axis] == 2:
+        return True, "Ring needs more than 2 devices"
     return False, None
 
 

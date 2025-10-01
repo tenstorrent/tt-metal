@@ -1549,7 +1549,8 @@ void validate_fabric_2d_dynamic_config(Topology topology) {
         physical_mesh_shape.dims() == 2,
         "Fabric 2D dynamic CCLs are not supported for mesh shape with more than 2 dimensions");
     TT_FATAL(
-        physical_mesh_shape[0] == 1 || physical_mesh_shape[1] == 1,
+        physical_mesh_shape[0] == 1 || physical_mesh_shape[1] == 1 ||
+            (physical_mesh_shape[0] == 2 && physical_mesh_shape[1] == 2),
         "Fabric 2D dynamic CCLs are only supported for 1D physical meshes");
 }
 
