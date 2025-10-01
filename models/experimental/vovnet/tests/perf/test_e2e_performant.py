@@ -16,7 +16,7 @@ from models.experimental.vovnet.common import VOVNET_L1_SMALL_SIZE
 
 
 def get_expected_times(name):
-    base = {"vovnet": (172, 0.017)}
+    base = {"vovnet": (172, 0.0082)}
     return base[name]
 
 
