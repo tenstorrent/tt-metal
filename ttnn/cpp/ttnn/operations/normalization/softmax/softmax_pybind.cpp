@@ -98,6 +98,8 @@ void bind_normalization_softmax_program_config_operation(py::module& module) {
 void bind_normalization_softmax_operation(py::module& module) {
     const auto doc =
         R"doc(
+            ``ttnn.softmax(input_tensor: ttnn.Tensor, dim: int = -1, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, numeric_stable: bool = True) -> ttnn.Tensor``
+
             Computes the softmax function over the specified dimension of the input tensor.
 
             The softmax function is defined as:
@@ -106,7 +108,7 @@ void bind_normalization_softmax_operation(py::module& module) {
                 \text{softmax}(x_i) = \frac{e^{x_i}}{\sum_{j=1}^{K} e^{x_j}}
 
             Args:
-                input_tensor (ttnn.Tensor): The input tensor to apply softmax to.
+                input_tensor (ttnn.Tensor): The input tensor to apply softmax to. Must be on the device.
                 dim (int, optional): The dimension along which to compute softmax. Defaults to -1 (last dimension).
 
             Keyword Args:
@@ -161,6 +163,8 @@ void bind_normalization_softmax_operation(py::module& module) {
 void bind_normalization_softmax_scale_mask_operation(py::module& module) {
     const auto doc =
         R"doc(
+            ``ttnn.scale_mask_softmax(input_tensor: ttnn.Tensor, scale: Optional[float] = None, mask: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, is_causal_mask: bool = False, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, numeric_stable: bool = True) -> ttnn.Tensor``
+
             Computes a fused scale-mask-softmax operation along the last dimension of the input tensor.
 
             This operation performs the following sequence:
@@ -259,6 +263,8 @@ void bind_normalization_softmax_scale_mask_operation(py::module& module) {
 void bind_normalization_softmax_inplace_operation(py::module& module) {
     const auto doc =
         R"doc(
+            ``ttnn.softmax_in_place(input_tensor: ttnn.Tensor, dim: int = -1, program_config: Optional[ttnn.SoftmaxProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, numeric_stable: bool = True) -> ttnn.Tensor``
+
             Computes the softmax function along the last dimension of the input tensor in-place.
 
             This operation modifies the input tensor directly, making it memory-efficient by avoiding
@@ -289,7 +295,7 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
                  - TILE
 
             Note:
-                * The input tensor is modified in-place to save memory.
+                * The input tensor is modified in-place to save memory. Must already be on the device.
                 * For very wide tensors, the operation may fall back to standard softmax if circular buffers would consume more than 90% of L1 memory.
                 * Supports both default and sharded multi-core program configurations.
 
@@ -341,6 +347,8 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
 void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module) {
     const auto doc =
         R"doc(
+            ``ttnn.scale_mask_softmax_in_place(input_tensor: ttnn.Tensor, scale: Optional[float] = None, mask: Optional[ttnn.Tensor] = None, program_config: Optional[ttnn.SoftmaxProgramConfig] = None, is_causal_mask: bool = False, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, numeric_stable: bool = False) -> ttnn.Tensor``
+
             Computes a fused scale-mask-softmax operation along the last dimension in-place.
 
             This operation modifies the input tensor directly and performs the following sequence:
@@ -478,6 +486,8 @@ void bind_normalization_softmax_scale_mask_inplace_operation(py::module& module)
 void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::module& module) {
     const auto doc =
         R"doc(
+            ``ttnn.scale_causal_mask_hw_dims_softmax_in_place(input_tensor: ttnn.Tensor, scale: Optional[float] = None, mask: Optional[ttnn.Tensor] = None, program_config: Optional[ttnn.SoftmaxProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, numeric_stable: bool = False) -> ttnn.Tensor``
+
             Specialized in-place operation for causal masked softmax with height-width dimension constraints.
 
             This is an optimized version of scale_mask_softmax_in_place specifically designed for transformer
@@ -528,6 +538,7 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(py::modul
 
             Note:
                 * This is an experimental/specialized feature optimized for specific transformer attention patterns.
+                * Inputs must be on the device.
                 * Input tensor must be sharded for optimal performance.
                 * Mask shape is constrained to [1, 1, H, W] format.
                 * Provides better performance than general scale_mask_softmax_in_place for these specific constraints.
