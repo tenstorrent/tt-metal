@@ -1299,7 +1299,7 @@ async function run() {
 
             // If we found a success in the window, show commits between success and first failure
             let commitsList = '';
-            const commitsMd = renderCommitsTable(it.commits_between || []);
+            // const commitsMd = renderCommitsTable(it.commits_between || []);
             const rawUrlsMd = renderRawCommitUrlsTable(it.commits_between || []);
             commitsList = [
               '',
