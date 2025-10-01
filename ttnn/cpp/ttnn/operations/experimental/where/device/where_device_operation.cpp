@@ -12,7 +12,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
 
 #include <tracy/Tracy.hpp>
 #include <tt_stl/assert.hpp>

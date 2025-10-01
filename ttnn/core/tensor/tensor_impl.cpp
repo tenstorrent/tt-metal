@@ -15,7 +15,6 @@
 #include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
-#include "tt-metalium/mesh_command_queue.hpp"
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include "tt-metalium/shape.hpp"

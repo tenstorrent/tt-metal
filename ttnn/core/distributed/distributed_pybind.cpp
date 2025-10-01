@@ -14,7 +14,6 @@
 #include <pybind11/cast.h>
 #include <pybind11/pytypes.h>
 
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
