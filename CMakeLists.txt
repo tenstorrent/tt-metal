@@ -201,7 +201,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-pessimizing-move>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-dangling-reference>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-overloaded-virtual>"
-    "$<$<CXX_COMPILER_ID:GNU>:$<$<CONFIG:Debug>:-Wno-uninitialized>>"
 )
 
 # Planned to be temporary, remove later.
