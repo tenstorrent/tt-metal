@@ -287,6 +287,17 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, _logsDirPath = 
       }
     }
     // Fallback: none (we no longer parse logs). If needed, could fallback to logs here.
+    // Attach owners based on mapping; strip trailing bracketed levels (e.g., [failure]) for matching
+    try {
+      const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
+      for (const it of snippets) {
+        if (!it) continue;
+        const cleaned = stripBracketSuffix(it.label || '');
+        const owner = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
+        if (owner && !it.owner) it.owner = owner;
+      }
+    } catch (_) { /* ignore */ }
+
     core.info(`Total snippets collected from annotations: ${snippets.length}`);
     return snippets || [];
   } catch (e) {
