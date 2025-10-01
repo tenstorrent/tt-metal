@@ -349,7 +349,7 @@ int main(int argc, char* argv[]) {
     // TODO: just for now, parse FSD
     if (result.count("fsd")) {
         process_fsd(result["fsd"].as<std::string>());
-        return 0;
+        // return 0;
     }
 
     bool use_mock_telemetry = result["mock-telemetry"].as<bool>();
@@ -414,9 +414,12 @@ int main(int argc, char* argv[]) {
         mock_telemetry.run();
     } else {
         // Real telemetry
+        TT_FATAL(result.count("fsd") > 0, "Factory system descriptor must be provided to collect telemetry");
         log_info(tt::LogAlways, "Using real hardware telemetry data");
         auto rtoptions = tt::llrt::RunTimeOptions();
-        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions);
+        std::string fsd_filepath = result["fsd"].as<std::string>();
+        tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(result["fsd"].as<std::string>());
+        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions, fsd);
     }
 
     // Run until finished

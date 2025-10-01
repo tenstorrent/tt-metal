@@ -19,8 +19,13 @@ namespace tt::llrt {
 class RunTimeOptions;
 }
 
+namespace tt::scaleout_tools::fsd::proto {
+class FactorySystemDescriptor;
+}
+
 void run_telemetry_collector(
     bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints,
-    const tt::llrt::RunTimeOptions& rtoptions);
+    const tt::llrt::RunTimeOptions& rtoptions,
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd);

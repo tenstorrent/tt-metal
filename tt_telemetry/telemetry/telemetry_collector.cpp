@@ -21,6 +21,7 @@
 #include <utils/simple_concurrent_queue.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
+#include "protobuf/factory_system_descriptor.pb.h"
 
 #include <telemetry/telemetry_collector.hpp>
 #include <hal/hal.hpp>
@@ -229,7 +230,8 @@ static void telemetry_thread(
     bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints,
-    const tt::llrt::RunTimeOptions& rtoptions) {
+    const tt::llrt::RunTimeOptions& rtoptions,
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd) {
     try {
         std::unique_ptr<tt::umd::Cluster> cluster;
         std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> psd;
@@ -299,7 +301,8 @@ void run_telemetry_collector(
     bool telemetry_enabled,
     std::vector<std::shared_ptr<TelemetrySubscriber>> subscribers,
     const std::vector<std::string>& aggregate_endpoints,
-    const tt::llrt::RunTimeOptions& rtoptions) {
+    const tt::llrt::RunTimeOptions& rtoptions,
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd) {
     // Prefill hostname
     gethostname(hostname_, sizeof(hostname_));
 
@@ -310,6 +313,7 @@ void run_telemetry_collector(
         telemetry_enabled,
         subscribers,
         aggregate_endpoints,
-        std::cref(rtoptions));
+        std::cref(rtoptions),
+        fsd);
     t.wait();
 }
