@@ -149,6 +149,8 @@ target_sources(
         accessor/test_tensor_accessor.cpp
         accessor/test_tensor_accessor_on_device.cpp
 )
+# needs access to "compile_time_args.h"
+target_link_libraries(unit_tests_ttnn_accessor PRIVATE Metalium::Metal::Hardware)
 setup_ttnn_test_target(unit_tests_ttnn_accessor)
 
 # unit_tests_ttnn_tensor
