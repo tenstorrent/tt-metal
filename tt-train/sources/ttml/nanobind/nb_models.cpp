@@ -10,6 +10,8 @@
 #include <nanobind/stl/vector.h>
 
 #include "models/base_transformer.hpp"
+#include "models/distributed/gpt2.hpp"
+#include "models/distributed/llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/linear_regression.hpp"
 #include "models/llama.hpp"
@@ -40,6 +42,19 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
     }
 
     m.def_submodule("linear_regression");
+
+    // Distributed models: register classes so return types can be wrapped
+    m.def_submodule("distributed");
+    {
+        auto m_distributed = static_cast<nb::module_>(m.attr("distributed"));
+        auto m_distributed_gpt2 = m_distributed.def_submodule("gpt2");
+        nb::class_<ttml::models::distributed::gpt2::DistributedTransformer, models::BaseTransformer>(
+            m_distributed_gpt2, "DistributedGPT2Transformer");
+
+        auto m_distributed_llama = m_distributed.def_submodule("llama");
+        nb::class_<ttml::models::distributed::llama::DistributedLlama, models::BaseTransformer>(
+            m_distributed_llama, "DistributedLlama");
+    }
 
     {
         auto py_llama_module = m.def_submodule("llama");
@@ -106,6 +121,20 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
     }
 
     {
+        // Distributed creators
+        auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
+        auto py_distributed_gpt2 = py_distributed.def_submodule("gpt2");
+        py_distributed_gpt2.def("create_gpt2_model", [](const models::gpt2::TransformerConfig& config) {
+            return ttml::models::distributed::gpt2::create(config);
+        });
+
+        auto py_distributed_llama = py_distributed.def_submodule("llama");
+        py_distributed_llama.def("create_llama_model", [](const models::llama::LlamaConfig& config) {
+            return ttml::models::distributed::llama::create(config);
+        });
+    }
+
+    {
         auto py_llama_module = static_cast<nb::module_>(m.attr("llama"));
 
         auto py_llama_config = static_cast<nb::class_<models::llama::LlamaConfig>>(py_llama_module.attr("LlamaConfig"));
@@ -124,6 +153,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_llama_config.def_rw("scaling_factor", &models::llama::LlamaConfig::scaling_factor);
         py_llama_config.def_rw("high_freq_factor", &models::llama::LlamaConfig::high_freq_factor);
         py_llama_config.def_rw("low_freq_factor", &models::llama::LlamaConfig::low_freq_factor);
+        py_llama_config.def_rw("original_context_length", &models::llama::LlamaConfig::original_context_length);
 
         auto py_llama = static_cast<nb::class_<models::llama::Llama>>(py_llama_module.attr("Llama"));
         py_llama.def(nb::init<models::llama::LlamaConfig>());

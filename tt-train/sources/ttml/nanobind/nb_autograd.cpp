@@ -8,6 +8,8 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/vector.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
@@ -76,18 +78,24 @@ void py_module(nb::module_& m) {
             "from_numpy",
             [](nb::ndarray<> numpy_tensor,
                tt::tt_metal::Layout layout,
-               std::optional<tt::tt_metal::DataType> new_type) {
-                return create_tensor(ttml::nanobind::util::make_metal_tensor(numpy_tensor, layout, new_type));
+               std::optional<tt::tt_metal::DataType> new_type,
+               ttnn::distributed::TensorToMesh* mapper) {
+                return create_tensor(ttml::nanobind::util::make_metal_tensor(numpy_tensor, layout, new_type, mapper));
             },
             nb::arg("numpy_tensor"),
             nb::arg("layout") = tt::tt_metal::Layout::TILE,
-            nb::arg("new_type") = std::nullopt);
+            nb::arg("new_type") = std::nullopt,
+            nb::arg("mapper") = nullptr);
         py_tensor.def(
             "to_numpy",
-            [](const Tensor& tensor, std::optional<tt::tt_metal::DataType> new_type) {
-                return ttml::nanobind::util::make_numpy_tensor(tensor.get_value(PreferredPrecision::FULL), new_type);
+            [](const Tensor& tensor,
+               std::optional<tt::tt_metal::DataType> new_type,
+               ttnn::distributed::MeshToTensor* composer) {
+                return ttml::nanobind::util::make_numpy_tensor(
+                    tensor.get_value(PreferredPrecision::FULL), new_type, composer);
             },
-            nb::arg("new_type") = std::nullopt);
+            nb::arg("new_type") = std::nullopt,
+            nb::arg("composer") = nullptr);
         py_tensor.def("to_string", [](const Tensor& tensor) {
             return tensor.get_value(PreferredPrecision::FULL).write_to_string();
         });
@@ -151,9 +159,34 @@ void py_module(nb::module_& m) {
             "add_backward_node", &AutoContext::add_backward_node, nb::arg("grad_function"), nb::arg("links"));
         py_auto_context.def("reset_graph", &AutoContext::reset_graph);
         py_auto_context.def("set_gradient_mode", &AutoContext::set_gradient_mode, nb::arg("mode"));
-        py_auto_context.def("open_device", &AutoContext::open_device, nb::arg("mesh_shape"), nb::arg("device_ids"));
+        py_auto_context.def(
+            "open_device",
+            [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj) {
+                tt::tt_metal::distributed::MeshShape mesh_shape(1, 1);
+
+                if (!mesh_shape_obj.is_none()) {
+                    if (nb::isinstance<nb::list>(mesh_shape_obj) || nb::isinstance<nb::tuple>(mesh_shape_obj)) {
+                        const auto dims = nb::cast<std::vector<int>>(mesh_shape_obj);
+                        if (dims.size() != 2) {
+                            throw std::runtime_error("mesh_shape must be a list/tuple of 2 integers: [rows, cols]");
+                        }
+                        mesh_shape = tt::tt_metal::distributed::MeshShape(dims[0], dims[1]);
+                    } else {
+                        mesh_shape = nb::cast<tt::tt_metal::distributed::MeshShape>(mesh_shape_obj);
+                    }
+                }
+
+                std::vector<int> device_ids;
+                if (!device_ids_obj.is_none()) {
+                    device_ids = nb::cast<std::vector<int>>(device_ids_obj);
+                }
+
+                self.open_device(mesh_shape, device_ids);
+            },
+            nb::arg("mesh_shape") = nb::none(),
+            nb::arg("device_ids") = nb::none());
         py_auto_context.def("close_device", &AutoContext::close_device);
-        py_auto_context.def("get_device", &AutoContext::get_device);
+        py_auto_context.def("get_device", &AutoContext::get_device, nb::rv_policy::reference);
         // TODO: argv's char** not supported
         // py_auto_context.def("initialize_distributed_context", &AutoContext::initialize_distributed_context);
         py_auto_context.def(
