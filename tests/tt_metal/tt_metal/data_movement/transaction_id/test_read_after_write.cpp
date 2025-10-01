@@ -24,11 +24,12 @@ struct ReadAfterWriteConfig {
     CoreCoord master_core_coord = {0, 0};
     CoreCoord sub0_core_coord = {0, 0};
     CoreCoord sub1_core_coord = {0, 0};
-    uint32_t num_of_transactions = 0;
+    uint32_t num_of_trids = 0;
     uint32_t pages_per_transaction = 0;
     uint32_t bytes_per_page = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     NOC noc_id = NOC::NOC_0;
+    bool one_packet_stateful = false;
 
     // TODO: Add the following parameters
     //  1. Posted flag
@@ -85,16 +86,22 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const ReadAf
     // Compile-time arguments for kernels
     vector<uint32_t> sender_compile_args = {
         (uint32_t)l1_base_address,
-        (uint32_t)test_config.num_of_transactions,
+        (uint32_t)test_config.num_of_trids,
         (uint32_t)bytes_per_transaction,
         (uint32_t)test_config.test_id,
         (uint32_t)packed_sub0_core_coordinates,
         (uint32_t)packed_sub1_core_coordinates};
 
     // Kernels
+    string kernel_path = "tests/tt_metal/tt_metal/data_movement/transaction_id/kernels/writer_reader";
+    if (test_config.one_packet_stateful) {
+        kernel_path += "_one_packet_stateful";
+    }
+    kernel_path += ".cpp";
+
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/data_movement/transaction_id/kernels/writer_reader.cpp",
+        kernel_path,
         test_config.master_core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -208,10 +215,57 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite) 
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
                 .sub1_core_coord = sub1_core_coord,
-                .num_of_transactions = num_of_trids,
+                .num_of_trids = num_of_trids,
                 .pages_per_transaction = pages_per_transaction,
                 .bytes_per_page = bytes_per_page,
                 .l1_data_format = DataFormat::Float16_b,
+            };
+
+            // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOnePacketStateful) {
+    // Test ID
+    uint32_t test_id = 601;
+
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    // Cores
+    CoreCoord master_core_coord = {0, 0};
+
+    // Furthest cores from master
+    CoreCoord sub0_core_coord = {0, device->compute_with_storage_grid_size().y - 1};
+    CoreCoord sub1_core_coord = {device->compute_with_storage_grid_size().x - 1, 0};
+
+    // Parameters
+    uint32_t max_pages_per_transaction = 256;  // NOC_MAX_BURST_WORDS
+
+    for (uint32_t num_of_trids = 1; num_of_trids <= 16; num_of_trids *= 2) {  // Up to 0xF (16) transaction ids
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            // Check if the total page size is within the limits
+            if (pages_per_transaction * num_of_trids > max_transmittable_pages) {
+                continue;
+            }
+            // Test config
+            unit_tests::dm::transaction_id::ReadAfterWriteConfig test_config = {
+                .test_id = test_id,
+                .master_core_coord = master_core_coord,
+                .sub0_core_coord = sub0_core_coord,
+                .sub1_core_coord = sub1_core_coord,
+                .num_of_trids = num_of_trids,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .one_packet_stateful = true,
             };
 
             // Run
