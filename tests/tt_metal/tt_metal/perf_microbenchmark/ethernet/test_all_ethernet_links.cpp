@@ -38,6 +38,7 @@
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tests/tt_metal/test_utils/stimulus.hpp"
+#include <gtest/gtest.h>
 
 using namespace tt;
 using namespace tt::test_utils;
@@ -718,12 +719,14 @@ int main(int argc, char** argv) {
 
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, 4);
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> kernel_coords;
+    std::unordered_set<tt_cxy_pair> sender_kernel_coords;
+    std::unordered_set<tt_cxy_pair> receiver_kernel_coords;
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         auto sender_chip_id = asic_id_to_chip_id[*asic_id];
         auto sender_device = devices[sender_chip_id];
         auto& sender_program = programs[sender_chip_id];
-        std::cout << "Sender chip id: " << sender_chip_id << std::endl;
+
         for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
             auto receiver_chip_id = asic_id_to_chip_id[*dst_asic_id];
             auto receiver_device = devices[receiver_chip_id];
@@ -732,50 +735,65 @@ int main(int argc, char** argv) {
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
                 auto dst_chan = eth_connection.dst_chan;
-                std::cout << "Connected to " << receiver_chip_id << " over: " << +src_chan << " -> " << +dst_chan
-                          << std::endl;
 
                 const auto& sender_soc_desc = cluster.get_soc_desc(sender_chip_id);
                 const auto& receiver_soc_desc = cluster.get_soc_desc(receiver_chip_id);
                 auto sender_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
                 auto receiver_coord = receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
 
-                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                    sender_chip_id,
-                    sender_device->ethernet_core_from_logical_core(sender_coord),
-                    inputs,
-                    src_eth_l1_byte_address);
-                std::vector<uint32_t> all_zeros(inputs.size(), 0);
-                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-                    receiver_chip_id,
-                    receiver_device->ethernet_core_from_logical_core(receiver_coord),
-                    all_zeros,
-                    dst_eth_l1_byte_address);
+                if (std::find(
+                        kernel_coords[sender_chip_id].begin(), kernel_coords[sender_chip_id].end(), sender_coord) ==
+                    kernel_coords[sender_chip_id].end()) {
+                    std::cout << "Sender chip id: " << sender_chip_id << std::endl;
+                    std::cout << "  -> Connected to " << receiver_chip_id << " over: " << +src_chan << " -> "
+                              << +dst_chan << std::endl;
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                        sender_chip_id,
+                        sender_device->ethernet_core_from_logical_core(sender_coord),
+                        inputs,
+                        src_eth_l1_byte_address);
+                    std::vector<uint32_t> all_zeros(inputs.size(), 0);
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                        receiver_chip_id,
+                        receiver_device->ethernet_core_from_logical_core(receiver_coord),
+                        all_zeros,
+                        dst_eth_l1_byte_address);
 
-                auto sender_kernel = tt_metal::CreateKernel(
-                    sender_program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
-                    sender_coord,
-                    tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {16, 16 >> 4}});
-                tt_metal::SetRuntimeArgs(
-                    sender_program,
-                    sender_kernel,
-                    sender_coord,
-                    {src_eth_l1_byte_address, dst_eth_l1_byte_address, 16});
+                    auto sender_kernel = tt_metal::CreateKernel(
+                        sender_program,
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
+                        sender_coord,
+                        tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {16, 16 >> 4}});
+                    tt_metal::SetRuntimeArgs(
+                        sender_program,
+                        sender_kernel,
+                        sender_coord,
+                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, 16});
 
-                auto receiver_kernel = tt_metal::CreateKernel(
-                    receiver_program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
-                    receiver_coord,
-                    tt_metal::EthernetConfig{
-                        .noc = tt_metal::NOC::NOC_0,
-                    });
-                tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_coord, {16});
-                kernel_coords[sender_chip_id].push_back(sender_coord);
-                kernel_coords[receiver_chip_id].push_back(receiver_coord);
+                    auto receiver_kernel = tt_metal::CreateKernel(
+                        receiver_program,
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
+                        receiver_coord,
+                        tt_metal::EthernetConfig{
+                            .noc = tt_metal::NOC::NOC_0,
+                        });
+                    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_coord, {16});
+                    kernel_coords[sender_chip_id].push_back(sender_coord);
+                    kernel_coords[receiver_chip_id].push_back(receiver_coord);
+                    sender_kernel_coords.insert(tt_cxy_pair(sender_chip_id, sender_coord));
+                    receiver_kernel_coords.insert(tt_cxy_pair(receiver_chip_id, receiver_coord));
+                } else {
+                    TT_FATAL(
+                        std::find(
+                            kernel_coords[receiver_chip_id].begin(),
+                            kernel_coords[receiver_chip_id].end(),
+                            receiver_coord) != kernel_coords[receiver_chip_id].end(),
+                        "Expected kernel to be populated for device {}, logical eth core {}",
+                        receiver_chip_id,
+                        receiver_coord.str());
+                }
             }
         }
-        break;
     }
 
     std::unordered_map<chip_id_t, tt_metal::distributed::MeshWorkload> mesh_workloads;
@@ -785,24 +803,21 @@ int main(int argc, char** argv) {
             tt_metal::distributed::MeshCoordinateRange(
                 tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)),
             std::move(program));
-        std::cout << "Run Mesh Workload on: " << device_id << std::endl;
         tt_metal::distributed::EnqueueMeshWorkload(
             devices[device_id]->mesh_command_queue(), mesh_workloads[device_id], false);
     }
 
     for (auto& [device_id, mesh_workload] : mesh_workloads) {
         auto device = devices[device_id];
-        std::cout << "Calling wait Program Done on: " << device_id << std::endl;
         tt_metal::detail::WaitProgramDone(device->get_devices()[0], mesh_workload.get_programs().begin()->second);
-        std::cout << "Wait Program Done on: " << device_id << " done" << std::endl;
         for (const auto& kernel_coord : kernel_coords[device_id]) {
             auto result_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 device_id, device->ethernet_core_from_logical_core(kernel_coord), src_eth_l1_byte_address, 16);
-            if (result_vec != inputs) {
-                std::cout << "Mismatch at Device: " << device_id << " Core: " << kernel_coord.str() << std::endl;
-            } else {
-                std::cout << "Match at Device: " << device_id << " Core: " << kernel_coord.str() << std::endl;
-            }
+            bool is_sender =
+                sender_kernel_coords.find(tt_cxy_pair(device_id, kernel_coord)) != sender_kernel_coords.end();
+            std::cout << "verifying " << (is_sender ? "Sender" : "Receiver") << " at Device: " << device_id
+                      << " Core: " << kernel_coord.str() << std::endl;
+            EXPECT_EQ(result_vec, inputs) << "Mismatch at Device: " << device_id << " Core: " << kernel_coord.str();
         }
     }
     // for (auto& [device_id, device] : devices) {
