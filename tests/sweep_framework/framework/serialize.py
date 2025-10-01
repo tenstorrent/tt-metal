@@ -5,6 +5,7 @@
 import ttnn
 import json
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+from framework.statuses import VectorValidity
 import torch
 
 TTNN_NAME = ttnn.__name__
@@ -102,7 +103,6 @@ def deserialize(object):
         try:
             return eval(object)
         except (SyntaxError, NameError) as e:
-            logger.debug(f"eval failed with {type(e).__name__}: {e}; returning str(object)")
             return str(object)
 
     except Exception as e:
