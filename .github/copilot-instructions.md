@@ -7,7 +7,7 @@ When performing a code review in this repository:
 - Prefer **compile-time safety** and **clarity** over cleverness. Avoid macros when templates or constexpr utilities suffice.
 - Limit addition of new dependencies if similar ones already exist.
 - Review code for correctness, readability, security, memory safety, and best practices.
-- flag anytime someone uses templates excessively. Strongly discourage usage of enable_if and concepts unless absolutely necessary.
+- Flag anytime someone uses templates excessively. Strongly discourage usage of enable_if, SFINAE, and recursive template instantiations unless absolutely necessary.
 
 ## Must-run mental model
 - Assume a **large C++20 codebase** with heavy headers; keep compile times in mind (avoid unnecessary includes; prefer forward declarations and PIMPL where appropriate).
