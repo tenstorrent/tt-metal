@@ -8,6 +8,7 @@ import re
 import inspect
 import pytest
 import subprocess
+import ast
 from loguru import logger
 from conftest import is_6u
 
@@ -248,6 +249,7 @@ def verify_stats(devicesData, statTypes, allowedRange, refCountDict):
     statTypesSet = set(statTypes)
     for statType in statTypes:
         for stat in verifiedStat:
+            print(stat)
             if statType in stat and statType in statTypesSet:
                 statTypesSet.remove(statType)
     assert (
@@ -255,32 +257,98 @@ def verify_stats(devicesData, statTypes, allowedRange, refCountDict):
     ), f"Not all required stats (i.e. {statTypesSet}) were found in the device stats (i.e. {verifiedStat})"
 
 
+def verify_trace_markers(devicesData, num_non_trace_ops, num_trace_ops, num_repeats_per_trace_op):
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for core, coreData in deviceData["cores"].items():
+            for risc, riscData in coreData["riscs"].items():
+                non_trace_ops = set()
+                trace_ops_to_trace_ids = {}
+                trace_ids_to_counts = {}
+                for marker in riscData["timeseries"]:
+                    marker_data = ast.literal_eval(marker)[0]
+                    runtime_id = marker_data["run_host_id"]
+                    trace_id = marker_data["trace_id"]
+                    if trace_id == -1:
+                        non_trace_ops.add(runtime_id)
+                    else:
+                        if runtime_id not in trace_ops_to_trace_ids:
+                            trace_ops_to_trace_ids[runtime_id] = trace_id
+                        else:
+                            assert (
+                                trace_ops_to_trace_ids[runtime_id] == trace_id
+                            ), f"Detected multiple trace ids for runtime id {runtime_id}"
+
+                        if trace_id not in trace_ids_to_counts:
+                            trace_ids_to_counts[trace_id] = set()
+                        trace_ids_to_counts[trace_id].add(int(marker_data["trace_id_count"]))
+
+                assert (
+                    len(non_trace_ops) <= num_non_trace_ops
+                ), f"Wrong number of non-trace ops for device {device}, core {core}, risc {risc} - expected at most {num_non_trace_ops}, read {len(non_trace_ops)}"
+                assert (
+                    len(trace_ops_to_trace_ids) == num_trace_ops
+                ), f"Wrong number of trace ops for device {device}, core {core}, risc {risc} - expected {num_trace_ops}, read {len(trace_ops_to_trace_ids)}"
+
+                for trace_id, trace_id_counts in trace_ids_to_counts.items():
+                    assert (
+                        len(trace_id_counts) == num_repeats_per_trace_op
+                    ), f"Wrong number of trace repeats for device {device}, core {core}, risc {risc}, trace {trace_id} - expected {num_repeats_per_trace_op}, read {len(trace_id_counts)}"
+                    assert (
+                        max(trace_id_counts) == num_repeats_per_trace_op
+                    ), f"Wrong maximum trace id counter value for device {device}, core {core}, risc {risc}, trace {trace_id} - expected {num_repeats_per_trace_op}, read {max(trace_id_counts)}"
+                    assert (
+                        min(trace_id_counts) == 1
+                    ), f"Wrong minimum trace id counter value for device {device}, core {core}, risc {risc}, trace {trace_id} - expected 1, read {min(trace_id_counts)}"
+
+
 def test_device_trace_run():
-    verify_stats(
+    # verify_stats(
+    #     run_device_profiler_test(
+    #         testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops",
+    #         setupAutoExtract=False,
+    #         doDeviceTrace=True,
+    #     ),
+    #     statTypes=["kernel", "fw"],
+    #     allowedRange=0,
+    #     refCountDict={
+    #         "trace_fw_duration": [5],
+    #         "trace_kernel_duration": [5],
+    #     },
+    # )
+    # verify_stats(
+    #     run_device_profiler_test(
+    #         testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
+    #         setupAutoExtract=False,
+    #         doDeviceTrace=True,
+    #     ),
+    #     statTypes=["kernel", "fw"],
+    #     allowedRange=0,
+    #     refCountDict={
+    #         "trace_fw_duration": [5],
+    #         "trace_kernel_duration": [5],
+    #     },
+    # )
+
+    verify_trace_markers(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_multiple_trace_ids",
             setupAutoExtract=False,
-            doDeviceTrace=True,
+            doDeviceTrace=False,
         ),
-        statTypes=["kernel", "fw"],
-        allowedRange=0,
-        refCountDict={
-            "trace_fw_duration": [5],
-            "trace_kernel_duration": [5],
-        },
+        num_non_trace_ops=3,
+        num_trace_ops=5,
+        num_repeats_per_trace_op=3,
     )
-    verify_stats(
+
+    verify_trace_markers(
         run_device_profiler_test(
-            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_trace_with_non_trace",
             setupAutoExtract=False,
-            doDeviceTrace=True,
+            doDeviceTrace=False,
         ),
-        statTypes=["kernel", "fw"],
-        allowedRange=0,
-        refCountDict={
-            "trace_fw_duration": [5],
-            "trace_kernel_duration": [5],
-        },
+        num_non_trace_ops=12,
+        num_trace_ops=10,
+        num_repeats_per_trace_op=2,
     )
 
 
