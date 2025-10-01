@@ -3,10 +3,8 @@
 
 import pytest
 import csv
-
 # must be the very first lines!
 import os
-
 # os.environ["TRANSFORMERS_NO_TF"] = "1"     # block tensorflow backend
 # os.environ["TRANSFORMERS_NO_FLAX"] = "1"   # block flax/jax backend
 # os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"   # silence tf if it somehow loads
@@ -16,6 +14,7 @@ import time
 from loguru import logger
 import statistics
 import json
+from PIL import Image
 
 from clip_encoder import CLIPEncoder
 from fid_score import calculate_fid_score
@@ -26,18 +25,18 @@ class SimpleProfiler:
     def __init__(self):
         self.times = {}
         self.start_times = {}
-
+    
     def start(self, name):
         self.start_times[name] = time.time()
         if name not in self.times:
             self.times[name] = []
-
+    
     def end(self, name):
         if name in self.start_times:
             elapsed = time.time() - self.start_times[name]
             self.times[name].append(elapsed)
             del self.start_times[name]
-
+    
     def get(self, name):
         if name in self.times and self.times[name]:
             return sum(self.times[name]) / len(self.times[name])
@@ -59,8 +58,8 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "flux_test_results.json"
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
-        ("dev", 1024, 1024, 3.5, 28),  # Full resolution on H100
-        # ("schnell", 1024, 1024, 1.0, 4)
+        #("dev", 1024, 1024, 3.5, 28),  # Full resolution on H100
+        ("schnell", 1024, 1024, 1.0, 4)
     ],
 )
 @pytest.mark.parametrize("captions_path", ["captions.tsv"])
@@ -82,25 +81,25 @@ def test_accuracy_model(
 
     device = device_params.get("device", "cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
-
+    
     if device == "cuda":
         logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
         logger.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
-
+    
     # Initialize Diffusers pipeline
     model_id = f"black-forest-labs/FLUX.1-{model_name}"
     logger.info(f"Loading model: {model_id}")
-
+    
     pipeline = FluxPipeline.from_pretrained(
         model_id,
         dtype=torch.bfloat16 if device == "cuda" else torch.float32,  # Use bfloat16 for H100
         use_safetensors=True,
     )
-
+    
     # Move to device manually
     pipeline = pipeline.to(device)
     logger.info(f"Pipeline loaded on {device}")
-
+    
     if device == "cuda":
         # Enable optimizations for H100
         try:
@@ -108,30 +107,30 @@ def test_accuracy_model(
             logger.info("✓ Attention slicing enabled")
         except Exception as e:
             logger.warning(f"Could not enable attention slicing: {e}")
-
+            
         # Optional: Enable VAE slicing for memory efficiency
         try:
-            if hasattr(pipeline, "enable_vae_slicing"):
+            if hasattr(pipeline, 'enable_vae_slicing'):
                 pipeline.enable_vae_slicing()
                 logger.info("✓ VAE slicing enabled")
         except Exception as e:
             logger.warning(f"Could not enable VAE slicing: {e}")
-
+            
         # Enable memory efficient attention for Flux
         try:
             pipeline.enable_memory_efficient_attention()
             logger.info("✓ Memory efficient attention enabled")
         except Exception as e:
             logger.warning(f"Could not enable memory efficient attention: {e}")
-
+    
     # Set generator for reproducibility
     generator = torch.Generator(device=device).manual_seed(0)
 
     images = []
     total_times = []
-
+    
     logger.info(f"Starting generation of {len(prompts)} images at {image_w}x{image_h}...")
-
+    
     for i, prompt in enumerate(prompts):
         logger.info(f"Generating image {i+1}/{len(prompts)}: {prompt[:50]}...")
         negative_prompt = ""
@@ -154,13 +153,13 @@ def test_accuracy_model(
 
         profiler.end("denoising_loop")
         end_total = time.time()
-
+        
         total_time = end_total - start_total
         total_times.append(total_time)
-
+        
         images.append(generated_images[0])
         logger.info(f"Image {i+1} completed in {total_time:.2f}s")
-
+        
         # Optional: Save image for inspection
         os.makedirs("generated_images", exist_ok=True)
         generated_images[0].save(f"generated_images/image_{i+1}.png")
@@ -173,12 +172,12 @@ def test_accuracy_model(
 
     deviation_clip_score = "N/A"
     fid_score = "N/A"
-
+    
     # Calculate CLIP standard deviation if we have multiple prompts
     if num_prompts >= 2:
         deviation_clip_score = statistics.stdev(clip_scores)
         logger.info(f"CLIP scores individual: {[f'{score:.2f}' for score in clip_scores]}")
-
+    
     # Calculate FID score if we have the COCO statistics file
     if num_prompts >= 2 and os.path.isfile(coco_statistics_path):
         logger.info("Calculating FID score...")
@@ -225,7 +224,7 @@ def test_accuracy_model(
             "num_inference_steps": num_inference_steps,
             "backend": "diffusers",
             "dtype": str(torch.bfloat16 if device == "cuda" else torch.float32),
-            "optimizations": ["attention_slicing", "vae_slicing", "memory_efficient_attention"],
+            "optimizations": ["attention_slicing", "vae_slicing", "memory_efficient_attention"]
         },
         "benchmarks_summary": [
             {
@@ -239,7 +238,7 @@ def test_accuracy_model(
                 "average_clip": average_clip_score,
                 "deviation_clip": clip_std_serializable,
                 "fid_score": fid_serializable,
-                "individual_clip_scores": [float(score) for score in clip_scores],  # Add individual scores
+                "individual_clip_scores": [float(score) for score in clip_scores]  # Add individual scores
             }
         ],
     }
@@ -252,7 +251,7 @@ def test_accuracy_model(
     # Cleanup
     if device == "cuda":
         torch.cuda.empty_cache()
-
+    
     print(f"\n🎉 Test completed successfully!")
     print(f"📊 Average CLIP Score: {average_clip_score:.2f}")
     print(f"⚡ Average Inference Time: {average_inference_time:.2f}s")
@@ -294,3 +293,7 @@ def device_params(request):
 # def evaluation_range():
 #     # Default evaluation range - can be overridden
 #     return (0, 5)  # start_from=0, num_prompts=5 for better statistics
+
+
+
+
