@@ -287,7 +287,7 @@ struct EdmChannelWorkerInterface {
             read_counter_update_src_address);
     }
 
-    FORCE_INLINE void increment_local_read_counter(int32_t inc_val) {
+    FORCE_INLINE void advance_completion_pointer(int32_t inc_val) {
         local_read_counter.counter += inc_val;
     }
 

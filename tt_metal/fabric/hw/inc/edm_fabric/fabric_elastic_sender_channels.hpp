@@ -135,7 +135,7 @@ struct OnePassIteratorStaticSizes
     }
 };
 
-template <size_t CHUNK_N_PKTS>
+template <size_t CHUNK_N_PKTS, typename ChannelBuffersPoolT>
 struct ElasticSenderChannel : public SenderEthChannelInterface<ElasticSenderChannel<CHUNK_N_PKTS>> {
     using chunk_t = EthChannelBuffer<PACKET_HEADER_TYPE, CHUNK_N_PKTS>;
     using chunk_iterator_t tt::tt_fabric::OnePassIteratorStaticSizes<uint32_t, CHUNK_N_PKTS, PACKET_SIZE_BYTES / sizeof(uint32_t)>;
@@ -151,10 +151,11 @@ struct ElasticSenderChannel : public SenderEthChannelInterface<ElasticSenderChan
     // chunk and advances as completion acks are received.
     chunk_iterator_t completion_chunk_iterator;
 
-
     std::size_t cached_next_buffer_slot_addr;
 
+    ChannelBuffersPoolT *channel_buffers_pool;
 
+    // Send Side APIs (these map to the `SenderEthChannel` type)
     FORCE_INLINE void init_impl(
         size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
         static_assert(false, "Unimplemented");
@@ -172,4 +173,20 @@ struct ElasticSenderChannel : public SenderEthChannelInterface<ElasticSenderChan
             
         }
     }
+
+
+    // EdmChannelWorkerInterface API
+    // Current, only enable elastic channels with persistent (i.e. router <-> router) connections
+    // update_persistent_connection_copy_of_free_slots
+
+    // Future work - enable elastic channels with dynamic (i.e. worker <-> router) connections
+    // -> this will be moved to send side and requires updates to the dynamic connection protocol
+    // notify_worker_of_read_counter_update 
+    
+
+    // Channel Buffers Pool API
+    // FORCE_INLINE chunk_t* get_free_chunk();
+    // FORCE_INLINE void return_chunk(chunk_t* chunk) { free_chunks.push(chunk); }
+    // FORCE_INLINE bool is_empty() const { return free_chunks.is_empty(); }
+    // FORCE_INLINE bool is_full() const { return free_chunks.is_full(); }
 };
