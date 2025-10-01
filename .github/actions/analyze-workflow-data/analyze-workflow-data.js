@@ -257,55 +257,25 @@ function renderRawCommitUrlsTable(commits) {
  *   - prTitle: Title of the PR or EMPTY_VALUE if not found
  *   - prAuthor: GitHub username of the PR author or 'unknown'
  */
-async function fetchPRInfo(github, context, commitSha) {
-  try {
-    const { data: prs } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      commit_sha: commitSha,
-    }); // listPullRequestsAssociatedWithCommit is a GitHub API call to get the PRs associated with a commit
-    if (prs.length > 0) {
-      const pr = prs[0]; // get the first PR (usually the only one)
-      return { // return the PR number, title, and author
-        prNumber: `[#${pr.number}](https://github.com/${context.repo.owner}/${context.repo.repo}/pull/${pr.number})`, // make a link to the PR attached to the commit number
-        prTitle: pr.title || EMPTY_VALUE, // return the PR title or EMPTY_VALUE if the PR title is not available
-        prAuthor: pr.user?.login || 'unknown' // return the PR author or 'unknown' if the PR author is not available
-      };
-    }
-  } catch (e) {
-    core.warning(`Could not fetch PR for commit ${commitSha}: ${e.message}`); // if there is an error, log it
-  }
-  return { prNumber: EMPTY_VALUE, prTitle: EMPTY_VALUE, prAuthor: EMPTY_VALUE }; //return nothing if there is no PR
+// Disabled: PR fetching via GitHub API removed for offline analysis
+async function fetchPRInfo(_github, _context, _commitSha) {
+  return { prNumber: EMPTY_VALUE, prTitle: EMPTY_VALUE, prAuthor: EMPTY_VALUE };
 }
 
 /**
  * Fetch commit author info for a commit SHA.
  * Returns GitHub login (if associated), author display name, and profile URL (if available).
  */
-async function fetchCommitAuthor(octokit, context, commitSha) {
-  try {
-    const { data } = await octokit.rest.repos.getCommit({ // getCommit is a GitHub API call to get the commit associated with a commit SHA
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      ref: commitSha,
-    });
-    const login = data.author?.login; // return the author login name if available
-    const htmlUrl = data.author?.html_url; // return the author profile URL if available
-    const name = data.commit?.author?.name; // return the author display name if available
-    return { login, name, htmlUrl };
-  } catch (e) {
-    core.warning(`Could not fetch commit author for ${commitSha}: ${e.message}`); // if there is an error, log it
-    return { login: undefined, name: undefined, htmlUrl: undefined }; // return nothing if there is no author
-  }
+// Disabled: commit author fetch via GitHub API; will be inferred from commits index if present
+async function fetchCommitAuthor(_octokit, _context, _commitSha) {
+  return { login: undefined, name: undefined, htmlUrl: undefined };
 }
 
 /**
  * Download workflow run logs and extract up to N error snippets.
  * Returns an array of strings (snippets).
  */
-async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 50, logsDirPath = undefined) {
-  const owner = context.repo.owner; // return the owner of the repository
-  const repo = context.repo.repo; // return the repository name
+async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = undefined) {
   try {
     await core.startGroup(`Extracting error snippets for run ${runId}`); // start a group to log the error snippets (we log this to the console)
     // IMPORTANT: This function no longer downloads logs.
@@ -320,42 +290,6 @@ async function fetchErrorSnippetsForRun(octokit, context, runId, maxSnippets = 5
       core.info(`No logs directory available for run ${runId}; skipping log parsing`);
     }
     core.info(`Total snippets collected: ${snippets.length}`); // log the total number of snippets collected
-
-    // Query job/step status once to validate findings and/or provide fallback
-    let hasFailingJob = false;
-    let failingLabel = 'no failing job detected';
-    let apiCheckSucceeded = false;
-    try {
-      const { data } = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: runId }); // listJobsForWorkflowRun is a GitHub API call to list the jobs for a workflow run
-      const jobs = Array.isArray(data.jobs) ? data.jobs : []; // return the jobs array if it is an array, otherwise return an empty array
-      let failingJob = jobs.find(j => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped' && j.conclusion !== 'cancelled'); // find the failing job. the assumption is a job is failing if the conclusion isn't success, skipped, or cancelled
-      let failingStep = undefined; // initialize the failing step to undefined
-      if (!failingJob) { // if there is no failing job, find the failing step (sometimes a job might pass while a step fails I guess)
-        for (const job of jobs) {
-          const step = (job.steps || []).find(s => s.conclusion === 'failure');
-          if (step) { failingJob = job; failingStep = step; break; } // if the step is a failure, set the failing job and step
-        }
-      }
-      apiCheckSucceeded = true;
-      if (failingJob) {
-        hasFailingJob = true;
-        failingLabel = `${failingJob.name}${failingStep ? ' / ' + failingStep.name : ''}`; // set the failing label to the job name and step name if the step is a failure
-      }
-    } catch (e) {
-      core.info(`Job status lookup failed for run ${runId}: ${e.message}`);
-    }
-
-    // If we found FAILED lines but the run has no failing job, suppress false positives
-    // Only do this if the API check succeeded; on API failure, keep the snippets.
-    // if ((snippets && snippets.length > 0) && apiCheckSucceeded && !hasFailingJob) {
-    //   snippets = [];
-    // }
-
-    // If we did not find FAILED lines but the run has a failing job, emit synthetic entry
-    if ((!snippets || snippets.length === 0) && hasFailingJob) {
-      const owner = findOwnerForLabel(failingLabel) || 'no owner found';
-      snippets = [{ label: failingLabel, owner, snippet: 'could not find failure in logs' }];
-    }
 
     return snippets;
   } catch (e) {
@@ -885,30 +819,37 @@ function filterRunsByDate(runs, days) {
  * Returns an array of { sha, short, url, author_login, author_name, author_url }.
  * Note: Uses compareCommits, which is base..head; base is typically the success commit, head is the failed run commit.
  */
-async function listCommitsBetween(octokit, context, startShaExclusive, endShaInclusive) {
+// Offline commits lookup: read from commits index built by fetch step
+let __commitsIndex = undefined;
+function loadCommitsIndex(commitsPath) {
+  if (!commitsPath) return undefined;
   try {
-    const { data } = await octokit.rest.repos.compareCommits({
-      owner: context.repo.owner,
-      repo: context.repo.repo,
-      base: startShaExclusive,
-      head: endShaInclusive,
-    }); // compareCommits is a GitHub API call to get the commits between two SHAs
-    // compareCommits includes both endpoints; to make start exclusive, filter it out explicitly
-    const commits = data.commits || []; // get the commits between the two SHAs
-    return commits // return the commits between the two SHAs
-      .filter(c => c.sha !== startShaExclusive) // filter out the start SHA
-      .map(c => ({
-        sha: c.sha,
-        short: c.sha.substring(0, SHA_SHORT_LENGTH),
-        url: `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${c.sha}`,
-        author_login: c.author?.login,
-        author_name: c.commit?.author?.name,
-        author_url: c.author?.html_url,
-      })); // return the commits with the necessary information
-  } catch (e) {
-    core.warning(`Failed to list commits between ${startShaExclusive}..${endShaInclusive}: ${e.message}`);
-    return [];
-  }
+    if (!fs.existsSync(commitsPath)) return undefined;
+    const raw = fs.readFileSync(commitsPath, 'utf8');
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return arr;
+  } catch (_) { /* ignore */ }
+  return undefined;
+}
+
+function listCommitsBetweenOffline(context, startShaExclusive, endShaInclusive) {
+  if (!Array.isArray(__commitsIndex) || __commitsIndex.length === 0) return [];
+  const commits = __commitsIndex;
+  const startIdx = commits.findIndex(c => c.sha === startShaExclusive);
+  const endIdx = commits.findIndex(c => c.sha === endShaInclusive);
+  if (endIdx === -1) return [];
+  // We want commits strictly after start and up to and including end
+  const from = startIdx === -1 ? 0 : (startIdx + 1);
+  const to = endIdx;
+  const slice = commits.slice(from, to + 1);
+  return slice.map(c => ({
+    sha: c.sha,
+    short: (c.short || (c.sha ? c.sha.substring(0, SHA_SHORT_LENGTH) : '')),
+    url: c.url || (c.sha ? `https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${c.sha}` : ''),
+    author_login: c.author_login,
+    author_name: c.author_name,
+    author_url: c.author_url,
+  }));
 }
 
 // END MORE ERROR HANDLING CODE
@@ -925,6 +866,7 @@ async function run() {
     const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
     const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true'; // get the alert-all input from the action inputs
     const logsIndexPath = core.getInput('logs-index-path', { required: false }); // optional: path to JSON mapping runId -> extracted logs dir
+    const commitsPath = core.getInput('commits-path', { required: false }); // optional: path to commits index JSON
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -951,6 +893,10 @@ async function run() {
         core.info(`No valid entries found in logs index file at ${logsIndexPath}`);
       }
     }
+
+    // Load commits index (optional)
+    __commitsIndex = loadCommitsIndex(commitsPath) || [];
+    core.info(`Loaded commits index entries: ${Array.isArray(__commitsIndex) ? __commitsIndex.length : 0}`);
 
     // Track failed workflows
     const failedWorkflows = [];
@@ -1027,8 +973,6 @@ async function run() {
         let owners = undefined;
         try {
           const errs = await fetchErrorSnippetsForRun(
-            octokit,
-            github.context,
             latestFail.id,
             20,
             getLogsDirForRunId(latestFail.id)
@@ -1140,11 +1084,11 @@ async function run() {
           item.no_success_in_window = !!res.noSuccessInWindow; // explicitely cast to a boolean
           if (!res.noSuccessInWindow && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
             // Get commits between boundary success and first failing run (inclusive of failing run)
-            item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha); // get the commits between the boundary success and the first failing run
+            item.commits_between = listCommitsBetweenOffline(github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
           }
           // Commit author enrichment is now superseded by commits_between list; keep top-level for convenience if present
           if (item.first_failed_head_sha) {
-            const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
+            const author = await fetchCommitAuthor(null, null, item.first_failed_head_sha);
             item.first_failed_author_login = author.login;
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
@@ -1153,8 +1097,6 @@ async function run() {
           // Reuse cached error snippets if available, otherwise fetch
           if (item.run_id) {
             item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
-              octokit,
-              github.context,
               item.run_id,
               20,
               getLogsDirForRunId(item.run_id)
@@ -1205,11 +1147,11 @@ async function run() {
           item.no_success_in_window = !!res.noSuccessInWindow;
           // Do not fetch commits/authors for stayed_failing if no success in-window
           if (!item.no_success_in_window && res.boundarySuccessRun && res.boundarySuccessRun.head_sha) {
-            item.commits_between = await listCommitsBetween(octokit, github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
+            item.commits_between = listCommitsBetweenOffline(github.context, res.boundarySuccessRun.head_sha, item.first_failed_head_sha);
           }
           // Commit author of the first failed in-window (optional)
           if (item.first_failed_head_sha) {
-            const author = await fetchCommitAuthor(octokit, github.context, item.first_failed_head_sha);
+            const author = await fetchCommitAuthor(null, null, item.first_failed_head_sha);
             item.first_failed_author_login = author.login;
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
@@ -1218,8 +1160,6 @@ async function run() {
           // Reuse cached error snippets if available, otherwise fetch
           if (item.run_id) {
             item.error_snippets = errorSnippetsCache.get(item.run_id) || await fetchErrorSnippetsForRun(
-              octokit,
-              github.context,
               item.run_id,
               20,
               getLogsDirForRunId(item.run_id)
