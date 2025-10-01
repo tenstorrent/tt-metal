@@ -81,8 +81,7 @@ Fabric1DRoute fabric_1d_routing(
         const auto neighbor_coord = sender_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
 
         TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", sender_coord);
-        const auto next_fabric_id = mesh_device->get_fabric_node_id(neighbor_coord.value());
-        return next_fabric_id;
+        return mesh_device->get_fabric_node_id(*neighbor_coord);
     };
 
     if (topology == ::ttnn::ccl::Topology::Ring) {

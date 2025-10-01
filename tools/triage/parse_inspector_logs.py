@@ -7,7 +7,7 @@
 Script Name: parse_inspector_logs.py
 
 Usage:
-    scripts/debugging_scripts/parse_inspector_logs.py [<log-directory>]
+    parse_inspector_logs.py [<log-directory>]
 
 Arguments:
     <log-directory>  Path to inspector log directory. Defaults to $TT_METAL_HOME/generated/inspector

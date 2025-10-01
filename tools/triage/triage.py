@@ -495,7 +495,9 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         skip_check = False
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    ref_path = os.path.abspath(os.path.join(os.path.dirname(script_dir), "ttexalens_ref.txt"))
+    ref_path = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "scripts", "ttexalens_ref.txt")
+    )
 
     try:
         with open(ref_path, "r", encoding="utf-8") as f:
