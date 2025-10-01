@@ -36,7 +36,7 @@ void py_bind_conv2d(py::module& module) {
 
         For more information, refer to `this tech report. <https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md>`_
 
-        :param ttnn.Tensor input_tensor:  The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
+        :param ttnn.Tensor input_tensor:  The input tensor. This must be in the format [N, H, W, C] and must be a device tensor. Use ttnn.to_device() if your tensor is on host.
         :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
         :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
         :param ttnn.MeshDevice device:  The device to use.

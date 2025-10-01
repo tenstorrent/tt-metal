@@ -112,7 +112,7 @@ def run_full(
             torch_bias_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
 
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
@@ -221,7 +221,7 @@ def run_short(
     if has_bias:
         tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16)
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
 
     start_time = start_measuring_time()
     [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv_transpose2d(
