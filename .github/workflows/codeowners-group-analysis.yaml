@@ -664,15 +664,34 @@ jobs:
               if [ "$PING_OWNERS" = "true" ]; then
                 # Create new ping comment
                 echo "Creating ping comment..."
-                # Properly escape the message for JSON
+
+                # Use jq to properly create JSON and avoid shell escaping issues
                 JSON_PAYLOAD=$(jq -n --arg body "$PING_MESSAGE" '{"body": $body}')
-                curl -s -X POST \
+
+                # Debug: show what we're sending
+                echo "Sending JSON payload:"
+                echo "$JSON_PAYLOAD" | jq '.'
+
+                # Try curl with proper error handling
+                RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
                   -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                   -H "Accept: application/vnd.github.v3+json" \
                   -H "Content-Type: application/json" \
                   -d "$JSON_PAYLOAD" \
-                  "$COMMENTS_API"
-                echo "Ping comment created for PR #$PR_NUMBER"
+                  "$COMMENTS_API")
+
+                # Extract HTTP status code
+                HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
+                RESPONSE_BODY=$(echo "$RESPONSE" | sed -e 's/HTTPSTATUS:.*//')
+
+                if [ "$HTTP_STATUS" = "201" ]; then
+                  echo "✅ Ping comment created successfully for PR #$PR_NUMBER"
+                else
+                  echo "❌ ERROR: Failed to create ping comment (HTTP $HTTP_STATUS)"
+                  echo "Response body: $RESPONSE_BODY"
+                  echo "Full response: $RESPONSE"
+                  exit 1
+                fi
               else
                 # Just output the ping message to workflow logs
                 echo "Ping message (not sent):"
