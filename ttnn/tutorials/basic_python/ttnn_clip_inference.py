@@ -13,6 +13,7 @@ from PIL import Image
 from transformers import CLIPTokenizer, CLIPModel
 import requests
 from io import BytesIO
+import time
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
 
@@ -446,14 +447,14 @@ def main():
 
     class CLIP:
         def __init__(self, state_dict):
-            self.token_embedding = convert_ttnn_dtype(
+            self.token_embedding = ttnn.typecast(
                 state_dict["text_model.embeddings.token_embedding.weight"], dtype=ttnn.bfloat16
             )
-            self.positional_embedding = convert_ttnn_dtype(
+            self.positional_embedding = ttnn.typecast(
                 state_dict["text_model.embeddings.position_embedding.weight"], dtype=ttnn.bfloat16
             )
 
-            self.text_projection = convert_ttnn_dtype(state_dict["text_projection.weight"], dtype=ttnn.bfloat16)
+            self.text_projection = ttnn.typecast(state_dict["text_projection.weight"], dtype=ttnn.bfloat16)
             self.context_length = self.positional_embedding.shape[0]
             self.vocab_size = self.token_embedding.shape[0]
             self.transformer_width = state_dict["text_model.final_layer_norm.weight"].shape[0]
@@ -616,11 +617,14 @@ def main():
 
         # Perform CLIP inference: compute similarity between image and text
         print("Running CLIP inference...")
+        time_start = time.time()
         logits_per_image, logits_per_text = clip.forward(tt_image, tokens_pretrained)
+        time_end = time.time()
+        print(f"Time taken: {time_end - time_start} seconds")
 
         # Convert logits to probabilities using softmax
         probs = ttnn.softmax(logits_per_image, dim=-1)
-        print(f"Classification probabilities: {probs}")
+        print(f"==== Classification probabilities:")
 
         # Display results
         probs_torch = ttnn.to_torch(probs)
