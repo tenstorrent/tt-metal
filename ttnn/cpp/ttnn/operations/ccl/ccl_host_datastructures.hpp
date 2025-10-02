@@ -268,7 +268,7 @@ public:
     [[nodiscard]]
     std::vector<uint32_t> get_runtime_args() const {
         std::vector<uint32_t> args;
-        uint32_t size = 3 + active_channels.size() * 6;
+        uint32_t size = 3 + (active_channels.size() * 6);
         for (auto const& channel : active_channels) {
             size += channel.worker_coords.size();
         }

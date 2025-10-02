@@ -85,7 +85,7 @@ Fabric1DRoute fabric_1d_routing(
     };
 
     if (topology == ::ttnn::ccl::Topology::Ring) {
-        int ring_hops = line_hops + (line_hops < 0 ? -1 : 1) * mesh_shape[dim];
+        int ring_hops = line_hops + ((line_hops < 0 ? -1 : 1) * mesh_shape[dim]);
 
         if (std::abs(ring_hops) < std::abs(line_hops)) {
             bool ring_is_forward = (ring_hops > 0);

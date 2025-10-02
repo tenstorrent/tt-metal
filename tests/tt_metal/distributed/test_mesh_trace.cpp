@@ -128,7 +128,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
             for (int workload_idx = 0; workload_idx < num_workloads_per_trace; workload_idx++) {
                 EnqueueMeshWorkload(
                     mesh_device_->mesh_command_queue(),
-                    *mesh_workloads[trace_idx * num_workloads_per_trace + workload_idx],
+                    *mesh_workloads[(trace_idx * num_workloads_per_trace) + workload_idx],
                     false);
             }
             EndTraceCapture(mesh_device_.get(), 0, trace_id);
@@ -194,9 +194,9 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src0_bufs[col_idx * worker_grid_size.y + row_idx], src0_vec);
+                mesh_device_->mesh_command_queue(), src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec);
             EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src1_bufs[col_idx * worker_grid_size.y + row_idx], src1_vec);
+                mesh_device_->mesh_command_queue(), src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec);
         }
     }
     // Compile workloads
@@ -224,9 +224,9 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
                     ReadShard(
                         mesh_device_->mesh_command_queue(),
                         dst_vec,
-                        output_bufs[col_idx * worker_grid_size.y + row_idx],
+                        output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                         MeshCoordinate(logical_y, logical_x));
-                    auto expected_value = expected_values[logical_x + logical_y * mesh_device_->num_cols()];
+                    auto expected_value = expected_values[logical_x + (logical_y * mesh_device_->num_cols())];
                     for (int i = 0; i < dst_vec.size(); i++) {
                         EXPECT_EQ(static_cast<float>(dst_vec[i]), expected_value);
                     }

@@ -76,7 +76,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
 
     // define chunk_1 and chunk_2
     const uint32_t chunk_1 = ring_id;
-    const uint32_t chunk_2 = 2 * ring_size - ring_id - 1;
+    const uint32_t chunk_2 = (2 * ring_size) - ring_id - 1;
 
     const uint32_t Sk = k_shape[2];
 

@@ -197,7 +197,7 @@ TEST_F(TensorDistribution2x4Test, PartialConcat) {
     constexpr int kNumRows = 2;
     std::vector<float> test_data;
     for (int i = 0; i < kNumRows; i++) {
-        test_data.insert(test_data.end(), {i * 10 + 0, i * 10 + 1, i * 10 + 2});
+        test_data.insert(test_data.end(), {(i * 10) + 0, (i * 10) + 1, (i * 10) + 2});
     }
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, 1, 3}, DataType::FLOAT32));

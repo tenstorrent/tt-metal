@@ -454,13 +454,13 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
         std::span<const std::uint8_t> page(host_buffer.data() + data_index, page_size);
         if (buffer.is_l1()) {
             auto absolute_address =
-                buffer.address() + bank_offset + mapped_page.device_page * buffer.aligned_page_size();
+                buffer.address() + bank_offset + (mapped_page.device_page * buffer.aligned_page_size());
             auto core_coordinates =
                 device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device->id(), core_coordinates, page, absolute_address);
         } else {
-            auto bank_local_address = buffer.address() + mapped_page.device_page * buffer.aligned_page_size();
+            auto bank_local_address = buffer.address() + (mapped_page.device_page * buffer.aligned_page_size());
             WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
         }
     }
@@ -590,13 +590,13 @@ void read_pages_to_host_helper(
         auto core_coordinates =
             device->worker_core_from_logical_core(dev_buffer.allocator()->get_logical_core_from_bank_id(bank_id));
         auto bank_offset = device->allocator()->get_bank_offset(dev_buffer.buffer_type(), bank_id);
-        auto absolute_address = dev_buffer.address() + bank_offset + core_page_id * dev_buffer.aligned_page_size();
+        auto absolute_address = dev_buffer.address() + bank_offset + (core_page_id * dev_buffer.aligned_page_size());
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             host_buffer + host_buffer_start, page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
     } else {
         std::vector<uint32_t> page;
         page.resize(page_size / sizeof(uint32_t));
-        auto bank_local_address = dev_buffer.address() + core_page_id * dev_buffer.aligned_page_size();
+        auto bank_local_address = dev_buffer.address() + (core_page_id * dev_buffer.aligned_page_size());
         ReadFromDeviceDRAMChannel(device, bank_id, bank_local_address, page_size, page);
         std::memcpy(host_buffer + host_buffer_start, page.data(), page_size);
     }
@@ -816,8 +816,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         }
                         for (uint32_t buffer_index : circular_buffer->remote_buffer_indices()) {
                             uint32_t base_index =
-                                remote_offset_index + (NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
-                                                          UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG;
+                                remote_offset_index + ((NUM_CIRCULAR_BUFFERS - 1 - buffer_index) *
+                                                       UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG);
                             uint32_t config_address = circular_buffer->config_address();
                             circular_buffer_config_vec[base_index] = config_address;
                             circular_buffer_config_vec[base_index + 1] = circular_buffer->page_size(buffer_index);

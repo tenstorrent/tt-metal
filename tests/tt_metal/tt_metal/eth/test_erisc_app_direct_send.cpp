@@ -882,7 +882,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
             erisc_unreserved_base_addr, max_l1_loading_addr);
 
         int max_words = (max_l1_loading_addr - std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) / WORD_SIZE;
-        int num_words = rand() % max_words + 1;
+        int num_words = (rand() % max_words) + 1;
 
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
             static_cast<MeshDispatchFixture*>(this),
@@ -941,7 +941,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests)
 
             int max_words =
                 (max_l1_loading_addr - std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) / num_bytes_per_send;
-            int num_words = rand() % max_words + 1;
+            int num_words = (rand() % max_words) + 1;
 
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                 static_cast<MeshDispatchFixture*>(this),

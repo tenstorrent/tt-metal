@@ -424,7 +424,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
 
             std::array<uint32_t, max_chunks> dst_addresses{};
             for (uint32_t i = 0; i < max_chunks; i++) {
-                dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
+                dst_addresses[i] = static_cast<uint32_t>(this->target_address + (i * chunk_size));
             }
 
             std::array<uint16_t, max_chunks - 1> chunk_sizes{};
@@ -496,7 +496,7 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
 
             std::array<uint32_t, max_chunks> dst_addresses{};
             for (uint32_t i = 0; i < max_chunks; i++) {
-                dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
+                dst_addresses[i] = static_cast<uint32_t>(this->target_address + (i * chunk_size));
             }
 
             std::array<uint16_t, max_chunks - 1> chunk_sizes{};

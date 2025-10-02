@@ -262,7 +262,7 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestContext::create_ra
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_id;
     for (uint32_t rank = 0; rank < world_size; ++rank) {
         uint32_t mesh_id_val;
-        std::memcpy(&mesh_id_val, recv_buffer.data() + rank * sizeof(uint32_t), sizeof(uint32_t));
+        std::memcpy(&mesh_id_val, recv_buffer.data() + (rank * sizeof(uint32_t)), sizeof(uint32_t));
         log_info(tt::LogTest, "Rank {} is in mesh {}", rank, mesh_id_val);
         TT_FATAL(
             !std::any_of(

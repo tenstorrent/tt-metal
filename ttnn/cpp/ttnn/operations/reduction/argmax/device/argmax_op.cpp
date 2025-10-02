@@ -117,7 +117,7 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
     const auto normalized_dim =
-        this->dim.has_value() ? *this->dim + input_tensor.padded_shape().rank() * (*this->dim < 0) : this->dim;
+        this->dim.has_value() ? *this->dim + (input_tensor.padded_shape().rank() * (*this->dim < 0)) : this->dim;
     if (this->use_multicore) {
         return detail::argmax_multi_core(
             input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);

@@ -67,8 +67,8 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, tt::constants::TILE_WIDTH) : 0;
     uint32_t intermed_num_tile = 1;
     uint32_t output_num_tile = 1;
-    uint32_t cb_usage = target_num_tile * target_tile_size + weight_num_tile * data_tile_size +
-                        intermed_num_tile * intermed_tile_size + output_num_tile * data_tile_size;
+    uint32_t cb_usage = (target_num_tile * target_tile_size) + (weight_num_tile * data_tile_size) +
+                        (intermed_num_tile * intermed_tile_size) + (output_num_tile * data_tile_size);
 
     const bool use_large_algorithm = cb_usage >= available_L1;
 
