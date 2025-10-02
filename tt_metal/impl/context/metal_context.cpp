@@ -587,10 +587,10 @@ void MetalContext::initialize_control_plane() {
 
     std::string suffix;
     if (rtoptions_.get_use_mesh_graph_descriptor_2_0()) {
-        std::string suffix = ".textproto";
+        suffix = ".textproto";
         log_debug(tt::LogDistributed, "Using MGD 2.0 mesh graph descriptor.");
     } else {
-        std::string suffix = ".yaml";
+        suffix = ".yaml";
         log_debug(tt::LogDistributed, "Using MGD 1.0 mesh graph descriptor.");
     }
 

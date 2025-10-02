@@ -272,21 +272,24 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
         const auto& src_instance = mgd.get_instance(connection_data.nodes[0]);
         const auto& dst_instance = mgd.get_instance(connection_data.nodes[1]);
 
-        const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
-        const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
-
-        const MeshId src_mesh_id = MeshId(src_mesh_instance.local_id);
-        const MeshId dst_mesh_id = MeshId(dst_mesh_instance.local_id);
-
-        const chip_id_t src_chip_id = src_instance.local_id;
-        const chip_id_t dst_chip_id = dst_instance.local_id;
-
         bool is_device_level = (src_instance.kind == NodeKind::Device) && (dst_instance.kind == NodeKind::Device);
 
         if (is_device_level) {
+            const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
+            const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
+
+            const MeshId src_mesh_id = MeshId(src_mesh_instance.local_id);
+            const MeshId dst_mesh_id = MeshId(dst_mesh_instance.local_id);
+
+            const chip_id_t src_chip_id = src_instance.local_id;
+            const chip_id_t dst_chip_id = dst_instance.local_id;
+
             requested_intermesh_ports_[*src_mesh_id][*dst_mesh_id].push_back({src_chip_id, dst_chip_id, connection_data.count});
         } else {
-            requested_intermesh_connections_[*src_mesh_id][*dst_mesh_id] += connection_data.count;
+            const MeshId src_mesh_id = MeshId(src_instance.local_id);
+            const MeshId dst_mesh_id = MeshId(dst_instance.local_id);
+
+            requested_intermesh_connections_[*src_mesh_id][*dst_mesh_id] = connection_data.count;
         }
     }
 
@@ -599,7 +602,6 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             }
         }
     }
-    std::vector<std::tuple<std::pair<uint32_t, std::string>, std::pair<uint32_t, std::string>>> connections;
 
     TT_FATAL(
         !(yaml["RelaxedGraph"] && yaml["Graph"]),
@@ -634,7 +636,6 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
             requested_intermesh_ports_[dst_mesh][src_mesh].push_back({dst_device, src_device, num_chans});
         }
     }
-    printf("yo\n");
 }
 
 void MeshGraph::print_connectivity() const {
