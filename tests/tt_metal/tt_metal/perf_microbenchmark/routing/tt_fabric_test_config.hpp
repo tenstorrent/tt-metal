@@ -444,6 +444,7 @@ private:
         resolved_test.benchmark_mode = parsed_test.benchmark_mode;
         resolved_test.global_sync = parsed_test.global_sync;
         resolved_test.global_sync_val = parsed_test.global_sync_val;
+        resolved_test.enable_flow_control = parsed_test.enable_flow_control;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {

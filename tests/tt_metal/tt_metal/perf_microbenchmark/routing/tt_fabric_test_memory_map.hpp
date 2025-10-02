@@ -356,7 +356,7 @@ struct ReceiverMemoryMap {
         // Returns: [common args][credit_header_base][credit_header_end]
         auto args = common.get_kernel_args();
         args.push_back(credit_headers.start);
-        args.push_back(credit_headers.size);
+        args.push_back(credit_headers.start + credit_headers.size);  // Send END address, not size
         return args;
     }
 

@@ -34,8 +34,12 @@ static_assert(
     NUM_CREDIT_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_CREDIT_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
 
 void kernel_main() {
+    DPRINT << "=== RECEIVER KERNEL STARTED ===" << ENDL();
     size_t rt_args_idx = 0;
-    size_t local_args_idx = 0;  // Initialize local args index
+    size_t local_args_idx = 0;
+
+    DPRINT << "receiver HAS_MUX_CONNECTIONS: " << (uint32_t)HAS_MUX_CONNECTIONS << ENDL();
+    DPRINT << "receiver NUM_MUXES_TO_TERMINATE: " << (uint32_t)NUM_MUXES_TO_TERMINATE << ENDL();
 
     // Get kernel config address from runtime args
     CommonMemoryMap common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
@@ -60,30 +64,63 @@ void kernel_main() {
     uint64_t total_packets_received = 0;
 
     bool packets_left_to_validate = true;
+    uint32_t loop_count = 0;
     while (packets_left_to_validate) {
         packets_left_to_validate = false;
+
+        if (loop_count < 3) {
+            DPRINT << "Validation loop iteration " << loop_count << ENDL();
+        }
+
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             auto* traffic_config = receiver_config->traffic_configs()[i];
 
             if constexpr (!BENCHMARK_MODE) {
                 if (!traffic_config->has_packets_to_validate()) {
+                    if (loop_count < 3) {
+                        DPRINT << "Traffic config " << (uint32_t)i << " has no packets to validate" << ENDL();
+                    }
                     continue;
+                }
+
+                if (loop_count < 3) {
+                    DPRINT << "Traffic config " << (uint32_t)i << " has packets to validate, attempting poll..."
+                           << ENDL();
                 }
 
                 // if we are here, this means that we have atleast 1 packet left to validate
                 packets_left_to_validate = true;
+
+                if (loop_count < 3) {
+                    DPRINT << "Calling poll()..." << ENDL();
+                }
                 bool got_new_data = traffic_config->poll();
+                if (loop_count < 3) {
+                    DPRINT << "poll() returned " << (uint32_t)got_new_data << ENDL();
+                }
                 if (!got_new_data) {
                     continue;
                 }
 
+                if (loop_count < 3) {
+                    DPRINT << "Calling validate()..." << ENDL();
+                }
                 bool data_valid = traffic_config->validate();
+                if (loop_count < 3) {
+                    DPRINT << "validate() returned " << (uint32_t)data_valid << ENDL();
+                }
                 if (!data_valid) {
                     failed = true;
                     break;
                 }
 
+                if (loop_count < 3) {
+                    DPRINT << "Calling advance()..." << ENDL();
+                }
                 traffic_config->advance();  // Automatically handles credit return
+                if (loop_count < 3) {
+                    DPRINT << "advance() done, packet received successfully" << ENDL();
+                }
                 total_packets_received++;
 
                 packets_left_to_validate |= traffic_config->has_packets_to_validate();
@@ -95,21 +132,25 @@ void kernel_main() {
         if (failed) {
             break;
         }
+
+        loop_count++;
     }
+
+    DPRINT << "Validation loop complete, total_packets_received=" << total_packets_received << ENDL();
 
     // Close credit connections (automatically flushes remaining credits, no-op if NUM_CREDIT_CONNECTIONS == 0)
     receiver_config->close_credit_connections();
 
     // Write test results
     write_test_packets(receiver_config->get_result_buffer_address(), total_packets_received);
-
-    // Mark test as passed or failed
     uint32_t final_status = failed ? TT_FABRIC_STATUS_DATA_MISMATCH : TT_FABRIC_STATUS_PASS;
     write_test_status(receiver_config->get_result_buffer_address(), final_status);
 
-    // Terminate muxes (no-op if not a mux client)
+    // Terminate muxes and wait for completion
+    DPRINT << "receiver terminating muxes" << ENDL();
     mux_termination_manager.terminate_muxes();
-
-    // Make sure all the noc txns are done
+    DPRINT << "receiver terminating muxes done, starting barrier" << ENDL();
     noc_async_full_barrier();
+
+    DPRINT << "=== RECEIVER COMPLETE: received " << total_packets_received << " packets ===" << ENDL();
 }

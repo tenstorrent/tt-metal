@@ -162,6 +162,12 @@ public:
         // NOTE: Flow control (mux) is now handled automatically based on per-pattern enable_flow_control
         // via the FabricConnectionManager during kernel creation. No global enable_mux flag needed.
 
+        log_info(
+            tt::LogTest,
+            "process_traffic_config: test={} enable_flow_control={}",
+            config.name,
+            config.enable_flow_control);
+
         // Allocate resources
         log_info(tt::LogTest, "Allocating resources for test config");
         this->allocator_->allocate_resources(config);
@@ -280,6 +286,13 @@ public:
                 // The allocator has already filled in all the necessary details.
                 // We just need to construct the TrafficConfig and pass it to add_traffic_config.
                 const auto& dest = pattern.destination.value();
+
+                log_info(
+                    tt::LogTest,
+                    "Creating traffic config for sender device {} core {} with enable_flow_control={}",
+                    sender.device,
+                    sender.core.value(),
+                    config.enable_flow_control);
 
                 TrafficParameters traffic_parameters = {
                     .chip_send_type = pattern.ftype.value(),

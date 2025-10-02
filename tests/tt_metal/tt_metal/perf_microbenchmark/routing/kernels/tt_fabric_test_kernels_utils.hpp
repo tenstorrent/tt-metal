@@ -423,6 +423,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, false, USE_DYNAMIC_ROUTIN
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields1D::build_from_args(arg_idx);
         packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_fields.num_hops));
+        DPRINT << "num hops: " << (uint32_t)unicast_fields.num_hops << ENDL();
     }
 };
 
@@ -727,18 +728,30 @@ struct LocalSyncConfig {
 
     void local_sync(uint8_t sync_iter) {
         if constexpr (IS_MASTER_CORE) {
+            DPRINT << "LocalSyncConfig::local_sync: MASTER, sync_iter=" << (uint32_t)sync_iter
+                   << " NUM_LOCAL_CORES=" << (uint32_t)NUM_LOCAL_CORES << ENDL();
             // Master core: signal all local cores
             for (uint8_t i = 0; i < NUM_LOCAL_CORES; i++) {
                 auto dest_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[i], sync_address);
+                DPRINT << "LocalSyncConfig::local_sync: signaling core " << (uint32_t)i << " noc_addr=" << dest_noc_addr
+                       << ENDL();
                 noc_semaphore_inc(dest_noc_addr, 1);
             }
             // Wait for all local cores to acknowledge
-            noc_semaphore_wait(sync_ptr, NUM_LOCAL_CORES * (sync_iter + 1));
+            uint32_t expected_val = NUM_LOCAL_CORES * (sync_iter + 1);
+            DPRINT << "LocalSyncConfig::local_sync: waiting for " << expected_val << ENDL();
+            noc_semaphore_wait(sync_ptr, expected_val);
+            DPRINT << "LocalSyncConfig::local_sync: MASTER done" << ENDL();
         } else {
-            noc_semaphore_wait(sync_ptr, (sync_iter + 1));
+            uint32_t expected_val = sync_iter + 1;
+            DPRINT << "LocalSyncConfig::local_sync: SUBORDINATE, sync_iter=" << (uint32_t)sync_iter << " waiting for "
+                   << expected_val << ENDL();
+            noc_semaphore_wait(sync_ptr, expected_val);
+            DPRINT << "LocalSyncConfig::local_sync: received signal, sending ack" << ENDL();
             // send ack back to master sender
             auto master_sender_noc_addr = get_noc_addr_helper(sync_core_xy_encoding_[0], sync_address);
             noc_semaphore_inc(master_sender_noc_addr, 1);
+            DPRINT << "LocalSyncConfig::local_sync: SUBORDINATE done" << ENDL();
         }
     }
 
@@ -800,16 +813,22 @@ struct SenderCreditManager {
 
     // Initialize credit semaphores (called at connection open)
     void initialize() {
+        DPRINT << "SenderCreditManager::initialize: enabled=" << (uint32_t)enabled_ << ENDL();
         if (!enabled_) {
             return;
         }
 
+        DPRINT << "SenderCreditManager::initialize: num_receivers=" << num_receivers_
+               << " initial_credits=" << initial_credits_ << ENDL();
+        DPRINT << "SenderCreditManager: credit_reception_address_base="
+               << sender_credit_info_.credit_reception_address_base << ENDL();
         // Initialize all receiver credit semaphores to initial_credits
         for (uint32_t i = 0; i < num_receivers_; i++) {
             credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] = initial_credits_;
         }
 
         estimated_available_credits_ = initial_credits_;
+        DPRINT << "SenderCreditManager::initialize: done" << ENDL();
     }
 
     // Check if credits available (non-blocking, called before send)
@@ -824,6 +843,11 @@ struct SenderCreditManager {
         }
 
         // Slow path: blocked - check actual credit state across all receivers
+        static uint32_t slow_path_count = 0;
+        if (slow_path_count++ < 5) {  // Only print first few times
+            DPRINT << "has_credits_available: slow path, estimated_available_credits_=" << estimated_available_credits_
+                   << ENDL();
+        }
         return const_cast<SenderCreditManager*>(this)->update_available_credits();
     }
 
@@ -875,6 +899,7 @@ struct SenderCreditManager {
         }
 
         // Wait for all receivers to return to initial credit count
+        DPRINT << "sender waiting for all credits returned" << ENDL();
         bool all_returned = false;
         while (!all_returned) {
             invalidate_l1_cache();
@@ -882,6 +907,8 @@ struct SenderCreditManager {
 
             for (uint32_t i = 0; i < num_receivers_; i++) {
                 if (credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] < initial_credits_) {
+                    DPRINT << "credit sem addr: " << (uint32_t)credit_semaphores_base_ptr_ << ENDL();
+                    DPRINT << "current value: " << credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] << ENDL();
                     all_returned = false;
                     break;
                 }
@@ -990,6 +1017,10 @@ struct SenderKernelTrafficConfig {
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
             if (!credit_manager_.has_credits_available()) {
+                static uint32_t blocked_count = 0;
+                if (blocked_count++ < 5) {  // Only print first few times
+                    DPRINT << "send_one_packet: BLOCKED - no credits available" << ENDL();
+                }
                 return false;  // No credits available - blocked
             }
         }
@@ -1321,18 +1352,27 @@ struct MuxTerminationManager<true, NUM_MUXES> {
     }
 
     FORCE_INLINE void terminate_muxes() {
+        DPRINT << "MuxTerminationManager: is_master=" << (uint32_t)is_master_ << " total_clients=" << total_mux_clients_
+               << ENDL();
         if (is_master_) {
+            DPRINT << "MuxTerminationManager: MASTER waiting for " << (total_mux_clients_ - 1) << " subordinates"
+                   << ENDL();
             // Wait for all subordinates (total_clients - 1, excluding self)
             noc_semaphore_wait(termination_sync_ptr_, total_mux_clients_ - 1);
+            DPRINT << "MuxTerminationManager: MASTER got all signals, terminating " << (uint32_t)num_muxes_to_terminate_
+                   << " muxes" << ENDL();
 
             // Terminate all muxes in sequence
             for (uint8_t i = 0; i < num_muxes_to_terminate_; i++) {
                 tt::tt_fabric::fabric_endpoint_terminate(mux_x_[i], mux_y_[i], mux_signal_addrs_[i]);
             }
+            DPRINT << "MuxTerminationManager: MASTER done" << ENDL();
         } else {
+            DPRINT << "MuxTerminationManager: SUBORDINATE signaling master" << ENDL();
             // Signal the master
             noc_semaphore_inc(master_noc_addr_, 1);
             noc_async_atomic_barrier();
+            DPRINT << "MuxTerminationManager: SUBORDINATE done" << ENDL();
         }
     }
 
@@ -1496,7 +1536,9 @@ struct SenderKernelConfig {
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_config_ptrs[i]->credit_manager_.wait_for_all_credits_returned();
         }
+        DPRINT << "sender got all credits" << ENDL();
         connections.close_all();
+        DPRINT << "sender closed connections" << ENDL();
     }
 
     SenderKernelMemoryMap memory_map;
@@ -1540,8 +1582,6 @@ private:
         size_t& rt_args_idx,
         size_t& local_args_idx,
         uint8_t num_fabric_connections) {
-        DPRINT << "SenderKernelConfig constructor started, rt_args_idx=" << (uint32_t)rt_args_idx << ENDL();
-
         // Parse memory map args from runtime args using pre-parsed common map
         this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
 
@@ -1569,11 +1609,8 @@ private:
         }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
-            DPRINT << "Building traffic config " << (uint32_t)i << ", local_args_idx=" << (uint32_t)local_args_idx
-                   << ENDL();
             auto metadata = SenderTrafficConfigMetadata::build_from_args(local_args_idx);
             const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
-            DPRINT << "fabric_connection_idx=" << (uint32_t)fabric_connection_idx << ENDL();
             ASSERT(fabric_connection_idx < connections.num_connections);
 
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
@@ -1600,10 +1637,7 @@ private:
             uint32_t payload_buffer_address =
                 this->memory_map.get_payload_buffer_address(traffic_config_ptrs[i]->payload_size_bytes);
             traffic_config_ptrs[i]->setup_payload_buffer(payload_buffer_address, payload_buffer_size);
-            DPRINT << "Traffic config " << (uint32_t)i << " done" << ENDL();
         }
-
-        DPRINT << "SenderKernelConfig constructor completed successfully!" << ENDL();
     };
 };
 
@@ -1620,8 +1654,11 @@ struct ReceiverCreditManager {
             arg_idx, packet_header_address, packet_header_);
 
         credit_fields_ = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
-        packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-            credit_fields_.dst_address, credit_fields_.atomic_inc_val, credit_fields_.atomic_inc_wrap});
+        uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
+        packet_header_->to_noc_unicast_atomic_inc(
+            NocUnicastAtomicIncCommandHeader{noc_addr, credit_fields_.atomic_inc_val, credit_fields_.atomic_inc_wrap});
+        DPRINT << "ReceiverCreditManager: batch_size=" << (uint32_t)credit_fields_.atomic_inc_val
+               << " dst_addr=" << (uint32_t)credit_fields_.dst_address << ENDL();
     }
 
     // Initialize with credit info and fabric connection array
@@ -1655,6 +1692,7 @@ struct ReceiverCreditManager {
     // Called at end to flush remaining credits
     FORCE_INLINE void flush_remaining() {
         if (enabled_ && accumulated_credits_ > 0) {
+            DPRINT << "receiver flushing remaining credits: " << accumulated_credits_ << ENDL();
             send_credits(accumulated_credits_);
             accumulated_credits_ = 0;
         }
@@ -1664,8 +1702,9 @@ private:
     FORCE_INLINE void send_credits() { connections_->send_header_flush(connection_idx_, (uint32_t)packet_header_); }
 
     FORCE_INLINE void send_credits(uint32_t num_credits) {
+        uint64_t noc_addr = get_noc_addr_helper(credit_fields_.dst_noc_encoding, credit_fields_.dst_address);
         packet_header_->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-            credit_fields_.dst_address, static_cast<uint16_t>(num_credits), credit_fields_.atomic_inc_wrap});
+            noc_addr, static_cast<uint16_t>(num_credits), credit_fields_.atomic_inc_wrap});
         connections_->send_header_flush(connection_idx_, (uint32_t)packet_header_);
     }
 
@@ -2005,7 +2044,9 @@ struct ReceiverKernelConfig {
     void close_credit_connections() {
         // Automatically flush any remaining credits before closing
         flush_remaining_credits();
+        DPRINT << "receiver flushed remaining credits" << ENDL();
         credit_connections.close_all();
+        DPRINT << "receiver closed connections" << ENDL();
     }
 
 private:

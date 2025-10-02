@@ -82,6 +82,14 @@ public:
         ConnectionKey key = {direction, link_idx};
         auto& conn = connections_[key];  // Auto-creates if new
 
+        log_info(
+            tt::LogTest,
+            "FabricConnectionManager::register_client: core={} direction={} link_idx={} is_sender={}",
+            core,
+            static_cast<int>(direction),
+            link_idx,
+            is_sender);
+
         // Add to appropriate set (dedup happens automatically with std::set)
         if (is_sender) {
             conn.sender_cores.insert(core);
@@ -102,7 +110,17 @@ public:
 
         for (auto& [key, conn] : connections_) {
             conn.connection_idx = connection_idx++;
+            // Mux is needed if more than 1 client (sender or receiver) uses this link
             conn.needs_mux = (conn.sender_cores.size() + conn.receiver_cores.size()) > 1;
+
+            log_info(
+                tt::LogTest,
+                "FabricConnectionManager::process: direction={} link_idx={} senders={} receivers={} needs_mux={}",
+                static_cast<int>(key.direction),
+                key.link_idx,
+                conn.sender_cores.size(),
+                conn.receiver_cores.size(),
+                conn.needs_mux);
 
             if (conn.needs_mux) {
                 assign_and_validate_channels(conn, key);
@@ -217,7 +235,10 @@ public:
     }
 
     // Check if a core is a mux client
-    bool is_mux_client(const CoreCoord& core) const { return all_mux_client_cores_.count(core) > 0; }
+    bool is_mux_client(const CoreCoord& core) const {
+        log_info(tt::LogTest, "all mux client cores: {}", all_mux_client_cores_);
+        return all_mux_client_cores_.count(core) > 0;
+    }
 
     // Get the number of muxes to terminate (for compile-time arg)
     uint32_t get_num_muxes_to_terminate() const { return static_cast<uint32_t>(mux_configs_.size()); }
@@ -1219,6 +1240,11 @@ inline void TestDevice::create_sender_kernels() {
         // Determine if any traffic configs need flow control (for logging/debugging)
         bool any_traffic_needs_flow_control = false;
         for (const auto& [config, _] : sender.configs_) {
+            log_info(
+                tt::LogTest,
+                "Sender core {} traffic config: enable_flow_control={}",
+                core,
+                config.parameters.enable_flow_control);
             if (config.parameters.enable_flow_control) {
                 any_traffic_needs_flow_control = true;
                 break;
@@ -1327,6 +1353,11 @@ inline void TestDevice::create_receiver_kernels() {
         // NEW: Determine if any traffic configs need flow control (receivers need mux connections for credit return)
         bool any_traffic_needs_flow_control = false;
         for (const auto& [config, credit_connection_key] : receiver.configs_) {
+            log_info(
+                tt::LogTest,
+                "Receiver core {} traffic config: enable_flow_control={}",
+                core,
+                config.parameters.enable_flow_control);
             if (config.parameters.enable_flow_control) {
                 any_traffic_needs_flow_control = true;
                 break;
@@ -1340,6 +1371,9 @@ inline void TestDevice::create_receiver_kernels() {
         bool has_mux_connections = connection_manager_.is_mux_client(core);
         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
 
+        log_info(tt::LogTest, "has mux connections: {}", has_mux_connections);
+        log_info(tt::LogTest, "num_muxes_to_terminate: {}", num_muxes_to_terminate);
+
         // Compile-time args (order must match receiver kernel .cpp file)
         std::vector<uint32_t> ct_args = {
             is_2D_routing_enabled ? 1u : 0u,                       /* IS_2D_FABRIC */
@@ -1347,7 +1381,6 @@ inline void TestDevice::create_receiver_kernels() {
             receiver.configs_.size(),                              /* NUM_TRAFFIC_CONFIGS */
             benchmark_mode_ ? 1u : 0u,                             /* BENCHMARK_MODE */
             receiver_memory_map_->common.get_kernel_config_size(), /* KERNEL_CONFIG_BUFFER_SIZE */
-            any_traffic_needs_flow_control ? 1u : 0u,              /* FLOW_CONTROL_ENABLED (replaced USE_MUX) */
             (uint32_t)num_connections,                             /* NUM_CREDIT_CONNECTIONS */
             has_mux_connections ? 1u : 0u,                         /* HAS_MUX_CONNECTIONS */
             num_muxes_to_terminate                                 /* NUM_MUXES_TO_TERMINATE */

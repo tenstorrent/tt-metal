@@ -220,6 +220,13 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
 
     if (test_yaml["enable_flow_control"]) {
         test_config.enable_flow_control = parse_scalar<bool>(test_yaml["enable_flow_control"]);
+        log_info(
+            tt::LogTest, "Test '{}': parsed enable_flow_control={}", test_config.name, test_config.enable_flow_control);
+    } else {
+        log_info(
+            tt::LogTest,
+            "Test '{}': enable_flow_control field not found in YAML, using default (false)",
+            test_config.name);
     }
 
     return test_config;
