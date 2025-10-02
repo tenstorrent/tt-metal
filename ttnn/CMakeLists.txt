@@ -353,6 +353,11 @@ set(CCL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/barrier/barrier_${PY_BINDING}.cpp
 )
 
+set(CCL2_TTNN_SRCS_PYBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl2/ccl2_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl2/all_gather/all_gather_${PY_BINDING}.cpp
+)
+
 set(DEBUG_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/debug/debug_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/debug/apply_device_delay_${PY_BINDING}.cpp
@@ -493,6 +498,7 @@ target_link_libraries(
         TTNN::Core
         TTNN::Ops::Bernoulli
         TTNN::Ops::CCL
+        TTNN::Ops::CCL2
         TTNN::Ops::Conv
         TTNN::Ops::Core
         TTNN::Ops::DataMovement
@@ -601,6 +607,7 @@ if(WITH_PYTHON_BINDINGS)
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
             ${CCL_TTNN_SRCS_PYBIND}
+            ${CCL2_TTNN_SRCS_PYBIND}
             ${CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND}
             ${DEBUG_TTNN_SRCS_PYBIND}
             ${TTNN_P2P_PYBIND}
@@ -661,6 +668,7 @@ set(FixmeOpIncDirs
 
 add_subdirectory(cpp/ttnn/operations/bernoulli)
 add_subdirectory(cpp/ttnn/operations/ccl)
+add_subdirectory(cpp/ttnn/operations/ccl2)
 add_subdirectory(cpp/ttnn/operations/conv)
 add_subdirectory(cpp/ttnn/operations/core)
 add_subdirectory(cpp/ttnn/operations/data_movement)
