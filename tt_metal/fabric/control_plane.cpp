@@ -492,8 +492,13 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>();
+    this->physical_system_descriptor_ =
+        std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(driver, distributed_context, rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     this->initialize_distributed_contexts();
@@ -622,7 +627,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
         auto eth_coords_per_chip =
             tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
         std::unordered_map<int, chip_id_t> eth_coord_y_for_gateway_chips = {};
-        for (const auto [chip_id, eth_coord] : eth_coords_per_chip) {
+        for (const auto& [chip_id, eth_coord] : eth_coords_per_chip) {
             if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(chip_id) == BoardType::N150) {
                 eth_coord_y_for_gateway_chips[eth_coord.y] = chip_id;
             }
