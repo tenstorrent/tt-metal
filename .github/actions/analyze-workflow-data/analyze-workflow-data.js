@@ -259,9 +259,11 @@ function renderErrorsTable(errorSnippets) {
 
     // Aesthetics: drop trailing bracketed status like [failure] or [error]
     jobName = jobName.replace(/\s*\[[^\]]+\]\s*$/, '');
+    // Prevent excessive wrapping on hyphenated job names by using non-breaking hyphens for display
+    const jobDisplay = String(jobName).replace(/-/g, '\u2011');
     // HTML escape the content
     const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-    const jobEsc = escapeHtml(jobName).replace(/\r?\n/g, ' ⇥ ');
+    const jobEsc = escapeHtml(jobDisplay).replace(/\r?\n/g, ' ⇥ ');
     const testEsc = escapeHtml(testName).replace(/\r?\n/g, ' ⇥ ');
     const snippetOneLine = escapeHtml(errorForDisplay || '').replace(/\r?\n/g, ' ⇥ ');
     let ownerDisplay = 'no owner found';
@@ -540,7 +542,6 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               const levelLc = String(level).toLowerCase();
               if (levelLc !== 'failure' && levelLc !== 'error') continue; // ignore warnings
               const msgTrim = String(message).trim();
-              if (/^process completed with exit code 1\.?$/i.test(msgTrim)) continue; // skip unhelpful annotations
               const label = `${job}${title ? `: ${title}` : ''} [${level}]`;
               const dedupeKey = `${job}|${title}|${levelLc}|${msgTrim}`;
               if (seen.has(dedupeKey)) continue;
