@@ -184,7 +184,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventCros
                 EXPECT_EQ(event.mesh_cq_id(), cqs[cq_idx_record].get().id());
                 EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
                 cqs[cq_idx_wait].get().enqueue_wait_for_event(event);
-              
+
                 // Note: Removed host sync here since MeshCommandQueue::enqueue_record_event creates device-only events
                 // that don't notify the host. Host sync would require MeshCommandQueue::enqueue_record_event_to_host.
                 cmds_issued_per_cq[cq_idx_record] += num_cmds_per_cq;
