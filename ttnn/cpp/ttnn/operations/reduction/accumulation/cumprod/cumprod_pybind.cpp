@@ -39,12 +39,6 @@ void bind_reduction_cumprod_operation(py::module& module) {
         Returns:
             ttnn.Tensor: the output tensor.
 
-        Example:
-            .. code-block:: python
-
-                input_tensor = ttnn.rand((N, N), device=device)
-                output_tensor = ttnn.cumprod(input_tensor, dim=0)
-
         Note:
             If both `dtype` and `output` are specified then `output.dtype` must match `dtype`.
 
@@ -67,10 +61,7 @@ void bind_reduction_cumprod_operation(py::module& module) {
                  - dim in {0, 1, ..., rank - 3} or dim in {-rank, -rank + 1, ..., -3}
 
         Example:
-
             .. code-block:: python
-
-                import ttnn
 
                 # Create tensor
                 tensor_input = ttnn.rand((2,3,4), device=device)
@@ -79,9 +70,10 @@ void bind_reduction_cumprod_operation(py::module& module) {
                 tensor_output = ttnn.cumprod(tensor_input, dim=0)
 
                 # With preallocated output and dtype
-                preallocated_output = ttnn.from_torch(torch.rand([2, 3, 4]), dtype=ttnn.bfloat16, device=device)
+                preallocated_output = ttnn.rand([2, 3, 4], dtype=ttnn.bfloat16, device=device)
 
-                tensor_output = ttnn.cumprod(tensor_input, dim=0, dtype=torch.bfloat16, output=preallocated_output)
+                tensor_output = ttnn.cumprod(tensor_input, dim=0, dtype=ttnn.bfloat16, out=preallocated_output)
+
         )doc";
 
     using OperationType = decltype(ttnn::cumprod);
