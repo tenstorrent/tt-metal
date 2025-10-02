@@ -1428,7 +1428,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','<details>','<summary>• Errors (click to expand)</summary>','', errorsHtml, '</details>',''].join('\n');
+            errorsList = ['', '• Errors', '', errorsHtml, ''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build a link to the latest (most recent) failing run with timestamp and commit
@@ -1450,11 +1450,8 @@ async function run() {
             const commitsMd = renderCommitsTable(it.commits_between || []);
             commitsList = [
               '',
-              '<details>',
-              '<summary>Commits between last success and first failure (click to expand)</summary>',
-              '',
+              '<p>• Commits between last success and first failure</p>',
               commitsMd,
-              '</details>',
               ''
             ].join('\n');
 
@@ -1496,7 +1493,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','<details>','<summary>• Errors (click to expand)</summary>','', errorsHtml2, '</details>',''].join('\n');
+            errorsList = ['', '• Errors', '', errorsHtml2, ''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build information about the latest failing run
@@ -1518,11 +1515,8 @@ async function run() {
             const commitsMd2 = renderCommitsTable(it.commits_between || []);
             commitsList = [
               '',
-              '<details>',
-              '<summary>Commits between last success and first failure (click to expand)</summary>',
-              '',
+              '<p>• Commits between last success and first failure</p>',
               commitsMd2,
-              '</details>',
               ''
             ].join('\n');
 
