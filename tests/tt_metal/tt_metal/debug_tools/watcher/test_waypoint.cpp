@@ -170,7 +170,8 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
                     k_id_s = "";
                 }
                 std::string erisc1_s = "   X";
-                if (device->arch() == ARCH::BLACKHOLE) {
+                if (device->arch() == ARCH::BLACKHOLE &&
+                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
                     // There is a second erisc on Blackhole
                     erisc1_s = "   W";
                 }

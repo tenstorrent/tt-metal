@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <csetjmp>
 
-void __attribute__((noinline)) Application();
+int __attribute__((noinline)) main();
 
 static std::jmp_buf gJumpBuf;
 
@@ -29,7 +29,7 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
         // Returned from the longjmp
         // Do not run Application() again
     } else {
-        Application();
+        main();
     }
     __asm__ volatile("fence");
 }

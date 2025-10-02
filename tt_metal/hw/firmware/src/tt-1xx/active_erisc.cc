@@ -69,23 +69,29 @@ uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 #endif
 
 void set_deassert_addresses() {
+#if defined(ENABLE_2_ERISC_MODE)
     WRITE_REG(SUBORDINATE_AERISC_RESET_PC, MEM_SUBORDINATE_AERISC_FIRMWARE_BASE);
+#endif
 }
 
 inline void run_subordinate_eriscs(uint32_t enables) {
+#if defined(ENABLE_2_ERISC_MODE)
     // List of subordinate eriscs to run
     if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1))) {
         mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_GO;
     }
+#endif
 }
 
 inline void wait_subordinate_eriscs() {
+#if defined(ENABLE_2_ERISC_MODE)
     WAYPOINT("SEW");
     do {
         invalidate_l1_cache();
         internal_::risc_context_switch();
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
+#endif
 }
 
 // Copy from init scratch space to local memory
@@ -98,7 +104,7 @@ inline void initialize_local_memory() {
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
 }
 
-void __attribute__((noinline)) Application(void) {
+int __attribute__((noinline)) main(void) {
     WAYPOINT("I");
     configure_csr();
     initialize_local_memory();
@@ -113,8 +119,10 @@ void __attribute__((noinline)) Application(void) {
 
     risc_init();
 
+#if defined(ENABLE_2_ERISC_MODE)
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+#endif
 
     set_deassert_addresses();
 
@@ -124,7 +132,9 @@ void __attribute__((noinline)) Application(void) {
     }
     ncrisc_noc_full_sync();
 
+#if defined(ENABLE_2_ERISC_MODE)
     deassert_all_reset();
+#endif
     wait_subordinate_eriscs();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
@@ -144,7 +154,7 @@ void __attribute__((noinline)) Application(void) {
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
-                return;
+                return 0;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
                 // Set the rd_ptr on workers to specified value
@@ -207,5 +217,5 @@ void __attribute__((noinline)) Application(void) {
     }
 
     // Getting here is an invalid state
-    __builtin_unreachable();
+    return 0;
 }

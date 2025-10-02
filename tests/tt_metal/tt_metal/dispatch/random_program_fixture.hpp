@@ -262,7 +262,9 @@ private:
         std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
         if (create_eth_config) {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
-            config = EthernetConfig{.processor = this->get_processor(true), .compile_args = compile_args, .defines = defines};
+            const auto proc = this->get_processor(true);
+            config = EthernetConfig{
+                .noc = static_cast<NOC>(proc), .processor = proc, .compile_args = compile_args, .defines = defines};
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
             config = DataMovementConfig{.processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};
@@ -302,9 +304,8 @@ private:
             max_index = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
                         1;
-        } else {
-            num = this->generate_random_num(0, max_index);
         }
+        num = this->generate_random_num(0, max_index);
         DataMovementProcessor processor;
         if (num == 0) {
             processor = DataMovementProcessor::RISCV_0;

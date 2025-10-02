@@ -24,7 +24,7 @@
 #define ETH_RISC_NUM_INTERRUPT_VECS 5
 #define ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_LO_REG_ADDR 0xFFB98850
 #define ETH_CORE_A_ETH_CTRL_A_PTP_TIMER_A_CFR_TIMER_HI_REG_ADDR 0xFFB98854
-#define ETH_PTP_CYCLES_1MS 50000
+#define ETH_CLOCK_CYCLE_1MS 1000000
 #define ETH_UPDATE_LINK_STATUS_INTERVAL_MS 1000
 
 enum link_train_status_e : uint32_t {
@@ -224,14 +224,14 @@ uint64_t get_next_link_status_check_timestamp() {
 }
 
 void update_next_link_status_check_timestamp() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
-    uint64_t timestamp = eth_read_wall_clock() + (ETH_PTP_CYCLES_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+    uint64_t timestamp = eth_read_wall_clock() + (ETH_CLOCK_CYCLE_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
 #endif
 }
 
 void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
     auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
         ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + (4 * interrupt_number));
     *reg_ptr = mode_val;
@@ -239,13 +239,15 @@ void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
 }
 
 void disable_interrupts() {
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
     for (uint32_t i = 0; i < ETH_RISC_NUM_INTERRUPT_VECS; i++) {
         eth_set_interrupt_mode(i, 0);
     }
+#endif
 }
 
 FORCE_INLINE bool is_link_up() {
-#if defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)
+#if defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0) && !defined(ENABLE_2_ERISC_MODE)
     // Collect current link states
     // TODO: Until erisc0 is enabled, use MAILBOX_RISC1 for link status check. When both riscs are enabled, assign one
     // to use MAILBOX_OTHER Sending msgs to mailbox described in:
@@ -295,17 +297,20 @@ FORCE_INLINE bool is_port_up() {
 }
 
 static void service_eth_msg() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
     invalidate_l1_cache();
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
 #endif
 }
 
 static void update_boot_results_eth_link_status_check() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
     uint64_t curr_timestamp = eth_read_wall_clock();
+    uint64_t next_timestamp = get_next_link_status_check_timestamp();
     // Debounce to only be called at every interval
-    if (curr_timestamp > get_next_link_status_check_timestamp()) {
+    // wrap-around safe comparison. calling this too many times can result in link
+    // stability
+    if ((curr_timestamp - next_timestamp) < (UINT64_MAX / 2)) {
         invalidate_l1_cache();
         reinterpret_cast<void (*)(uint32_t)>(
             (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);

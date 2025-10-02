@@ -35,6 +35,7 @@
 #include <tt_stl/span.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
+#include "eth_test_common.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -64,7 +65,7 @@ bool reader_kernel_no_send(
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
     const CoreCoord& eth_reader_core,
-    const tt_metal::EthernetConfig& ethernet_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0}) {
+    tt_metal::EthernetConfig ethernet_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0}) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -82,6 +83,7 @@ bool reader_kernel_no_send(
     auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_byte_address = input_dram_buffer->address();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_reader_core);
+    eth_test_common::set_arch_specific_eth_config(ethernet_config);
     log_info(
         tt::LogTest,
         "Device {}: reading {} bytes from dram bank 0 addr {} to ethernet core {} addr {} risc {} noc {}",
@@ -140,7 +142,7 @@ bool writer_kernel_no_receive(
     const size_t& byte_size,
     const size_t& eth_l1_byte_address,
     const CoreCoord& eth_writer_core,
-    const tt_metal::EthernetConfig& ethernet_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0}) {
+    tt_metal::EthernetConfig ethernet_config = tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0}) {
     bool pass = true;
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -158,6 +160,7 @@ bool writer_kernel_no_receive(
     auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_byte_address = output_dram_buffer->address();
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_writer_core);
+    eth_test_common::set_arch_specific_eth_config(ethernet_config);
     log_info(
         tt::LogTest,
         "Device {}: writing {} bytes from ethernet core {} addr {} to dram bank 0 addr {}",
@@ -214,8 +217,8 @@ bool noc_reader_and_writer_kernels(
     const uint32_t eth_dst_l1_address,
     const uint32_t eth_src_l1_address,
     const CoreCoord& logical_eth_core,
-    const tt_metal::EthernetConfig& reader_eth_config,
-    const tt_metal::EthernetConfig& writer_eth_config) {
+    tt_metal::EthernetConfig reader_eth_config,
+    tt_metal::EthernetConfig writer_eth_config) {
     bool pass = true;
 
     distributed::MeshWorkload workload;
@@ -230,6 +233,9 @@ bool noc_reader_and_writer_kernels(
 
     auto reader_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     auto writer_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+
+    eth_test_common::set_arch_specific_eth_config(reader_eth_config);
+    eth_test_common::set_arch_specific_eth_config(writer_eth_config);
 
     log_info(
         tt::LogTest,
@@ -335,7 +341,8 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
         auto device = mesh_device->get_devices()[0];
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
-                if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0) {
+                if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
+                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
                     log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
                     continue;
                 }
@@ -381,7 +388,8 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
         auto device = mesh_device->get_devices()[0];
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
-                if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0) {
+                if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
+                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
                     log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
                     continue;
                 }

@@ -56,6 +56,13 @@ static constexpr float EPS_BH = 1.19209e-7f;
 static constexpr float NAN_BH = 7.0040e+19;
 static constexpr float INF_BH = 1.7014e+38;
 
+namespace tt::tt_metal::blackhole {
+bool is_2_erisc_mode() {
+    // rtoptions not included in here due to circular dependency
+    return getenv("TT_METAL_MULTI_AERISC") != nullptr;
+}
+}  // namespace tt::tt_metal::blackhole
+
 namespace tt {
 
 namespace tt_metal {
@@ -64,9 +71,13 @@ class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
-        if (params.is_fw && !(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0)) {
-            // active eth0 being shared with base fw has it's own crt0
-            objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
+        if (params.is_fw) {
+            // Needed to setup gp, sp, etc. for all processors which are launched with assert/deassert PC method
+            // For 2 erisc, erisc0 is launched from base firmware so it's not needed
+            if (!(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
+                  blackhole::is_2_erisc_mode())) {
+                objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
+            }
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
@@ -117,6 +128,9 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_BLACKHOLE");
+        if (blackhole::is_2_erisc_mode() && params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+            defines.push_back("ENABLE_2_ERISC_MODE");
+        }
         return defines;
     }
 
@@ -127,7 +141,10 @@ public:
             case 0:
                 if (params.is_fw) {
                     srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                    if (blackhole::is_2_erisc_mode()) {
+                        // not tmu-crt0
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                    }
                 } else {
                     srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
                 }
@@ -175,8 +192,13 @@ public:
             case HalProgrammableCoreType::ACTIVE_ETH:
                 switch (params.processor_id) {
                     case 0:
-                        return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
-                                            : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
+                        if (blackhole::is_2_erisc_mode()) {
+                            return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_main_aerisc.ld"
+                                                : "runtime/hw/toolchain/blackhole/kernel_main_aerisc.ld";
+                        } else {
+                            return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_aerisc.ld"
+                                                : "runtime/hw/toolchain/blackhole/kernel_aerisc.ld";
+                        }
                     case 1:
                         return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_aerisc.ld"
                                             : "runtime/hw/toolchain/blackhole/kernel_subordinate_aerisc.ld";
