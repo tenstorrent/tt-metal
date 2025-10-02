@@ -1355,7 +1355,9 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','  - <details><summary>Errors (click to expand)</summary>','', errorsHtml2, '  </details>',''].join('\n');
+            // Indent the table content to be inside the details block
+            const indentedTable = errorsHtml2.split('\n').map(line => line ? '  ' + line : '').join('\n');
+            errorsList = ['','  <details>','  <summary>Errors (click to expand)</summary>','', indentedTable, '  </details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build information about the latest failing run
@@ -1374,16 +1376,14 @@ async function run() {
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
             const commitsMd2 = renderCommitsTable(it.commits_between || []);
-            // const rawUrlsMd2 = renderRawCommitUrlsTable(it.commits_between || []);
+            // Indent the table content to be inside the details block
+            const indentedCommits = commitsMd2.split('\n').map(line => line ? '  ' + line : '').join('\n');
             commitsList = [
               '',
-              '  - <details><summary>Commits between last success and first failure (click to expand)</summary>',
+              '  <details>',
+              '  <summary>Commits between last success and first failure (click to expand)</summary>',
               '',
-              commitsMd2,
-              '',
-              '  - Raw commit URLs:',
-              '',
-              // rawUrlsMd2,
+              indentedCommits,
               '  </details>',
               ''
             ].join('\n');
