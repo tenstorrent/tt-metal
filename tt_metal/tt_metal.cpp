@@ -1122,6 +1122,29 @@ KernelHandle CreateKernel(
     return kernel;
 }
 
+void CreateKernel(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const UniversalConfig& config) {
+    ReaderDataMovementConfig reader_config(config.compile_args, config.defines, config.named_compile_args);
+    WriterDataMovementConfig writer_config(config.compile_args, config.defines, config.named_compile_args);
+    ComputeConfig compute_config{
+        .math_fidelity = config.math_fidelity,
+        .fp32_dest_acc_en = config.fp32_dest_acc_en,
+        .dst_full_sync_en = config.dst_full_sync_en,
+        .unpack_to_dest_mode = config.unpack_to_dest_mode,
+        .bfp8_pack_precise = config.bfp8_pack_precise,
+        .math_approx_mode = config.math_approx_mode,
+        .compile_args = config.compile_args,
+        .defines = config.defines,
+        .named_compile_args = config.named_compile_args,
+    };
+    CreateKernel(program, file_name, core_spec, reader_config);
+    CreateKernel(program, file_name, core_spec, writer_config);
+    CreateKernel(program, file_name, core_spec, compute_config);
+}
+
 KernelHandle CreateKernelFromString(
     Program& program,
     const std::string& kernel_src_code,
@@ -1280,6 +1303,15 @@ void SetRuntimeArgs(
 
 void SetRuntimeArgs(
     const Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    stl::Span<const uint32_t> runtime_args) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        SetRuntimeArgs(program, kernel_id, core_spec, runtime_args);
+    }
+}
+
+void SetRuntimeArgs(
+    const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     std::initializer_list<uint32_t> runtime_args) {
@@ -1287,6 +1319,15 @@ void SetRuntimeArgs(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
+}
+
+void SetRuntimeArgs(
+    const Program& program,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    std::initializer_list<uint32_t> runtime_args) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        SetRuntimeArgs(program, kernel_id, core_spec, runtime_args);
+    }
 }
 
 void SetRuntimeArgs(
@@ -1305,6 +1346,15 @@ void SetRuntimeArgs(
     auto k = program.impl().get_kernel(kernel);
     for (size_t i = 0; i < core_spec.size(); i++) {
         k->set_runtime_args(core_spec[i], runtime_args[i]);
+    }
+}
+
+void SetRuntimeArgs(
+    const Program& program,
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<std::vector<uint32_t>>& runtime_args) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        SetRuntimeArgs(program, kernel_id, core_spec, runtime_args);
     }
 }
 

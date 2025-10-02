@@ -110,32 +110,20 @@ int main(int argc, char** argv) {
         // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
         // back to DRAM.
 
-        std::vector<uint32_t> compute_compile_time_args = {tile_size_bytes};
-        TensorAccessorArgs(*src0_dram_buffer).append_to(compute_compile_time_args);
-        TensorAccessorArgs(*src1_dram_buffer).append_to(compute_compile_time_args);
-        TensorAccessorArgs(*dst_dram_buffer).append_to(compute_compile_time_args);
+        std::vector<uint32_t> compile_time_args = {tile_size_bytes};
+        TensorAccessorArgs(*src0_dram_buffer).append_to(compile_time_args);
+        TensorAccessorArgs(*src1_dram_buffer).append_to(compile_time_args);
+        TensorAccessorArgs(*dst_dram_buffer).append_to(compile_time_args);
 
-        auto reader = CreateKernel(
+        CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = compute_compile_time_args});
-        auto writer = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = compute_compile_time_args});
-        auto compute = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
-            core,
-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_compile_time_args});
+            UniversalConfig{.compile_args = compile_time_args, .math_fidelity = MathFidelity::HiFi4});
 
         // Set the runtime arguments for the kernels. This also registers
         // the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, writer, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, compute, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), n_tiles});
 
         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates
         // to Metalium that the operation is non-blocking. The function is allowed to return upon the kernel being queued. We must
