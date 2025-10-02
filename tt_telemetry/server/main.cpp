@@ -115,6 +115,12 @@ get_local_asic_location_and_tray_id_to_chip_id_mapping(
     return asic_location_and_tray_id_to_chip_id;
 }
 
+static std::string get_ethernet_metric_name(
+    const std::string& host_name, const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor_EndPoint& endpoint) {
+    return host_name + "/tray_" + std::to_string(endpoint.tray_id()) + "/chip_" +
+           std::to_string(endpoint.asic_location()) + "/channel_" + std::to_string(endpoint.chan_id());
+}
+
 static void process_fsd(const std::string& fsd_filename) {
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(fsd_filename);
 
@@ -150,6 +156,7 @@ static void process_fsd(const std::string& fsd_filename) {
     auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto rtoptions = tt::llrt::RunTimeOptions();
     auto psd = tt::tt_metal::PhysicalSystemDescriptor(cluster, distributed_context, rtoptions);
+    std::string my_host_name = psd.my_host_name();
 
     std::cout << std::endl;
     std::cout << "ASIC Descriptors:" << std::endl;
@@ -165,7 +172,7 @@ static void process_fsd(const std::string& fsd_filename) {
     std::cout << "Local ASICs:" << std::endl;
     std::cout << "------------" << std::endl;
     for (auto [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
-        if (psd.my_host_name() != asic_descriptor.host_name) {
+        if (my_host_name != asic_descriptor.host_name) {
             // Only looking at local ASICs
             continue;
         }
@@ -180,6 +187,34 @@ static void process_fsd(const std::string& fsd_filename) {
         std::cout << "  " << psd.my_host_name() << " chip " << chip_id << ": asic_location=" << asic_location
                   << ", tray_id=" << tray_id << std::endl;
     }
+
+    std::cout << std::endl;
+    std::cout << "Ethernet Links:" << std::endl;
+    std::cout << "---------------" << std::endl;
+    std::vector<tt::scaleout_tools::fsd::proto::FactorySystemDescriptor_EndPoint> endpoints;
+    for (const auto& connection : fsd.eth_connections().connection()) {
+        // a and b are each unique (that is, nothing listed as b will ever appear as a)
+        endpoints.push_back(connection.endpoint_a());
+        endpoints.push_back(connection.endpoint_b());
+    }
+    std::set<std::string> conns_a, conns_b;
+    for (const auto& connection : fsd.eth_connections().connection()) {
+        const auto& a = connection.endpoint_a();
+        const auto& b = connection.endpoint_b();
+        const auto& host_a = fsd.hosts()[a.host_id()];
+        const auto& host_b = fsd.hosts()[b.host_id()];
+        std::string connection_a = get_ethernet_metric_name(host_a.hostname(), a);
+        std::string connection_b = get_ethernet_metric_name(host_b.hostname(), b);
+        std::cout << "  " << connection_a << " -> " << connection_b << std::endl;
+
+        conns_a.insert(connection_a);
+        conns_b.insert(connection_b);
+    }
+    std::vector<std::string> common;
+    std::set_intersection(conns_a.begin(), conns_a.end(), conns_b.begin(), conns_b.end(), std::back_inserter(common));
+    std::cout << std::endl;
+    std::cout << common.size() << " common endpoints, " << conns_a.size() << " in A, " << conns_b.size() << " in B"
+              << std::endl;
 }
 
 /**************************************************************************************************
@@ -349,7 +384,7 @@ int main(int argc, char* argv[]) {
     // TODO: just for now, parse FSD
     if (result.count("fsd")) {
         process_fsd(result["fsd"].as<std::string>());
-        // return 0;
+        return 0;
     }
 
     bool use_mock_telemetry = result["mock-telemetry"].as<bool>();
