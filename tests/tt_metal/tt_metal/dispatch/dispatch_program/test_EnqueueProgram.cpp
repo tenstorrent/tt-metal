@@ -1312,10 +1312,13 @@ TEST_F(UnitMeshCQFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 }
 
 TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
+    const auto erisc_count =
+        tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
+    if (erisc_count != 2) {
+        GTEST_SKIP() << "Skipping test as this test requires 2 active ethernet cores";
+    }
     for (const auto& device : devices_) {
         for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
-            const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
-                HalProgrammableCoreType::ACTIVE_ETH);
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
                 log_info(
                     tt::LogTest,

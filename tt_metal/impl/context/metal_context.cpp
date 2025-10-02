@@ -649,9 +649,11 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             // subordinates we could hang waiting for subordinates to finish
             CoreCoord virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-            erisc_send_exit_signal(device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
-            llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
-
+            if (rtoptions_.get_enable_2_erisc_mode()) {
+                erisc_send_exit_signal(
+                    device_id, virtual_core, false /* is_idle_eth */);  // Stop any running erisc kernels
+                llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_core);
+            }
             // Only send reset to subordinate cores
             TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
             reset_val =
@@ -739,7 +741,9 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_eth_core, CoreType::ETH);
             // Ensure that the core has returned to base fw
-            llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_eth_core);
+            if (rtoptions_.get_enable_2_erisc_mode()) {
+                llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(device_id, virtual_eth_core);
+            }
             // Stop subordinate
             TensixSoftResetOptions reset_val =
                 TENSIX_ASSERT_SOFT_RESET &
@@ -1025,7 +1029,9 @@ void MetalContext::initialize_firmware(
             write_initial_go_launch_msg();
 
             // Write firmware main to primary erisc (DM0)
-            if (hal_->get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH) {
+            // Using classic ASSERT/DEASSERT PC method for 1 erisc mode because erisc1 has no base firmware
+            if (hal_->get_eth_fw_is_cooperative() || core_type != HalProgrammableCoreType::ACTIVE_ETH ||
+                !rtoptions_.get_enable_2_erisc_mode()) {
                 // PC
                 tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                     &jit_build_config.fw_launch_addr_value,
@@ -1035,7 +1041,6 @@ void MetalContext::initialize_firmware(
             } else {
                 // Active ethernet firmware launched immediately. Set the enable flag to 1 so FW doesn't exit
                 // immediately.
-                // tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
                 // Wait for ack not required because we wait for the done message
                 constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
@@ -1275,7 +1280,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
-    std::unordered_set<CoreCoord> active_eth_cores;
+    std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
     for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
@@ -1289,7 +1294,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         initialize_firmware(
             device_id, HalProgrammableCoreType::ACTIVE_ETH, virtual_core, launch_msg.view(), go_msg.view());
         if (!hal_->get_eth_fw_is_cooperative()) {
-            active_eth_cores.insert(virtual_core);
+            multi_risc_active_eth_cores.insert(virtual_core);
             not_done_cores.insert(virtual_core);
         }
     }
@@ -1320,10 +1325,20 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
 
     // Deassert worker cores
     for (const auto& worker_core : not_done_cores) {
-        if (active_eth_cores.contains(worker_core)) {
+        if (multi_risc_active_eth_cores.contains(worker_core) && rtoptions_.get_enable_2_erisc_mode()) {
+            // Not needed for 2 erisc mode. primary erisc handles deasserting subordinate
             continue;
         }
+
         TensixSoftResetOptions reset_val = TENSIX_DEASSERT_SOFT_RESET;
+        if (multi_risc_active_eth_cores.contains(worker_core)) {
+            // bit 12 needs to be deasserted to run second erisc on BH
+            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+                        static_cast<TensixSoftResetOptions>(
+                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        } else {
+            reset_val = TENSIX_DEASSERT_SOFT_RESET;
+        }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
 

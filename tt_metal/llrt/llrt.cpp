@@ -44,7 +44,7 @@ void print_aerisc_training_status(chip_id_t device_id, const CoreCoord& virtual_
         device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
     log_critical(
         tt::LogMetal,
-        "Device {}: Virtual core {},Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
         device_id,
         virtual_core.str(),
         port_status,

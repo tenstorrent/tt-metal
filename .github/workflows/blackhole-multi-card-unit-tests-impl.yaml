@@ -49,6 +49,14 @@ jobs:
               ./build/test/tt_metal/unit_tests_eth
               ./build/test/tt_metal/unit_tests_tunneling
             timeout: 15
+          - name: dual erisc tests
+            cmd: |
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
+              TT_METAL_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
+              TT_METAL_MULTI_AERISC=1 pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
+            timeout: 60
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
             timeout: 60
