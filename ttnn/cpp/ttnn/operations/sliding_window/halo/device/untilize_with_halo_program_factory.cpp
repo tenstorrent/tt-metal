@@ -578,7 +578,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
     uint32_t rectangular_y =
         is_block_sharded ? all_cores.ranges()[0].end_coord.y + 1
-                         : (num_noop_cores ? num_active_cores / num_cores_x + 1 : num_active_cores / num_cores_x);
+                         : (num_noop_cores ? (num_active_cores / num_cores_x) + 1 : num_active_cores / num_cores_x);
     std::set<CoreRange> rectangular_cores_set;
     if (is_block_sharded) {
         rectangular_cores_set.insert(all_cores.ranges()[0]);
@@ -586,7 +586,8 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         rectangular_cores_set.insert(CoreRange(CoreCoord(0, 0), CoreCoord(rectangular_x - 1, rectangular_y - 1)));
     }
     CoreRangeSet rectangular_cores(rectangular_cores_set);
-    CoreCoord noc_BR = is_block_sharded ? last_active_coord : core_id_to_noc_coords(rectangular_x * rectangular_y - 1);
+    CoreCoord noc_BR =
+        is_block_sharded ? last_active_coord : core_id_to_noc_coords((rectangular_x * rectangular_y) - 1);
 
     // create semaphore
     uint32_t semaphore_id = tt::tt_metal::CreateSemaphore(program, rectangular_cores, 0);

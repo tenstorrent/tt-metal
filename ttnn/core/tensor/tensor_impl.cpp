@@ -400,7 +400,7 @@ void to_string_row_major(
 
         if (rank > 1) {
             to_string_row_major(
-                ss, buffer, shape, strides, index, buffer_offset + index * stride, rank - 1, dim + 1, use_scientific);
+                ss, buffer, shape, strides, index, buffer_offset + (index * stride), rank - 1, dim + 1, use_scientific);
         } else {
             print_datum(ss, buffer[buffer_offset + index], use_scientific);
         }
@@ -913,12 +913,12 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
                 shard_width_idx == num_shards_width - 1 ? last_shard_width : logical_shard_shape.width();
 
             auto indices = LogicalPhysicalIdxPairs(num_shard_rows);
-            const auto logical_start_idx = shard_height_idx * logical_shard_shape.height() * logical_stride +
-                                           shard_width_idx * logical_shard_shape.width();
-            const auto physical_start_idx = shard_height_idx * physical_shard_shape.height() * physical_stride +
-                                            shard_width_idx * physical_shard_shape.width();
+            const auto logical_start_idx = (shard_height_idx * logical_shard_shape.height() * logical_stride) +
+                                           (shard_width_idx * logical_shard_shape.width());
+            const auto physical_start_idx = (shard_height_idx * physical_shard_shape.height() * physical_stride) +
+                                            (shard_width_idx * physical_shard_shape.width());
             for (size_t i = 0; i < num_shard_rows; i++) {
-                indices[i] = {i * logical_stride + logical_start_idx, i * physical_stride + physical_start_idx};
+                indices[i] = {(i * logical_stride) + logical_start_idx, (i * physical_stride) + physical_start_idx};
             }
 
             logical_physical_mapping.emplace_back(indices, num_shard_cols);
