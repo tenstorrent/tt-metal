@@ -20,6 +20,10 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/pinned_memory.hpp>
+#include <tt-metalium/memory_pin.hpp>
+#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/vector_aligned.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"
@@ -124,6 +128,70 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
+static void BM_read_pinned_memory(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
+    auto page_size = state.range(0);
+    auto transfer_size = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    [[maybe_unused]] auto device_id = state.range(3);
+
+    fmt::println(
+        stderr,
+        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
+    fmt::println(
+        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
+
+    log_debug(
+        LogTest,
+        "Running ReadPinnedMemory Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
+
+    auto device_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{transfer_size},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        mesh_device.get());
+
+    // Allocate destination host buffer with 16-byte alignment
+    auto dst_storage = std::make_shared<vector_aligned<std::uint8_t>>(static_cast<std::size_t>(transfer_size), 0);
+    auto aligned_ptr = reinterpret_cast<void*>(dst_storage->data());
+
+    // Create HostBuffer on top of aligned memory
+    HostBuffer host_buffer(
+        tt::stl::Span<std::uint8_t>(dst_storage->data(), static_cast<std::size_t>(transfer_size)),
+        MemoryPin(dst_storage));
+
+    // Pin the aligned host memory region for the shard
+    auto coord = MeshCoordinate(0, 0);
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+    auto pinned_unique = mesh_device->pin_memory(coordinate_range_set, host_buffer, /*map_to_noc=*/true);
+    std::shared_ptr<PinnedMemory> pinned_mem = std::move(pinned_unique);
+
+    // Prepare the read transfer using pinned memory
+    MeshCommandQueue::ShardDataTransfer read_transfer = {
+        .shard_coord = coord,
+        .host_data = aligned_ptr,
+        .pinned_memory = pinned_mem,
+        .region = BufferRegion(0, static_cast<std::size_t>(transfer_size)),
+    };
+    fmt::println(stderr, "Before enqueue read shards");
+
+    for (auto _ : state) {
+        mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
+    }
+
+    state.SetBytesProcessed(transfer_size * state.iterations());
+}
+
 int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
 
@@ -158,6 +226,14 @@ int main(int argc, char** argv) {
             ->ComputeStatistics("max", compute_max);
 
         benchmark::RegisterBenchmark("Read", BM_read, device)
+            ->ArgsProduct(benchmark_args)
+            ->UseRealTime()
+            ->Repetitions(num_test_repetitions)
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
+
+        benchmark::RegisterBenchmark("ReadPinnedMemory", BM_read_pinned_memory, device)
             ->ArgsProduct(benchmark_args)
             ->UseRealTime()
             ->Repetitions(num_test_repetitions)

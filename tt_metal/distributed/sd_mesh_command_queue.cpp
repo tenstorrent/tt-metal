@@ -46,6 +46,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     void* dst,
+    std::shared_ptr<PinnedMemory> pinned_memory,
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -92,10 +93,15 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event(
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
 }
 
-MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
+MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
     return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+}
+
+MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
+    tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
 
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
