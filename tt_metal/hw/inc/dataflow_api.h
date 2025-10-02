@@ -2413,6 +2413,8 @@ public:
     uint32_t get_cb_id() const { return cb_id_; }
 #ifdef DATA_FORMATS_DEFINED
     uint32_t get_tile_size() const { return ::get_tile_size(cb_id_); }
+    uint32_t get_tile_hw() const { return ::get_tile_hw(cb_id_); }
+    DataFormat get_dataformat() const { return ::get_dataformat(cb_id_); }
 #endif
 
     void reserve_back(int32_t num_pages) { cb_reserve_back(cb_id_, num_pages); }
@@ -2422,6 +2424,10 @@ public:
     void wait_front(int32_t num_pages) { cb_wait_front(cb_id_, num_pages); }
 
     void pop_front(int32_t num_pages) { cb_pop_front(cb_id_, num_pages); }
+
+    bool pages_reservable_at_back(int32_t num_pages) const { return cb_pages_reservable_at_back(cb_id_, num_pages); }
+
+    bool pages_available_at_front(int32_t num_pages) const { return cb_pages_available_at_front(cb_id_, num_pages); }
 
     uint32_t get_write_ptr() const {
         // return byte address (fifo_wr_ptr is 16B address)
