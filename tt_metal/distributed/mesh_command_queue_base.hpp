@@ -36,6 +36,9 @@ protected:
     virtual void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) = 0;
     // Must be called with lock_api_function_() held.
     virtual void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+    virtual MeshEvent enqueue_record_event_to_host_nolock(
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt) = 0;
 
 private:
     // Helper functions for read and write entire Sharded-MeshBuffers
