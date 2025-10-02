@@ -11,7 +11,7 @@ namespace operations::experimental::transformer {
 struct NLPConcatHeadsBoltzOperation {
     static ttnn::Tensor invoke(
         const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 }  // namespace operations::experimental::transformer

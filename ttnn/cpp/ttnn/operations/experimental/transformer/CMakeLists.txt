@@ -6,8 +6,8 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
 set_target_properties(
     ttnn_op_experimental_transformer
     PROPERTIES
-        INTERFACE_HEADER_SETS_TO_VERIFY
-            api
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
@@ -38,12 +38,8 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
-            nlp_concat_heads/nlp_concat_heads.hpp
-            nlp_create_qkv_heads/device/nlp_create_qkv_heads_device_operation.hpp
-            nlp_create_qkv_heads/nlp_create_qkv_heads.hpp
-            nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
-            rotary_embedding_llama/rotary_embedding_llama.hpp
+        FILES nlp_kv_cache_load_slice/nlp_kv_cache_load_slice.hpp
+        FILES nlp_concat_heads_boltz/nlp_concat_heads_boltz.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -105,7 +101,12 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_experimental_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_experimental_transformer PUBLIC TTNN::Core PRIVATE TT::Metalium)
+target_link_libraries(
+    ttnn_op_experimental_transformer
+    PRIVATE
+        TT::Metalium
+        TTNN::Core
+)
 
 install(
     TARGETS

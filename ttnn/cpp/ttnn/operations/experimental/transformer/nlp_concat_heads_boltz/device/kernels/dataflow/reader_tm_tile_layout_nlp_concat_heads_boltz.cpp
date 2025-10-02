@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <array>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     // WRITER RUNTIME ARGS
@@ -12,6 +13,13 @@ void kernel_main() {
     uint32_t num_blocks = get_arg_val<uint32_t>(1);
     uint32_t in0_h_dim = get_arg_val<uint32_t>(2);
     uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(3);
+
+    // DEBUG: Print all runtime arg_vals (NON-SHARDED KERNEL)
+    DPRINT << "=== NON-SHARDED KERNEL RUNTIME ARG_VALS ===" << ENDL();
+    DPRINT << "arg_val[0] (in0_tensor_addr): " << in0_tensor_addr << ENDL();
+    DPRINT << "arg_val[1] (num_blocks): " << num_blocks << ENDL();
+    DPRINT << "arg_val[2] (in0_h_dim): " << in0_h_dim << ENDL();
+    DPRINT << "arg_val[3] (in0_tensor_tile_id): " << in0_tensor_tile_id << ENDL();
     // COMPILE TIME ARGS
     constexpr uint32_t in0_h_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t in0_w_tiles = get_compile_time_arg_val(1);
@@ -21,6 +29,14 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
+
+    // DEBUG: Print compile-time args (NON-SHARDED KERNEL)
+    DPRINT << "=== NON-SHARDED KERNEL COMPILE TIME ARGS ===" << ENDL();
+    DPRINT << "compile_time_arg[0] (in0_h_tiles): " << in0_h_tiles << ENDL();
+    DPRINT << "compile_time_arg[1] (in0_w_tiles): " << in0_w_tiles << ENDL();
+    DPRINT << "compile_time_arg[2] (in0_c): " << in0_c << ENDL();
+    DPRINT << "compile_time_arg[3] (in0_HtWt): " << in0_HtWt << ENDL();
+    DPRINT << "single_tile_size_bytes: " << single_tile_size_bytes << ENDL();
     const DataFormat data_format = get_dataformat(cb_id_in0);
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr, single_tile_size_bytes);
 

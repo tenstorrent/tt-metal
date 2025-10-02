@@ -1,0 +1,25 @@
+{
+  "timestamp": "2025-09-24 05:22:40",
+  "configuration": {
+    "build_dir": "/home/tt-metal-apv/build-cmake",
+    "results_dir": "performance_results"
+  },
+  "results": {
+    "CPU Reference": {
+      "total_pixels": 262144,
+      "total_operations": 26214400,
+      "execution_time_ms": 724.8086628969759,
+      "pixels_per_second": 361673.3814304053,
+      "operations_per_second": 36167338.14304053,
+      "estimated_gflops": 0.3616733814304053,
+      "timing_stats": {
+        "avg_ms": 724.8086628969759,
+        "min_ms": 724.8086628969759,
+        "max_ms": 724.8086628969759,
+        "times": [
+          724.8086628969759
+        ]
+      }
+    }
+  }
+}

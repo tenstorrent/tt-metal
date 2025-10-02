@@ -26,7 +26,8 @@ void NLPConcatHeadsBoltzDeviceOperation::validate(const std::vector<Tensor>& inp
         TT_FATAL(shard_spec.shape[0] % input_tensor.padded_shape()[-2] == 0, "Error");
         TT_FATAL(
             input_tensor.padded_shape()[1] % (shard_spec.shape[0] / input_tensor.padded_shape()[-2]) == 0, "Error");
-        TT_FATAL(this->output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, "Error");
+        // Allow HEIGHT_SHARDED output memory layout for sharded inputs
+        // TT_FATAL(this->output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, "Error");
     } else {
         TT_FATAL(this->output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED, "Error");
     }

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mandelbrot Set - TT Mesh Device Results</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 10px;
+        }
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .image-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border: 1px solid #ddd;
+        }
+        .image-card img {
+            width: 100%;
+            height: auto;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+        .image-card img:hover {
+            transform: scale(1.05);
+        }
+        .image-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin: 10px 0 5px 0;
+            color: #333;
+        }
+        .image-info {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        .specs {
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.9);
+        }
+        .modal-content {
+            margin: auto;
+            display: block;
+            width: 90%;
+            max-width: 1000px;
+            max-height: 90%;
+            margin-top: 2%;
+        }
+        .close {
+            position: absolute;
+            top: 15px;
+            right: 35px;
+            color: #f1f1f1;
+            font-size: 40px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎨 Mandelbrot Set Visualization</h1>
+            <h2>Computed on Tenstorrent 2×4 Mesh Device</h2>
+            <p>8× Parallel Processing • Perfect Load Balancing • Distributed Computing</p>
+        </div>
+
+        <div class="specs">
+            <h3>🚀 Parallelization Details</h3>
+            <ul>
+                <li><strong>Mesh Configuration:</strong> 2×4 = 8 devices</li>
+                <li><strong>Per Device:</strong> ~32,768 pixels</li>
+                <li><strong>Speedup:</strong> 8× theoretical (embarrassingly parallel)</li>
+                <li><strong>Memory:</strong> Distributed DRAM shards</li>
+                <li><strong>Communication:</strong> Zero during computation</li>
+            </ul>
+        </div>
+
+        <div class="image-grid">
+
+            <div class="image-card">
+                <div class="image-title">mandelbrot_mesh_simple.ppm</div>
+                <div class="image-info">
+                    Simple Kernel (Educational)<br>
+                    Resolution: 512 × 512<br>
+                    File size: 1.8 MB
+                </div>
+                <img src="mandelbrot_mesh_simple.png" alt="mandelbrot_mesh_simple.ppm" onclick="openModal(this.src)">
+            </div>
+
+            <div class="image-card">
+                <div class="image-title">mandelbrot_set.ppm</div>
+                <div class="image-info">
+                    Unknown<br>
+                    Resolution: 512 × 512<br>
+                    File size: 1.8 MB
+                </div>
+                <img src="mandelbrot_set.png" alt="mandelbrot_set.ppm" onclick="openModal(this.src)">
+            </div>
+
+        </div>
+
+        <div class="specs">
+            <h3>📊 Implementation Comparison</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr style="background: #f8f9fa;">
+                    <th style="padding: 10px; border: 1px solid #ddd;">Kernel</th>
+                    <th style="padding: 10px; border: 1px solid #ddd;">Approach</th>
+                    <th style="padding: 10px; border: 1px solid #ddd;">Best For</th>
+                </tr>
+                <tr>
+                    <td style="padding: 10px; border: 1px solid #ddd;"><strong>Fixed-Point</strong></td>
+                    <td style="padding: 10px; border: 1px solid #ddd;">16.16 integer arithmetic</td>
+                    <td style="padding: 10px; border: 1px solid #ddd;">Production deployment</td>
+                </tr>
+                <tr>
+                    <td style="padding: 10px; border: 1px solid #ddd;"><strong>Simple</strong></td>
+                    <td style="padding: 10px; border: 1px solid #ddd;">Detailed comments</td>
+                    <td style="padding: 10px; border: 1px solid #ddd;">Learning/teaching</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Modal for full-size viewing -->
+    <div id="imageModal" class="modal" onclick="closeModal()">
+        <span class="close" onclick="closeModal()">&times;</span>
+        <img class="modal-content" id="modalImage">
+    </div>
+
+    <script>
+        function openModal(src) {
+            document.getElementById('imageModal').style.display = 'block';
+            document.getElementById('modalImage').src = src;
+        }
+
+        function closeModal() {
+            document.getElementById('imageModal').style.display = 'none';
+        }
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+</html>
