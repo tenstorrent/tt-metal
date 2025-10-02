@@ -202,25 +202,31 @@ function renderErrorsTable(errorSnippets) {
   const rows = errorSnippets.map(obj => {
     const rawLabel = (obj && obj.label) ? String(obj.label) : '';
     const rawSnippet = (obj && obj.snippet) ? String(obj.snippet) : '';
-    // Extract job and test
-    const tryGet = (s) => typeof s === 'string' ? s : '';
-    let jobName = tryGet(obj && obj.job);
-    let testName = tryGet(obj && obj.test);
+    let errorForDisplay = rawSnippet;
+
+    // --- RESTRUCTURED PARSING LOGIC ---
+    // 1. Start with explicitly provided job/test names (from gtest logs)
+    let jobName = (obj && typeof obj.job === 'string') ? obj.job : '';
+    let testName = (obj && typeof obj.test === 'string') ? obj.test : '';
+
+    // 2. If job/test names are missing, try parsing from the label (for annotations)
     if (!jobName || !testName) {
-      // Try parsing from label of the form "job: test"
       if (rawLabel && rawLabel.includes(':')) {
         const idx = rawLabel.indexOf(':');
         const left = rawLabel.slice(0, idx).trim();
         const right = rawLabel.slice(idx + 1).trim();
-        if (!jobName) jobName = left;
-        if (!testName && right) testName = right.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
+        if (!jobName) {
+          jobName = left;
+        }
+        if (!testName && right) {
+          // Clean up the test name by removing status indicators like [failure]
+          testName = right.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
+        }
       }
     }
-    // For pytest (or anything else):
-    // - Test name is content up to first '[' when present
-    // - If there is no '[', set Test to NA
-    // - For generic infra errors, force Test to NA
-    let errorForDisplay = rawSnippet;
+
+    // 3. FALLBACK: If testName is *still* not found, try to infer it from the snippet.
+    // This block is now correctly scoped to only run when truly necessary.
     if (!testName) {
       const trimmed = rawSnippet.replace(/^\s+/, '');
       const generic = /(lost\s+connection|timeout|timed\s*out|connection\s+reset|network\s+is\s+unreachable|no\s+space\s+left|killed\s+by|out\s+of\s+memory)/i;
@@ -228,6 +234,7 @@ function renderErrorsTable(errorSnippets) {
       const ispace = trimmed.indexOf(' ');
       const endWord = (ispace === -1 && ib === -1) ? trimmed.length : Math.min(...[ispace, ib].filter(v => v !== -1));
       const firstToken = trimmed.slice(0, Math.max(0, endWord)).trim();
+
       if (generic.test(trimmed)) {
         testName = 'NA';
         errorForDisplay = rawSnippet;
@@ -242,11 +249,14 @@ function renderErrorsTable(errorSnippets) {
         testName = 'NA';
         errorForDisplay = rawSnippet;
       }
-    } else {
-      // If test name provided (e.g., gtest), leave error as-is
-      errorForDisplay = rawSnippet;
     }
-    if (!jobName) jobName = rawLabel || '';
+
+    // 4. Final fallback for jobName if it's still empty
+    if (!jobName) {
+      jobName = rawLabel || '';
+    }
+    // --- END OF RESTRUCTURED LOGIC ---
+
     // Aesthetics: drop trailing bracketed status like [failure] or [error]
     jobName = jobName.replace(/\s*\[[^\]]+\]\s*$/, '');
     // HTML escape the content
