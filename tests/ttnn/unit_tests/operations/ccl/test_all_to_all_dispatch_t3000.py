@@ -167,6 +167,18 @@ def gen_tensors(
     return input_tokens, expert_indices, expert_mapping, output_tensor, metadata_tensor
 
 
+def get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim):
+    if cluster_axis is None:
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
+    elif cluster_axis == 1:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, shard_dim), mesh_shape=mesh_shape)
+    elif cluster_axis == 0:
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape)
+    else:
+        raise ValueError(f"Invalid cluster_axis: {cluster_axis}")
+    return mesh_mapper
+
+
 # we import and use this function in tests.sweeps_framework.sweeps.ccl.generality.all_to_all_dispatch.py
 # so be sure to carry over interface changes!
 def run_all_to_all_dispatch_test(
@@ -221,14 +233,7 @@ def run_all_to_all_dispatch_test(
 
     output_tensor_goldens_list = []
     output_metadata_goldens_list = []
-    if cluster_axis is None:
-        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=shard_dim)
-    elif cluster_axis == 1:
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, shard_dim), mesh_shape=mesh_shape)
-    elif cluster_axis == 0:
-        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(shard_dim, None), mesh_shape=mesh_shape)
-    else:
-        raise ValueError(f"Invalid cluster_axis: {cluster_axis}")
+    mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, shard_dim)
 
     for iter in range(num_iters):
         input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
@@ -1040,23 +1045,82 @@ def test_all_to_all_dispatch_no_trace_batch1(
 ):
     if num_links == "MAX_LINKS":
         num_links = get_max_links(cluster_axis, device_params["fabric_config"])
-
-    run_all_to_all_dispatch_test(
-        mesh_device,
-        mesh_shape,
+    devices = mesh_shape[0] * mesh_shape[1]
+    input_tokens, expert_indices, expert_mapping, sparse_output_token_tensor, metadata_tensor = gen_tensors(
         batch,
         experts,
         select_experts_k,
         hidden_size,
         seq_len,
-        num_iters,
-        warmup_iters,
-        trace_mode,
-        num_links=num_links,
+        mesh_shape,
+        devices,
         scheme="random",
-        input_memory_config=input_memory_config,
-        output_memory_config=output_memory_config,
-        dtype=dtype,
-        cluster_axis=cluster_axis,
-        shard_dim=1,
+        dtype=tt_to_torch_dtype(dtype),
     )
+
+    logger.info(f"Batch = 1 input_tokens global shape: {input_tokens.shape}")
+    logger.info(f"Batch = 1 expert_indices global shape: {expert_indices.shape}")
+
+    mesh_mapper = get_mesh_mapper(mesh_device, mesh_shape, cluster_axis, 2)
+
+    tt_input_tokens = ttnn.from_torch(
+        input_tokens,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=input_memory_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    tt_expert_indices = ttnn.from_torch(
+        expert_indices,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
+    )
+
+    logger.info(f"Batch = 1 tt_input_tokens per-device shape: {tt_input_tokens.shape}")
+    logger.info(f"Batch = 1 tt_expert_indices per-device shape: {tt_expert_indices.shape}")
+    logger.info(f"Batch = 1 tt_expert_mapping per-device shape: {tt_expert_mapping.shape}")
+
+    tt_output_tensor, tt_metadata_tensor = ttnn.all_to_all_dispatch(
+        tt_input_tokens,
+        tt_expert_indices,
+        tt_expert_mapping,
+        cluster_axis=cluster_axis,
+        num_links=num_links,
+        memory_config=output_memory_config,
+    )
+
+    logger.info(f"Batch = 1 tt_output_tensor per-device shape: {tt_output_tensor.shape}")
+    logger.info(f"Batch = 1 tt_metadata_tensor per-device shape: {tt_metadata_tensor.shape}")
+
+    torch_tt_output_tensor = ttnn.to_torch(
+        tt_output_tensor,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+    )
+
+    torch_tt_metadata_tensor = ttnn.to_torch(
+        tt_metadata_tensor,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2),
+    )
+
+    # reshape to (-1, H)/
+    torch_tt_output_tensor = torch_tt_output_tensor.reshape(-1, torch_tt_output_tensor.shape[-1])
+    torch_tt_metadata_tensor = torch_tt_metadata_tensor.reshape(-1, torch_tt_metadata_tensor.shape[-1])
+    sparse_output_token_tensor = sparse_output_token_tensor.reshape(-1, sparse_output_token_tensor.shape[-1])
+    metadata_tensor = metadata_tensor.reshape(-1, metadata_tensor.shape[-1])
+
+    torch.allclose(torch_tt_output_tensor, sparse_output_token_tensor)
+    torch.allclose(torch_tt_metadata_tensor, metadata_tensor)
