@@ -90,7 +90,8 @@ private:
         const MeshId mesh_id,
         const HostName& hostname,
         std::unordered_map<MeshId, HostRank>& mesh_id_to_host_rank,
-        std::unordered_set<HostName>& visited_hosts);
+        std::unordered_set<HostName>& visited_hosts,
+        std::unordered_set<MeshId>& visited_meshes);
 
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;

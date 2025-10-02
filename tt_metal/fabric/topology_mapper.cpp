@@ -58,9 +58,10 @@ std::unordered_map<MeshId, HostRank> TopologyMapper::build_host_mesh_mappings() 
     mesh_id_to_host_rank[mesh_id] = {current_host};
 
     std::unordered_set<HostName> visited_hosts = {};
+    std::unordered_set<MeshId> visited_meshes = {};
 
     // Discover all hosts
-    discover_hosts_dfs(mesh_id, current_host, mesh_id_to_host_rank, visited_hosts);
+    discover_hosts_dfs(mesh_id, current_host, mesh_id_to_host_rank, visited_hosts, visited_meshes);
 
     return mesh_id_to_host_rank;
 }
@@ -69,7 +70,8 @@ bool TopologyMapper::discover_hosts_dfs(
     const MeshId mesh_id,
     const HostName& host_name,
     std::unordered_map<MeshId, HostRank>& mesh_id_to_host_rank,
-    std::unordered_set<HostName>& visited_hosts) {
+    std::unordered_set<HostName>& visited_hosts,
+    std::unordered_set<MeshId>& visited_meshes) {
     // Mesh Graph related information
     auto mesh_size = mesh_graph_.get_mesh_shape(mesh_id).mesh_size();
     auto host_ranks = mesh_graph_.get_host_ranks(mesh_id);
@@ -79,28 +81,6 @@ bool TopologyMapper::discover_hosts_dfs(
 
     // Rank sizes
     auto rank_size = mesh_size / host_size;
-
-    // If Equal to 1, Single mesh per host
-    if (rank_size == 1) {
-        mesh_id_to_host_rank[mesh_id] = {host_name};
-
-        // If Greater than 1, Big mesh
-    } else if (rank_size > 1) {
-        mesh_id_to_host_rank[mesh_id].resize(host_ranks.size());
-
-        // mesh_id_to_host_rank[mesh_id][*host_ranks.begin()] = host_name;
-
-        // If Less than 1, many meshes per host
-    } else {
-        mesh_id_to_host_rank[mesh_id] = {host_name};
-
-        // TODO: Find adjacent meshes on same host
-    }
-
-    if (visited_hosts.size() == physical_system_descriptor_.get_all_hostnames().size()) {
-        // FINISH!
-        return true;
-    }
 
     // Size of the mesh ratio to host size does not match the number of host ranks means the match is incorrect
     if (host_ranks.size() > 1 && host_ranks.size() != rank_size) {
@@ -112,33 +92,57 @@ bool TopologyMapper::discover_hosts_dfs(
     }
 
     if (visited_hosts.contains(host_name)) {
-        // Add the chain to the mapping
+        return false;
+    }
+    if (visited_meshes.contains(mesh_id)) {
         return false;
     }
 
+    // Add the chain to the mapping
+    visited_hosts.insert(host_name);
+    visited_meshes.insert(mesh_id);
+
     // If Equal to 1, Single mesh per host
     if (rank_size == 1) {
-        // Find adjacent hosts
-        auto adjacent_hosts = physical_system_descriptor_.get_host_neighbors(host_name);
+        mesh_id_to_host_rank[mesh_id] = {host_name};
+    } else if (rank_size > 1) {
+        mesh_id_to_host_rank[mesh_id].resize(host_ranks.size());
+        auto host_rank = host_ranks.at(MeshCoordinate(0, 0));
+        mesh_id_to_host_rank[mesh_id][host_rank.get()] = host_name;
+    } else {
+        mesh_id_to_host_rank[mesh_id] = {host_name};
+    }
 
-        // Find adjacent meshes
-        auto adjacent_meshes = mesh_graph_.get_adjacent_meshes(mesh_id);
+    // Check if all hosts and meshes have been visited
+    if (visited_hosts.size() == physical_system_descriptor_.get_all_hostnames().size() && visited_meshes.size() == mesh_graph_.get_mesh_ids().size()) {
+        // FINISH!
+        return true;
+    }
 
+    std::vector<HostName> adjacent_hosts;
+    std::vector<MeshId> adjacent_meshes;
+
+    // If Equal to 1, Single mesh per host
+    if (rank_size == 1) {
+        adjacent_hosts = physical_system_descriptor_.get_host_neighbors(host_name);
+        adjacent_meshes = mesh_graph_.get_adjacent_meshes(mesh_id);
+    // If Greater than 1, Big mesh
+    } else if (rank_size > 1) {
+        adjacent_hosts = physical_system_descriptor_.get_host_neighbors(host_name);
+        adjacent_meshes = mesh_graph_.get_adjacent_meshes(mesh_id);
+        adjacent_meshes.push_back(mesh_id);
+    } else {
+        adjacent_hosts = {host_name};
+        adjacent_meshes = mesh_graph_.get_adjacent_meshes(mesh_id);
+    }
+
+    // Check every combination of adjacent meshes and hosts to see if there is a valid mapping
+    for (const auto& adjacent_mesh : adjacent_meshes) {
         for (const auto& adjacent_host : adjacent_hosts) {
-            for (const auto& adjacent_mesh : adjacent_meshes) {
-                if (discover_hosts_dfs(adjacent_mesh, adjacent_host, mesh_id_to_host_rank, visited_hosts)) {
-                    return true;
-                }
+            if (discover_hosts_dfs(adjacent_mesh, adjacent_host, mesh_id_to_host_rank, visited_hosts, visited_meshes)) {
+                return true;
             }
         }
-
-        // If Greater than 1, Big mesh
-    } else if (rank_size > 1) {
-        // TODO: Find adjacent hosts
-
-        // If Less than 1, many meshes per host
-    } else {
-        // TODO: Find adjacent meshes on same host
     }
 
     return false;
