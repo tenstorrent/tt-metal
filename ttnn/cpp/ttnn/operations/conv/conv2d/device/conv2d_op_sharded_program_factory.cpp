@@ -625,7 +625,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
         weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
 
-        if (enable_split_reader && overlap_act_cb) {
+        if (split_reader_overlapped) {
             act_split_reader_sync_first_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
             act_split_reader_sync_second_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
         }
