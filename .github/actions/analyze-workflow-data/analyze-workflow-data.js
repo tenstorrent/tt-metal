@@ -265,10 +265,10 @@ function renderErrorsTable(errorSnippets) {
   return [
     '<table>',
     '<colgroup>',
-    '<col style="width: 40%;">',
+    '<col style="width: 45%;">',
     '<col style="width: 15%;">',
     '<col style="width: 10%;">',
-    '<col style="width: 35%;">',
+    '<col style="width: 30%;">',
     '</colgroup>',
     '<thead>',
     '<tr><th>Job</th><th>Test</th><th>Owner</th><th>Error</th></tr>',
