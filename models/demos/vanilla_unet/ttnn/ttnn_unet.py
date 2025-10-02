@@ -165,7 +165,7 @@ class TtUnet:
         nhwc = ttnn.reallocate(nhwc)
 
         enc1 = self.enc1_1(device, nhwc)
-        enc1 = ttnn.to_memory_config(enc1, ttnn.DRAM_MEMORY_CONFIG)
+        # enc1 = ttnn.to_memory_config(enc1, ttnn.DRAM_MEMORY_CONFIG)
         enc1 = self.enc1_2(device, enc1)
         pool_in = ttnn.reshape(enc1, (1, 1, enc1.shape[0] * enc1.shape[1] * enc1.shape[2], enc1.shape[3]))
         pool_1 = ttnn.max_pool2d(
@@ -190,15 +190,15 @@ class TtUnet:
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        pool_1 = ttnn.to_memory_config(pool_1, memory_config)
+        # pool_1 = ttnn.to_memory_config(pool_1, memory_config)
 
         enc2 = self.enc2_1(device, pool_1)
         ttnn.deallocate(pool_1)
         enc2 = self.enc2_2(device, enc2)
 
         pool_in = ttnn.reshape(enc2, (1, 1, enc2.shape[0] * enc2.shape[1] * enc2.shape[2], enc2.shape[3]))
-        if pool_in.is_sharded:
-            pool_in = ttnn.sharded_to_interleaved(pool_in, ttnn.L1_MEMORY_CONFIG)
+        # if pool_in.is_sharded:
+        # pool_in = ttnn.sharded_to_interleaved(pool_in, ttnn.L1_MEMORY_CONFIG)
         pool_2 = ttnn.max_pool2d(
             input_tensor=pool_in,
             batch_size=1,
