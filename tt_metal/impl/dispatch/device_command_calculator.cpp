@@ -59,7 +59,7 @@ void DeviceCommandCalculator::insert_write_packed_payloads(
         const uint32_t num_sub_cmds_in_cmd = std::min(max_packed_sub_cmds_per_cmd, rem_num_sub_cmds);
         const uint32_t aligned_data_sizeB = aligned_sub_cmd_sizeB * num_sub_cmds_in_cmd;
         const uint32_t dispatch_cmd_sizeB =
-            tt::align(sizeof(CQDispatchCmd) + num_sub_cmds_in_cmd * sizeof(PackedSubCmd), l1_alignment);
+            tt::align(sizeof(CQDispatchCmd) + (num_sub_cmds_in_cmd * sizeof(PackedSubCmd)), l1_alignment);
         packed_cmd_payloads.emplace_back(num_sub_cmds_in_cmd, dispatch_cmd_sizeB + aligned_data_sizeB);
         rem_num_sub_cmds -= num_sub_cmds_in_cmd;
         this->add_dispatch_write_packed<PackedSubCmd>(

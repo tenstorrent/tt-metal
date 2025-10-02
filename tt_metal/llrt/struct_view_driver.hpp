@@ -45,7 +45,7 @@ public:
     StructSpan(const StructInfo info, byte_type* base, size_t size) : info_(info), base_(base), size_(size) {}
     size_t size() const { return size_; }
 
-    view_type operator[](size_t i) const { return {info_, base_ + i * info_.get_size()}; }
+    view_type operator[](size_t i) const { return {info_, base_ + (i * info_.get_size())}; }
     class iterator {
     private:
         const StructInfo info_;
@@ -62,7 +62,7 @@ public:
         view_type operator*() const { return {info_, ptr_}; }
     };
     iterator begin() const { return {info_, base_}; }
-    iterator end() const { return {info_, base_ + size_ * info_.get_size()}; }
+    iterator end() const { return {info_, base_ + (size_ * info_.get_size())}; }
 
 private:
     StructInfo info_;
