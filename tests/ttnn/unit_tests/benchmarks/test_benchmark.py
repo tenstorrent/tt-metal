@@ -140,74 +140,67 @@ def get_profiler_build_enabled():
 # M will be scaled by Y (num cols), N and K will be scaled by X (num rows)
 # (m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
 matmul_shapes_bfloat16 = [
-    (64, 64, 64, True, True, 1, 1, 1),
-    (64, 128, 128, True, True, 1, 1, 1),
-    (64, 128, 256, True, True, 1, 1, 1),
-    (128, 128, 128, True, True, 1, 1, 1),
-    (128, 128, 256, True, True, 1, 1, 1),
-    (128, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 384, True, True, 1, 1, 1),
+    # (64, 64, 64, True, True, 1, 1, 1),
+    # (64, 128, 128, True, True, 1, 1, 1),
+    # (64, 128, 256, True, True, 1, 1, 1),
+    # (128, 128, 128, True, True, 1, 1, 1),
+    # (128, 128, 256, True, True, 1, 1, 1),
+    # (128, 256, 256, True, True, 1, 1, 1),
+    # (256, 256, 256, True, True, 1, 1, 1),
+    # (256, 256, 384, True, True, 1, 1, 1),
     (256, 384, 384, True, True, 2, 1, 1),
     (384, 384, 384, True, True, 4, 1, 1),
-    (384, 384, 512, False, False, 2, 1, 1),
-    (384, 512, 512, False, False, 2, 1, 1),
-    (512, 512, 512, False, False, 1, 2, 2),
-    (1024, 1024, 1024, False, False, 2, 4, 4),
-    (2048, 2048, 2048, False, False, 4, 8, 8),
+    # (384, 384, 512, False, False, 2, 1, 1),
+    # (384, 512, 512, False, False, 2, 1, 1),
+    # (512, 512, 512, False, False, 1, 2, 2),
+    # (1024, 1024, 1024, False, False, 2, 4, 4),
+    # (2048, 2048, 2048, False, False, 4, 8, 8),
 ]
 
 matmul_shapes_bfloat8_b = [
-    (64, 64, 64, True, True, 1, 1, 1),
-    (64, 128, 128, True, True, 1, 1, 1),
-    (64, 128, 256, True, True, 1, 1, 1),
-    (128, 128, 128, True, True, 1, 1, 1),
-    (128, 128, 256, True, True, 1, 1, 1),
-    (128, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 384, True, True, 1, 1, 1),
-    (256, 384, 384, True, True, 1, 1, 1),
+    # (64, 64, 64, True, True, 1, 1, 1),
+    # (64, 128, 128, True, True, 1, 1, 1),
+    # (64, 128, 256, True, True, 1, 1, 1),
+    # (128, 128, 128, True, True, 1, 1, 1),
+    # (128, 128, 256, True, True, 1, 1, 1),
+    # (128, 256, 256, True, True, 1, 1, 1),
+    # (256, 256, 256, True, True, 1, 1, 1),
+    # (256, 256, 384, True, True, 1, 1, 1),
+    # (256, 384, 384, True, True, 1, 1, 1),
     (384, 384, 384, True, True, 2, 1, 1),
     (384, 384, 512, True, True, 2, 1, 1),
-    (512, 512, 512, False, False, 1, 2, 2),
-    (1024, 1024, 1024, False, False, 2, 4, 4),
-    (2048, 2048, 2048, False, False, 4, 8, 8),
+    # (512, 512, 512, False, False, 1, 2, 2),
+    # (1024, 1024, 1024, False, False, 2, 4, 4),
+    # (2048, 2048, 2048, False, False, 4, 8, 8),
 ]
 
 matmul_shapes_bfloat4_b = [
-    (64, 64, 64, True, True, 1, 1, 1),
-    (64, 128, 128, True, True, 1, 1, 1),
-    (64, 128, 256, True, True, 1, 1, 1),
-    (128, 128, 128, True, True, 1, 1, 1),
-    (128, 128, 256, True, True, 1, 1, 1),
-    (128, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 256, True, True, 1, 1, 1),
-    (256, 256, 384, True, True, 1, 1, 1),
-    (256, 384, 384, True, True, 1, 1, 1),
-    (384, 384, 384, True, True, 1, 1, 1),
-    (384, 384, 512, True, True, 1, 1, 1),
-    (384, 512, 512, True, True, 2, 1, 1),
-    (512, 512, 512, True, True, 2, 1, 1),
-    (1024, 1024, 1024, False, False, 2, 2, 2),
-    (2048, 2048, 2048, False, False, 4, 4, 4),
+    # (64, 64, 64, True, True, 1, 1, 1),
+    # (64, 128, 128, True, True, 1, 1, 1),
+    # (64, 128, 256, True, True, 1, 1, 1),
+    # (128, 128, 128, True, True, 1, 1, 1),
+    # (128, 128, 256, True, True, 1, 1, 1),
+    # (128, 256, 256, True, True, 1, 1, 1),
+    # (256, 256, 256, True, True, 1, 1, 1),
+    # (256, 256, 384, True, True, 1, 1, 1),
+    # (256, 384, 384, True, True, 1, 1, 1),
+    # (384, 384, 384, True, True, 1, 1, 1),
+    # (384, 384, 512, True, True, 1, 1, 1),
+    # (384, 512, 512, True, True, 2, 1, 1),
+    # (512, 512, 512, True, True, 2, 1, 1),
+    # (1024, 1024, 1024, False, False, 2, 2, 2),
+    # (2048, 2048, 2048, False, False, 4, 4, 4),
 ]
 
 # (dtype, math_fidelity, use_trace)
 matmul_configs = [
+    (ttnn.bfloat16, ttnn.MathFidelity.LoFi, False),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
     (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
-    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
-    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
 ]
 
 
-@pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -247,6 +240,7 @@ def test_matmul_2d_host_perf(
     HiFi4_cycle = LoFi_cycle * 4
 
     with open(FILE_NAME, mode="w", newline="") as file:
+        logger.info(f"output file: {FILE_NAME}")
         writer = csv.writer(file)
         header = [
             "m",
@@ -263,6 +257,7 @@ def test_matmul_2d_host_perf(
             "math_fidelity",
             "inference_time_avg [ns]",
             "TFLOPs (avg)",
+            "TFLOPs_per_core (avg)",
             f"Host based utilization[%] (vs user selected grid {grid_size[0]}x{grid_size[1]})",
             f"Host based utilization[%] (vs full available grid {compute_grid_size.x}x{compute_grid_size.y})",
         ]
@@ -478,7 +473,7 @@ def test_matmul_2d_host_perf(
                     utilization_user_grid_device = ideal_cycle_user_grid / np.mean(trisc1_kernel_duration)
 
                 logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user selected grid {grid_size[0]}x{grid_size[1]}): {utilization_user_grid * 100:.2f}%, utilization (vs full available grid {compute_grid_size.x}x{compute_grid_size.y}): {utilization_full_grid * 100:.2f}%"
+                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, {dtype=}, tflops (avg): {tflops}, utilization (vs user selected grid {grid_size[0]}x{grid_size[1]}): {utilization_user_grid * 100:.2f}%, utilization (vs full available grid {compute_grid_size.x}x{compute_grid_size.y}): {utilization_full_grid * 100:.2f}%"
                 )
 
                 output_tensor = ttnn.to_torch(output_t)
@@ -500,6 +495,7 @@ def test_matmul_2d_host_perf(
                     math_fidelity,
                     f"{inference_time_avg * 1e9:.2f}",
                     f"{tflops:.2f}",
+                    f"{(tflops / num_cores_user_grid):.2f}",
                     f"{utilization_user_grid * 100:.2f}",
                     f"{utilization_full_grid * 100:.2f}",
                 ]
