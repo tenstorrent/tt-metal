@@ -71,8 +71,9 @@ class TtnnYoloV11:
             ttnn.ShardStrategy.HEIGHT,
             ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=False,
+            buffer_type=ttnn.BufferType.DRAM,
         )
-        dram_sharded_config.buffer_type = ttnn.BufferType.DRAM  # 🔧 Force DRAM while keeping sharding
+
         x = ttnn.to_memory_config(x, dram_sharded_config)
 
         x = self.conv3(self.device, x)

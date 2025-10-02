@@ -55,7 +55,6 @@ class Yolov11Conv2D:
 
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
-            shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
             reshard_if_not_optimal=True if self.reshard else False,
@@ -95,7 +94,10 @@ class Yolov11Conv2D:
         print(f"🔍 [CONV2D DEBUG] Conv2D operation details:")
         print(f"    Input shape: {x.shape}")
         print(f"    Input memory config: {x.memory_config()}")
+        print(f"    Input memory layout: {x.memory_config().memory_layout}")
+        print(f"    Input buffer type: {x.memory_config().buffer_type}")
         print(f"    Input storage type: {x.storage_type()}")
+        print(f"    Input is sharded: {x.is_sharded()}")
         print(f"    In channels: {self.in_channels}, Out channels: {self.out_channels}")
         print(f"    Kernel size: {kernel_size}, Stride: {stride}, Padding: {padding}")
         print(f"    Groups: {self.groups}")
@@ -124,7 +126,8 @@ class Yolov11Conv2D:
         # According to PR #27147, the conv2d should auto-select DRAM based on input memory config
         # But if there are explicit slice configs, they might override this
         print(f"    🔧 Conv2D should auto-select DRAM based on input memory config")
-        print(f"    🔧 Input is in DRAM: {x.memory_config() == ttnn.DRAM_MEMORY_CONFIG}")
+        print(f"    🔧 Input is in DRAM: {x.memory_config().buffer_type == ttnn.BufferType.DRAM}")
+        print(f"    🔧 Input is HEIGHT_SHARDED: {x.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED}")
 
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
@@ -159,11 +162,25 @@ class Yolov11Conv2D:
         
         if x.shape[2] != hw:
             print(f"    🔧 Reshaping needed: {x.shape[2]} -> {hw}")
-            print(f"    🔧 Using DRAM_MEMORY_CONFIG for reshaping")
+            print(f"    🔧 Converting to DRAM interleaved for reshaping, then back to sharded")
             x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
             print(f"    🔧 After sharded_to_interleaved: {x.shape}, memory_config: {x.memory_config()}")
             x = x[:, :, :hw, :]
             print(f"    🔧 After slicing: {x.shape}")
+            # Convert back to HEIGHT_SHARDED DRAM for next conv2d operations
+            try:
+                dram_sharded_config = ttnn.create_sharded_memory_config(
+                    x.shape,
+                    ttnn.CoreGrid(y=8, x=8),
+                    ttnn.ShardStrategy.HEIGHT,
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=False,
+                )
+                dram_sharded_config.buffer_type = ttnn.BufferType.DRAM
+                x = ttnn.to_memory_config(x, dram_sharded_config)
+                print(f"    🔧 Converted back to DRAM HEIGHT_SHARDED: {x.memory_config()}")
+            except Exception as e:
+                print(f"    ⚠️  Failed to convert back to DRAM sharded, keeping interleaved: {e}")
         else:
             print(f"    ✅ No reshaping needed")
         
