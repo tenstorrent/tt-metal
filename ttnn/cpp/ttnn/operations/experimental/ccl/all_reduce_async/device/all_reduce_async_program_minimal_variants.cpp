@@ -232,7 +232,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
         // Num pages allocated based on number of input cores selected for this link
         uint32_t num_pages_allocated =
-            (end_core_idx - start_core_idx) * input_tensor_shard_num_pages - input_tensor_tile_offset;
+            ((end_core_idx - start_core_idx) * input_tensor_shard_num_pages) - input_tensor_tile_offset;
 
         // Update overflow
         num_pages_overflow = num_pages_allocated - num_pages_this_link;

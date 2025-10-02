@@ -220,8 +220,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Pool2D::tensor_return_value_t
     int tensix_mul_adds_per_cycle_lofi = 2048;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, pool, downsample)
-    int output_height = std::floor((activation_h - filter_h + pad_h) / stride_h + 1);
-    int output_width = std::floor((activation_w - filter_w + pad_w) / stride_w + 1);
+    int output_height = std::floor(((activation_h - filter_h + pad_h) / stride_h) + 1);
+    int output_width = std::floor(((activation_w - filter_w + pad_w) / stride_w) + 1);
 
     // Calculate number of mul/add / compare operations
     int64_t num_mul_adds_per_elem = activation_c * filter_h * filter_w;  // 1 multiply and 1 add per element

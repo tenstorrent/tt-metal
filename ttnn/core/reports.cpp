@@ -125,7 +125,7 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
                 for (auto mapped_page : buffer_page_mapping) {
                     auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
                     auto bank_id = device->allocator()->get_bank_ids_from_logical_core(buffer_type, core)[0];
-                    auto page_address = buffer->address() + mapped_page.device_page * buffer->aligned_page_size();
+                    auto page_address = buffer->address() + (mapped_page.device_page * buffer->aligned_page_size());
                     buffer_page_infos.push_back(BufferPageInfo{
                         .device_id = device_id,
                         .address = address,
