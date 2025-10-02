@@ -38,8 +38,8 @@ int main() {
     std::vector<uint32_t> src_vec(src_num_values_packed, 0);
     // source vector = {1, 2, 3, ... , 30, 31, 32,   2048}
     for (uint32_t i = 0; i < src_vec.size(); i++) {
-        bfloat16 bfloat_val1 = bfloat16(2 * i + 1);
-        bfloat16 bfloat_val2 = bfloat16(2 * i + 2);
+        bfloat16 bfloat_val1 = bfloat16((2 * i) + 1);
+        bfloat16 bfloat_val2 = bfloat16((2 * i) + 2);
         src_vec[i] = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfloat_val1, bfloat_val2));
     }
 
@@ -186,8 +186,8 @@ int main() {
     printf("Original tensor with shape (%d, %d):\n", src_M, src_N);
     for (uint32_t m = 0; m < src_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_src; n++) {
-            printf("%d ", (uint16_t)src_vec[m * num_packed_row_src + n]);
-            printf("%d ", (uint16_t)(src_vec[m * num_packed_row_src + n] >> 16));
+            printf("%d ", (uint16_t)src_vec[(m * num_packed_row_src) + n]);
+            printf("%d ", (uint16_t)(src_vec[(m * num_packed_row_src) + n] >> 16));
         }
         printf("\n");
     }
@@ -204,8 +204,8 @@ int main() {
     printf("Padded tensor with shape (%d, %d):\n", dst_M, dst_N);
     for (uint32_t m = 0; m < dst_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_dst; n++) {
-            printf("%d ", (uint16_t)dst_vec[m * num_packed_row_dst + n]);
-            printf("%d ", (uint16_t)(dst_vec[m * num_packed_row_dst + n] >> 16));
+            printf("%d ", (uint16_t)dst_vec[(m * num_packed_row_dst) + n]);
+            printf("%d ", (uint16_t)(dst_vec[(m * num_packed_row_dst) + n] >> 16));
         }
         printf("\n");
     }

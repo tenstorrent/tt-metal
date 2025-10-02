@@ -124,7 +124,7 @@ TEST_F(MeshDeviceFixture, PingAllLegalDramChannels) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
@@ -167,7 +167,7 @@ TEST_F(MeshDeviceFixture, TensixPingAllLegalL1Cores) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(

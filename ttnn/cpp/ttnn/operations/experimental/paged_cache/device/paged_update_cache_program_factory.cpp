@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
         const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
         // Cache tile info
         const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-        const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+        const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * Wt);
         // Offset to write into untilized cache
         uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 
@@ -333,7 +333,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
                 const uint32_t update_idx = use_index_tensor ? 0 : update_idxs.at(i);
                 // Cache tile info
                 const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-                const uint32_t cache_start_id = cache_batch_tile_offset + (update_idx / TILE_HEIGHT) * Wt;
+                const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * Wt);
                 // Offset to write into untilized cache
                 uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
 

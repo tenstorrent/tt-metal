@@ -140,16 +140,16 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
             for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                 CoreCoord curr_core = {col_idx, row_idx};
                 const std::array<uint32_t, 7> reader_args = {
-                    src0_bufs.at(col_idx * worker_grid_size.y + row_idx)->address(),
+                    src0_bufs.at((col_idx * worker_grid_size.y) + row_idx)->address(),
                     0,
                     num_tiles,
-                    src1_bufs.at(col_idx * worker_grid_size.y + row_idx)->address(),
+                    src1_bufs.at((col_idx * worker_grid_size.y) + row_idx)->address(),
                     0,
                     num_tiles,
                     0};
 
                 const std::array<uint32_t, 3> writer_args = {
-                    output_bufs.at(col_idx * worker_grid_size.y + row_idx)->address(), 0, num_tiles};
+                    output_bufs.at((col_idx * worker_grid_size.y) + row_idx)->address(), 0, num_tiles};
 
                 SetRuntimeArgs(program, unary_writer_kernel, curr_core, writer_args);
                 SetRuntimeArgs(program, binary_reader_kernel, curr_core, reader_args);
@@ -355,7 +355,7 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
         }
 
         if (not at_least_one_kernel) {
-            uint32_t random_risc = rand() % 3 + 1;
+            uint32_t random_risc = (rand() % 3) + 1;
             if (random_risc == 1) {
                 auto dummy_brisc_kernel = CreateKernel(
                     program,

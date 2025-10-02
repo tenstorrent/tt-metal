@@ -153,9 +153,9 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
         for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
             for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                 EnqueueWriteMeshBuffer(
-                    mesh_device_->mesh_command_queue(1), src0_bufs[col_idx * worker_grid_size.y + row_idx], src0_vec);
+                    mesh_device_->mesh_command_queue(1), src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec);
                 EnqueueWriteMeshBuffer(
-                    mesh_device_->mesh_command_queue(1), src1_bufs[col_idx * worker_grid_size.y + row_idx], src1_vec);
+                    mesh_device_->mesh_command_queue(1), src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec);
             }
         }
         if (iter % 2) {
@@ -188,7 +188,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                     ReadShard(
                         mesh_device_->mesh_command_queue(1),
                         dst_vec,
-                        output_bufs[col_idx * worker_grid_size.y + row_idx],
+                        output_bufs[(col_idx * worker_grid_size.y) + row_idx],
                         device_coord);
                     if (device_coord[1] <= num_cols_in_workload - 1) {
                         for (int i = 0; i < dst_vec.size(); i++) {

@@ -981,7 +981,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
 void get_runtime_args_for_edm_termination_infos(
     const std::vector<edm_termination_info_t>& edm_termination_infos, std::vector<uint32_t>& args_out) {
-    args_out.reserve(args_out.size() + edm_termination_infos.size() * 4 + 1);
+    args_out.reserve(args_out.size() + (edm_termination_infos.size() * 4) + 1);
     args_out.push_back(edm_termination_infos.size());
     for (const auto& info : edm_termination_infos) {
         args_out.push_back(info.edm_noc_x);
@@ -1073,7 +1073,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     fabric_connections.valid_connections_mask |= (1u << eth_channel);
 
     size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, read_only) +
-                               eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t);
+                               (eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t));
     // Write to Tensix cores
     std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
     for (const auto& logical_core : worker_core_coords) {

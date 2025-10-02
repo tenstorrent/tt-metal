@@ -771,7 +771,7 @@ public:
 
         auto num_forward_hops = 0;
         auto num_backward_hops = 0;
-        uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
+        uint32_t full_hop_count = (2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1)) - 1;
 
         if (pattern_type == HighLevelTrafficPattern::FullRing) {
             num_forward_hops = full_hop_count;

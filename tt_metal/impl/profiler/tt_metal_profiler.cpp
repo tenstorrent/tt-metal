@@ -134,7 +134,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
     DeviceAddr control_vector_addr = profiler_msg_addr + dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(
                                                              dev_msgs::profiler_msg_t::Field::control_vector);
-    DeviceAddr control_addr = control_vector_addr + kernel_profiler::FW_RESET_L * sizeof(uint32_t);
+    DeviceAddr control_addr = control_vector_addr + (kernel_profiler::FW_RESET_L * sizeof(uint32_t));
     for (int i = 0; i < sampleCount; i++) {
         ZoneScopedC(tracy::Color::Tomato2);
         std::this_thread::sleep_for(std::chrono::milliseconds(millisecond_wait));
@@ -160,7 +160,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
 
     uint64_t addr = profiler_msg_addr +
                     dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(dev_msgs::profiler_msg_t::Field::buffer) +
-                    kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t);
+                    (kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t));
 
     std::vector<std::uint32_t> sync_times = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
@@ -183,7 +183,7 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         preDeviceTime = deviceTime;
         uint64_t deviceTimeLarge = (uint64_t(deviceStartTime_H) << 32) | deviceTime;
 
-        uint32_t hostTime = sync_times[i + 1] + writeTimes[i / 2 - 1];
+        uint32_t hostTime = sync_times[i + 1] + writeTimes[(i / 2) - 1];
         if (hostTime < preHostTime) {
             hostStartTime_H++;
         }
@@ -260,8 +260,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
         frequencyFit);
 
     double host_timestamp = hostStartTime;
-    double device_timestamp = delay + (host_timestamp - profiler_state_manager->smallest_host_time.at(device_id)) *
-                                          frequencyFit * tracyToSecRatio;
+    double device_timestamp = delay + ((host_timestamp - profiler_state_manager->smallest_host_time.at(device_id)) *
+                                       frequencyFit * tracyToSecRatio);
     // disable linting here; slicing is __intended__
     // NOLINTBEGIN
     profiler_state_manager->device_profiler_map.at(device_id).device_core_sync_info.insert_or_assign(
@@ -534,7 +534,7 @@ void syncAllDevices(chip_id_t host_connected_device) {
             double freqScale = (senderReceiverProductSum * accumulateSampleCount - senderSum * receiverSum) /
                                (receiverSquareSum * accumulateSampleCount - receiverSum * receiverSum);
 
-            uint64_t shift = (double)(senderSum - freqScale * (double)receiverSum) / accumulateSampleCount +
+            uint64_t shift = ((double)(senderSum - (freqScale * (double)receiverSum)) / accumulateSampleCount) +
                              (senderBase - freqScale * receiverBase);
             deviceDeviceSyncInfo.insert_or_assign(sender.first, (std::unordered_map<chip_id_t, std::pair<double, int64_t>>){});
             deviceDeviceSyncInfo.at(sender.first)

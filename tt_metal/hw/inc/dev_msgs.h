@@ -162,7 +162,7 @@ struct kernel_config_msg_t {
 
     volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
-    volatile uint8_t pad3[1 + (1 - MaxProcessorsPerCoreType % 2) * 2];  // CODEGEN:skip
+    volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2)];  // CODEGEN:skip
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));

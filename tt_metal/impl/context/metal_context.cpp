@@ -946,7 +946,9 @@ void MetalContext::initialize_firmware(
         dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
     for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
         std::copy(
-            launch_msg.data(), launch_msg.data() + launch_msg_size, init_launch_msg_data.data() + i * launch_msg_size);
+            launch_msg.data(),
+            launch_msg.data() + launch_msg_size,
+            init_launch_msg_data.data() + (i * launch_msg_size));
     }
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     cluster_->write_core(

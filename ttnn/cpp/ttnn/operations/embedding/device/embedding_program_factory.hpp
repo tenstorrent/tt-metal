@@ -760,11 +760,11 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         row = weight_offset / num_cols;
 
         uint32_t local_num_blocks = i < g1_numcores ? num_blocks_per_core_group_1 : num_blocks_per_core_group_2;
-        uint32_t r_f_offset = ((row % TILE_HEIGHT) / FACE_HEIGHT) * 2 * FACE_HW + (row % FACE_HEIGHT) * FACE_HEIGHT;
+        uint32_t r_f_offset = (((row % TILE_HEIGHT) / FACE_HEIGHT) * 2 * FACE_HW) + ((row % FACE_HEIGHT) * FACE_HEIGHT);
         // Offset by one face size if we are in the right half of the tile + where we are in the row
         uint32_t c_f_offset = ((col_offset % TILE_HEIGHT) / FACE_HEIGHT) * FACE_HW;
         uint32_t face_offset = r_f_offset + c_f_offset;
-        uint32_t curr_tile = (row / TILE_HEIGHT) * tiles_per_tile_row + (col_offset / TILE_HEIGHT);
+        uint32_t curr_tile = ((row / TILE_HEIGHT) * tiles_per_tile_row) + (col_offset / TILE_HEIGHT);
 
         // Reader
         {

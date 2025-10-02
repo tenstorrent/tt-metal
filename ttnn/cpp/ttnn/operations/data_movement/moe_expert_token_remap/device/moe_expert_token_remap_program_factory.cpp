@@ -130,7 +130,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CreateCircularBuffer(program, total_cores, cb_output_reduced_config);
 
     const auto& mesh_view = mesh_device->get_view();
-    const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+    const uint32_t flat_mesh_idx = (mesh_coordinate[0] * mesh_view.num_cols()) + mesh_coordinate[1];
 
     // slightly abusing this functionality since here we also have a single page if any experts are activated
     constexpr bool local_reduce = true;

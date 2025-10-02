@@ -455,7 +455,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
         TT_FATAL(row >= 0 && row < mesh_rows, "Row {} out of bounds.", row);
         TT_FATAL(col >= 0 && col < mesh_cols, "Col {} out of bounds.", col);
 
-        size_t idx = static_cast<size_t>(row) * static_cast<size_t>(mesh_cols) + static_cast<size_t>(col);
+        size_t idx = (static_cast<size_t>(row) * static_cast<size_t>(mesh_cols)) + static_cast<size_t>(col);
         TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}.", idx);
         physical_chip_ids[idx] = chip;
     }

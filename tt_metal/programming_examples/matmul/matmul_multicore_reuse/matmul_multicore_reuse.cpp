@@ -305,12 +305,13 @@ void matmul_multicore_reuse(
             };
 
             std::vector<uint32_t> writer_args = {
-                (std::uint32_t)dst_dram_buffer->address(),                                  // out_buffer_addr
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * Nt,  // out_tensor_start_tile_id
-                (std::uint32_t)1,                                                           // out_tensor_stride_w
-                (std::uint32_t)Nt,                                                          // out_tensor_stride_h
-                (std::uint32_t)out_subblock_w,       // out_tensor_next_subblock_stride_w
-                (std::uint32_t)out_subblock_h * Nt,  // out_tensor_next_subblock_stride_h
+                (std::uint32_t)dst_dram_buffer->address(),  // out_buffer_addr
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * Nt),  // out_tensor_start_tile_id
+                (std::uint32_t)1,                      // out_tensor_stride_w
+                (std::uint32_t)Nt,                     // out_tensor_stride_h
+                (std::uint32_t)out_subblock_w,         // out_tensor_next_subblock_stride_w
+                (std::uint32_t)out_subblock_h * Nt,    // out_tensor_next_subblock_stride_h
 
                 (std::uint32_t)out_subblock_w,                     // out_subblock_w
                 (std::uint32_t)out_subblock_h,                     // out_subblock_h
