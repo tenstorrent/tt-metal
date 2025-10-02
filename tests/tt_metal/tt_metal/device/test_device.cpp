@@ -396,6 +396,8 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
+    auto round_up_to_mult_of_4 = [](size_t value) { return ((value + 3) / 4) * 4; };
+
     auto logical_grid_size = device->logical_grid_size();
     for (int r = 0; r < logical_grid_size.y; r++) {
         for (int c = 0; c < logical_grid_size.x; c++) {
@@ -420,8 +422,8 @@ TEST_F(MeshDeviceFixture, VerifyLogicalToVirtualMap) {
             .noc = tt_metal::NOC::NOC_0,
             .compile_args = {kernel0_l1_address, logical_grid_size.x, logical_grid_size.y}});
 
-    auto kernel1_l1_address = l1_unreserved_base + (((logical_grid_size.x + 3) / 4) * 4) * sizeof(uint32_t) +
-                              (((logical_grid_size.y + 3) / 4) * 4) * sizeof(uint32_t);
+    auto kernel1_l1_address = l1_unreserved_base + (round_up_to_mult_of_4(logical_grid_size.x) * sizeof(uint32_t)) +
+                              (round_up_to_mult_of_4(logical_grid_size.y) * sizeof(uint32_t));
     tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_virtual_table.cpp",
