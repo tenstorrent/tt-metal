@@ -360,7 +360,7 @@ run_t3000_whisper_tests() {
 
   echo "LOG_METAL: Running run_t3000_whisper_tests"
 
-  pytest models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
+  pytest -n auto models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation --timeout=600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
