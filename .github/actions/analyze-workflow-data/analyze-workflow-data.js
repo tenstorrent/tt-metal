@@ -202,7 +202,6 @@ function renderErrorsTable(errorSnippets) {
   const rows = errorSnippets.map(obj => {
     const rawLabel = (obj && obj.label) ? String(obj.label) : '';
     const rawSnippet = (obj && obj.snippet) ? String(obj.snippet) : '';
-    const snippetOneLine = rawSnippet.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
     // Extract job and test
     const tryGet = (s) => typeof s === 'string' ? s : '';
     let jobName = tryGet(obj && obj.job);
@@ -217,17 +216,33 @@ function renderErrorsTable(errorSnippets) {
         if (!testName && right) testName = right.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
       }
     }
-    // For pytest (or anything else): test name is message up to first '['
+    // For pytest (or anything else):
+    // - Test name is content up to first '[' when present
+    // - If there is no '[', set Test to NA
+    // - For generic infra errors, force Test to NA
+    let errorForDisplay = rawSnippet;
     if (!testName) {
-      const upto = rawSnippet.split('[')[0].trim();
+      const hasBracket = rawSnippet.includes('[');
       const generic = /(lost\s+connection|timeout|timed\s*out|connection\s+reset|network\s+is\s+unreachable|no\s+space\s+left|killed\s+by|out\s+of\s+memory)/i;
-      testName = (!upto || generic.test(rawSnippet)) ? 'NA' : upto;
+      if (generic.test(rawSnippet) || !hasBracket) {
+        testName = 'NA';
+        errorForDisplay = rawSnippet;
+      } else {
+        const idx = rawSnippet.indexOf('[');
+        const upto = rawSnippet.slice(0, idx).trim();
+        testName = upto || 'NA';
+        errorForDisplay = rawSnippet.slice(idx).trim();
+      }
+    } else {
+      // If test name provided (e.g., gtest), leave error as-is
+      errorForDisplay = rawSnippet;
     }
     if (!jobName) jobName = rawLabel || '';
     // Aesthetics: drop trailing bracketed status like [failure] or [error]
     jobName = jobName.replace(/\s*\[[^\]]+\]\s*$/, '');
     const jobEsc = jobName.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
     const testEsc = testName.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
+    const snippetOneLine = String(errorForDisplay || '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
     let ownerDisplay = 'no owner found';
     if (obj && Array.isArray(obj.owner) && obj.owner.length) {
       const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
