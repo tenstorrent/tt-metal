@@ -179,7 +179,7 @@ public:
         uint32_t bank_id = flattened_shard_id % dspec().num_banks();
         uint32_t bank_shard_id = flattened_shard_id / dspec().num_banks();
 
-        uint32_t bank_page_offset = bank_shard_id * dspec().shard_volume() + page_offset_within_shard;
+        uint32_t bank_page_offset = (bank_shard_id * dspec().shard_volume()) + page_offset_within_shard;
 
         return {bank_id, bank_page_offset};
     }
@@ -245,7 +245,7 @@ private:
         auto bank_y = get_bank_y(packed_xy_coords[page_mapping.bank_id]);
         auto bank_start = DSpec::is_dram ? tensor_accessor::get_dram_bank_base_offset(bank_x, noc)
                                          : NOC_XY_ADDR(DYNAMIC_NOC_X(noc, bank_x), DYNAMIC_NOC_Y(noc, bank_y), 0);
-        return bank_start + bank_base_address + page_mapping.bank_page_offset * page_size + offset;
+        return bank_start + bank_base_address + (page_mapping.bank_page_offset * page_size) + offset;
     }
 
     PageMapping get_bank_and_offset_from_page_id(uint32_t page_id) const {
@@ -264,7 +264,7 @@ private:
         size_t bank_id = flattened_shard_id % dspec().num_banks();
         size_t bank_shard_id = flattened_shard_id / dspec().num_banks();
 
-        size_t bank_page_offset = bank_shard_id * dspec().shard_volume() + page_offset_within_shard;
+        size_t bank_page_offset = (bank_shard_id * dspec().shard_volume()) + page_offset_within_shard;
 
         return {bank_id, bank_page_offset};
     }

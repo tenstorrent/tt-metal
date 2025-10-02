@@ -23,13 +23,6 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
 
-MeshEvent EnqueueRecordEvent(
-    MeshCommandQueue& mesh_cq,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    return mesh_cq.enqueue_record_event(sub_device_ids, device_range);
-}
-
 MeshEvent EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
     tt::stl::Span<const SubDeviceId> sub_device_ids,

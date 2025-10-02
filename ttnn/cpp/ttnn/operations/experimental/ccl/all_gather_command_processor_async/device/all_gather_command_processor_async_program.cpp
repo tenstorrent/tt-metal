@@ -272,7 +272,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async
             // 3, wait for n_chip*num_links number of semaphore at teardown semaphore address for first chip, and
             // n_chip*num_links+1 for other chips
             writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::local_semaphore_wait(
-                &semaphore, is_first_chip ? ring_size * num_links : ring_size * num_links + 1));
+                &semaphore, is_first_chip ? ring_size * num_links : (ring_size * num_links) + 1));
             // 4, send semaphore unicast to forward device except for the last chip
             if (!is_last_chip) {
                 writer_cmd_stream.push_back(ttnn::ccl::cmd::uops::fabric_unicast_semaphore_inc(

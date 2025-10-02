@@ -717,7 +717,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         }
     }
     uint32_t num_rows_per_all_to_all_worker_last =
-        block_ht - (block_ht / num_rows_per_all_to_all_worker) * num_rows_per_all_to_all_worker;
+        block_ht - ((block_ht / num_rows_per_all_to_all_worker) * num_rows_per_all_to_all_worker);
     uint32_t in0_block_tiles = block_wt * block_ht;
     // pre_all_gather_stats_block_tiles
     uint32_t pre_all_gather_stats_block_tiles = rms_norm ? 1 : 2;

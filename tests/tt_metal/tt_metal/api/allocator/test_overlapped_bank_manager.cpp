@@ -1009,7 +1009,7 @@ TEST(OverlappedAllocators, NonzeroAddressLimit) {
         deps);
 
     const uint32_t alloc_size_1K = 1024;
-    const uint32_t alloc_size_a_bit_more_than_half_of_total_size = total_size / 2 + alloc_size_1K;
+    const uint32_t alloc_size_a_bit_more_than_half_of_total_size = (total_size / 2) + alloc_size_1K;
     const uint32_t alloc_size_same_as_address_limit = address_limit;
 
     // Allocate 1K in allocator 0 - should be placed at address_limit (256KB)

@@ -43,7 +43,7 @@ uint32_t calculate_act_cb_size_with_reuse(
                                   (1 + image_width_tile_leftover * kernel_size[0]) * dtype_size_bytes;
     const uint32_t reuse_tiles = tt::div_up(reuse_length, input_tile_size);
 
-    return image_width_tiles * act_block_w_tiles + reuse_tiles;
+    return (image_width_tiles * act_block_w_tiles) + reuse_tiles;
 }
 
 std::vector<CBInfo> get_cb_info(
@@ -420,7 +420,7 @@ static float get_local_l1_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Calculates NOC transfer rate for DRAM transfers using empirical data.
@@ -457,7 +457,7 @@ static float get_all_dram_noc_transfer_rate(uint32_t transfer_size_bytes, tt::AR
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Calculates NOC transfer rate for multicast L1-linked transfers using empirical data.
@@ -494,7 +494,7 @@ static float get_mcast_many_l1_linked_noc_transfer_rate(uint32_t transfer_size_b
         (params.peak_rate_gbps - params.min_rate_gbps) /
         static_cast<float>(params.linear_growth_threshold_bytes - min_transfer_size_bytes);
 
-    return params.min_rate_gbps + rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes);
+    return params.min_rate_gbps + (rate_increase_per_byte * (effective_transfer_size - min_transfer_size_bytes));
 }
 /**
  * Determines if split reader optimization is supported for the given configuration.

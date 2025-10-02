@@ -17,7 +17,7 @@ uint32_t calculate_max_prefetch_data_size_bytes(const CoreType& dispatch_core_ty
     // prefetch_relay_inline, dispatch_wait (x #workers), and dispatch_write_linear would add alignment padding
     const auto host_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::HOST);
     auto padded_commands_size = tt::align(sizeof(CQPrefetchCmd), host_alignment) +
-                                num_subdevices * tt::align(sizeof(CQDispatchCmd), host_alignment) +
+                                (num_subdevices * tt::align(sizeof(CQDispatchCmd), host_alignment)) +
                                 tt::align(sizeof(CQDispatchCmdLarge), host_alignment);
     return tt::tt_metal::MetalContext::instance().dispatch_mem_map().max_prefetch_command_size() - padded_commands_size;
 }

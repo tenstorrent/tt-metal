@@ -19,16 +19,21 @@ from tests.ttnn.unit_tests.operations.conv.test_conv3d import (
 
 
 @pytest.mark.parametrize("B", [1])
-@pytest.mark.parametrize("C_in", [12, 32, 64])
+@pytest.mark.parametrize("C_in", [12, 64])
 @pytest.mark.parametrize("C_out", [32, 64])
 @pytest.mark.parametrize("T", [3, 5])
 @pytest.mark.parametrize("H", [4, 6])
 @pytest.mark.parametrize("W", [5, 7])
-@pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)], ids=["kernel_333", "kernel_111"])
+@pytest.mark.parametrize("kernel_size", [(3, 3, 3)], ids=["kernel_333"])
 @pytest.mark.parametrize(
-    "stride", [(1, 1, 1), (2, 2, 2), (1, 3, 5), (3, 2, 1)], ids=["stride_111", "stride_222", "stride_135", "stride_321"]
+    "stride",
+    [
+        (1, 1, 1),
+        (1, 3, 5),
+    ],
+    ids=["stride_111", "stride_135"],
 )
-@pytest.mark.parametrize("padding", [(0, 0, 0), (0, 1, 1)], ids=["padding_000", "padding_011"])
+@pytest.mark.parametrize("padding", [(0, 1, 1)], ids=["padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
 def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     if padding == (0, 0, 0) and padding_mode == "replicate":

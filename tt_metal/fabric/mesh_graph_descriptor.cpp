@@ -65,7 +65,7 @@ std::string get_validation_report(const std::vector<std::string>& error_messages
 LocalNodeId get_device_id(const MeshCoordinate& mesh_coord, const MeshShape& mesh_shape) {
     // Check that mesh_coord is within mesh_shape
     TT_FATAL(mesh_coord[0] < mesh_shape[0] && mesh_coord[1] < mesh_shape[1], "Mesh coordinate {} is out of bounds for mesh shape {}", mesh_coord, mesh_shape);
-    return mesh_coord[0] * mesh_shape[1] + mesh_coord[1];
+    return (mesh_coord[0] * mesh_shape[1]) + mesh_coord[1];
 }
 
 std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connections(

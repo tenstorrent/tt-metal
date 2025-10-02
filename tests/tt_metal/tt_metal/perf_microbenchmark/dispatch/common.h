@@ -342,7 +342,7 @@ uint32_t DeviceData::get_base_result_addr(CoreType core_type) {
 
 uint32_t DeviceData::get_result_data_addr(CoreCoord core, int bank_id) {
     uint32_t base_addr = this->base_result_data_addr[static_cast<int>(this->all_data[core][bank_id].core_type)];
-    return base_addr + this->all_data[core][bank_id].data.size() * sizeof(uint32_t);
+    return base_addr + (this->all_data[core][bank_id].data.size() * sizeof(uint32_t));
 }
 
 uint32_t DeviceData::size_at(CoreCoord core, int bank_id) { return this->all_data[core][bank_id].data.size(); }
@@ -812,7 +812,7 @@ inline void debug_epilogue(std::vector<uint32_t>& cmds, size_t prior_end) {
         // buffer wrap which then messes up the routines w/ the embedded insn - not worth it
         CQDispatchCmd* debug_cmd_ptr;
         debug_cmd_ptr = (CQDispatchCmd*)&cmds[prior_end];
-        uint32_t full_size = (cmds.size() - prior_end) * sizeof(uint32_t) - sizeof(CQDispatchCmd);
+        uint32_t full_size = ((cmds.size() - prior_end) * sizeof(uint32_t)) - sizeof(CQDispatchCmd);
         uint32_t max_size = dispatch_buffer_page_size_g - sizeof(CQDispatchCmd);
         uint32_t size = (full_size > max_size) ? max_size : full_size;
         debug_cmd_ptr->debug.size = size;

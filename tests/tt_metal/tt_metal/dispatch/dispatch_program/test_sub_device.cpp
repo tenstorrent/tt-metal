@@ -64,7 +64,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
     DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
     mesh_device->load_sub_device_manager(sub_device_manager_1);
-    uint32_t global_buffer_size = l1_total_size - k_local_l1_size * 2;
+    uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 2);
     ShardSpecBuffer global_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
 

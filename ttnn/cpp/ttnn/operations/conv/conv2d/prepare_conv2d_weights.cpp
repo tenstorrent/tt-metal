@@ -228,10 +228,10 @@ Tensor to_weight_special_padding_tile_layout(
                             for (auto c = c_start; c < c_end; c++) {
                                 for (auto k = k_start; k < k_end; k++) {
                                     auto matrix_idx =
-                                        k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols +
-                                        r * ((w_shape[3] * w_shape[1]) + block_height_padding) * weight_matrix_cols;
-                                    auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] +
-                                               r * w_shape[3] + s;
+                                        k + (c * weight_matrix_cols) + (s * w_shape[1] * weight_matrix_cols) +
+                                        (r * ((w_shape[3] * w_shape[1]) + block_height_padding) * weight_matrix_cols);
+                                    auto idx = (k * w_shape[1] * w_shape[2] * w_shape[3]) +
+                                               (c * w_shape[2] * w_shape[3]) + (r * w_shape[3]) + s;
                                     output_buffer[matrix_idx] = input_buffer[idx];
                                 }
                             }
@@ -282,12 +282,12 @@ Tensor to_weight_interleaved_mm_layout(const Tensor& conv_weight_tensor, DataTyp
                         for (auto ci = ci_start; ci < ci_end; ci++) {
                             for (auto co = co_start; co < co_end; co++) {
                                 // Input index: [Co, Ci, Kh, Kw]
-                                auto input_idx = co * w_shape[1] * w_shape[2] * w_shape[3] +
-                                                 ci * w_shape[2] * w_shape[3] + kh * w_shape[3] + kw;
+                                auto input_idx = (co * w_shape[1] * w_shape[2] * w_shape[3]) +
+                                                 (ci * w_shape[2] * w_shape[3]) + (kh * w_shape[3]) + kw;
 
                                 // Output index: [1, 1, KhKwCi, Co]
-                                auto output_row = kh * w_shape[3] * w_shape[1] + kw * w_shape[1] + ci;
-                                auto output_idx = output_row * weight_matrix_cols_padded + co;
+                                auto output_row = (kh * w_shape[3] * w_shape[1]) + (kw * w_shape[1]) + ci;
+                                auto output_idx = (output_row * weight_matrix_cols_padded) + co;
 
                                 output_buffer[output_idx] = input_buffer[input_idx];
                             }
@@ -345,10 +345,11 @@ Tensor to_weight_tile_layout(
                         for (auto s = 0; s < w_shape[3]; s++) {
                             for (auto c = in_start; c < in_end; c++) {
                                 for (auto k = out_start; k < out_end; k++) {
-                                    auto matrix_idx = k + c * weight_matrix_cols + s * w_shape[1] * weight_matrix_cols +
-                                                      r * w_shape[3] * w_shape[1] * weight_matrix_cols;
-                                    auto idx = k * w_shape[1] * w_shape[2] * w_shape[3] + c * w_shape[2] * w_shape[3] +
-                                               r * w_shape[3] + s;
+                                    auto matrix_idx = k + (c * weight_matrix_cols) +
+                                                      (s * w_shape[1] * weight_matrix_cols) +
+                                                      (r * w_shape[3] * w_shape[1] * weight_matrix_cols);
+                                    auto idx = (k * w_shape[1] * w_shape[2] * w_shape[3]) +
+                                               (c * w_shape[2] * w_shape[3]) + (r * w_shape[3]) + s;
                                     output_buffer[matrix_idx] = input_buffer[idx];
                                 }
                             }
@@ -480,8 +481,8 @@ Tensor to_weight_tile_layout_block_sharded(
                                             // When using full inner dim, layout is: [ic_shard][flattened_inner_dim]
                                             // where flattened_inner_dim = r*kernel_w*conv_input_shard_width +
                                             // s*conv_input_shard_width + c_s
-                                            uint32_t flattened_inner_idx = r * kernel_w * conv_input_shard_width +
-                                                                           s * conv_input_shard_width + c_s;
+                                            uint32_t flattened_inner_idx = (r * kernel_w * conv_input_shard_width) +
+                                                                           (s * conv_input_shard_width) + c_s;
                                             matrix_row = ic * weight_block_height_padded + flattened_inner_idx;
                                         } else {
                                             // Original logic - slice by kernel height
@@ -490,14 +491,14 @@ Tensor to_weight_tile_layout_block_sharded(
                                                          c_s;
                                         }
 
-                                        uint32_t matrix_col = oc * conv_output_shard_width_padded + k_s;
-                                        uint32_t matrix_idx = matrix_row * weight_matrix_cols + matrix_col;
+                                        uint32_t matrix_col = (oc * conv_output_shard_width_padded) + k_s;
+                                        uint32_t matrix_idx = (matrix_row * weight_matrix_cols) + matrix_col;
 
                                         // Calculate input tensor index [OC][IC][KH][KW]
-                                        uint32_t input_oc = oc * conv_output_shard_width + k_s;
-                                        uint32_t input_ic = ic * conv_input_shard_width + c_s;
-                                        uint32_t idx = input_oc * w_shape[1] * w_shape[2] * w_shape[3] +
-                                                       input_ic * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+                                        uint32_t input_oc = (oc * conv_output_shard_width) + k_s;
+                                        uint32_t input_ic = (ic * conv_input_shard_width) + c_s;
+                                        uint32_t idx = (input_oc * w_shape[1] * w_shape[2] * w_shape[3]) +
+                                                       (input_ic * w_shape[2] * w_shape[3]) + (r * w_shape[3]) + s;
 
                                         // Ensure we're within bounds before writing
                                         if (matrix_idx < output_buffer.size() && input_oc < w_shape[0] &&
@@ -570,8 +571,8 @@ Tensor to_bias_tile_layout_block_sharded(
         auto output_buffer = std::vector<T>(output_shape.volume());
         for (auto oc = 0; oc < num_channel_shards; oc++) {
             for (auto k_s = 0; k_s < conv_output_shard_width; k_s++) {
-                auto matrix_idx = oc * conv_output_shard_width_padded + k_s;
-                auto idx = oc * conv_output_shard_width + k_s;
+                auto matrix_idx = (oc * conv_output_shard_width_padded) + k_s;
+                auto idx = (oc * conv_output_shard_width) + k_s;
                 output_buffer[matrix_idx] = input_buffer[idx];
             }
         }
@@ -857,11 +858,11 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
                                     int x = kw / stride[1];
 
                                     // Calculate folded input channel index
-                                    int folded_ic_idx = (sh * stride[1] + sw) * in_channels + ic;
+                                    int folded_ic_idx = ((sh * stride[1] + sw) * in_channels) + ic;
 
                                     // Calculate final destination index
-                                    int dst_idx = oc * in_channels * stride[0] * stride[1] * new_h * new_w +
-                                                  folded_ic_idx * new_h * new_w + y * new_w + x;
+                                    int dst_idx = (oc * in_channels * stride[0] * stride[1] * new_h * new_w) +
+                                                  (folded_ic_idx * new_h * new_w) + (y * new_w) + x;
 
                                     output_buffer[dst_idx] = input_buffer[src_idx];
                                 }

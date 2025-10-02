@@ -287,7 +287,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
             inputs[i],
-            src_eth_l1_byte_address + i * byte_size_per_device);
+            src_eth_l1_byte_address + (i * byte_size_per_device));
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),

@@ -108,7 +108,7 @@ std::vector<std::uint32_t> create_arange_vector_of_bfloat16(size_t num_bytes, bo
     std::vector<std::uint32_t> vec(num_bytes / sizeof(std::uint32_t), 0);
     for (size_t i = 0; i < vec.size(); i++) {
         float num_1_float = i * 2;
-        float num_2_float = i * 2 + 1;
+        float num_2_float = (i * 2) + 1;
 
         bfloat16 num_1_bfloat16 = bfloat16(num_1_float);
         bfloat16 num_2_bfloat16 = bfloat16(num_2_float);
@@ -189,7 +189,7 @@ std::vector<std::uint32_t> create_constant_vector_of_bfloat16(size_t num_bytes, 
 std::vector<bfloat16> create_identity_matrix(int rows, int cols, int num_ones) {
     std::vector<bfloat16> vec(rows * cols, (float)0);
     for (int i = 0; i < num_ones; i++) {
-        vec.at(i * cols + i) = bfloat16((float)1);
+        vec.at((i * cols) + i) = bfloat16((float)1);
     }
     return vec;
 }
@@ -220,7 +220,7 @@ std::vector<uint16_t> u16_from_u32_vector(const std::vector<uint32_t>& in) {
         uint32_t val = in.at(i);
         auto two_bfloats = unpack_two_bfloat16_from_uint32(val);
         result[i * 2] = std::bit_cast<uint16_t>(two_bfloats.first);
-        result[i * 2 + 1] = std::bit_cast<uint16_t>(two_bfloats.second);
+        result[(i * 2) + 1] = std::bit_cast<uint16_t>(two_bfloats.second);
     }
     return result;
 }

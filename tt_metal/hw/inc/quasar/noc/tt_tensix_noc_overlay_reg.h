@@ -130,8 +130,7 @@
 // Structs for Address Map: tt_tensix_noc_overlay
 //==============================================================================
 
-typedef struct {
-} tt_tensix_noc_overlay_regmap_t;
+using tt_tensix_noc_overlay_regmap_t = struct {};
 
 //==============================================================================
 // Bit Fields for Address Map: tt_tensix_noc_overlay

@@ -291,7 +291,7 @@ private:
             max,
             divisible_by);
 
-        return adjusted_min + (rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by;
+        return adjusted_min + ((rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by);
     }
 
     DataMovementProcessor get_processor() {

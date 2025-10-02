@@ -494,7 +494,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = x * Wt + y * tiles_per_core_y;
+                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
                 uint32_t stats_offset = x * stats_tiles_cols;
 
                 log_debug(
