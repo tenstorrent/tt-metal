@@ -6,12 +6,19 @@
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
-#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
 
 #include "autograd/autocast_tensor.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
+#include "serialization/serializable.hpp"
+
+// Make NamedParameters opaque - must be before unordered_map include
+NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
+
+#include <nanobind/stl/bind_map.h>
+#include <nanobind/stl/unordered_map.h>
+
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "nb_util.hpp"
