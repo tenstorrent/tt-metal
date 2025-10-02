@@ -1341,8 +1341,8 @@ async function run() {
       }
       if (stayedFailingDetails.length > 0) { // check if there are any pipelines that stayed failing
         const lines = stayedFailingDetails.map(it => { // for each stayed-failing pipeline, build a markdown line
-          // Build the workflow name with optional link for the summary
-          const workflowName = it.workflow_url ? `[${it.name}](${it.workflow_url})` : it.name;
+          // Build the workflow name with optional link for the summary (use HTML anchor tag, not markdown)
+          const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
 
           if (it.first_failed_run_url) { // if we found the first failing run in the window
             // Extract the short SHA for the first failing commit
