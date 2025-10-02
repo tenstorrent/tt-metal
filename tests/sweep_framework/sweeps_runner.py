@@ -197,7 +197,7 @@ def gather_single_test_perf(device, test_passed):
         return None
 
     # Read profiler data from device
-    # ttnn.ReadDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
     try:
         opPerfData = get_device_data_generate_report(
             PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
