@@ -23,13 +23,6 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
 
-MeshEvent EnqueueRecordEventToHost(
-    MeshCommandQueue& mesh_cq,
-    tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<MeshCoordinateRange>& device_range) {
-    return mesh_cq.enqueue_record_event_to_host(sub_device_ids, device_range);
-}
-
 void EventSynchronize(const MeshEvent& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         return;
