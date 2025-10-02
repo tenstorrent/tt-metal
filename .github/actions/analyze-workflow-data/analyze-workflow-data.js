@@ -1355,7 +1355,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','  - Errors (table below):','', errorsHtml2, ''].join('\n');
+            errorsList = ['','  - <details><summary>Errors (click to expand)</summary>','', errorsHtml2, '  </details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build information about the latest failing run
@@ -1377,13 +1377,14 @@ async function run() {
             // const rawUrlsMd2 = renderRawCommitUrlsTable(it.commits_between || []);
             commitsList = [
               '',
-              '  - Commits between last success and first failure (tables below):',
+              '  - <details><summary>Commits between last success and first failure (click to expand)</summary>',
               '',
               commitsMd2,
               '',
               '  - Raw commit URLs:',
               '',
               // rawUrlsMd2,
+              '  </details>',
               ''
             ].join('\n');
 
