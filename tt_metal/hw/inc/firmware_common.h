@@ -29,6 +29,7 @@ extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
 // These arrays are used to store the logical to virtual coordinate mapping. Only
 // defined in cores that need this information for NOC transactions (e.g. DM cores).
+// Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
 extern uint8_t logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];
 extern uint8_t logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)];
 
