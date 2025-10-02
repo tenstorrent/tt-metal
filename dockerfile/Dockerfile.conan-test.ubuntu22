@@ -8,11 +8,8 @@ FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION}
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    gcc build-essential \
-    pkg-config \
+    git xxd gcc build-essential pkg-config wget curl \
     python3-pip python3-full python3-dev \
-    wget curl \
     lsb-release software-properties-common gnupg \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -22,3 +19,5 @@ RUN wget https://apt.llvm.org/llvm.sh && \
     ./llvm.sh 20 && \
     ./llvm.sh 17 && \
     rm llvm.sh
+
+RUN ln -s /usr/bin/clang-17 /usr/bin/clang && ln -s /usr/bin/clang++-17 /usr/bin/clang++

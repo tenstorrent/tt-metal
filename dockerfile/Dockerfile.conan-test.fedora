@@ -8,7 +8,7 @@ FROM fedora:${FEDORA_VERSION}
 RUN dnf update -y && dnf install -y \
     git wget curl which patch perl-core make \
     python3-pip python3-devel python3-virtualenv python3 \
-    texinfo \
+    texinfo clang vim-common \
     && dnf clean all
 
 # Ensure python3 command exists

@@ -1,8 +1,30 @@
 include(default)
 
+{% set clang_info = detect_api.detect_clang_compiler("clang") %}
+{% set gcc_info = detect_api.detect_gcc_compiler("gcc") %}
+
 [settings]
-*/*:compiler.cppstd=gnu20
+{% if clang_info[0] %}
+*/*:compiler=clang
+*/*:compiler.version={{ clang_info[1].major }}
 */*:compiler.libcxx=libstdc++11
+*/*:compiler.cppstd=20
+{% else %}
+*/*:compiler=gcc
+*/*:compiler.version={{ gcc_info[1].major }}
+*/*:compiler.libcxx=libstdc++11
+*/*:compiler.cppstd=gnu20
+{% endif %}
+
+
+[buildenv]
+{% if clang_info[0] %}
+CC=clang
+CXX=clang++
+{% else %}
+CC=gcc
+CXX=g++
+{% endif %}
 
 [tool_requires]
 bzip2/*: cmake/[>=3.25]
