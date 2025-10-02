@@ -391,6 +391,7 @@ from ttnn.operations.pool import (
 )
 
 from ttnn._ttnn.operations.experimental import Conv3dConfig
+from ttnn._ttnn.operations.experimental import MinimalMatmulConfig
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
