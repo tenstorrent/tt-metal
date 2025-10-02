@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <fstream>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -23,9 +22,27 @@ namespace tt {
 
 namespace tt_metal {
 
+/*
+MemoryBlockTable is a list of memory blocks in the following format:
+[{"blockID": "0", "address": "0", "size": "0", "prevID": "0", "nextID": "0", "allocated": true}]
+address: bytes
+size: bytes
+*/
+using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
+
+struct Statistics {
+    size_t total_allocatable_size_bytes = 0;
+    size_t total_allocated_bytes = 0;
+    size_t total_free_bytes = 0;
+    size_t largest_free_block_bytes = 0;
+    // addresses (relative to bank) that can hold the largest_free_block_bytes
+    std::vector<uint32_t> largest_free_block_addrs;
+};
+
+// Fwd declares
 class BankManager;
 class Buffer;
-// Fwd declares, these are supplied from impl
+// These are supplied from impl
 enum class BufferType;
 struct AllocatorConfig;
 
