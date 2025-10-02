@@ -304,6 +304,9 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
           const jobs = Array.isArray(idx.jobs) ? idx.jobs : [];
           core.info(`[GTEST] Jobs detected: ${jobs.length}`);
           const out = [];
+          // Helper to strip ANSI color codes and other escape sequences
+          const stripAnsi = (s) => typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*m/g, '') : s;
+
           for (const job of jobs) {
             const jobName = (job && job.name) ? String(job.name) : 'gtest';
             const files = Array.isArray(job.files) ? job.files : [];
@@ -334,9 +337,11 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                 };
 
                 for (let i = 0; i < lines.length && out.length < maxSnippets; i++) {
-                  const line = lines[i];
+                  const rawLine = lines[i];
+                  const line = stripAnsi(rawLine);
                   // Detect new test start
-                  const runMatch = line && line.match(/^\s*\[\s*RUN\s*\]\s+(.+?)\s*$/);
+                  // Match RUN anywhere in the line (timestamps/prefixes may precede it)
+                  const runMatch = line && line.match(/\[\s*RUN\s*\]\s+(.+?)\s*$/);
                   if (runMatch) {
                     // Starting a new test block; stop any capture in progress (without emitting)
                     capturing = false; buf = [];
