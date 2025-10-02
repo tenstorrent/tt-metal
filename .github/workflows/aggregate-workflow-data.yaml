@@ -95,7 +95,7 @@ jobs:
               status: 'completed',
               per_page: 2
             });
-            const runs = (resp.data.workflow_runs || []).filter(r => r.event === 'schedule');
+            const runs = (resp.data.workflow_runs || []).filter(r => r.event === 'schedule' && r.conclusion === 'success');
             const run = runs[0];
             const selectedId = run ? String(run.id) : '';
             core.info(`Selected previous run id: ${selectedId || 'none'}`);
