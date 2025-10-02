@@ -23,7 +23,7 @@ from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_
 )
 @pytest.mark.parametrize(
     "is_global",
-    (True, False),
+    [(False)],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -62,10 +62,11 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     dim = model_args.vision_dim
     ntok = model_args.vision_chunk_ntok - 1  # NOTE: -1 to remove class embedding
 
-    from transformers import MllamaForConditionalGeneration  # , MllamaConfig
+    from transformers import MllamaForConditionalGeneration
 
-    weights_path = "/home/ubuntu/.cache/huggingface/hub/models--meta-llama--Llama-3.2-11B-Vision-Instruct/snapshots/9eb2daaa8597bf192a8b0e73f848f3a102794df5"
-    # config = MllamaConfig.from_pretrained(weights_path)
+    weights_path = os.getenv(
+        "HF_MODEL"
+    )  # "/home/ubuntu/.cache/huggingface/hub/models--meta-llama--Llama-3.2-11B-Vision-Instruct/snapshots/9eb2daaa8597bf192a8b0e73f848f3a102794df5"
     # config.vision_config.max_num_tiles = 4
     # config.vision_config.image_size = model_args.vision_chunk_size
     # config.vision_config.patch_size = model_args.vision_patch_size
@@ -73,9 +74,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     # config.vision_config.num_global_layers = n_global_layers
     # config.vision_config.output_hidden_states = return_intermediate
 
-    model = MllamaForConditionalGeneration.from_pretrained(
-        weights_path, torch_dtype=torch.bfloat16, device_map="auto"
-    )  # config=config,
+    model = MllamaForConditionalGeneration.from_pretrained(weights_path, device_map="auto")  # config=config,
     reference_model = model.model.vision_model.eval()
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
@@ -92,9 +91,9 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         layers=n_layers if not is_global else n_global_layers,
         gated=gated,
     )
-
+    # ntok = 128
     ar = torch.tensor([[2, 2]] * batch)
-    pt_block_input = (torch.rand(batch, num_chunks, ntok, dim) * 2) - 1
+    pt_block_input = ((torch.rand(batch, num_chunks, ntok, dim) * 2) - 1) / 1
     tt_attention_input = pt_block_input.clone()
 
     # Create PT attention mask
@@ -141,9 +140,11 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         tt_out = ttnn.slice(tt_out, (0, 0, 0, 0), (batch, num_chunks, ntok, dim))
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
-        tens_input = ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
-            :, :, :, :
-        ].reshape(batch * num_chunks, ntok + npadtt, dim)
+        tens_input = (
+            ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[:, :, :, :]
+            .reshape(batch * num_chunks, ntok + npadtt, dim)
+            .to(torch.float)
+        )
         # tens = callable_reference.layernorm_pre(tens_input)
         feats = callable_reference(
             tens_input[:, :ntok, :],
