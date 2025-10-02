@@ -141,24 +141,12 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     const auto& weight_decay = operation_attributes.weight_decay;
     const auto& nesterov = operation_attributes.nesterov;
 
-    TT_FATAL(!(nesterov && dampening != 0.0), "Nesterov momentum requires zero dampening");
-    TT_FATAL(!(nesterov && momentum <= 0.0), "Nesterov momentum requires a positive momentum");
-    const bool mom_buffer_has = momentum_buffer.has_value();
-    const bool use_momentum = (momentum > 0.0F);
-    TT_FATAL(
-        !use_momentum || mom_buffer_has,
-        "Momentum buffers must be provided when using momentum (momentum={}).",
-        momentum);
-
     auto* device = param.device();
 
     tt::tt_metal::Program program{};
 
     tt::DataFormat param_data_format = datatype_to_dataformat_converter(param.dtype());
-    TT_FATAL(param_data_format == tt::DataFormat::Float16_b, "Parameters input data format must be Float16_b");
-
     tt::DataFormat grad_data_format = datatype_to_dataformat_converter(grad.dtype());
-    TT_FATAL(grad_data_format == tt::DataFormat::Float16_b, "Gradient input data format must be Float16_b");
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
 
@@ -219,33 +207,12 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     // -------------------------------------------------------------------------
 
     auto* param_buffer = param.buffer();
-    TT_FATAL(
-        param_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(param_buffer->buffer_type()));
-
     auto* grad_buffer = grad.buffer();
-    TT_FATAL(
-        grad_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Grad buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(grad_buffer->buffer_type()));
-
-    auto* momentum_buffer_unwrapped = use_momentum ? momentum_buffer.value().buffer() : nullptr;
-    if (use_momentum) {
-        TT_FATAL(
-            momentum_buffer_unwrapped->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Momentum in buffer must be in DRAM. Momentum buffer of type {}",
-            enchantum::to_string(momentum_buffer_unwrapped->buffer_type()));
-    }
-
+    auto* momentum_buffer_unwrapped = momentum_buffer.has_value() ? momentum_buffer.value().buffer() : nullptr;
     auto* output_buffer = output.buffer();
-    TT_FATAL(
-        output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
-        "Output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(output_buffer->buffer_type()));
 
     std::map<std::string, std::string> defines;
-    defines["USE_MOMENTUM"] = use_momentum ? "1" : "0";
+    defines["USE_MOMENTUM"] = momentum_buffer_unwrapped != nullptr ? "1" : "0";
 
     SGDFusedKernels kernels{};
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
