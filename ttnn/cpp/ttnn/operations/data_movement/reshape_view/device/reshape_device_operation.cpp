@@ -66,17 +66,4 @@ operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(
             input_tensors.at(0), output_tensors.at(0));
     }
 }
-
-tt::tt_metal::operation::Hash ReshapeDeviceOperation::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto layout = input_tensor.layout();
-    const auto& input_mem_config = input_tensor.memory_config();
-
-    // don't hash on ReshapeDeviceOperation::recreate_mapping_tensor
-
-    return tt::tt_metal::operation::hash_operation<ReshapeDeviceOperation>(
-        input_shape, layout, input_mem_config, this->logical_output_shape, this->output_mem_config);
-}
 }  // namespace ttnn
