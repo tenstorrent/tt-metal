@@ -334,7 +334,7 @@ void set_or_update_runtime_arguments(
             c_num_tiles = num_tiles_per_core_group_2;
         } else {
             handle_args(program, reader_kernel_id, core, std::array<uint32_t, 21>{0});
-            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 16>{0});
+            handle_args(program, writer_kernel_id, core, std::array<uint32_t, 10>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, 4>{0});
             continue;
         }
@@ -373,24 +373,8 @@ void set_or_update_runtime_arguments(
                 auto b_shard_shape = b_shard_shape_generator(core);
                 b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
             }
-            // TODO: after transition, remove b from writer completely
             std::array writer_runtime_args = {
-                b->buffer()->address(),
-                c.buffer()->address(),
-                c_start_id,
-                b_num_tiles,
-                c_num_tiles,
-                c_current_shard_width,
-                bHt * bWt * bC * bN * bD * (bND > 1),
-                bHt * bWt * bC * bN * (bD > 1),
-                bHt * bWt * bC * (bN > 1),
-                bHt * bWt * (bC > 1),
-                cD,
-                cN,
-                cC,
-                cHt,
-                cWt,
-                cND};
+                c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND};
             handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
             auto [freq, counter] =

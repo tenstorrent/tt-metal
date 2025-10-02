@@ -3761,3 +3761,43 @@ def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device):
         out_pt = torch.mul(a_pt, b_pt)
         out_tt = ttnn.mul(a_tt, b_tt, use_legacy=None)
         assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
+
+
+def rand_bf16_gen_dtype(shape, device, *, min=0, max=1, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    torch_dtype = getattr(torch, dtype)
+    pt = torch.rand(shape, dtype=torch_dtype) * (max - min) + min
+    tt = ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    return pt, tt
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    (
+        # row bcast
+        (torch.Size([5, 10, 640, 128]), torch.Size([5, 10, 1, 128])),
+        (torch.Size([5, 10, 1, 128]), torch.Size([5, 10, 640, 128])),
+        # row col mixed bcast
+        (torch.Size([5, 10, 640, 1]), torch.Size([5, 10, 1, 128])),
+        (torch.Size([5, 10, 1, 128]), torch.Size([5, 10, 640, 1])),
+    ),
+)
+def test_binary_sfpu_row_bcast(a_shape, b_shape, device):
+    torch.manual_seed(0)
+    # make 0 exclusive for rhs of div
+    min, max = (1, 0)
+
+    ttnn_fn = ttnn.pow
+    dtype = "bfloat16"
+    a_pt, a_tt = rand_bf16_gen_dtype(a_shape, device, dtype=dtype)
+    b_pt, b_tt = rand_bf16_gen_dtype(b_shape, device, min=min, max=max, dtype=dtype)
+
+    out_tt = ttnn_fn(
+        a_tt,
+        b_tt,
+        use_legacy=None,
+    )
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+    golden = golden_fn(a_pt, b_pt)
+
+    calculated = ttnn.to_torch(out_tt)
+    assert_with_pcc(calculated, golden, 0.999)
