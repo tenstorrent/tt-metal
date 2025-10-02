@@ -144,8 +144,7 @@ class Yolov11Conv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
-            dtype=self.activation_dtype,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
+            dtype=self.activation_dtype
         )
         
         # 🔍 DEBUGGING: Analyze conv2d output
