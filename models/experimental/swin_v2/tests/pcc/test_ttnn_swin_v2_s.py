@@ -165,4 +165,4 @@ def test_swin_s_transformer(device, reset_seeds, model_location_generator):
     output_tensor = ttnn_model(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)

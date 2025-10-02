@@ -41,7 +41,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         auto device_range = distributed::MeshCoordinateRange(zero_coord);
         distributed::MeshWorkload workload;
         Program program;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         auto& program_ = workload.get_programs().at(device_range);
         auto device = mesh_device->get_devices()[0];
 
@@ -81,7 +81,7 @@ TEST_F(CompileTimeArgsTest, TensixTestNamedCompileTimeArgs) {
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     distributed::MeshWorkload workload;
     Program program;
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 

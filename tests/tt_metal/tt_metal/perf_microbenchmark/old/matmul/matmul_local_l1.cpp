@@ -66,7 +66,7 @@ std::vector<bfloat16> get_col_slice(
 
     for (int r = 0; r < rows; r++) {
         for (int c = cols_per_slice * col_slice_index; c < cols_per_slice * (col_slice_index + 1); c++) {
-            result.push_back(data.at(r * cols + c));
+            result.push_back(data.at((r * cols) + c));
         }
     }
     return result;
@@ -83,7 +83,7 @@ std::vector<std::uint32_t> transpose_tiles(
     for (int c = 0; c < col_tiles; c += in0_block_w) {
         for (int r = 0; r < row_tiles; r++) {
             for (int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
+                int offset = (tile_size * col_tiles * r) + (c * tile_size) + (k * tile_size);
                 for (int i = 0; i < tile_size; i++) {
                     result.push_back(data.at(offset + i));
                 }
@@ -319,7 +319,7 @@ int main(int argc, char** argv) {
         auto mesh_workload = tt_metal::distributed::MeshWorkload();
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+        mesh_workload.add_program(device_range, std::move(program));
         auto start = std::chrono::high_resolution_clock::now();
         tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
         tt_metal::distributed::Finish(device->mesh_command_queue());

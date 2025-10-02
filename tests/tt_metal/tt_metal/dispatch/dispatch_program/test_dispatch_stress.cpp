@@ -66,7 +66,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Write runtime args
     auto get_first_arg =
         [](const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core, uint32_t multiplier) {
-            return (uint32_t)mesh_device->get_devices()[0]->id() + (uint32_t)core.x * 10 * multiplier;
+            return (uint32_t)mesh_device->get_devices()[0]->id() + ((uint32_t)core.x * 10 * multiplier);
         };
     auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                              CoreCoord& core,
@@ -82,8 +82,7 @@ void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     }
 
     distributed::MeshWorkload workload;
-    distributed::AddProgramToMeshWorkload(
-        workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
     distributed::Finish(mesh_device->mesh_command_queue());
 

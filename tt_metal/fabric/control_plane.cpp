@@ -492,8 +492,13 @@ void ControlPlane::init_control_plane(
     const std::string& mesh_graph_desc_file,
     std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
         logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    const auto& driver = tt::tt_metal::MetalContext::instance().get_cluster().get_driver();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
-    this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>();
+    this->physical_system_descriptor_ =
+        std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(driver, distributed_context, rtoptions);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
     this->initialize_distributed_contexts();
@@ -622,7 +627,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
         auto eth_coords_per_chip =
             tt::tt_metal::MetalContext::instance().get_cluster().get_all_chip_ethernet_coordinates();
         std::unordered_map<int, chip_id_t> eth_coord_y_for_gateway_chips = {};
-        for (const auto [chip_id, eth_coord] : eth_coords_per_chip) {
+        for (const auto& [chip_id, eth_coord] : eth_coords_per_chip) {
             if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(chip_id) == BoardType::N150) {
                 eth_coord_y_for_gateway_chips[eth_coord.y] = chip_id;
             }
@@ -879,7 +884,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
     this->print_routing_tables();
 }
 
-// order ethernet channels using virtual coordinates
+// order ethernet channels using noc0 coordinates
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
         for (auto& [_, eth_chans] : eth_chans_by_dir) {
@@ -887,9 +892,9 @@ void ControlPlane::order_ethernet_channels() {
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
 
             std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
-                auto virt_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::VIRTUAL);
-                auto virt_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::VIRTUAL);
-                return virt_coords_a.x < virt_coords_b.x;
+                auto noc0_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::NOC0);
+                auto noc0_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::NOC0);
+                return noc0_coords_a.x < noc0_coords_b.x;
             });
         }
     }

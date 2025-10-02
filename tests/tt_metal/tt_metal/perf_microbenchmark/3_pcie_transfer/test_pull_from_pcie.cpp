@@ -286,7 +286,7 @@ int main(int argc, char** argv) {
         // First add is for aligning to next aligned addr
         // Second add is for making sure the specified alignment is the max alignment
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-            total_transfer_size + 2 * addr_align, 1000, std::chrono::system_clock::now().time_since_epoch().count());
+            total_transfer_size + (2 * addr_align), 1000, std::chrono::system_clock::now().time_since_epoch().count());
 
         uint32_t* start_ptr = (uint32_t*)align(src_vec.data(), addr_align);
         std::vector<uint32_t> result_vec;
@@ -313,8 +313,7 @@ int main(int argc, char** argv) {
 
         // Create MeshWorkload for kernel execution
         auto mesh_workload = tt_metal::distributed::MeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application
