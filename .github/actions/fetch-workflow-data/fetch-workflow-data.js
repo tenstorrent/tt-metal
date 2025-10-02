@@ -327,60 +327,55 @@ async function run() {
           core.warning(`[TEST MODE] Failed to inspect annotations for gtest signal: ${e.message}`);
         }
 
-        if (shouldFetchGtestLogs) {
-          // Download logs zip for the run and extract
-          const respLogs = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId });
-          const zipPath = path.join(runDir, `logs-${runId}.zip`);
-          fs.writeFileSync(zipPath, Buffer.from(respLogs.data));
-          const extractDir = path.join(runDir, 'extract');
-          if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
-          execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+        // Always attempt to download logs in TEST MODE, even if annotations were missing
+        const respLogs = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: runId });
+        const zipPath = path.join(runDir, `logs-${runId}.zip`);
+        fs.writeFileSync(zipPath, Buffer.from(respLogs.data));
+        const extractDir = path.join(runDir, 'extract');
+        if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+        execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
 
-          // Build simple index focusing on files related to the identified job names; fallback to any file containing 'gtest'
-          const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-          const wanted = new Map();
-          for (const jn of Array.from(gtestAnnotationJobNames.values())) {
-            const key = sanitize(jn);
-            if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
-          }
-          if (wanted.size === 0) wanted.set('gtest', { name: 'gtest', files: [] });
+        // Build simple index focusing on files related to the identified job names; fallback widely in test mode
+        const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+        const wanted = new Map();
+        for (const jn of Array.from(gtestAnnotationJobNames.values())) {
+          const key = sanitize(jn);
+          if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
+        }
+        if (wanted.size === 0) {
+          // test mode: be permissive; include any .txt file so analyzer can still parse
+          wanted.set('gtest', { name: 'gtest', files: [] });
+        }
 
-          const stack3 = [extractDir];
-          while (stack3.length) {
-            const dir = stack3.pop();
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const ent of entries) {
-              const p = path.join(dir, ent.name);
-              if (ent.isDirectory()) {
-                stack3.push(p);
-              } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
-                const fileKey = sanitize(p);
-                for (const [k, rec] of wanted.entries()) {
-                  if (fileKey.includes(k)) {
-                    const rel = path.relative(runDir, p);
-                    if (!rec.files.includes(rel)) rec.files.push(rel);
-                  }
+        const stack3 = [extractDir];
+        while (stack3.length) {
+          const dir = stack3.pop();
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const ent of entries) {
+            const p = path.join(dir, ent.name);
+            if (ent.isDirectory()) {
+              stack3.push(p);
+            } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
+              const fileKey = sanitize(p);
+              for (const [k, rec] of wanted.entries()) {
+                if (fileKey.includes(k) || k === 'gtest') {
+                  const rel = path.relative(runDir, p);
+                  if (!rec.files.includes(rel)) rec.files.push(rel);
                 }
               }
             }
           }
-          const gtestIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
-          const gtestIndexPath = path.join(runDir, 'gtest-jobs.json');
-          fs.writeFileSync(gtestIndexPath, JSON.stringify(gtestIndex));
-          const logsIndexPath = path.join(logsRoot, 'logs-index.json');
-          const logsIndex = {};
-          logsIndex[String(runId)] = path.relative(workspace, runDir) || runDir;
-          fs.writeFileSync(logsIndexPath, JSON.stringify(logsIndex));
-          core.setOutput('logs-root', logsRoot);
-          core.setOutput('logs-index-path', logsIndexPath);
-          core.info(`[TEST MODE] Downloaded and indexed logs for run ${runId} → ${gtestIndex.jobs.length} job(s)`);
-        } else {
-          // Even if not downloading, emit empty index so downstream input resolution is stable
-          const logsIndexPath = path.join(logsRoot, 'logs-index.json');
-          if (!fs.existsSync(logsIndexPath)) fs.writeFileSync(logsIndexPath, JSON.stringify({}));
-          core.setOutput('logs-root', logsRoot);
-          core.setOutput('logs-index-path', logsIndexPath);
         }
+        const gtestIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
+        const gtestIndexPath = path.join(runDir, 'gtest-jobs.json');
+        fs.writeFileSync(gtestIndexPath, JSON.stringify(gtestIndex));
+        const logsIndexPath = path.join(logsRoot, 'logs-index.json');
+        const logsIndex = {};
+        logsIndex[String(runId)] = path.relative(workspace, runDir) || runDir;
+        fs.writeFileSync(logsIndexPath, JSON.stringify(logsIndex));
+        core.setOutput('logs-root', logsRoot);
+        core.setOutput('logs-index-path', logsIndexPath);
+        core.info(`[TEST MODE] Downloaded and indexed logs for run ${runId} → ${gtestIndex.jobs.length} job(s)`);
       } catch (e) {
         core.warning(`[TEST MODE] Failed to download/index logs: ${e.message}`);
       }
