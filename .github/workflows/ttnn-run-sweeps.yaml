@@ -563,7 +563,7 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron: "0 4 * * 4" # This cron schedule runs the workflow at 4:00 AM UTC on Thursdays (Wednesday 11 PM EST)
+    - cron: "0 4 * * 1-4" # This cron schedule runs the workflow at 4:00 AM UTC on Monday-Thursday
     - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (Friday 9 PM PST)
 
 concurrency:
@@ -668,7 +668,7 @@ jobs:
           regular_modules = [m for m in modules if m not in suite_split_modules.keys()]
 
           # Use smaller batch size for comprehensive runs (Friday night schedule or manual comprehensive dispatch)
-          # Use larger batch size for nightly runs (Thursday schedule or manual nightly dispatch)
+          # Use larger batch size for nightly runs (Mon-Thu schedule or manual nightly dispatch)
           if "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
               BATCH_SIZE = 3  # Smaller batches for comprehensive runs (must stay under 256 total batches due to GitHub Actions limit)
           else:
@@ -829,9 +829,15 @@ jobs:
         run: |
           BATCH="${{ matrix.batch }}"
 
-          # Set skip-on-timeout flag based on input (default to true for scheduled runs)
+          # Set skip-on-timeout flag based on input (default to true for Mon-Thu nightly runs, false for Saturday comprehensive runs)
           SKIP_ON_TIMEOUT_FLAG=""
-          if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            # For scheduled runs: skip on timeout for Mon-Thu nightly, but not for Saturday comprehensive
+            if [[ "${{ github.event.schedule }}" == "0 4 * * 1-4" ]]; then
+              SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
+            fi
+          elif [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+            # For manual dispatch: use the input parameter
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
           fi
 
