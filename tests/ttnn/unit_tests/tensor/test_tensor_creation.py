@@ -423,3 +423,28 @@ def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, devic
         assert "Unreachable" in str(e)
     else:
         pytest.fail("Expected an exception, but got none")
+
+
+@pytest.mark.parametrize(
+    "dtype,buffer,shape",
+    [
+        (ttnn.float32, [1, 2, 3], [1, 1, 3]),
+        (ttnn.float32, [1, 2, 3, 4, 5, 6], [1, 2, 3]),  # 3 x 2
+        (ttnn.float32, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], [2, 2, 3]),  # 2 x 3 x 2
+        (ttnn.float32, [1, 2, 3, 4], [1, 1, 1, 4]),  # 1 x 1 x 1 x4
+        (ttnn.float32, [1, 2, 3, 4], [1, 1, 4]),  # 1 x 1 x 4
+        (ttnn.float32, [1, 2, 3, 4], [1, 4]),  # 1 x 4
+        (ttnn.float32, [1, 2, 3, 4], [4]),  # 4
+        (ttnn.float32, [1, 2, 3, 4], [1, 1, 1, 1, 4]),  # 1 x 1 x 1 x 1 x 4 # 5d!
+        (ttnn.float32, [1, 2, 3, 4, 5, 6, 7, 8], [2, 1, 1, 1, 1, 4]),  # 2 x 1 x 1 x 1 x 4 # 6d!
+    ],
+)
+def test_tensor_creation_with_multiple_buffer_sizes(dtype, buffer, device, shape):
+    tt_tensor = ttnn.Tensor(
+        buffer,
+        shape,
+        dtype,
+        ttnn.Layout.TILE,
+        device,
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM, None),
+    )
