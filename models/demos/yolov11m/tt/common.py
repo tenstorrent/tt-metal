@@ -15,8 +15,8 @@ class Yolov11Conv2D:
         bn=None,
         device=None,
         activation="",
-        activation_dtype=ttnn.bfloat8_b,
-        weights_dtype=ttnn.bfloat8_b,
+        activation_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
         reshard=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         is_detect=False,
@@ -110,7 +110,6 @@ class Yolov11Conv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
-            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
