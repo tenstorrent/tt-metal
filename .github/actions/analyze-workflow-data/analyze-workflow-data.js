@@ -319,6 +319,8 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                 let inInfo = false;
                 let infoLines = [];
                 let fileSnippets = 0;
+                // Collect info blocks even if we don't know the test yet; pair on FAILED later
+                const pendingInfoBlocks = [];
                 const flushIfFailBlock = () => {
                   if (currentTest && infoLines.length) {
                     const infoMsg = infoLines.join('\n').trim();
@@ -347,9 +349,34 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                       inInfo = false; infoLines = []; currentTest = undefined;
                       core.info(`[GTEST]     OK -> end test @ line ${i+1}`);
                     } else {
-                      flushIfFailBlock();
-                      currentTest = undefined;
-                      core.info(`[GTEST]     FAILED -> finalize @ line ${i+1}`);
+                      // Prefer pairing the nearest pending info block to this FAILED marker
+                      const failedName = endFailed[1] ? String(endFailed[1]).trim() : (currentTest || '');
+                      let paired = false;
+                      for (let j = pendingInfoBlocks.length - 1; j >= 0; j--) {
+                        const blk = pendingInfoBlocks[j];
+                        if (!blk || blk.used) continue;
+                        // Simple proximity rule: last un-used block before current line
+                        blk.used = true;
+                        out.push({ label: `${jobName}: ${failedName}`, snippet: blk.text });
+                        fileSnippets++;
+                        core.info(`[GTEST]     FAILED -> paired with info block ending @ line ${blk.endLine}`);
+                        paired = true;
+                        break;
+                      }
+                      if (!paired) {
+                        // Fallback: if we had a live infoLines, use it
+                        if (infoLines.length) {
+                          const infoMsg = infoLines.join('\n').trim();
+                          if (infoMsg) {
+                            out.push({ label: `${jobName}: ${failedName}`, snippet: infoMsg });
+                            fileSnippets++;
+                            core.info(`[GTEST]     FAILED -> used immediate info lines (len=${infoMsg.length})`);
+                          }
+                        } else {
+                          core.info(`[GTEST]     FAILED -> no nearby info block to pair`);
+                        }
+                      }
+                      currentTest = undefined; inInfo = false; infoLines = [];
                     }
                     continue;
                   }
@@ -361,8 +388,13 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                       const infoIdx = lower.indexOf('info:');
                       const between = line.substring(infoIdx + 5, btIdx).replace(/^\s*|\s*$/g, '');
                       if (between) infoLines.push(between);
-                      core.info(`[GTEST]       info:..backtrace: same-line capture (len=${between.length})`);
-                      flushIfFailBlock();
+                      const textBlock = infoLines.join('\n').trim();
+                      if (textBlock) {
+                        pendingInfoBlocks.push({ text: textBlock, endLine: i+1, used: false });
+                      }
+                      core.info(`[GTEST]       info:..backtrace: same-line capture (len=${between.length}) -> queued`);
+                      // reset capture
+                      inInfo = false; infoLines = [];
                       continue;
                     }
                     const trailing = infoStart[1];
@@ -378,14 +410,19 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                     if (btIdx2 !== -1) {
                       const head = line.substring(0, btIdx2).replace(/^\s*|\s*$/g, '');
                       if (head) infoLines.push(head);
-                      inInfo = false;
-                      core.info(`[GTEST]       backtrace: end capture @ line ${i+1}`);
+                      const textBlock = infoLines.join('\n').trim();
+                      if (textBlock) {
+                        pendingInfoBlocks.push({ text: textBlock, endLine: i+1, used: false });
+                      }
+                      inInfo = false; infoLines = [];
+                      core.info(`[GTEST]       backtrace: end capture @ line ${i+1} -> queued`);
                       continue;
                     }
                     infoLines.push(line);
                   }
                 }
                 flushIfFailBlock();
+                core.info(`[GTEST]   Pending info blocks at EOF: ${pendingInfoBlocks.filter(b => !b.used).length}`);
                 core.info(`[GTEST]   File complete: snippets_added=${fileSnippets}`);
               } catch (errFile) {
                 core.info(`[GTEST]   Failed parsing file '${rel}': ${errFile && errFile.message || String(errFile)}`);
