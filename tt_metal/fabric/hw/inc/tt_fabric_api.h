@@ -11,7 +11,7 @@
 #include "ethernet/dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
 #include "hostdevcommon/fabric_common.h"
-#include "tt_metal/hw/inc/risc_common.h"
+#include "tt_metal/hw/inc/tt-1xx/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
