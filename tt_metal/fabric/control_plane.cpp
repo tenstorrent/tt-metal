@@ -53,24 +53,6 @@
 namespace tt::tt_fabric {
 
 namespace {
-// TODO: Support custom operator< for eth_coord_t to allow usage in std::set
-struct EthCoordComparator {
-    bool operator()(const eth_coord_t& eth_coord_a, const eth_coord_t& eth_coord_b) const {
-        if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
-            return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
-        }
-        if (eth_coord_a.x != eth_coord_b.x) {
-            return eth_coord_a.x < eth_coord_b.x;
-        }
-        if (eth_coord_a.y != eth_coord_b.y) {
-            return eth_coord_a.y < eth_coord_b.y;
-        }
-        if (eth_coord_a.rack != eth_coord_b.rack) {
-            return eth_coord_a.rack < eth_coord_b.rack;
-        }
-        return eth_coord_a.shelf < eth_coord_b.shelf;
-    }
-};
 
 // Get the physical chip ids for a mesh
 std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(chip_id_t chip_id) {
