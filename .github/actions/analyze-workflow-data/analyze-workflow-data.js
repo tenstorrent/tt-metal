@@ -199,6 +199,7 @@ function renderErrorsTable(errorSnippets) {
   if (!Array.isArray(errorSnippets) || errorSnippets.length === 0) {
     return '<p><em>No error info found</em></p>';
   }
+  let __maxJobLen = 0;
   const rows = errorSnippets.map(obj => {
     const rawLabel = (obj && obj.label) ? String(obj.label) : '';
     const rawSnippet = (obj && obj.snippet) ? String(obj.snippet) : '';
@@ -266,6 +267,8 @@ function renderErrorsTable(errorSnippets) {
     // HTML escape the content
     const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     const jobEsc = escapeHtml(jobDisplay).replace(/\r?\n/g, ' ⇥ ');
+    // Track longest job (by characters shown) to size the column later (2-line target ≈ len/2ch)
+    try { __maxJobLen = Math.max(__maxJobLen, jobDisplay.length); } catch (_) { /* ignore */ }
     const testEsc = escapeHtml(testName).replace(/\r?\n/g, ' ⇥ ');
     const snippetOneLine = escapeHtml(errorForDisplay || '').replace(/\r?\n/g, ' ⇥ ');
     let ownerDisplay = 'no owner found';
@@ -276,14 +279,22 @@ function renderErrorsTable(errorSnippets) {
     const ownerEsc = escapeHtml(ownerDisplay);
     return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto;">${jobEsc}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow-wrap: normal; hyphens: none;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
   }).join('\n');
+  // Compute dynamic width for Job column based on longest job label; cap to reasonable bounds
+  const jobWidthCh = (() => {
+    const est = Math.ceil((__maxJobLen || 0) / 2) + 2; // two-line target + padding
+    const minCh = 28; // lower bound so it doesn't get too narrow
+    const maxCh = 88; // upper bound to avoid crowding other columns
+    return Math.max(minCh, Math.min(maxCh, est));
+  })();
+
   return [
     '<table style="table-layout: auto; width: 100%;">',
     '<thead>',
     '<tr>',
-    '<th style="width: 70%;">Job</th>',
-    '<th style="width: 8%;">Test</th>',
-    '<th style="width: 12%;">Owner</th>',
-    '<th style="width: 10%;">Error</th>',
+    `<th style="width: ${jobWidthCh}ch;">Job</th>`,
+    '<th>Test</th>',
+    '<th>Owner</th>',
+    '<th>Error</th>',
     '</tr>',
     '</thead>',
     '<tbody>',
