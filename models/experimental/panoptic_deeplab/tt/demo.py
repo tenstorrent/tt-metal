@@ -19,7 +19,7 @@ from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.common import get_panoptic_deeplab_config, PDL_L1_SMALL_SIZE
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
-from models.utility_functions import disable_persistent_kernel_cache
+from models.common.utility_functions import disable_persistent_kernel_cache
 
 
 def merge_nearby_instances(panoptic_seg: np.ndarray, max_distance: int = 15) -> np.ndarray:
