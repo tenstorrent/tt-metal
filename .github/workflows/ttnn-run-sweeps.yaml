@@ -563,8 +563,9 @@ on:
         type: boolean
         default: true
   schedule:
-    - cron: "0 4 * * 1-5" # This cron schedule runs the workflow at 4:00 AM UTC on Monday-Friday
-    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (Friday 9 PM PST)
+    - cron: "0 4 * * 1,2,4,5" # This cron schedule runs the workflow at 4:00 AM UTC on Mon, Tue, Thu, Fri (nightly runs)
+    - cron: "0 4 * * 3" # This cron schedule runs the workflow at 4:00 AM UTC on Wednesdays (comprehensive run)
+    - cron: "0 5 * * 6" # This cron schedule runs the workflow at 5:00 AM UTC on Saturdays (comprehensive run)
 
 concurrency:
   group: ttnn-sweeps-${{ github.ref }}
@@ -667,9 +668,9 @@ jobs:
           # Remove suite-split modules from regular processing
           regular_modules = [m for m in modules if m not in suite_split_modules.keys()]
 
-          # Use smaller batch size for comprehensive runs (Friday night schedule or manual comprehensive dispatch)
-          # Use larger batch size for nightly runs (Mon-Fri schedule or manual nightly dispatch)
-          if "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
+          # Use smaller batch size for comprehensive runs (Wed/Sat schedule or manual comprehensive dispatch)
+          # Use larger batch size for nightly runs (Mon/Tue/Thu/Fri schedule or manual nightly dispatch)
+          if "${{ github.event.schedule }}" == "0 4 * * 3" or "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
               BATCH_SIZE = 3  # Smaller batches for comprehensive runs (must stay under 256 total batches due to GitHub Actions limit)
           else:
               BATCH_SIZE = 10  # Larger batches for nightly runs
@@ -829,11 +830,11 @@ jobs:
         run: |
           BATCH="${{ matrix.batch }}"
 
-          # Set skip-on-timeout flag based on input (default to true for Mon-Fri nightly runs, false for Saturday comprehensive runs)
+          # Set skip-on-timeout flag based on input (default to true for nightly runs, false for comprehensive runs)
           SKIP_ON_TIMEOUT_FLAG=""
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            # For scheduled runs: skip on timeout for Mon-Fri nightly, but not for Saturday comprehensive
-            if [[ "${{ github.event.schedule }}" == "0 4 * * 1-5" ]]; then
+            # For scheduled runs: skip on timeout for nightly (Mon/Tue/Thu/Fri), but not for comprehensive (Wed/Sat)
+            if [[ "${{ github.event.schedule }}" == "0 4 * * 1,2,4,5" ]]; then
               SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
             fi
           elif [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
@@ -849,7 +850,7 @@ jobs:
             python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_NAME" --suite-name "$SUITE_NAME" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
           else
             # Regular batch execution
-            if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+            if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
               python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --summary $SKIP_ON_TIMEOUT_FLAG
             else
               python3 tests/sweep_framework/sweeps_runner.py --module-name "$BATCH" --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary $SKIP_ON_TIMEOUT_FLAG
@@ -904,7 +905,7 @@ jobs:
         run: |
           # Determine run type based on schedule or input
           RUN_TYPE="nightly"
-          if [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+          if [[ "${{ github.event.schedule }}" == "0 4 * * 3" ]] || [[ "${{ github.event.schedule }}" == "0 5 * * 6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
           fi
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
