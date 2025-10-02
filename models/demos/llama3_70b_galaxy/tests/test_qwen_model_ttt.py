@@ -27,14 +27,14 @@ from models.common.utility_functions import (
 @pytest.mark.parametrize(
     "weights, layers, iterations",
     [
-        ("instruct", 64, 20),
+        ("instruct", 64, 2048),
     ],
     ids=["quick"],
 )
 @pytest.mark.parametrize(
     "sampling_params",
     [
-        {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},
+        {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},
         # {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42}
     ],
 )
@@ -51,7 +51,7 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "page_params",
-    [{"page_block_size": 64, "page_max_num_blocks": 4096}],
+    [{"page_block_size": 64, "page_max_num_blocks": 2048}],
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -59,7 +59,7 @@ from models.common.utility_functions import (
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (2048,),
+    (128 * 1024,),
 )
 @pytest.mark.parametrize(
     "mesh_device",

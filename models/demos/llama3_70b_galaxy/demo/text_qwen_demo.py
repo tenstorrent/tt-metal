@@ -169,7 +169,7 @@ def create_tt_qwen_model(
         weight_cache_path=tt_model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="prefill",
-        enable_prefetcher_performance_mode=True,
+        enable_prefetcher_performance_mode=False,
     )
 
     if use_paged_kv_cache:
@@ -197,7 +197,7 @@ def create_tt_qwen_model(
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
-            False,  # instruct mode
+            True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             32,  # batch_size
@@ -220,7 +220,8 @@ def create_tt_qwen_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            128,  # max_generated_tokens
+            # 128,  # max_generated_tokens
+            8192,
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -258,11 +259,11 @@ def create_tt_qwen_model(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
-            128,  # max_generated_tokens
+            8192,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
+            True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
@@ -278,10 +279,10 @@ def create_tt_qwen_model(
             128 * 1024,  # max_seq_len
             1,  # batch_size
             # 128,  # max_generated_tokens
-            8192,  # max_generated_tokens
+            1024,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 1.0, "top_p": 0.04},  # sampling_params (argmax)
+            {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
