@@ -224,8 +224,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             base_pages_per_worker = num_rows / num_links;
         }
         uint32_t remainder = input_tensor_num_pages % num_links;
-        uint32_t input_tile_id_start = link * base_pages_per_worker + std::min(link, remainder);
-        uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
+        uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
+        uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),        // tensor_address0
             input_tile_id_start * num_width_shards,  // tile_id_start

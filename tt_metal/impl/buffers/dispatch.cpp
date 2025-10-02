@@ -486,9 +486,9 @@ void populate_interleaved_buffer_write_dispatch_cmds(
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
              sysmem_address_offset += dispatch_params.page_size_to_write) {
             const uint64_t src_address_offset =
-                (uint64_t)num_full_pages_written * buffer.page_size() +
-                num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size() +
-                num_partial_pages_written_curr_txn * buffer.page_size();
+                ((uint64_t)num_full_pages_written * buffer.page_size()) +
+                (num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size()) +
+                (num_partial_pages_written_curr_txn * buffer.page_size());
             command_sequence.add_data(
                 (char*)src + src_address_offset, dispatch_params.data_size_to_copy, dispatch_params.page_size_to_write);
             num_partial_pages_written_curr_txn += 1;
@@ -541,8 +541,8 @@ void populate_sharded_buffer_write_dispatch_cmds(
         for (uint32_t i = 0; i < dispatch_params.pages_per_txn; ++i) {
             const uint64_t src_offset =
                 (*cur_host_page * (uint64_t)buffer.page_size()) +
-                (dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
-                    dispatch_params.partial_page_size();
+                ((dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
+                 dispatch_params.partial_page_size());
             command_sequence.update_cmd_sequence(
                 dst_offset, (char*)(src) + src_offset, dispatch_params.data_size_to_copy);
             dst_offset += dispatch_params.page_size_to_write;
