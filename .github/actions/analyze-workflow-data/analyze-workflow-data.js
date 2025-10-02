@@ -327,7 +327,7 @@ function renderErrorsTable(errorSnippets) {
         ownerHtml = `${escapeHtml(p1).replace(/\s/g, '\u00A0')}<br/>${escapeHtml(p2).replace(/\s/g, '\u00A0')}`;
       }
     } catch (_) { /* keep fallback ownerEsc */ }
-    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;">${jobHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style=\"line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;\">${ownerHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
+    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;">${jobHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow: hidden;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;">${ownerHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
   }).join('\n');
   // Compute dynamic width for Job column based on longest job label; cap to reasonable bounds
   const jobWidthCh = (() => {
@@ -1428,7 +1428,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','<details style="margin-left: 1.5em;">','<summary>Errors (click to expand)</summary>','', errorsHtml, '</details>',''].join('\n');
+            errorsList = ['','<details>','<summary>• Errors (click to expand)</summary>','', errorsHtml, '</details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build a link to the latest (most recent) failing run with timestamp and commit
@@ -1496,7 +1496,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','<details style="margin-left: 1.5em;">','<summary>Errors (click to expand)</summary>','', errorsHtml2, '</details>',''].join('\n');
+            errorsList = ['','<details>','<summary>• Errors (click to expand)</summary>','', errorsHtml2, '</details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build information about the latest failing run
