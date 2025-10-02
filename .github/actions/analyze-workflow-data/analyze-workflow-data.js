@@ -270,13 +270,20 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, _logsDirPath = 
           const raw = fs.readFileSync(filePath, 'utf8');
           const arr = JSON.parse(raw);
           if (Array.isArray(arr)) {
+            const seen = new Set();
             for (const a of arr) {
               const job = a.job_name || '';
               const title = a.title || '';
               const level = a.annotation_level || '';
               const message = a.message || '';
-              if (String(level).toLowerCase() !== 'failure' && String(level).toLowerCase() !== 'error') continue;
+              const levelLc = String(level).toLowerCase();
+              if (levelLc !== 'failure' && levelLc !== 'error') continue; // ignore warnings
+              const msgTrim = String(message).trim();
+              if (/^process completed with exit code 1\.?$/i.test(msgTrim)) continue; // skip unhelpful annotations
               const label = `${job}${title ? `: ${title}` : ''} [${level}]`;
+              const dedupeKey = `${job}|${title}|${levelLc}|${msgTrim}`;
+              if (seen.has(dedupeKey)) continue;
+              seen.add(dedupeKey);
               snippets.push({ label, snippet: message });
               if (snippets.length >= maxSnippets) break;
             }
