@@ -995,7 +995,7 @@ void py_module(py::module& module) {
 
                 * - dtype
                   - layout
-                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                * - BFLOAT16
                   - TILE
 
             .. list-table:: input_tensor_b
@@ -1003,8 +1003,10 @@ void py_module(py::module& module) {
 
                 * - dtype
                   - layout
-                * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
+                * - BFLOAT4_B, BFLOAT8_B, BFLOAT16, FLOAT32
                   - TILE
+
+            FLOAT32 is only supported if :attr:`nnz` is provided.
 
             .. list-table:: sparsity
                 :header-rows: 1
@@ -1013,6 +1015,7 @@ void py_module(py::module& module) {
                   - layout
                 * - BFLOAT16
                   - ROW_MAJOR
+
         Example:
             >>> # Sparse matmul for 64 batch, 128 sequence, 512 hidden dimensions, 8 experts
             >>> expert_weights = ttnn.ones([1, 8, 512, 512])
