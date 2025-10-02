@@ -16,6 +16,7 @@
 #include "tt-metalium/mesh_coord.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
+#include "tt-metalium/pinned_memory.hpp"
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
 #include "tt-metalium/shape.hpp"
@@ -701,6 +702,15 @@ Tensor to_device(
     return Tensor(std::move(mesh_storage), *tensor_spec, topology);
 }
 
+// TODO: remove from cache when tensor (or torch tensor) is destroyed.
+struct PinnedMemoryWrapper {
+    distributed::MeshCoordinateRangeSet device_range;
+    std::shared_ptr<tt_metal::PinnedMemory> pinned_memory;
+};
+std::deque<PinnedMemoryWrapper> pinned_memories_cache;
+
+void clear_pinned_memories_cache() { pinned_memories_cache.clear(); }
+
 template <typename T>
 void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blocking, std::optional<ttnn::QueueId> cq_id) {
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Source tensor is not on device.");
@@ -720,15 +730,58 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(cq_id_int);
 
-    const auto& distributed_host_buffer = host_tensor.host_storage().buffer();
+    const DistributedHostBuffer& distributed_host_buffer = host_tensor.host_storage().buffer();
+
+    std::vector<PinnedMemoryWrapper> pinned_memories_to_cache;
+
+    bool use_pinned = device->get_memory_pinning_parameters().can_map_to_noc;
 
     // Host tensor must have pre-allocated buffers for all device shards.
     // However, it may have some extra shards. Drop them by "unwrapping" the distributed host buffer, and re-wrapping
     // only for those shards that are actually present on device.
     std::vector<std::pair<distributed::MeshCoordinate, std::optional<HostBuffer>>> shards;
     shards.reserve(device_storage.coords.size());
+    std::vector<std::shared_ptr<tt_metal::PinnedMemory>> pinned_memories;
     for (const auto& device_coord : device_storage.coords) {
-        shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
+        auto shard = distributed_host_buffer.get_shard(device_coord);
+        if (use_pinned) {
+            if (shard.has_value()) {
+                auto range_set =
+                    distributed::MeshCoordinateRangeSet{distributed::MeshCoordinateRange{device_coord, device_coord}};
+                std::shared_ptr<tt_metal::PinnedMemory> pinned_memory;
+                for (auto& pinned_memory_wrapper : pinned_memories_cache) {
+                    if (pinned_memory_wrapper.device_range == range_set &&
+                        pinned_memory_wrapper.pinned_memory->get_host_ptr() == shard->view_bytes().data() &&
+                        pinned_memory_wrapper.pinned_memory->get_buffer_size() == shard->view_bytes().size()) {
+                        pinned_memory = pinned_memory_wrapper.pinned_memory;
+                        break;
+                    }
+                }
+                if (pinned_memory == nullptr) {
+                    // TODO: on blackhole, limit size of cache to avoid pinning arbitrarily many buffers.
+                    try {
+                        pinned_memory = device->pin_memory(range_set, *shard, /*map_to_noc=*/true);
+                    } catch (const std::exception& e) {
+                        pinned_memories_cache.clear();
+                    }
+                    if (pinned_memory == nullptr) {
+                        try {
+                            pinned_memory = device->pin_memory(range_set, *shard, /*map_to_noc=*/true);
+                        } catch (const std::exception& e) {
+                        }
+                    }
+                    if (pinned_memory != nullptr) {
+                        pinned_memories_to_cache.push_back(PinnedMemoryWrapper{range_set, pinned_memory});
+                    }
+                }
+                shard->set_pinned_memory(pinned_memory);
+            }
+        }
+        shards.push_back({device_coord, std::move(shard)});
+    }
+
+    for (auto& pinned_memory_wrapper : pinned_memories_to_cache) {
+        pinned_memories_cache.push_back(pinned_memory_wrapper);
     }
 
     DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->get_view());

@@ -6,6 +6,7 @@
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <pinned_memory.hpp>
 #include <optional>
 
 #include "buffer.hpp"
@@ -132,6 +133,7 @@ void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
                 buffer,
                 MeshCoordinate(device_y, device_x),
                 shard_data.data(),
+                /*pinned_memory=*/nullptr,
                 /*region=*/std::nullopt,
                 num_txns_per_device);
             this->submit_memcpy_request(num_txns_per_device, true);
@@ -279,17 +281,29 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
+    bool has_pinned_memory = false;
     for (const auto& shard_data_transfer : shard_data_transfers) {
         if (mesh_device_->is_local(shard_data_transfer.shard_coord)) {
+            has_pinned_memory = has_pinned_memory || shard_data_transfer.pinned_memory != nullptr;
             this->read_shard_from_device(
                 *buffer,
                 shard_data_transfer.shard_coord,
                 shard_data_transfer.host_data,
+                shard_data_transfer.pinned_memory,
                 shard_data_transfer.region,
                 num_txns_per_device);
         }
     }
     this->submit_memcpy_request(num_txns_per_device, blocking);
+
+    if (!blocking && has_pinned_memory) {
+        auto event = this->enqueue_record_event_to_host_nolock();
+        for (const auto& shard_data_transfer : shard_data_transfers) {
+            if (mesh_device_->is_local(shard_data_transfer.shard_coord)) {
+                shard_data_transfer.pinned_memory->add_barrier_event(event);
+            }
+        }
+    }
 }
 
 void MeshCommandQueueBase::enqueue_read_shards(
@@ -317,6 +331,7 @@ void MeshCommandQueueBase::enqueue_read(
             shard_data_transfers.push_back(
                 {.shard_coord = coord,
                  .host_data = buf->view_bytes().data(),
+                 .pinned_memory = buf->get_pinned_memory(),
                  .region = BufferRegion(0, buf->view_bytes().size())});
         }
     }

@@ -842,6 +842,24 @@ void Cluster::read_sysmem(
     this->driver_->read_from_sysmem(vec, addr, channel & HOST_MEM_CHANNELS_MASK, size_in_bytes, src_device_id);
 }
 
+std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
+    chip_id_t device_id, size_t sysmem_buffer_size, bool map_to_noc) const {
+    tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
+    if (!sysmem_manager) {
+        TT_THROW("Failed to get SysmemManager for device {}", device_id);
+    }
+    return sysmem_manager->allocate_sysmem_buffer(sysmem_buffer_size, map_to_noc);
+}
+
+std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
+    chip_id_t device_id, void* buffer, size_t sysmem_buffer_size, bool map_to_noc) const {
+    tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
+    if (!sysmem_manager) {
+        TT_THROW("Failed to get SysmemManager for device {}", device_id);
+    }
+    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc);
+}
+
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t> &fw_versions) const {
     umd::tt_version sw(sw_version), fw_first_eth_core(fw_versions.at(0));

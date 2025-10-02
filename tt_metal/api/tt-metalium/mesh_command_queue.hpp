@@ -82,6 +82,7 @@ public:
     struct ShardDataTransfer {
         MeshCoordinate shard_coord;
         void* host_data = nullptr;
+        std::shared_ptr<PinnedMemory> pinned_memory = nullptr;
         std::optional<BufferRegion> region;
     };
 
