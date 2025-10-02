@@ -259,8 +259,10 @@ function renderErrorsTable(errorSnippets) {
 
     // Aesthetics: drop trailing bracketed status like [failure] or [error]
     jobName = jobName.replace(/\s*\[[^\]]+\]\s*$/, '');
-    // Prevent excessive wrapping on hyphenated job names by using non-breaking hyphens for display
-    const jobDisplay = String(jobName).replace(/-/g, '\u2011');
+    // Prevent excessive wrapping: use non-breaking hyphens and keep slash groups together
+    const jobDisplay = String(jobName)
+      .replace(/-/g, '\u2011')
+      .replace(/\s\/\s/g, '\u00A0/\u00A0');
     // HTML escape the content
     const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     const jobEsc = escapeHtml(jobDisplay).replace(/\r?\n/g, ' ⇥ ');
@@ -272,16 +274,16 @@ function renderErrorsTable(errorSnippets) {
       if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
-    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: anywhere;">${jobEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: anywhere;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow-wrap: normal;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: anywhere;">${snippetOneLine}</td></tr>`;
+    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${jobEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow-wrap: normal; hyphens: none;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
   }).join('\n');
   return [
     '<table style="table-layout: auto; width: 100%;">',
     '<thead>',
     '<tr>',
-    '<th style="width: 62%;">Job</th>',
-    '<th style="width: 10%;">Test</th>',
-    '<th style="width: 16%;">Owner</th>',
-    '<th style="width: 12%;">Error</th>',
+    '<th style="width: 70%;">Job</th>',
+    '<th style="width: 8%;">Test</th>',
+    '<th style="width: 12%;">Owner</th>',
+    '<th style="width: 10%;">Error</th>',
     '</tr>',
     '</thead>',
     '<tbody>',
