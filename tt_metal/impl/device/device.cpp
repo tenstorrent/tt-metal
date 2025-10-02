@@ -31,7 +31,7 @@
 
 #include "allocator.hpp"
 #include "allocator_types.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
@@ -39,7 +39,6 @@
 #include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
-#include "trace/trace.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
@@ -759,7 +758,7 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
     // This function queries Physical Coordinates (only exposed directly to the Device class)
     // and passes them to logic in core_assignment.cpp to derive the most optimal core placement
     // based on architecture specific logic and Physical Grid configuration.
-    if (not this->optimal_dram_bank_to_logical_worker_assignment_.size()) {
+    if (this->optimal_dram_bank_to_logical_worker_assignment_.empty()) {
         uint32_t full_grid_size_x = this->grid_size().x;
         uint32_t full_grid_size_y = this->grid_size().y;
 

@@ -11,7 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/circular_buffer_constants.h>
-#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/semaphore.hpp>
 #include "dispatch_test_utils.hpp"
@@ -291,7 +291,7 @@ private:
             max,
             divisible_by);
 
-        return adjusted_min + (rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by;
+        return adjusted_min + ((rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by);
     }
 
     DataMovementProcessor get_processor() {
@@ -332,7 +332,7 @@ private:
             case 2: cores = this->generate_subset_of_cores(all_cores, 4); break;
         }
 
-        TT_FATAL(cores.size() > 0, "Generated cores cannot be empty");
+        TT_FATAL(!cores.empty(), "Generated cores cannot be empty");
         return cores;
     }
 

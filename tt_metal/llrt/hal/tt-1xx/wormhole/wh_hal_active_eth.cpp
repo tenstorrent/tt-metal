@@ -101,26 +101,25 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
-    std::vector<HalJitBuildConfig> processor_types(1);
-    for (uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
-        processor_types[0] = HalJitBuildConfig{
-            .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
-            .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
-            .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
-            .fw_launch_addr_value = 0x1,
-            .memory_load = ll_api::memory::Loading::DISCRETE,
-        };
-        processor_classes[processor_class_idx] = processor_types;
-    }
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
+        // DM
+        {
+            // ERISC
+            {.fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
+             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
+             .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
+             .fw_launch_addr_value = 0x1,
+             .memory_load = ll_api::memory::Loading::DISCRETE},
+        },
+    };
     static_assert(sizeof(mailboxes_t) <= eth_l1_mem::address_map::ERISC_MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,
         CoreType::ETH,
-        processor_classes,
-        mem_map_bases,
-        mem_map_sizes,
-        fw_mailbox_addr,
+        std::move(processor_classes),
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
         active_eth_dev_msgs::create_factory()};

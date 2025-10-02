@@ -116,12 +116,11 @@ public:
             tt::tt_metal::distributed::MeshCommandQueue& cq = device->mesh_command_queue();
             // Create a mesh workload from the program
             auto& program_copy = program;
-            auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-            tt::tt_metal::distributed::AddProgramToMeshWorkload(
-                mesh_workload,
-                std::move(program_copy),
+            auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
+            mesh_workload.add_program(
                 tt::tt_metal::distributed::MeshCoordinateRange(
-                    tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)));
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)),
+                std::move(program_copy));
             tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
         }
     }
@@ -151,9 +150,8 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
-                tt::tt_metal::ClusterType::GALAXY ||
-            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
+            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             should_skip_ = true;
             return;
         }

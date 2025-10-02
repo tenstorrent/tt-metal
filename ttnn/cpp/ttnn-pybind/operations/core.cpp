@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -202,6 +202,7 @@ void py_module(py::module& module) {
             tensor (ttnn.Tensor): the input tensor to be converted.
             memory_config (ttnn.MemoryConfig): the desired memory configuration for the tensor.
             dtype (ttnn.DataType, optional): the optional `ttnn` data type. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): the optional output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the converted tensor.
@@ -212,7 +213,11 @@ void py_module(py::module& module) {
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
-        ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("memory_config"), py::arg("dtype") = std::nullopt});
+        ttnn::pybind_arguments_t{
+            py::arg("tensor"),
+            py::arg("memory_config"),
+            py::arg("dtype") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt});
 
     bind_registered_operation(
         module,

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -184,6 +184,9 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
     // Write host tensor to device.
     Tensor device_tensor = tensor_impl::to_device_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
     EXPECT_EQ(device_tensor.tensor_spec().logical_shape(), shape);
+    EXPECT_EQ(
+        device_tensor.tensor_topology(),
+        TensorTopology::create_fully_replicated_tensor_topology(mesh_device_->shape()));
 
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.storage());
     ASSERT_NE(device_storage, nullptr);
@@ -339,6 +342,8 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
         }
     }();
 
+    EXPECT_EQ(device_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
+
     auto* device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&device_tensor.storage());
     ASSERT_NE(device_storage, nullptr);
     EXPECT_THAT(device_storage->coords, ElementsAreArray(coord_matchers));
@@ -352,6 +357,8 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
             return tensor_impl::to_host_wrapper(device_tensor);
         }
     }();
+
+    EXPECT_EQ(output_host_tensor.tensor_topology(), input_host_tensor_sharded.tensor_topology());
 
     std::vector<Tensor> output_host_shards = get_device_tensors(output_host_tensor);
     ASSERT_EQ(output_host_shards.size(), input_host_shards.size());

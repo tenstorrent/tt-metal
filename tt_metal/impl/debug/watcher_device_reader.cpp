@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
@@ -309,9 +309,6 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             logical_core_to_eth_link_retraining_count[eth_core] = read_data[0];
         }
     }
-
-    num_erisc_cores = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
 }
 
 WatcherDeviceReader::~WatcherDeviceReader() {
@@ -1031,14 +1028,14 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
         // XXXX TODO(PGK) get this from device
         const uint32_t OPERAND_START_STREAM = 8;
-        uint32_t base = NOC_OVERLAY_START_ADDR + (OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE;
+        uint32_t base = NOC_OVERLAY_START_ADDR + ((OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE);
 
-        uint32_t rcvd_addr = base + STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t);
+        uint32_t rcvd_addr = base + (STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t));
         data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             reader_.device_id, virtual_coord_, rcvd_addr, sizeof(uint32_t));
         uint32_t rcvd = data[0];
 
-        uint32_t ackd_addr = base + STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t);
+        uint32_t ackd_addr = base + (STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t));
         data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             reader_.device_id, virtual_coord_, ackd_addr, sizeof(uint32_t));
         uint32_t ackd = data[0];

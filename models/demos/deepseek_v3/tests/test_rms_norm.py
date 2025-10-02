@@ -13,6 +13,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
+    get_test_weight_config,
     load_reference_io_tensors_for_module,
     load_state_dict,
     run_module_forward,
@@ -54,8 +55,10 @@ def test_forward_pass(
     model_path,
     hf_config,
     tmp_path,
+    cache_path,
     mesh_device,
     ccl,
+    force_recalculate_weight_config,
     set_deterministic_env,
 ):
     num_module_layers, _ = mesh_device.shape
@@ -74,6 +77,10 @@ def test_forward_pass(
         torch_input = torch.randn(num_module_layers, 1, seq_len, hidden_size)
         reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
+
+        # Do not cache random weights
+        cache_path = tmp_path
+        force_recalculate_weight_config = True
     else:
         state_dict = load_state_dict(model_path, reference_layernorm_path)
         torch_input, reference_output = load_reference_io_tensors_for_module(
@@ -81,7 +88,14 @@ def test_forward_pass(
         )
 
     # Generate module configs and state
-    weight_config = RMSNormClass.convert_weights(hf_config, [state_dict] * num_module_layers, tmp_path, mesh_device)
+    weight_config = get_test_weight_config(
+        RMSNormClass,
+        hf_config,
+        [state_dict] * num_module_layers,
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+    )
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
     model_state = RMSNormClass.create_state(
         hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]

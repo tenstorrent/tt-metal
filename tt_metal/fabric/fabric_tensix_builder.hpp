@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -152,6 +152,8 @@ public:
     uint32_t get_noc_y() const { return noc_y_; }
     eth_chan_directions get_direction() const { return direction_; }
 
+    void append_upstream_routers_noc_xy(uint32_t noc_x, uint32_t noc_y);
+
 private:
     // Core and fabric configuration
     CoreCoord my_core_logical_;
@@ -174,6 +176,10 @@ private:
     // Channel connection liveness check disable array
     mutable std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
         channel_connection_liveness_check_disable_array_{};
+
+    // Upstream router coordinates for sync
+    std::vector<uint32_t> upstream_routers_noc_x_;
+    std::vector<uint32_t> upstream_routers_noc_y_;
 
     // Helper methods for kernel compilation
     std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice* device) const;

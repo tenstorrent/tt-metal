@@ -8,7 +8,6 @@ using namespace tt::tt_metal::wormhole::tensix;
 
 #include <cstdint>
 
-#include "assert.hpp"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -54,6 +53,7 @@ HalCoreInfoType create_tensix_mem_map() {
         MEM_TENSIX_FABRIC_CONNECTIONS_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_1D)] = MEM_TENSIX_ROUTING_PATH_BASE_1D;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_2D)] = MEM_TENSIX_ROUTING_PATH_BASE_2D;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_EXIT_NODE_TABLE)] = MEM_TENSIX_EXIT_NODE_TABLE_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
 
@@ -77,77 +77,59 @@ HalCoreInfoType create_tensix_mem_map() {
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_1D)] = ROUTING_PATH_SIZE_1D;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_2D)] = COMPRESSED_ROUTING_PATH_SIZE_2D;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_EXIT_NODE_TABLE)] = MEM_TENSIX_EXIT_NODE_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
     // No base fw on tensix core
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumTensixDispatchClasses);
-    std::vector<HalJitBuildConfig> processor_types;
-    for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumTensixDispatchClasses; processor_class_idx++) {
-        std::uint32_t num_processors = processor_class_idx == (NumTensixDispatchClasses - 1) ? 3 : 1;
-        processor_types.resize(num_processors);
-        for (std::size_t processor_type_idx = 0; processor_type_idx < processor_types.size(); processor_type_idx++) {
-            DeviceAddr fw_base{}, local_init{}, fw_launch{};
-            uint32_t fw_launch_value{};
-            ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
-            switch (processor_class_idx) {
-                case 0: {
-                    fw_base = MEM_BRISC_FIRMWARE_BASE;
-                    local_init = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                    fw_launch = 0x0;  // BRISC is hardcoded to have reset PC of 0
-                    fw_launch_value = generate_risc_startup_addr(fw_base);
-                } break;
-                case 1: {
-                    fw_base = MEM_NCRISC_FIRMWARE_BASE;
-                    local_init = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                    fw_launch = 0;  // fix me;
-                    fw_launch_value = fw_base;
-                    memory_load = ll_api::memory::Loading::CONTIGUOUS;
-                } break;
-                case 2: {
-                    switch (processor_type_idx) {
-                        case 0: {
-                            fw_base = MEM_TRISC0_FIRMWARE_BASE;
-                            local_init = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH;
-                            fw_launch = 0;  // fix me;
-                            fw_launch_value = fw_base;
-                        } break;
-                        case 1: {
-                            fw_base = MEM_TRISC1_FIRMWARE_BASE;
-                            local_init = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH;
-                            fw_launch = 0;  // fix me;
-                            fw_launch_value = fw_base;
-                        } break;
-                        case 2: {
-                            fw_base = MEM_TRISC2_FIRMWARE_BASE;
-                            local_init = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH;
-                            fw_launch = 0;  // fix me
-                            fw_launch_value = fw_base;
-                        } break;
-                    }
-                } break;
-                default: TT_THROW("Unexpected processor class {} for Blackhole Tensix", processor_class_idx);
-            }
-
-            processor_types[processor_type_idx] = HalJitBuildConfig{
-                .fw_base_addr = fw_base,
-                .local_init_addr = local_init,
-                .fw_launch_addr = fw_launch,
-                .fw_launch_addr_value = fw_launch_value,
-                .memory_load = memory_load};
-        }
-        processor_classes[processor_class_idx] = processor_types;
-    }
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
+        // DM
+        {
+            // BRISC
+            {.fw_base_addr = MEM_BRISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0x0,  // BRISC is hardcoded to have reset PC of 0
+             .fw_launch_addr_value = generate_risc_startup_addr(MEM_BRISC_FIRMWARE_BASE),
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // NCRISC
+            {.fw_base_addr = MEM_NCRISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0,  // fix me;
+             .fw_launch_addr_value = MEM_NCRISC_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS},
+        },
+        // COMPUTE
+        {
+            // TRISC0
+            {.fw_base_addr = MEM_TRISC0_FIRMWARE_BASE,
+             .local_init_addr = MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0,  // fix me;
+             .fw_launch_addr_value = MEM_TRISC0_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // TRISC1
+            {.fw_base_addr = MEM_TRISC1_FIRMWARE_BASE,
+             .local_init_addr = MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0,  // fix me;
+             .fw_launch_addr_value = MEM_TRISC1_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // TRISC2
+            {.fw_base_addr = MEM_TRISC2_FIRMWARE_BASE,
+             .local_init_addr = MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = 0,  // fix me
+             .fw_launch_addr_value = MEM_TRISC2_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        },
+    };
     static_assert(sizeof(mailboxes_t) <= MEM_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::TENSIX,
         CoreType::WORKER,
-        processor_classes,
-        mem_map_bases,
-        mem_map_sizes,
-        fw_mailbox_addr,
+        std::move(processor_classes),
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
         true /*supports_cbs*/,
         true /*supports_receiving_multicast_cmds*/,
         tensix_dev_msgs::create_factory()};

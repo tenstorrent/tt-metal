@@ -21,7 +21,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -163,13 +163,13 @@ bool eth_direct_sender_receiver_kernels(
     std::thread t1;
     std::thread t2;
     if (fixture->IsSlowDispatch()) {
-        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
-        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
+        sender_workload.add_program(device_range, std::move(sender_program));
+        receiver_workload.add_program(device_range, std::move(receiver_program));
         t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
         t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
     } else {
-        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
-        distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
+        sender_workload.add_program(device_range, std::move(sender_program));
+        receiver_workload.add_program(device_range, std::move(receiver_program));
         fixture->RunProgram(sender_mesh_device, sender_workload, true);
         fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
     }
@@ -861,8 +861,9 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
         const auto& send_chip = devices_.at(std::get<0>(it->first));
         CoreCoord sender_core = std::get<1>(it->first);
 
+        auto send_device = send_chip->get_devices()[0];
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
-                send_chip->id(), sender_core)) {
+                send_device->id(), sender_core)) {
             continue;
         }
 
@@ -881,7 +882,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
             erisc_unreserved_base_addr, max_l1_loading_addr);
 
         int max_words = (max_l1_loading_addr - std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) / WORD_SIZE;
-        int num_words = rand() % max_words + 1;
+        int num_words = (rand() % max_words) + 1;
 
         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
             static_cast<MeshDispatchFixture*>(this),
@@ -940,7 +941,7 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests)
 
             int max_words =
                 (max_l1_loading_addr - std::max(src_eth_l1_byte_address, dst_eth_l1_byte_address)) / num_bytes_per_send;
-            int num_words = rand() % max_words + 1;
+            int num_words = (rand() % max_words) + 1;
 
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                 static_cast<MeshDispatchFixture*>(this),

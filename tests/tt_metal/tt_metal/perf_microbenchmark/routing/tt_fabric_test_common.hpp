@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -151,7 +151,7 @@ public:
 
     void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program program) {
         MeshCoordinateRange device(mesh_coord, mesh_coord);
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(*mesh_workload_, std::move(program), device);
+        mesh_workload_->add_program(device, std::move(program));
     }
 
     void run_programs() {
@@ -771,7 +771,7 @@ public:
 
         auto num_forward_hops = 0;
         auto num_backward_hops = 0;
-        uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
+        uint32_t full_hop_count = (2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1)) - 1;
 
         if (pattern_type == HighLevelTrafficPattern::FullRing) {
             num_forward_hops = full_hop_count;
@@ -985,7 +985,7 @@ public:
         const auto& neighbors = control_plane_ptr_->get_chip_neighbors(src_node_id, direction);
         TT_FATAL(neighbors.size() == 1, "Expected only neighbor mesh for {} in direction: {}", src_node_id, direction);
         TT_FATAL(
-            neighbors.begin()->second.size() >= 1,
+            !neighbors.begin()->second.empty(),
             "Expected at least 1 neighbor chip for {} in direction: {}",
             src_node_id,
             direction);
