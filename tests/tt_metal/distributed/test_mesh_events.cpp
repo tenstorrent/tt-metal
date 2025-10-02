@@ -99,7 +99,7 @@ TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), mesh_buffer, src_vec);
         if (i % 2) {
             // Test Host <-> Device synchronization
-            auto write_event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
+            auto write_event = mesh_device_->mesh_command_queue(0).enqueue_record_event_to_host();
             EventSynchronize(write_event);
         } else {
             // Test Device <-> Device synchronization
@@ -160,7 +160,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
         }
         if (iter % 2) {
             // Test Host <-> Device Synchronization
-            auto write_event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(1));
+            auto write_event = mesh_device_->mesh_command_queue(1).enqueue_record_event_to_host();
             EventSynchronize(write_event);
         } else {
             // Test Device <-> Device Synchronization
@@ -175,7 +175,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
             mesh_device_->mesh_command_queue(1).enqueue_wait_for_event(op_event);
         } else {
             // Test Host <-> Device Synchronization
-            auto op_event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
+            auto op_event = mesh_device_->mesh_command_queue(0).enqueue_record_event_to_host();
             EventSynchronize(op_event);
         }
 
@@ -240,7 +240,7 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
         }
 
         mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
-        auto event1 = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(1), {}, devices_1);
+        auto event1 = mesh_device_->mesh_command_queue(1).enqueue_record_event_to_host({}, devices_1);
         EventSynchronize(event1);
 
         for (const auto& coord : devices_1) {
@@ -307,11 +307,11 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
             write_cq.enqueue_wait_for_event(read_events.back());
         }
         EnqueueWriteMeshBuffer(write_cq, buffer, input_shard_data[i], true);
-        write_events.push_back(EnqueueRecordEventToHost(write_cq));
+        write_events.push_back(write_cq.enqueue_record_event_to_host());
         // Wait for write to complete before reading
         read_cq.enqueue_wait_for_event(write_events.back());
         read_cq.enqueue_read_shards(read_shards[i], buffer, false);
-        read_events.push_back(EnqueueRecordEventToHost(read_cq));
+        read_events.push_back(read_cq.enqueue_record_event_to_host());
     }
 
     // Stall on read and write CQs before data verification
@@ -329,7 +329,7 @@ TEST_F(MeshEventsTestSuite, EventQuery) {
     uint32_t NUM_ITERS = 500;
     // Stress EventQuery API and ensure that an event is marked as completed post synchronization.
     for (auto i = 0; i < NUM_ITERS; i++) {
-        auto event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
+        auto event = mesh_device_->mesh_command_queue(0).enqueue_record_event_to_host();
         if (i % 10 == 0) {
             EventSynchronize(event);
             EXPECT_TRUE(EventQuery(event));
