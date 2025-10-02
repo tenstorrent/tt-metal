@@ -200,19 +200,44 @@ function renderErrorsTable(errorSnippets) {
     return '_No error info found_';
   }
   const rows = errorSnippets.map(obj => {
-    const label = (obj && obj.label) ? String(obj.label).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ') : '';
+    const rawLabel = (obj && obj.label) ? String(obj.label) : '';
     const rawSnippet = (obj && obj.snippet) ? String(obj.snippet) : '';
     const snippetOneLine = rawSnippet.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
+    // Extract job and test
+    const tryGet = (s) => typeof s === 'string' ? s : '';
+    let jobName = tryGet(obj && obj.job);
+    let testName = tryGet(obj && obj.test);
+    if (!jobName || !testName) {
+      // Try parsing from label of the form "job: test"
+      if (rawLabel && rawLabel.includes(':')) {
+        const idx = rawLabel.indexOf(':');
+        const left = rawLabel.slice(0, idx).trim();
+        const right = rawLabel.slice(idx + 1).trim();
+        if (!jobName) jobName = left;
+        if (!testName && right) testName = right.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
+      }
+    }
+    // For pytest (or anything else): test name is message up to first '['
+    if (!testName) {
+      const upto = rawSnippet.split('[')[0].trim();
+      const generic = /(lost\s+connection|timeout|timed\s*out|connection\s+reset|network\s+is\s+unreachable|no\s+space\s+left|killed\s+by|out\s+of\s+memory)/i;
+      testName = (!upto || generic.test(rawSnippet)) ? 'NA' : upto;
+    }
+    if (!jobName) jobName = rawLabel || '';
+    // Aesthetics: drop trailing bracketed status like [failure] or [error]
+    jobName = jobName.replace(/\s*\[[^\]]+\]\s*$/, '');
+    const jobEsc = jobName.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
+    const testEsc = testName.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
     let ownerDisplay = 'no owner found';
     if (obj && Array.isArray(obj.owner) && obj.owner.length) {
       const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
       if (names.length) ownerDisplay = names.join(', ');
     }
     ownerDisplay = ownerDisplay.replace(/\|/g, '\\|');
-    return `| ${label} | ${ownerDisplay} | ${snippetOneLine} |`;
+    return `| ${jobEsc} | ${testEsc} | ${ownerDisplay} | ${snippetOneLine} |`;
   }).join('\n');
   return [
-    '| Job | Owner | Error |',
+    '| Job | Test | Owner | Error |',
     '|------|-------|-------|',
     rows,
     ''
@@ -346,7 +371,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                       }
                     }
                     if (!labelName) labelName = lastSeenTestName || 'unknown gtest';
-                    out.push({ label: `${jobName}: ${labelName}`, snippet: msg });
+                    out.push({ label: `${jobName}: ${labelName}`, job: jobName, test: labelName, snippet: msg });
                     snippetsAdded++;
                     core.info(`[GTEST]     Added snippet for '${labelName}' (len=${msg.length}) @ line ${lineNo}`);
                   }
@@ -1255,17 +1280,17 @@ async function run() {
 
             // If we found a success in the window, show commits between success and first failure
             let commitsList = '';
-            // const commitsMd = renderCommitsTable(it.commits_between || []);
-            const rawUrlsMd = renderRawCommitUrlsTable(it.commits_between || []);
+            const commitsMd = renderCommitsTable(it.commits_between || []);
+            // const rawUrlsMd = renderRawCommitUrlsTable(it.commits_between || []);
             commitsList = [
               '',
               '  - Commits between last success and first failure (tables below):',
               '',
-              // commitsMd,
+              commitsMd,
               '',
               '  - Raw commit URLs:',
               '',
-              rawUrlsMd,
+              // rawUrlsMd,
               ''
             ].join('\n');
 
@@ -1324,17 +1349,17 @@ async function run() {
 
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
-            // const commitsMd2 = renderCommitsTable(it.commits_between || []);
-            const rawUrlsMd2 = renderRawCommitUrlsTable(it.commits_between || []);
+            const commitsMd2 = renderCommitsTable(it.commits_between || []);
+            // const rawUrlsMd2 = renderRawCommitUrlsTable(it.commits_between || []);
             commitsList = [
               '',
               '  - Commits between last success and first failure (tables below):',
               '',
-              // commitsMd2,
+              commitsMd2,
               '',
               '  - Raw commit URLs:',
               '',
-              rawUrlsMd2,
+              // rawUrlsMd2,
               ''
             ].join('\n');
 
