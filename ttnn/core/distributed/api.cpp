@@ -107,11 +107,7 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
         coords.push_back(coord);
     }
 
-    TensorTopology topology(
-        MeshShape(mesh_shape.mesh_size()),
-        {tt::tt_metal::distributed::MeshMapperConfig::Shard{.dim = shard_dim}},
-        coords);
-
+    TensorTopology topology = TensorTopology::create_sharded_tensor_topology(mesh_shape, shard_dim);
     return Tensor(HostStorage{std::move(distributed_host_buffer)}, reference_shard.tensor_spec(), std::move(topology));
 }
 
@@ -144,10 +140,8 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
         std::adjacent_find(coords.begin(), coords.end(), [](const auto& a, const auto& b) { return a == b; });
     TT_FATAL(duplicate == coords.end(), "Found a tensor shard at duplicate coordinate {}", *duplicate);
 
-    TensorTopology topology(
-        MeshShape(tensor_shards.size()),
-        {tt::tt_metal::distributed::MeshMapperConfig::Shard{.dim = shard_dim}},
-        coords);
+    TensorTopology topology =
+        TensorTopology::create_sharded_tensor_topology(MeshShape(tensor_shards.size()), shard_dim);
     return Tensor(
         DeviceStorage(std::move(mesh_buffer), std::move(coords)), reference_shard.tensor_spec(), std::move(topology));
 }
