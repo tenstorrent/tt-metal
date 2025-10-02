@@ -411,27 +411,15 @@ def main():
             # Reshape class token: [embed_dim] -> [batch_size, 1, embed_dim]
             class_embedding = ttnn.reshape(self.class_embedding, (x.shape[0], 1, x.shape[-1]))
 
-            # Create a zero tensor with matching shape to ensure proper memory layout
-            # This workaround ensures the class embedding tensor has compatible memory configuration
-            # for subsequent operations (concatenation requires matching memory layouts)
-            zero_tensor = ttnn.zeros(
-                shape=(x.shape[0], 1, x.shape[-1]), dtype=x.dtype, device=device, layout=ttnn.TILE_LAYOUT
-            )
-
-            # Align class embedding to proper shape and layout
-            class_embedding = ttnn.reshape(class_embedding, zero_tensor.shape)
-            # Adding zero preserves values while ensuring proper memory layout
-            class_embedding = class_embedding + zero_tensor
-
             # Step 6: Prepare tensors for concatenation
             # Move to DRAM memory (larger but slower than L1) for concatenation operation
             # Note: Concatenation currently requires DRAM memory; future optimizations may use L1 sharded memory
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             # Ensure class_embedding has matching memory configuration
-            class_embedding = ttnn.reshape(
-                class_embedding, (class_embedding.shape[0], class_embedding.shape[1], class_embedding.shape[2])
-            )
+            # class_embedding = ttnn.reshape(
+            #     class_embedding, (class_embedding.shape[0], class_embedding.shape[1], class_embedding.shape[2])
+            # )
             class_embedding = ttnn.to_memory_config(class_embedding, memory_config=x.memory_config())
 
             # Step 7: Prepend class token to patch sequence
@@ -449,15 +437,15 @@ def main():
             x = ttnn.layer_norm(x, weight=self.ln_pre_weights, bias=self.ln_pre_bias)
 
             # Step 10: Permute to sequence-first format for transformer
-            # [batch, seq_len, embed] -> [seq_len, batch, embed]
             # Transformers typically process in sequence-first format
+            # [batch_size, sequence_length, hidden_size] -> [sequence_length, batch_size, hidden_size]
             x = ttnn.permute(x, (1, 0, 2))
 
             # Step 11: Pass through transformer encoder layers
             x = self.transformer.forward(x)
 
             # Step 12: Permute back to batch-first format
-            # [seq_len, batch, embed] -> [batch, seq_len, embed]
+            # [sequence_length, batch_size, hidden_size] -> [batch_size, sequence_length, hidden_size]
             x = ttnn.permute(x, (1, 0, 2))
 
             # Step 13: Extract [CLS] token and apply post-layer normalization
