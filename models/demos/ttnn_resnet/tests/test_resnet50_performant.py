@@ -82,8 +82,6 @@ def test_run_resnet50_2cqs_inference(
     math_fidelity,
     model_location_generator,
 ):
-    validate_mesh_device(mesh_device)
-
     run_resnet50_2cqs_inference(
         mesh_device,
         device_batch_size,
