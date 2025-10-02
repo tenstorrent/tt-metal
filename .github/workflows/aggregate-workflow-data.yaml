@@ -20,6 +20,8 @@ jobs:
       commits-path: ${{ steps.fetch.outputs.commits-path }}
       annotations-root: ${{ steps.fetch.outputs.annotations-root }}
       annotations-index-path: ${{ steps.fetch.outputs.annotations-index-path }}
+      logs-root: ${{ steps.fetch.outputs.logs-root }}
+      logs-index-path: ${{ steps.fetch.outputs.logs-index-path }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 #@v3
 
@@ -143,6 +145,7 @@ jobs:
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
           annotations-index-path: ${{ github.workspace }}/annotations/annotations-index.json
           commits-path: ${{ github.workspace }}/commits-main.json
+          logs-index-path: ${{ needs.fetch-data.outputs.logs-index-path }}
           alert-all: 'true'
           workflow_configs: |
             [
