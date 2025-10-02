@@ -230,7 +230,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
         PhysicalSystemDescriptor::null_cluster,
         nullptr,
-        PhysicalSystemDescriptor::null_hal,
+        nullptr,
         proto_desc.mock_cluster(),
         false);  // Don't run discovery
 

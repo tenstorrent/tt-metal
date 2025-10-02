@@ -4,6 +4,7 @@
 
 #include <iostream>
 #include <string>
+#include <optional>
 
 #include <factory_system_descriptor/utils.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -135,11 +136,13 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     } else {
         log_output_rank0("Running Physical Discovery");
         constexpr bool run_discovery = true;
+        auto& context = tt::tt_metal::MetalContext::instance();
+        const auto& driver = context.get_cluster().get_driver();
         auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
-            tt::tt_metal::MetalContext::instance().get_cluster().get_driver(),
-            tt::tt_metal::MetalContext::instance().get_distributed_context_ptr(),
-            tt::tt_metal::MetalContext::instance().hal_ptr(),
-            tt::tt_metal::MetalContext::instance().rtoptions().get_mock_enabled(),
+            driver,
+            context.get_distributed_context_ptr(),
+            &context.hal(),
+            context.rtoptions().get_mock_enabled(),
             run_discovery);
         log_output_rank0("Physical Discovery Complete");
         log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
@@ -156,7 +159,8 @@ generate_port_types(const PhysicalSystemDescriptor& physical_system_descriptor) 
     for (const auto& [asic_id, asic_descriptor] : physical_system_descriptor.get_asic_descriptors()) {
         auto board_type = asic_descriptor.board_type;
         auto board = tt::scaleout_tools::create_board(board_type);
-
+        // PhysicalSystemDescriptor internally validates that hostnames across asic descriptors are part of the graph
+        // This can't throw
         const auto& asic_edges = asic_connectivity_graph.at(asic_descriptor.host_name).at(asic_id);
         for (const auto& [dst_asic_id, eth_connections] : asic_edges) {
             for (const auto& eth_connection : eth_connections) {
@@ -167,19 +171,6 @@ generate_port_types(const PhysicalSystemDescriptor& physical_system_descriptor) 
         }
     }
     return port_types;
-}
-
-std::string get_port_type_str(const tt::scaleout_tools::PortType& port_type) {
-    switch (port_type) {
-        case tt::scaleout_tools::PortType::TRACE: return "TRACE";
-        case tt::scaleout_tools::PortType::QSFP_DD: return "QSFP_DD";
-        case tt::scaleout_tools::PortType::WARP100: return "WARP100";
-        case tt::scaleout_tools::PortType::WARP400: return "WARP400";
-        case tt::scaleout_tools::PortType::LINKING_BOARD_1: return "LINKING_BOARD_1";
-        case tt::scaleout_tools::PortType::LINKING_BOARD_2: return "LINKING_BOARD_2";
-        case tt::scaleout_tools::PortType::LINKING_BOARD_3: return "LINKING_BOARD_3";
-        default: return "UNKNOWN";
-    }
 }
 
 std::string log_ethernet_metrics_and_print_connectivity(
@@ -194,7 +185,8 @@ std::string log_ethernet_metrics_and_print_connectivity(
 
     // Collect all connections and organize by: connection_type -> hostname -> port_type -> connections
     // Using map with bool key: true = cross-host, false = local
-    std::map<bool, std::map<std::string, std::map<std::string, std::vector<ConnectionInfo>>>> organized_connections;
+    std::map<bool, std::map<std::string, std::map<std::string_view, std::vector<ConnectionInfo>>>>
+        organized_connections;
 
     for (const auto& host : physical_system_descriptor.get_all_hostnames()) {
         for (const auto& [asic_id, channel_metrics] : physical_system_descriptor.get_ethernet_metrics()) {
@@ -210,21 +202,21 @@ std::string log_ethernet_metrics_and_print_connectivity(
                     auto connected_asic_location =
                         physical_system_descriptor.get_asic_descriptors().at(connected_asic_id).asic_location;
                     const auto& connected_host = physical_system_descriptor.get_host_name_for_asic(connected_asic_id);
-                    auto port_type_str = get_port_type_str(port_types.at(asic_id).at(channel));
+                    auto port_type_str = enchantum::to_string(port_types.at(asic_id).at(channel));
 
                     ConnectionInfo conn_info{
-                        asic_id,
-                        channel,
-                        host,
-                        tray_id,
-                        asic_location,
-                        port_types.at(asic_id).at(channel),
-                        connected_asic_id,
-                        connected_channel,
-                        connected_host,
-                        connected_tray_id,
-                        connected_asic_location,
-                        metrics};
+                        .asic_id = asic_id,
+                        .channel = channel,
+                        .host = host,
+                        .tray_id = tray_id,
+                        .asic_location = asic_location,
+                        .port_type = port_types.at(asic_id).at(channel),
+                        .connected_asic_id = connected_asic_id,
+                        .connected_channel = connected_channel,
+                        .connected_host = connected_host,
+                        .connected_tray_id = connected_tray_id,
+                        .connected_asic_location = connected_asic_location,
+                        .metrics = metrics};
 
                     // Organize: connection_type -> hostname -> port_type -> connections
                     bool is_cross_host = (host != connected_host);

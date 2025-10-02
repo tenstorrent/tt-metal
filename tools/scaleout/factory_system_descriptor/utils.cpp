@@ -74,7 +74,7 @@ void validate_fsd_against_gsd(
     }
 
     for (const auto& hostname : discovered_hostnames) {
-        if (generated_hostnames.find(hostname) == generated_hostnames.end()) {
+        if (not generated_hostnames.contains(hostname)) {
             throw std::runtime_error("Hostname not found in FSD: " + hostname);
         }
     }
@@ -160,7 +160,7 @@ void validate_fsd_against_gsd(
     if (strict_validation) {
         for (const auto& [fsd_key, fsd_board_type] : fsd_board_types) {
             const auto& [hostname, tray_id] = fsd_key;
-            if (discovered_hostnames.find(hostname) != discovered_hostnames.end()) {
+            if (discovered_hostnames.contains(hostname)) {
                 throw std::runtime_error(
                     "Board type not found in GSD for discovered host " + hostname + ", tray " +
                     std::to_string(tray_id));
@@ -430,8 +430,9 @@ void validate_fsd_against_gsd(
     // Only in strict validation: also find connections in FSD but not in GSD
     if (strict_validation) {
         for (const auto& conn : generated_connections) {
-            if (discovered_hostnames.count(conn.first.hostname) && discovered_hostnames.count(conn.second.hostname)) {
-                if (discovered_connections.find(conn) == discovered_connections.end()) {
+            if (discovered_hostnames.contains(conn.first.hostname) &&
+                discovered_hostnames.contains(conn.second.hostname)) {
+                if (not discovered_connections.contains(conn)) {
                     missing_in_gsd.insert(conn);
                 }
             }

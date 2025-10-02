@@ -144,18 +144,18 @@ public:
     PhysicalSystemDescriptor(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const Hal* hal,
         const tt::llrt::RunTimeOptions& rtoptions,
         bool run_discovery = true);
     PhysicalSystemDescriptor(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-        const std::unique_ptr<tt::tt_metal::Hal>& hal,
+        const Hal* hal,
         bool using_mock_cluster_descriptor,
         bool run_discovery);
     // Constructor generating a PhysicalSystemDescriptor based on a protobuf
     // descriptor (can be used entirely offline).
-    PhysicalSystemDescriptor(const std::string& proto_desc_path);
+    PhysicalSystemDescriptor(const std::string& mock_proto_desc_path);
 
     ~PhysicalSystemDescriptor();
 
@@ -205,7 +205,6 @@ public:
     }
 
     static const std::unique_ptr<tt::umd::Cluster> null_cluster;
-    static const std::unique_ptr<Hal> null_hal;
 
     // Utility APIs to Print Physical System Descriptor
     void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
@@ -226,7 +225,7 @@ private:
 
     const std::unique_ptr<tt::umd::Cluster>& cluster_;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
-    const std::unique_ptr<Hal>& hal_;
+    const Hal* hal_;
     const bool using_mock_cluster_desc_;
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;

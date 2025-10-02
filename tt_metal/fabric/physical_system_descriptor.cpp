@@ -20,7 +20,6 @@
 namespace tt::tt_metal {
 
 const std::unique_ptr<tt::umd::Cluster> PhysicalSystemDescriptor::null_cluster = nullptr;
-const std::unique_ptr<Hal> PhysicalSystemDescriptor::null_hal = nullptr;
 
 /**************************************************************************************************
  Discovery helper functions
@@ -143,7 +142,7 @@ struct EthEndpoint {
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const std::unique_ptr<tt::tt_metal::Hal>& hal,
+    const Hal* hal,
     const llrt::RunTimeOptions& rtoptions,
     bool run_discovery) :
     PhysicalSystemDescriptor(cluster, distributed_context, hal, rtoptions.get_mock_enabled(), run_discovery) {}
@@ -151,7 +150,7 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const std::unique_ptr<tt::tt_metal::Hal>& hal,
+    const Hal* hal,
     bool using_mock_cluster_descriptor,
     bool run_discovery) :
     cluster_(cluster),
@@ -163,9 +162,9 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(
     }
 }
 
-PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& proto_desc_path) :
-    cluster_(null_cluster), distributed_context_(nullptr), hal_(null_hal), using_mock_cluster_desc_(false) {
-    auto proto_desc = deserialize_physical_system_descriptor_from_text_proto_file(proto_desc_path);
+PhysicalSystemDescriptor::PhysicalSystemDescriptor(const std::string& mock_proto_desc_path) :
+    cluster_(null_cluster), distributed_context_(nullptr), hal_(nullptr), using_mock_cluster_desc_(false) {
+    auto proto_desc = deserialize_physical_system_descriptor_from_text_proto_file(mock_proto_desc_path);
     this->merge(std::move(proto_desc));
 }
 
@@ -354,7 +353,7 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
     }
 
-    for (auto& [asic, metrics] : other.ethernet_metrics_) {
+    for (auto&& [asic, metrics] : other.ethernet_metrics_) {
         ethernet_metrics_[asic] = std::move(metrics);
     }
 
@@ -368,15 +367,15 @@ void PhysicalSystemDescriptor::remove_unresolved_nodes() {
     for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
             auto edges_copy = edges;
-            auto num_erased_edges = std::erase_if(
-                edges, [&](const auto& pair) { return asic_descriptors_.find(pair.first) == asic_descriptors_.end(); });
+            auto num_erased_edges =
+                std::erase_if(edges, [&](const auto& pair) { return not asic_descriptors_.contains(pair.first); });
             // Erase the metrics for the deleted edges
             if (num_erased_edges > 0) {
                 // Build set of remaining edges for O(log n) lookup instead of O(n) std::find
                 std::set<typename std::decay_t<decltype(edges)>::value_type> remaining_edges(
                     edges.begin(), edges.end());
                 for (const auto& edge : edges_copy) {
-                    if (remaining_edges.find(edge) == remaining_edges.end()) {
+                    if (not remaining_edges.contains(edge)) {
                         for (const auto& eth_conn : edge.second) {
                             ethernet_metrics_[src_asic].erase(eth_conn.src_chan);
                         }

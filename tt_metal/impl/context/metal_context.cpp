@@ -312,11 +312,6 @@ const Hal& MetalContext::hal() const {
     return *hal_;
 }
 
-const std::unique_ptr<Hal>& MetalContext::hal_ptr() const {
-    TT_FATAL(hal_, "Trying to get hal before initializing it.");
-    return hal_;
-}
-
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;
