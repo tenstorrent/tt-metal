@@ -681,22 +681,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 // TODO: Support custom operator< for eth_coord_t to allow usage in std::set
                 const auto min_coord =
                     *std::min_element(chip_eth_coords.begin(), chip_eth_coords.end(), [](const auto& a, const auto& b) {
-                        const auto& [chip_a, eth_coord_a] = a;
-                        const auto& [chip_b, eth_coord_b] = b;
-
-                        if (eth_coord_a.cluster_id != eth_coord_b.cluster_id) {
-                            return eth_coord_a.cluster_id < eth_coord_b.cluster_id;
-                        }
-                        if (eth_coord_a.x != eth_coord_b.x) {
-                            return eth_coord_a.x < eth_coord_b.x;
-                        }
-                        if (eth_coord_a.y != eth_coord_b.y) {
-                            return eth_coord_a.y < eth_coord_b.y;
-                        }
-                        if (eth_coord_a.rack != eth_coord_b.rack) {
-                            return eth_coord_a.rack < eth_coord_b.rack;
-                        }
-                        return eth_coord_a.shelf < eth_coord_b.shelf;
+                        return a.second < b.second;
                     });
 
                 nw_chip_physical_id =
