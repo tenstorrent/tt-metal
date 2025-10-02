@@ -55,7 +55,7 @@ public:
     // but not for allocator-specific operations (managing allocations).
     //
     // While in the middle of this refactory,
-    // runtime (river) splits moving AllocatorConfig out of pulic API,
+    // runtime (river) splits moving AllocatorConfig out of public API,
     // coming up with a memory profile access interface to replace current Allocator API into two (or more) PRs.
     //
     // See: #29569
@@ -138,7 +138,7 @@ private:
 
     // config_ is stored in a unique_ptr because AllocatorConfig is current an incomplete type in API directory.
     //
-    // TODO(river): revert this to inplace storage if we can sholve Allocator into impl.
+    // TODO(river): revert this to inplace storage if we can shove Allocator into impl.
     std::unique_ptr<AllocatorConfig> config_;
 };
 
