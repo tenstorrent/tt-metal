@@ -11,6 +11,8 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <cabling_generator/cabling_generator.hpp>
+#include <algorithm>
+#include <random>
 
 // Captures current list of supported inputargs
 struct InputArgs {
@@ -41,6 +43,285 @@ struct ConnectionInfo {
     tt::tt_metal::ASICLocation connected_asic_location;
     tt::tt_metal::EthernetMetrics metrics;
 };
+
+void configure_local_kernels(
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
+    const std::vector<uint32_t>& inputs,
+    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    size_t packet_size_bytes,
+    size_t packet_size_words,
+    size_t data_size) {
+    const auto& host_name = physical_system_descriptor.my_host_name();
+    const auto& asic_topology = physical_system_descriptor.get_asic_topology(host_name);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t dst_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    std::unordered_map<chip_id_t, std::vector<CoreCoord>> kernel_coords;
+
+    for (const auto& [asic_id, asic_connections] : asic_topology) {
+        auto sender_chip_id = asic_id_to_chip_id[*asic_id];
+        auto sender_device = devices[sender_chip_id];
+        auto& sender_program = programs[sender_chip_id];
+
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            if (physical_system_descriptor.get_host_name_for_asic(dst_asic_id) != host_name) {
+                continue;
+            }
+            auto receiver_chip_id = asic_id_to_chip_id[*dst_asic_id];
+            auto receiver_device = devices[receiver_chip_id];
+            auto& receiver_program = programs[receiver_chip_id];
+
+            for (const auto& eth_connection : eth_connections) {
+                auto src_chan = eth_connection.src_chan;
+                auto dst_chan = eth_connection.dst_chan;
+
+                const auto& sender_soc_desc = cluster.get_soc_desc(sender_chip_id);
+                const auto& receiver_soc_desc = cluster.get_soc_desc(receiver_chip_id);
+                auto sender_coord = sender_soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+                auto receiver_coord = receiver_soc_desc.get_eth_core_for_channel(dst_chan, CoordSystem::LOGICAL);
+
+                if (std::find(
+                        kernel_coords[sender_chip_id].begin(), kernel_coords[sender_chip_id].end(), sender_coord) ==
+                    kernel_coords[sender_chip_id].end()) {
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                        sender_chip_id,
+                        sender_device->ethernet_core_from_logical_core(sender_coord),
+                        inputs,
+                        src_eth_l1_byte_address);
+                    std::vector<uint32_t> all_zeros(inputs.size(), 0);
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                        receiver_chip_id,
+                        receiver_device->ethernet_core_from_logical_core(receiver_coord),
+                        all_zeros,
+                        dst_eth_l1_byte_address);
+
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(sender_chip_id);
+                    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(receiver_chip_id);
+
+                    auto sender_kernel = tt::tt_metal::CreateKernel(
+                        sender_program,
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
+                        sender_coord,
+                        tt::tt_metal::EthernetConfig{
+                            .noc = tt::tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
+                    tt::tt_metal::SetRuntimeArgs(
+                        sender_program,
+                        sender_kernel,
+                        sender_coord,
+                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+
+                    auto receiver_kernel = tt::tt_metal::CreateKernel(
+                        receiver_program,
+                        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
+                        receiver_coord,
+                        tt::tt_metal::EthernetConfig{
+                            .noc = tt::tt_metal::NOC::NOC_0,
+                        });
+                    tt::tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_coord, {data_size});
+                    kernel_coords[sender_chip_id].push_back(sender_coord);
+                    kernel_coords[receiver_chip_id].push_back(receiver_coord);
+                } else {
+                    TT_FATAL(
+                        std::find(
+                            kernel_coords[receiver_chip_id].begin(),
+                            kernel_coords[receiver_chip_id].end(),
+                            receiver_coord) != kernel_coords[receiver_chip_id].end(),
+                        "Expected kernel to be populated for device {}, logical eth core {}",
+                        receiver_chip_id,
+                        receiver_coord.str());
+                }
+            }
+        }
+    }
+}
+
+void configure_cross_host_kernels(
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
+    const std::vector<uint32_t>& inputs,
+    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    size_t packet_size_bytes,
+    size_t packet_size_words,
+    size_t data_size) {
+    const auto& host_name = physical_system_descriptor.my_host_name();
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t dst_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    for (const auto& host_neighbor : physical_system_descriptor.get_host_neighbors(host_name)) {
+        const auto& exit_nodes = physical_system_descriptor.get_connecting_exit_nodes(host_name, host_neighbor);
+        for (const auto& exit_node : exit_nodes) {
+            auto my_asic = exit_node.src_exit_node;
+            auto my_chip = asic_id_to_chip_id[*my_asic];
+            auto neighbor_asic = exit_node.dst_exit_node;
+            bool sender = (*my_asic > *neighbor_asic);
+            auto my_device = devices[my_chip];
+            auto& my_program = programs[my_chip];
+            const auto& my_soc_desc = cluster.get_soc_desc(my_chip);
+            auto my_coord = my_soc_desc.get_eth_core_for_channel(exit_node.eth_conn.src_chan, CoordSystem::LOGICAL);
+
+            if (sender) {
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    my_chip, my_device->ethernet_core_from_logical_core(my_coord), inputs, src_eth_l1_byte_address);
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
+                auto sender_kernel = tt::tt_metal::CreateKernel(
+                    my_program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_send.cpp",
+                    my_coord,
+                    tt::tt_metal::EthernetConfig{
+                        .noc = tt::tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
+                tt::tt_metal::SetRuntimeArgs(
+                    my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+            } else {
+                std::vector<uint32_t> all_zeros(inputs.size(), 0);
+                tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                    my_chip, my_device->ethernet_core_from_logical_core(my_coord), all_zeros, dst_eth_l1_byte_address);
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(my_chip);
+                auto receiver_kernel = tt::tt_metal::CreateKernel(
+                    my_program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
+                    my_coord,
+                    tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0});
+                tt::tt_metal::SetRuntimeArgs(my_program, receiver_kernel, my_coord, {data_size});
+            }
+        }
+    }
+}
+
+void execute_workloads(
+    std::unordered_map<chip_id_t, tt::tt_metal::Program>& programs,
+    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices) {
+    std::unordered_map<chip_id_t, tt::tt_metal::distributed::MeshWorkload> mesh_workloads;
+
+    for (auto& [device_id, program] : programs) {
+        mesh_workloads[device_id] = tt::tt_metal::distributed::MeshWorkload();
+        mesh_workloads[device_id].add_program(
+            tt::tt_metal::distributed::MeshCoordinateRange(
+                tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)),
+            std::move(program));
+    }
+    std::thread threads[mesh_workloads.size()];
+    for (auto& [device_id, mesh_workload] : mesh_workloads) {
+        threads[device_id] = std::thread([&]() {
+            tt::tt_metal::distributed::EnqueueMeshWorkload(
+                devices[device_id]->mesh_command_queue(), mesh_workload, true);
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+}
+
+void validate_traffic(
+    std::vector<uint32_t>& inputs,
+    const PhysicalSystemDescriptor& physical_system_descriptor,
+    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
+    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
+    size_t data_size) {
+    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+
+    const auto& host_name = physical_system_descriptor.my_host_name();
+    const auto& asic_topology = physical_system_descriptor.get_asic_topology(host_name);
+
+    for (const auto& [asic_id, asic_connections] : asic_topology) {
+        auto chip_id = asic_id_to_chip_id[*asic_id];
+        const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id);
+        for (const auto& [dst_asic_id, eth_connections] : asic_connections) {
+            for (const auto& eth_connection : eth_connections) {
+                auto src_chan = eth_connection.src_chan;
+                auto coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
+                auto result_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                    chip_id,
+                    devices[chip_id]->ethernet_core_from_logical_core(coord),
+                    src_eth_l1_byte_address,
+                    data_size);
+                TT_FATAL(result_vec == inputs, "Validation failed");
+            }
+        }
+    }
+}
+
+template <typename ValueType>
+std::vector<ValueType> generate_uniform_random_vector(
+    ValueType min, ValueType max, const size_t numel, const uint32_t seed = 0) {
+    std::mt19937 gen(seed);
+    std::vector<ValueType> results(numel);
+    if constexpr (std::is_integral<ValueType>::value) {
+        std::uniform_int_distribution<ValueType> dis(min, max);
+        std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
+    } else if constexpr (std::is_floating_point<ValueType>::value) {
+        std::uniform_real_distribution<ValueType> dis(min, max);
+        std::generate(results.begin(), results.end(), [&]() { return dis(gen); });
+    } else {
+        std::uniform_real_distribution<float> dis(static_cast<float>(min), static_cast<float>(max));
+        std::generate(results.begin(), results.end(), [&]() { return ValueType(dis(gen)); });
+    }
+    return results;
+}
+
+void send_traffic_across_all_links(const PhysicalSystemDescriptor& physical_system_descriptor) {
+    constexpr uint32_t packet_size_bytes = 16;
+    constexpr uint32_t packet_size_words = packet_size_bytes >> 4;
+    constexpr uint32_t data_size = 256 * packet_size_bytes;
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    std::vector<chip_id_t> device_ids;
+    for (auto chip : cluster.all_chip_ids()) {
+        device_ids.push_back(chip);
+    }
+
+    auto devices = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
+        device_ids,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
+
+    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
+    std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
+
+    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+
+    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, data_size / sizeof(uint32_t));
+
+    configure_local_kernels(
+        physical_system_descriptor,
+        asic_id_to_chip_id,
+        devices,
+        inputs,
+        programs,
+        packet_size_bytes,
+        packet_size_words,
+        data_size);
+
+    configure_cross_host_kernels(
+        physical_system_descriptor,
+        asic_id_to_chip_id,
+        devices,
+        inputs,
+        programs,
+        packet_size_bytes,
+        packet_size_words,
+        data_size);
+
+    execute_workloads(programs, devices);
+
+    validate_traffic(inputs, physical_system_descriptor, devices, asic_id_to_chip_id, data_size);
+}
 
 void log_output_rank0(const std::string& message) {
     if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
@@ -362,7 +643,15 @@ int main(int argc, char* argv[]) {
         tt::scaleout_tools::validate_fsd_against_gsd(
             get_factory_system_descriptor_path(input_args), gsd_yaml_path, true, input_args.fail_on_warning);
         log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
+    }
 
+    std::cout << "Sending traffic across all links" << std::endl;
+    for (int i = 0; i < 10; i++) {
+        send_traffic_across_all_links(physical_system_descriptor);
+    }
+    std::cout << "Traffic sent across all links" << std::endl;
+
+    if (*distributed_context.rank() == 0) {
         std::string unexpected_status_log =
             log_ethernet_metrics_and_print_connectivity(input_args, physical_system_descriptor);
         log_unexpected_statuses(unexpected_status_log);
