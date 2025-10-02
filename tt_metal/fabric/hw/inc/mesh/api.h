@@ -888,7 +888,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
  * | packet_header              | Packet header to use                    | volatile PACKET_HEADER_TYPE*               | True     |
  * | dst_dev_id                 | Destination device id                   | uint8_t                                    | True     |
  * | dst_mesh_id                | Destination mesh id                     | uint16_t                                   | True     |
- * | ranges                     | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                            | True     |
+ * | ranges                     | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                      | True     |
  * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
  * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
  * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
@@ -900,13 +900,13 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
@@ -923,7 +923,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
  * |----------------------------|-----------------------------------------|--------------------------------------------|----------|
  * | connection_manager         | Routing plane connection manager        | RoutingPlaneConnectionManager&             | True     |
  * | route_id                   | Route containing packet headers         | uint8_t                                    | True     |
- * | ranges                     | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                           | True     |
+ * | ranges                     | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                     | True     |
  * | src_addr                   | Source L1 address                       | uint32_t                                   | True     |
  * | size                       | Payload size in bytes                   | uint32_t                                   | True     |
  * | noc_unicast_command_header | Destination NOC command header          | tt::tt_fabric::NocUnicastCommandHeader     | True     |
@@ -932,7 +932,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 FORCE_INLINE void fabric_multicast_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
@@ -943,7 +943,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
             packet_header,
             slot.dst_dev_id,
             slot.dst_mesh_id,
-            &ranges[i],
+            ranges[i],
             src_addr,
             size,
             noc_unicast_command_header);
@@ -1020,7 +1020,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*         | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                              | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                             | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                      | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                       | False    |
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                             | False    |
  */
@@ -1030,11 +1030,11 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
 }
 
@@ -1048,7 +1048,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
  * |---------------------------------------|-----------------------------------------|--------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&       | True     |
  * | route_id                              | Route whose headers will be updated     | uint8_t                              | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                     | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*               | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                       | False    |
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                             | False    |
  */
@@ -1057,13 +1057,13 @@ template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::null
 FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
-            packet_header, slot.dst_dev_id, slot.dst_mesh_id, &ranges[i], command_header, packet_size_bytes);
+            packet_header, slot.dst_dev_id, slot.dst_mesh_id, ranges[i], command_header, packet_size_bytes);
     });
 }
 
@@ -1079,7 +1079,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                                | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                          | True     |
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
  */
 // clang-format on
@@ -1089,11 +1089,11 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->to_noc_unicast_atomic_inc(noc_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -1109,14 +1109,14 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
  * | route_id                              | Route containing packet headers         | uint8_t                                        | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                                | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                          | True     |
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| True     |
  */
 // clang-format on
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
@@ -1125,7 +1125,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
             packet_header,
             slot.dst_dev_id,
             slot.dst_mesh_id,
-            &ranges[i],
+            ranges[i],
             noc_unicast_atomic_inc_command_header);
     });
 }
@@ -1190,7 +1190,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                               | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                         | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                                | False    |
  */
 // clang-format on
@@ -1201,11 +1201,11 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     CommandHeaderT command_header = nullptr) {
     packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_ATOMIC_INC;
     packet_header->payload_size_bytes = 0;
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, command_header);
 }
 
@@ -1219,7 +1219,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
  * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
  * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                               | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                                | False    |
  */
 // clang-format on
@@ -1229,12 +1229,12 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     CommandHeaderT command_header = nullptr) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_multicast_noc_unicast_atomic_inc_set_state<UpdateMask>(
-            packet_header, slot.dst_dev_id, slot.dst_mesh_id, &ranges[i], command_header);
+            packet_header, slot.dst_dev_id, slot.dst_mesh_id, ranges[i], command_header);
     });
 }
 
@@ -1250,7 +1250,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                                | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                          | True     |
  * | src_addr                              | Source L1 address                       | uint32_t                                       | True     |
  * | size                                  | Payload size in bytes                   | uint32_t                                       | True     |
  * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader  | True     |
@@ -1262,13 +1262,13 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->to_noc_unicast_scatter_write(noc_unicast_scatter_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
@@ -1285,7 +1285,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
  * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
  * | route_id                              | Route containing packet headers         | uint8_t                                       | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                               | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
  * | src_addr                              | Source L1 address                       | uint32_t                                      | True     |
  * | size                                  | Payload size in bytes                   | uint32_t                                      | True     |
  * | noc_unicast_scatter_command_header    | Scatter write command header            | tt::tt_fabric::NocUnicastScatterCommandHeader | True     |
@@ -1294,7 +1294,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
 FORCE_INLINE void fabric_multicast_noc_scatter_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header) {
@@ -1305,7 +1305,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
             packet_header,
             slot.dst_dev_id,
             slot.dst_mesh_id,
-            &ranges[i],
+            ranges[i],
             src_addr,
             size,
             noc_unicast_scatter_command_header);
@@ -1383,8 +1383,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                               | True     |
- * | command_header                       | Template command header                  | CommandHeaderT                                | False    |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                         | True     |
+ * | command_header                        | Template command header                  | CommandHeaderT                                | False    |
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
 // clang-format on
@@ -1393,10 +1393,10 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
     populate_unicast_scatter_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
 }
@@ -1411,7 +1411,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
  * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
  * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                               | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                                | False    |
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
@@ -1420,13 +1420,13 @@ template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT = st
 FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_multicast_noc_scatter_write_set_state<UpdateMask>(
-            packet_header, slot.dst_dev_id, slot.dst_mesh_id, &ranges[i], command_header, packet_size_bytes);
+            packet_header, slot.dst_dev_id, slot.dst_mesh_id, ranges[i], command_header, packet_size_bytes);
     });
 }
 
@@ -1442,7 +1442,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                                        | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                       | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                                | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                          | True     |
  * | noc_unicast_inline_write_command_header | Inline write command header           | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | True  |
  */
 // clang-format on
@@ -1452,11 +1452,11 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->to_noc_unicast_inline_write(noc_unicast_inline_write_command_header);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -1472,14 +1472,14 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
  * |---------------------------------------|--------------------------------------|------------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager     | RoutingPlaneConnectionManager&                 | True     |
  * | route_id                              | Route containing packet headers      | uint8_t                                        | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                               | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
  * | noc_unicast_inline_write_command_header | Inline write command header        | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | True  |
  */
 // clang-format on
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
@@ -1488,7 +1488,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
             packet_header,
             slot.dst_dev_id,
             slot.dst_mesh_id,
-            &ranges[i],
+            ranges[i],
             noc_unicast_inline_write_command_header);
     });
 }
@@ -1553,7 +1553,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                               | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                         | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
  */
 // clang-format on
@@ -1562,9 +1562,9 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     CommandHeaderT command_header) {
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_INLINE_WRITE;
     packet_header->payload_size_bytes = 0;
     populate_unicast_inline_fields<UpdateMask>(packet_header, command_header);
@@ -1580,7 +1580,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                 | True     |
  * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                                | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                          | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
  */
 // clang-format on
@@ -1588,12 +1588,12 @@ template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     CommandHeaderT command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_multicast_noc_unicast_inline_write_set_state<UpdateMask>(
-            packet_header, slot.dst_dev_id, slot.dst_mesh_id, &ranges[i], command_header);
+            packet_header, slot.dst_dev_id, slot.dst_mesh_id, ranges[i], command_header);
     });
 }
 
@@ -1609,7 +1609,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                     | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                                          | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                         | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                                  | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                            | True     |
  * | src_addr                              | Source L1 address                       | uint32_t                                         | True     |
  * | size                                  | Payload size in bytes                   | uint32_t                                         | True     |
  * | noc_fused_unicast_atomic_inc_command_header | Fused command header              | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True |
@@ -1621,13 +1621,13 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header) {
     [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
 
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
@@ -1644,7 +1644,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
  * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager     | RoutingPlaneConnectionManager&                   | True     |
  * | route_id                              | Route containing packet headers      | uint8_t                                          | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                                 | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                           | True     |
  * | src_addr                              | Source L1 address                    | uint32_t                                         | True     |
  * | size                                  | Payload size in bytes                | uint32_t                                         | True     |
  * | noc_fused_unicast_atomic_inc_command_header | Fused command header           | tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader | True |
@@ -1653,7 +1653,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header) {
@@ -1664,7 +1664,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
             packet_header,
             slot.dst_dev_id,
             slot.dst_mesh_id,
-            &ranges[i],
+            ranges[i],
             src_addr,
             size,
             noc_fused_unicast_atomic_inc_command_header);
@@ -1742,7 +1742,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
  * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
  * | dst_dev_id                            | Destination device id                   | uint8_t                                       | True     |
  * | dst_mesh_id                           | Destination mesh id                     | uint16_t                                      | True     |
- * | ranges                                 | Multicast hop counts (E/W/N/S)          | MeshMcastRange*                               | True     |
+ * | ranges                                | Multicast hop counts (E/W/N/S)          | const MeshMcastRange&                         | True     |
  * | command_header                        | Template fused command header           | CommandHeaderT                                | False    |
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
@@ -1752,10 +1752,10 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t dst_dev_id,
     uint16_t dst_mesh_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange& ranges,
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
-    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges->e, ranges->w, ranges->n, ranges->s);
+    fabric_set_mcast_route(packet_header, dst_dev_id, dst_mesh_id, ranges.e, ranges.w, ranges.n, ranges.s);
     packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
     populate_unicast_fused_atomic_inc_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
 }
@@ -1770,7 +1770,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
  * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
  * | connection_manager                    | Routing plane connection manager        | RoutingPlaneConnectionManager&                | True     |
  * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
- * | ranges                                 | Per-header multicast hop counts (E/W/N/S)| MeshMcastRange*                               | True     |
+ * | ranges                                | Per-header multicast hop counts (E/W/N/S)| const MeshMcastRange*                         | True     |
  * | command_header                        | Template fused command header           | CommandHeaderT                                | False    |
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
@@ -1779,13 +1779,13 @@ template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = 
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
-    MeshMcastRange* ranges,
+    const MeshMcastRange* ranges,
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
-            packet_header, slot.dst_dev_id, slot.dst_mesh_id, &ranges[i], command_header, packet_size_bytes);
+            packet_header, slot.dst_dev_id, slot.dst_mesh_id, ranges[i], command_header, packet_size_bytes);
     });
 }
 
