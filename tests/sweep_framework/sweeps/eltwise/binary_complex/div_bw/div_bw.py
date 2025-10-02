@@ -142,7 +142,6 @@ def run(
 
     passed = []
     output_string = ""
-    grad_names = ["grad_input_a", "grad_input_b"]
     for i in range(len(torch_output_tensors)):
         torch_output_tensor = torch_output_tensors[i]
         output_tensor = torch.complex(
@@ -153,8 +152,7 @@ def run(
             torch.view_as_real(torch_output_tensor.clone()), torch.view_as_real(output_tensor.clone()), 0.999
         )
         passed.append(passed_)
-        status = "PASS" if passed_ else "FAIL"
-        output_string += f"{grad_names[i]}: {status} (PCC: {output_string_}), "
+        output_string += output_string_ + ", "
 
     if all(passed):
         passed = True
