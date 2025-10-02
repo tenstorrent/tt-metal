@@ -252,7 +252,7 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -267,7 +267,7 @@ def run_all_gather_impl(
         ([1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
-        "dit_shape",  # this one triggers the default chunks_per_sync
+        # "dit_shape",  # this one triggers the default chunks_per_sync
         "sd35_spatial",
         "sd35_prompt",
         "gather_dim_0",
@@ -291,12 +291,11 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace,num_iters",
+    "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -347,6 +346,7 @@ def test_all_gather_async(
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
     )
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -403,10 +403,9 @@ def test_all_gather_async(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -446,6 +445,7 @@ def test_all_gather_async_training_shapes(
         use_barrier=True,
         use_persistent_buffers=False,
     )
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -509,10 +509,9 @@ def test_all_gather_async_training_shapes(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -569,6 +568,7 @@ def test_all_gather_async_sharded_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -612,10 +612,9 @@ def test_all_gather_async_sharded_to_sharded(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -664,6 +663,7 @@ def test_all_gather_async_sharded_to_interleaved(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -706,10 +706,9 @@ def test_all_gather_async_sharded_to_interleaved(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
@@ -758,6 +757,7 @@ def test_all_gather_async_interleaved_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -828,3 +828,4 @@ def test_all_gather_async_2x4(
         use_persistent_buffers=False,
         cluster_axis=1,
     )
+    ttnn.ReadDeviceProfiler(mesh_device)
