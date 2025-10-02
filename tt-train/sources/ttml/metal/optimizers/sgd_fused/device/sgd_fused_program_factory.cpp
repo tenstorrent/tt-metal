@@ -33,6 +33,9 @@ constexpr uint32_t kGradAddrIdx = 1U;
 constexpr uint32_t kMomentumBufferInAddrIdx = 2U;
 // compute runtime args
 constexpr uint32_t kLrIdx = 0U;
+constexpr uint32_t kMomentumIdx = 1U;
+constexpr uint32_t kDampeningIdx = 2U;
+constexpr uint32_t kWeightDecayIdx = 3U;
 // writer runtime args
 constexpr uint32_t kOutputAddrIdx = 0;
 constexpr uint32_t kMomentumBufferOutAddrIdx = 1U;
@@ -73,6 +76,9 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* grad_buffer,
     const tt::tt_metal::Buffer* momentum_buffer,
     const float lr,
+    const float momentum,
+    const float dampening,
+    const float weight_decay,
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -105,10 +111,24 @@ void assign_per_core_runtime_args(
              num_rows_written});
 
         // Compute kernel: (learning_rate)
-        SetRuntimeArgs(program, kernels.compute_group_1, core, {std::bit_cast<uint32_t>(lr)});
+        SetRuntimeArgs(
+            program,
+            kernels.compute_group_1,
+            core,
+            {std::bit_cast<uint32_t>(lr),
+             std::bit_cast<uint32_t>(momentum),
+             std::bit_cast<uint32_t>(1.0f - dampening),
+             std::bit_cast<uint32_t>(weight_decay)});
 
         if (!core_group_2.ranges().empty()) {
-            SetRuntimeArgs(program, kernels.compute_group_2, core, {std::bit_cast<uint32_t>(lr)});
+            SetRuntimeArgs(
+                program,
+                kernels.compute_group_2,
+                core,
+                {std::bit_cast<uint32_t>(lr),
+                 std::bit_cast<uint32_t>(momentum),
+                 std::bit_cast<uint32_t>(1.0f - dampening),
+                 std::bit_cast<uint32_t>(weight_decay)});
         }
 
         // Writer kernel: (dst_addr, momentum_buffer_addr, number_of_rows, offset_in_rows)
@@ -235,9 +255,6 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
         Wt,                         // num_inner / TILE_W
-        std::bit_cast<uint32_t>(momentum),
-        std::bit_cast<uint32_t>(1.0f - dampening),
-        std::bit_cast<uint32_t>(weight_decay),
         static_cast<uint32_t>(nesterov)};
 
     kernels.compute_group_1 = create_compute_kernel(
@@ -248,9 +265,6 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
             num_rows_per_core_group_2,  // per_core_block_cnt
             block_size,                 // per_core_block_size
             Wt,                         // num_inner / TILE_W
-            std::bit_cast<uint32_t>(momentum),
-            std::bit_cast<uint32_t>(1.0f - dampening),
-            std::bit_cast<uint32_t>(weight_decay),
             static_cast<uint32_t>(nesterov)};
         kernels.compute_group_2 = create_compute_kernel(
             program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
@@ -267,6 +281,9 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         grad_buffer,
         momentum_buffer_unwrapped,
         lr,
+        momentum,
+        dampening,
+        weight_decay,
         output_buffer,
         num_cores,
         num_cores_y,
@@ -314,6 +331,9 @@ void SGDFusedProgramFactory::override_runtime_arguments(
         tensor_args.momentum_buffer.has_value() ? tensor_args.momentum_buffer.value().buffer() : nullptr;
 
     auto lr = operation_attributes.lr;
+    auto momentum = operation_attributes.momentum;
+    auto dampening = operation_attributes.dampening;
+    auto weight_decay = operation_attributes.weight_decay;
     auto* output_buffer = tensor_return_value.buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
@@ -338,9 +358,15 @@ void SGDFusedProgramFactory::override_runtime_arguments(
         if (core_group_1.contains(core)) {
             auto& runtime_args = compute_group_1_runtime_args[core.x][core.y];
             runtime_args[kLrIdx] = std::bit_cast<uint32_t>(lr);
+            runtime_args[kMomentumIdx] = std::bit_cast<uint32_t>(momentum);
+            runtime_args[kDampeningIdx] = std::bit_cast<uint32_t>(1.0f - dampening);
+            runtime_args[kWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
         } else if (core_group_2.contains(core)) {
             auto& runtime_args = compute_group_2_runtime_args[core.x][core.y];
             runtime_args[kLrIdx] = std::bit_cast<uint32_t>(lr);
+            runtime_args[kMomentumIdx] = std::bit_cast<uint32_t>(momentum);
+            runtime_args[kDampeningIdx] = std::bit_cast<uint32_t>(1.0f - dampening);
+            runtime_args[kWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
         }
         // Update output buffer for the writer kernel
         {

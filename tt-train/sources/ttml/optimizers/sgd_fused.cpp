@@ -48,6 +48,7 @@ void SGDFused::step() {
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }
+
     for (const auto& [name, theta_ptr] : m_parameters) {
         if (!theta_ptr->is_grad_initialized()) {
             continue;
@@ -56,8 +57,14 @@ void SGDFused::step() {
         auto param = theta_ptr->get_value(autograd::PreferredPrecision::FULL);
 
         std::optional<ttnn::Tensor> momentum_buffer;
-
-        if (auto it = m_momentum.find(name); it != m_momentum.end()) {
+        if (m_config.momentum > 0.0) {
+            auto it = m_momentum.find(name);
+            if (it == m_momentum.end()) {
+                auto buf = autograd::create_tensor(
+                    core::zeros_like(param),
+                    /* requires_grad */ false);
+                it = m_momentum.emplace(name, std::move(buf)).first;
+            }
             momentum_buffer = it->second->get_value(autograd::PreferredPrecision::FULL);
         }
 
