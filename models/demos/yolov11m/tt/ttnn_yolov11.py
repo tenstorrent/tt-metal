@@ -97,6 +97,7 @@ class TtnnYoloV11:
         x = self.conv5(self.device, x)
         x = self.c3k2_3(self.device, x)
         x6 = x
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv6(self.device, x)
         x = self.c3k2_4(self.device, x)
         x = self.sppf(self.device, x)
