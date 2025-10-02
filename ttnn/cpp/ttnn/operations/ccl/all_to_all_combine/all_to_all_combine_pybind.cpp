@@ -78,7 +78,8 @@ void py_bind_all_to_all_combine(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<uint32_t>& axis,
                const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               const std::optional<ttnn::Tensor>& optional_output_tensor) {
+               const std::optional<ttnn::Tensor>& optional_output_tensor,
+               const std::optional<uint32_t>& output_shard_dim) {
                 return self(
                     input_tensor,
                     expert_mapping_tensor,
@@ -88,6 +89,7 @@ void py_bind_all_to_all_combine(py::module& module) {
                     topology,
                     memory_config,
                     axis,
+                    output_shard_dim,
                     subdevice_id,
                     optional_output_tensor);
             },
@@ -101,7 +103,8 @@ void py_bind_all_to_all_combine(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("axis") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("optional_output_tensor") = std::nullopt});
+            py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("output_shard_dim") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::ccl
