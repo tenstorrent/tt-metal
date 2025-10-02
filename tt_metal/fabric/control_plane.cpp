@@ -1400,8 +1400,13 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         auto dst_mesh_id = dst_fabric_node_id.mesh_id;
         auto dst_chip_id = dst_fabric_node_id.chip_id;
         if (i >= tt::tt_fabric::MAX_MESH_SIZE * tt::tt_fabric::MAX_NUM_MESHES) {
-            log_warning(
-                tt::LogFabric, "Could not find a route between {} and {}", src_fabric_node_id, dst_fabric_node_id);
+            // Route lookup exceeded maximum hops - no valid path exists on this channel
+            log_debug(
+                tt::LogFabric,
+                "Route lookup exceeded max hops for {} to {} on channel {}",
+                src_fabric_node_id,
+                dst_fabric_node_id,
+                src_chan_id);
             return {};
         }
         chan_id_t next_chan_id = 0;
@@ -1413,9 +1418,15 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
             next_chan_id = this->intra_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][dst_chip_id];
         }
         if (next_chan_id == eth_chan_magic_values::INVALID_DIRECTION) {
-            // The complete route b/w src and dst not found, probably some eth cores are reserved along the path
-            log_warning(
-                tt::LogFabric, "Could not find a route between {} and {}", src_fabric_node_id, dst_fabric_node_id);
+            // The complete route b/w src and dst not found on this channel.
+            // Note: This is normal in topologies with limited inter-mesh connectivity where not all
+            // devices have routes on all channels. Cycle detection checks all channels.
+            log_debug(
+                tt::LogFabric,
+                "Could not find a route between {} and {} on channel {}",
+                src_fabric_node_id,
+                dst_fabric_node_id,
+                src_chan_id);
             return {};
         }
         if (src_chan_id != next_chan_id) {
@@ -1466,8 +1477,29 @@ bool ControlPlane::detect_inter_mesh_cycles(
 
     for (const auto& [src, dest] : traffic_pairs) {
         try {
-            // Use channel 0 as default - the routing path structure should be the same regardless of channel
-            auto route = get_fabric_route(src, dest, 0);
+            // IMPORTANT: Routes are channel-specific. In topologies with limited inter-mesh connectivity,
+            // not all devices have routes on all channels. We need to check multiple channels to get
+            // a complete routing picture for cycle detection.
+            std::vector<std::pair<FabricNodeId, chan_id_t>> route;
+
+            // Try to find a valid route on any available channel
+            // Get the ethernet channels available for this source device
+            auto active_channels = this->get_active_fabric_eth_channels(src);
+            bool route_found = false;
+
+            for (const auto& [chan_id, chan_direction] : active_channels) {
+                route = get_fabric_route(src, dest, chan_id);
+                if (!route.empty()) {
+                    route_found = true;
+                    break;  // Found a valid route, use it for cycle detection
+                }
+            }
+
+            // If no route found on any channel, skip this pair
+            if (!route_found || route.empty()) {
+                log_trace(tt::LogFabric, "No route found on any channel for {}->{} during cycle detection", src, dest);
+                continue;
+            }
 
             // Convert route to node-only path (ignore channels for cycle detection)
             std::vector<FabricNodeId> path;
