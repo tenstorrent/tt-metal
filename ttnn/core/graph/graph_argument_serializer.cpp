@@ -206,10 +206,6 @@ void GraphArgumentSerializer::register_small_vector() {
             auto referenced_value = std::any_cast<std::reference_wrapper<const ttsl::SmallVector<T, N>>>(value);
             const auto& vec = referenced_value.get();
             serialize_small_vector(oss, vec);
-        } else if (value.type() == typeid(std::reference_wrapper<const ttsl::SmallVector<T, N>>)) {
-            auto referenced_value = std::any_cast<std::reference_wrapper<const ttsl::SmallVector<T, N>>>(value);
-            const auto& vec = referenced_value.get();
-            serialize_small_vector(oss, vec);
         }
 
         return oss.str();
