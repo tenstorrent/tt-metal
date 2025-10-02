@@ -5,7 +5,7 @@
 import ttnn
 import json
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
-from framework.statuses import VectorValidity
+from framework.statuses import VectorValidity, VectorStatus
 import torch
 
 TTNN_NAME = ttnn.__name__
