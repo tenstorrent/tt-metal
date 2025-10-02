@@ -153,6 +153,7 @@ struct ComparisonResult {
     double current_bandwidth_GB_s{};
     double golden_bandwidth_GB_s{};
     double difference_percent{};
+    double speedup{};
     bool within_tolerance{};
     std::string status;
 };
@@ -1353,6 +1354,7 @@ private:
             comp_result.difference_percent = ((comp_result.current_bandwidth_GB_s - comp_result.golden_bandwidth_GB_s) /
                                               comp_result.golden_bandwidth_GB_s) *
                                              100.0;
+            comp_result.speedup = comp_result.current_bandwidth_GB_s / comp_result.golden_bandwidth_GB_s;
 
             // Use per-test tolerance from golden CSV instead of global tolerance
             test_tolerance = golden_it->tolerance_percent;
@@ -1367,6 +1369,7 @@ private:
             log_warning(tt::LogTest, "Golden CSV entry not found for test {}", comp_result.test_name);
             comp_result.golden_bandwidth_GB_s = 0.0;
             comp_result.difference_percent = 0.0;
+            comp_result.speedup = 1.0;
             comp_result.within_tolerance = false;
             comp_result.status = "NO_GOLDEN";
         }
@@ -1440,15 +1443,16 @@ private:
         }
         // Write diff header
         diff_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,num_iterations,"
-                           "current_avg_bandwidth_gb_s,golden_avg_bandwidth_gb_s,difference_percent,status\n";
+                           "current_avg_bandwidth_gb_s,golden_avg_bandwidth_gb_s,speedup,difference_percent,status\n";
         log_info(tt::LogTest, "Initialized diff CSV file: {}", diff_csv_file_path_.string());
 
         for (const auto& result : comparison_results_) {
             diff_csv_stream << result.test_name << "," << result.ftype << "," << result.ntype << "," << result.topology
-                     << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size << "," << result.num_iterations << ","
-                     << std::fixed << std::setprecision(6) << result.current_bandwidth_GB_s << ","
-                     << result.golden_bandwidth_GB_s << "," << std::setprecision(2) << result.difference_percent << ","
-                     << result.status << "\n";
+                            << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size
+                            << "," << result.num_iterations << "," << std::fixed << std::setprecision(6)
+                            << result.current_bandwidth_GB_s << "," << result.golden_bandwidth_GB_s << ","
+                            << std::setprecision(6) << result.speedup << "," << std::setprecision(2)
+                            << result.difference_percent << "," << result.status << "\n";
         }
         diff_csv_stream.close();
         log_info(tt::LogTest, "Comparison diff CSV results appended to: {}", diff_csv_file_path_.string());
