@@ -69,6 +69,37 @@ class TtnnYoloV11:
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
         x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+
+        # 🔍 DEBUGGING: Analyze conv5 layer properties
+        print(f"🔍 [CONV5 LAYER DEBUG] Conv5 layer details:")
+        print(f"    Conv5 in_channels: {self.conv5.conv.in_channels}")
+        print(f"    Conv5 out_channels: {self.conv5.conv.out_channels}")
+        print(f"    Conv5 kernel_size: {self.conv5.conv.kernel_size}")
+        print(f"    Conv5 stride: {self.conv5.conv.stride}")
+        print(f"    Conv5 padding: {self.conv5.conv.padding}")
+        print(f"    Conv5 groups: {self.conv5.conv.groups}")
+
+        # 🔍 DEBUGGING: Analyze tensor before conv5
+        print(f"🔍 [CONV5 DEBUG] Input tensor before conv5:")
+        print(f"    Shape: {x.shape}")
+        print(f"    Memory config: {x.memory_config()}")
+        print(f"    Storage type: {x.storage_type()}")
+        print(f"    Layout: {x.get_layout()}")
+        print(f"    Dtype: {x.get_dtype()}")
+        
+        # Calculate expected output size for conv5
+        batch_size, _, height_width, channels = x.shape
+        print(f"    Input elements: {batch_size * height_width * channels}")
+        input_memory_mb = (batch_size * height_width * channels * 2) / (1024 * 1024)  # bfloat16 = 2 bytes
+        print(f"    Input memory: {input_memory_mb:.2f} MB")
+        print(f"    L1 limit: 1.43 MB")
+        
+        if input_memory_mb > 1.43:
+            print(f"    ⚠️  WARNING: Input tensor size ({input_memory_mb:.2f}MB) exceeds L1 limit!")
+        else:
+            print(f"    ✅ Input tensor size ({input_memory_mb:.2f}MB) fits in L1")
+
         x = self.conv5(self.device, x)
         x = self.c3k2_3(self.device, x)
         x6 = x
