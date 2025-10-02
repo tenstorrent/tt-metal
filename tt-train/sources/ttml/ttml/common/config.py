@@ -65,7 +65,7 @@ class TrainingConfig:
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
 
         tcfg = TransformerConfig(tc.get("transformer_config", {}))
-        self.seq_len = int(tcfg.get("max_sequence_length", 256))
+        self.seq_len = int(tcfg.max_sequence_length)
 
 
 class TransformerConfig:
