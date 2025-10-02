@@ -121,7 +121,7 @@ int CompileFabricLite(
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
     std::ostringstream oss;
-    oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
+    oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-g++ ";
     oss << GetCommonOptions() << " ";
 
     for (const auto& include : includes) {
@@ -157,7 +157,7 @@ int LinkFabricLite(
     const std::filesystem::path output_ld = out_dir / "lite_fabric_preprocessed.ld";
 
     std::ostringstream preprocess_oss;
-    preprocess_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
+    preprocess_oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-g++ ";
     preprocess_oss << fmt::format("-I{} ", tunneling_dir.string());  // Include path for the memory defs header
     preprocess_oss << "-E -P -x c ";                                 // Preprocess only, no line markers, treat as C
     preprocess_oss << fmt::format("-o {} ", output_ld.string());
@@ -174,7 +174,7 @@ int LinkFabricLite(
 
     // Now link using the preprocessed linker script
     std::ostringstream link_oss;
-    link_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
+    link_oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-g++ ";
     link_oss << GetCommonOptions() << " ";
     link_oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
     link_oss << fmt::format("-T{} ", output_ld.string());  // Use preprocessed linker script
@@ -197,7 +197,7 @@ int LinkFabricLite(
     bin_path.replace_extension(".bin");
 
     std::ostringstream objcopy_oss;
-    objcopy_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-objcopy -O binary ";
+    objcopy_oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-objcopy -O binary ";
     objcopy_oss << elf_out << " " << bin_path;
 
     std::string objcopy_cmd = objcopy_oss.str();
