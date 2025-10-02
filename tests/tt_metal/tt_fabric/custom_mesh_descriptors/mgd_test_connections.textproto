@@ -20,21 +20,21 @@ graph_descriptors {
   type: "FABRIC"
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
-  
+
   # Relaxed (mesh-level)
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
     channels { count: 2 policy: RELAXED }
   }
-  
+
   # Strict (device-level)
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 device_id: 1 } }
     channels { count: 1 policy: STRICT }
   }
-  
+
   # Mixed (device on one side, mesh on the other)
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
