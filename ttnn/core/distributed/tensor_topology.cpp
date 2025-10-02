@@ -21,6 +21,21 @@ TensorTopology TensorTopology::create_fully_replicated_tensor_topology(
     return tt::tt_metal::TensorTopology(distribution_shape, placements, mesh_coords);
 }
 
+TensorTopology TensorTopology::create_sharded_tensor_topology(
+    const tt::tt_metal::distributed::MeshShape& mesh_shape, int shard_dim) {
+    tt::tt_metal::distributed::MeshShape distribution_shape =
+        tt::tt_metal::distributed::MeshShape(mesh_shape.mesh_size());
+    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements = {
+        tt::tt_metal::distributed::MeshMapperConfig::Shard{shard_dim}};
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
+    mesh_coords.reserve(mesh_shape.mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        mesh_coords.push_back(coord);
+    }
+
+    return tt::tt_metal::TensorTopology(distribution_shape, placements, mesh_coords);
+}
+
 tt::tt_metal::distributed::MeshCoordinate TensorTopology::get_neighbor(
     const tt::tt_metal::distributed::MeshCoordinate& tensor_coord, int32_t offset, int32_t dim) const {
     const auto neighbor_coord = tensor_coord.get_neighbor(

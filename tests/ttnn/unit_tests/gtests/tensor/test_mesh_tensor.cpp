@@ -110,8 +110,7 @@ TEST(MeshTensorHostTest, FromHostShards) {
 
     EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
     EXPECT_EQ(tensor.storage_type(), StorageType::HOST);
-    EXPECT_EQ(tensor.tensor_topology().distribution_shape(), MeshShape(2));
-    EXPECT_EQ(std::get<distributed::MeshMapperConfig::Shard>(tensor.tensor_topology().placements()[0]).dim, 0);
+    EXPECT_EQ(tensor.tensor_topology(), TensorTopology::create_sharded_tensor_topology(MeshShape(2)));
 
     auto tensors = get_device_tensors(tensor);
     ASSERT_THAT(tensors, SizeIs(2));
@@ -279,15 +278,16 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
         ThrowsMessage<std::runtime_error>(HasSubstr("Found a tensor shard at duplicate coordinate")));
 
     // Aggregate every second shard into a new mesh tensor.
+    int shard_dim = 2;
     auto partial_tensor = combine_device_tensors(
-        std::vector<Tensor>{device_tensors1[6], device_tensors1[4], device_tensors1[2], device_tensors1[0]}, 2);
+        std::vector<Tensor>{device_tensors1[6], device_tensors1[4], device_tensors1[2], device_tensors1[0]}, shard_dim);
 
     auto* partial_device_storage = std::get_if<tt::tt_metal::DeviceStorage>(&partial_tensor.storage());
     ASSERT_NE(partial_device_storage, nullptr);
     EXPECT_NE(partial_device_storage->mesh_buffer, nullptr);
 
-    EXPECT_EQ(partial_tensor.tensor_topology().distribution_shape(), MeshShape(4));
-    EXPECT_EQ(std::get<distributed::MeshMapperConfig::Shard>(partial_tensor.tensor_topology().placements()[0]).dim, 2);
+    EXPECT_EQ(
+        partial_tensor.tensor_topology(), TensorTopology::create_sharded_tensor_topology(MeshShape(4), shard_dim));
 
     // Validate the shards are sorted, and are as expected.
     ASSERT_THAT(partial_device_storage->coords, SizeIs(4));

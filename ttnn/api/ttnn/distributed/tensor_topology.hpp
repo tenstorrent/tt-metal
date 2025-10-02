@@ -27,6 +27,9 @@ public:
     static TensorTopology create_fully_replicated_tensor_topology(
         const tt::tt_metal::distributed::MeshShape& mesh_shape);
 
+    static TensorTopology create_sharded_tensor_topology(
+        const tt::tt_metal::distributed::MeshShape& mesh_shape, int shard_dim = 0);
+
     // Returns the shape that the original tensor was sharded over.
     const tt::tt_metal::distributed::MeshShape& distribution_shape() const { return distribution_shape_; }
     const tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>& placements() const {
