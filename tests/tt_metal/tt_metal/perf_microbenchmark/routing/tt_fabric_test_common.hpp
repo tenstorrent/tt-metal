@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <optional>
 #include <random>
+#include <string>
+#include <cstdlib>
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
@@ -105,8 +107,23 @@ public:
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
-        const auto reliability_mode = fabric_setup.fabric_reliability_mode.value_or(
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+        // Fabric Reliability Mode
+        // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
+        // If RELIABILITY_MODE is set, it takes precedence over fabric_setup.fabric_reliability_mode
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        const char* reliability_mode_env = std::getenv("RELIABILITY_MODE");
+        if (reliability_mode_env != nullptr) {
+            std::string mode_str(reliability_mode_env);
+            if (mode_str == "relaxed") {
+                reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+            } else if (mode_str == "strict") {
+                reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+            }
+        } else if (fabric_setup.fabric_reliability_mode.has_value()) {
+            reliability_mode = fabric_setup.fabric_reliability_mode.value();
+        }
 
         FabricConfig new_fabric_config;
         if (topology == Topology::Torus) {
@@ -135,6 +152,7 @@ public:
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
+            log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
             open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
 
             topology_ = topology;
