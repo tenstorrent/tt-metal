@@ -5,7 +5,6 @@
 #include "l1_banking_allocator.hpp"
 
 #include <allocator.hpp>
-#include <allocator_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer_types.hpp>
 #include <core_coord.hpp>

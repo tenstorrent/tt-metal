@@ -21,7 +21,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/allocator_types.hpp>
 
 #include <tt_stl/span.hpp>
 

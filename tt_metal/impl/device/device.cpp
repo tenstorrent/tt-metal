@@ -30,7 +30,7 @@
 #include <vector>
 
 #include "allocator.hpp"
-#include "allocator_types.hpp"
+#include "impl/allocator/allocator_types.hpp"
 #include <tt_stl/assert.hpp>
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"

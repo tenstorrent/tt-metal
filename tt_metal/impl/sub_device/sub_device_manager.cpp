@@ -14,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "allocator_types.hpp"
 #include "core_coord.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
