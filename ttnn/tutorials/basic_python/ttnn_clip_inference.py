@@ -130,6 +130,7 @@ def main():
                         ),
                         "ln_1_bias": ttnn.typecast(state_dict[f"{resblock_prefix}.layer_norm1.bias"], ttnn.bfloat16),
                         # Multi-head attention projection weights (Q, K, V)
+                        # Ensure that weights use bfloat16 data type.
                         "q_proj_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.q_proj.weight"], ttnn.bfloat16
                         ),
@@ -156,10 +157,12 @@ def main():
                             state_dict[f"{resblock_prefix}.self_attn.out_proj.bias"], ttnn.bfloat16
                         ),
                         # Second layer normalization weights
-                        "ln_2_weight": ttnn.typecast(
+                        "layer_norm_2_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.layer_norm2.weight"], ttnn.bfloat16
                         ),
-                        "ln_2_bias": ttnn.typecast(state_dict[f"{resblock_prefix}.layer_norm2.bias"], ttnn.bfloat16),
+                        "layer_norm_2_bias": ttnn.typecast(
+                            state_dict[f"{resblock_prefix}.layer_norm2.bias"], ttnn.bfloat16
+                        ),
                         # MLP weights (feed-forward network)
                         "mlp_c_fc_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.mlp.fc1.weight"], ttnn.bfloat16
@@ -188,79 +191,73 @@ def main():
                 attention_mask=None,
                 prefix="",
             ):
-                seq_length, batch_size, hidden_size = hidden_states.shape
+                sequence_size, batch_size, hidden_size = hidden_states.shape
 
-                embed_dim = hidden_size
-                head_dim = hidden_size // self.heads
+                head_size = hidden_size // self.heads
                 # Scale factor for attention scores: 1/sqrt(head_dim) for numerical stability
-                scale = head_dim**-0.5
-
-                # Configure compute kernel for high-precision attention computation
-                compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity mode for accurate computation
-                    math_approx_mode=False,  # Disable approximations for exact results
-                    fp32_dest_acc_en=True,  # Enable FP32 accumulation in destination register for better precision
-                    packer_l1_acc=True,  # Enable L1 accumulation in packer for improved accuracy
-                )
+                scale = head_size**-0.5
 
                 # Note: KV-caching not implemented (not needed for single forward pass)
                 (q_weights, k_weights, v_weights) = qkv_weights
                 (q_bias, k_bias, v_bias) = qkv_biases
 
                 # Compute Q, K, V projections from input hidden states
-                # Each projection: [seq_length, batch_size, hidden_size] -> [seq_length, batch_size, hidden_size]
+                # Each projection: [sequence_size, batch_size, hidden_size] -> [sequence_size, batch_size, hidden_size]
                 q = ttnn.linear(hidden_states, q_weights, bias=q_bias, transpose_b=True)
                 k = ttnn.linear(hidden_states, k_weights, bias=k_bias, transpose_b=True)
                 v = ttnn.linear(hidden_states, v_weights, bias=v_bias, transpose_b=True)
 
                 # Reshape for multi-head attention: split hidden_size into (num_heads * head_dim)
-                # [seq_length, batch_size, hidden_size] -> [seq_length, batch_size * num_heads, head_dim]
-                q = ttnn.reshape(q, (seq_length, batch_size * self.heads, head_dim))
-                k = ttnn.reshape(k, (seq_length, batch_size * self.heads, head_dim))
-                v = ttnn.reshape(v, (seq_length, batch_size * self.heads, head_dim))
+                # [sequence_size, batch_size, hidden_size] -> [sequence_size, batch_size * num_heads, head_dim]
+                q = ttnn.reshape(q, (sequence_size, batch_size * self.heads, head_size))
+                k = ttnn.reshape(k, (sequence_size, batch_size * self.heads, head_size))
+                v = ttnn.reshape(v, (sequence_size, batch_size * self.heads, head_size))
 
-                # Transpose to bring batch*heads dimension first for parallel attention computation
-                # [seq_length, batch_size * num_heads, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
+                # Transpose to bring batch_size * num_heads dimension first for parallel attention computation
+                # [sequence_size, batch_size * num_heads, head_dim] -> [batch_size * num_heads, sequence_size, head_size]
                 q = ttnn.transpose(q, 0, 1)
                 k = ttnn.transpose(k, 0, 1)
                 v = ttnn.transpose(v, 0, 1)
 
                 # Compute attention scores: Q @ K^T
-                # [batch*heads, seq_len, head_dim] @ [batch*heads, head_dim, seq_len] -> [batch*heads, seq_len, seq_len]
+                # [batch_size * num_heads, sequence_size, head_size] @ [batch_size * num_heads, head_size, sequence_size]
+                #   -> [batch_size * num_heads, sequence_size, sequence_size]
                 scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
-                # Scale scores by 1/sqrt(head_dim) to prevent softmax saturation
+                # Scale scores by 1 / sqrt(head_size) to prevent softmax saturation
                 scores = scores * scale
 
                 # Apply attention mask if provided (for causal attention in text encoder)
                 if attention_mask is not None:
                     # Add mask to scores (mask contains -inf for positions that should be ignored)
-                    # Mask is broadcastable to [batch_size * num_heads, seq_len, seq_len]
+                    # Mask is broadcastable to [batch_size * num_heads, sequence_size, sequence_size]
                     scores = scores + attention_mask
 
                 # Apply softmax to get attention weights
                 # numeric_stable=True uses the numerically stable softmax: softmax(x) = softmax(x - max(x))
                 # This prevents overflow when computing exp(x) for large values
                 attn_weights = ttnn.softmax(
-                    scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
+                    scores,
+                    dim=-1,
+                    numeric_stable=True,
                 )
 
-                # Apply attention weights to values: weighted sum of values
-                # [batch*heads, seq_len, seq_len] @ [batch*heads, seq_len, head_dim] -> [batch*heads, seq_len, head_dim]
+                # [batch_size * num_heads, sequence_size, sequence_size] @ [batch_size*heads, sequence_size, head_size]
+                #   -> [batch_size * num_heads, sequence_size, head_size]
                 attn_output = ttnn.matmul(attn_weights, v)
 
                 # Transpose back to sequence-first format
-                # [batch*heads, seq_len, head_dim] -> [seq_len, batch*heads, head_dim]
+                # [batch_size * num_heads, sequence_size, head_size] -> [sequence_size, batch_size * num_heads, head_size]
                 attn_output = ttnn.transpose(attn_output, 0, 1)
+
                 # Merge heads back into hidden dimension
-                # [seq_len, batch*heads, head_dim] -> [seq_len, batch_size, hidden_size]
-                attn_output = ttnn.reshape(attn_output, (seq_length, batch_size, embed_dim))
+                # [sequence_size, batch_size * num_heads, head_size] -> [sequence_size, batch_size, hidden_size]
+                attn_output = ttnn.reshape(attn_output, (sequence_size, batch_size, hidden_size))
 
                 # Apply output projection
                 dense_out = ttnn.linear(
                     attn_output,
                     self_output_weight,
                     bias=self_output_bias,
-                    compute_kernel_config=compute_kernel_config,
                     transpose_b=True,
                 )
 
@@ -273,7 +270,7 @@ def main():
 
                 # Multihead attention / Self-Attention
                 # This must be equal to nn.MultiheadAttention(d_model, n_head)(x, x, x, need_weights=False, attn_mask=self.attn_mask)
-                x_attn = multi_head_attention(
+                attention_scores = multi_head_attention(
                     x,
                     qkv_weights=(layer["q_proj_weight"], layer["k_proj_weight"], layer["v_proj_weight"]),
                     qkv_biases=(layer["q_proj_bias"], layer["k_proj_bias"], layer["v_proj_bias"]),
@@ -283,13 +280,15 @@ def main():
                     prefix=f"{self.prefix}.layers.{i}.attn",
                 )  # Vision transformer doesn't use attention mask
 
-                x = residual + x_attn
+                x = residual + attention_scores
 
                 # LayerNorm
-                x_post_ln_2 = ttnn.layer_norm(x, weight=layer["ln_2_weight"], bias=layer["ln_2_bias"])
+                x_post_layer_norm = ttnn.layer_norm(
+                    x, weight=layer["layer_norm_2_weight"], bias=layer["layer_norm_2_bias"]
+                )
 
                 # Multi-Layer Perceptron
-                x = x + mlp(x_post_ln_2, layer)
+                x = x + mlp(x_post_layer_norm, layer)
 
                 return x
 
@@ -348,7 +347,7 @@ def main():
             # This is why we need to permute and reshape before and after convolution.
 
             # Step 1: Rearrange from channels-first to channels-last layout
-            # [N, C_in, H, W] -> [N, H, W, C_in]
+            # [batch_size, in_channels, height, width] -> [batch_size, height, width, in_channels]
             x = ttnn.permute(x, [0, 2, 3, 1])
 
             # Step 2: Convert to row-major layout (required by ttnn.conv2d)
@@ -404,6 +403,7 @@ def main():
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
             # Unflatten: [1, 1, N*H_out*W_out, C_out] -> [N, num_patches, embed_dim]
             # where num_patches = H_out * W_out = (224/32)^2 = 49
+
             x = ttnn.reshape(x, (x.shape[0], x.shape[1] * x.shape[2], x.shape[3]))
 
             # Step 5: Prepare the [CLS] token (class embedding)
@@ -438,14 +438,14 @@ def main():
 
             # Step 10: Permute to sequence-first format for transformer
             # Transformers typically process in sequence-first format
-            # [batch_size, sequence_length, hidden_size] -> [sequence_length, batch_size, hidden_size]
+            # [batch_size, sequence_size, hidden_size] -> [sequence_size, batch_size, hidden_size]
             x = ttnn.permute(x, (1, 0, 2))
 
             # Step 11: Pass through transformer encoder layers
             x = self.transformer.forward(x)
 
             # Step 12: Permute back to batch-first format
-            # [sequence_length, batch_size, hidden_size] -> [batch_size, sequence_length, hidden_size]
+            # [sequence_size, batch_size, hidden_size] -> [batch_size, sequence_size, hidden_size]
             x = ttnn.permute(x, (1, 0, 2))
 
             # Step 13: Extract [CLS] token and apply post-layer normalization
@@ -664,7 +664,7 @@ def main():
         # Convert PyTorch image tensor to TT-NN tensor with bfloat16 precision
         # bfloat16 provides good balance between precision and memory/compute efficiency
         preferred_dtype = ttnn.bfloat16
-        tt_image = to_ttnn(image, preferred_dtype)
+        tt_image = ttnn.from_torch(image, device=get_device(), layout=ttnn.TILE_LAYOUT, dtype=preferred_dtype)
 
         # Define text prompts for zero-shot classification
         # The model will compute similarity between the image and each text description
