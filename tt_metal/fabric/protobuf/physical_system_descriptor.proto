@@ -97,4 +97,5 @@ message PhysicalSystemDescriptor {
     repeated HostToMoboMap host_to_mobo_name = 3;
     repeated HostToRankMap host_to_rank = 4;
     repeated ExitNodeConnectionTable exit_node_connection_table = 5;
+    bool mock_cluster = 6;
 }

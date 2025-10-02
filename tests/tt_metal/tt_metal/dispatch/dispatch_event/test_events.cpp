@@ -76,7 +76,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
         uint32_t event;
         if (data_movement_mode == DataMovementMode::WRITE) {
             for (size_t i = 0; i < num_buffers; i++) {
-                uint32_t host_addr = last_read_address + i * completion_queue_page_size + completion_queue_event_offset;
+                uint32_t host_addr =
+                    last_read_address + (i * completion_queue_page_size) + completion_queue_event_offset;
                 tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     &event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
@@ -85,7 +86,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             for (size_t i = 0; i < num_buffers; i++) {
                 // Extra entry in the completion queue is from the buffer read data.
                 uint32_t host_addr =
-                    completion_queue_base + (2 * i + 1) * completion_queue_page_size + completion_queue_event_offset;
+                    completion_queue_base + ((2 * i + 1) * completion_queue_page_size) + completion_queue_event_offset;
                 tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
                     &event, 4, host_addr, mmio_device_id, channel);
                 EXPECT_EQ(event, ++expected_event_id);  // Event ids start at 1
@@ -269,7 +270,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
     // Read completion queue and ensure we see expected event IDs
     uint32_t event_id;
     for (size_t i = 0; i < num_buffers * num_events_per_cq; i++) {
-        uint32_t host_addr = completion_queue_base + i * completion_queue_page_size + completion_queue_event_offset;
+        uint32_t host_addr = completion_queue_base + (i * completion_queue_page_size) + completion_queue_event_offset;
         tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
             &event_id, 4, host_addr, mmio_device_id, channel);
         EXPECT_EQ(event_id, ++expected_event_id);
