@@ -82,7 +82,7 @@ class TtnnYoloV11:
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
         x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         # 🔍 DEBUGGING: Analyze tensor state before conv5 (which has shard_layout=None)
         print(f"🔍 [CONV5 ANALYSIS] Tensor state before conv5 call:")
         print(f"    Shape: {x.shape}")
