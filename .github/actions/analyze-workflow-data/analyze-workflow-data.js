@@ -298,26 +298,34 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
         const idxPath = path.join(runLogsDir, 'gtest-jobs.json');
         const extractDir = path.join(runLogsDir, 'extract');
         if (fs.existsSync(idxPath) && fs.existsSync(extractDir)) {
+          core.info(`[GTEST] Using logs for run ${runId}: runLogsDir=${runLogsDir}`);
+          core.info(`[GTEST] Index path: ${idxPath}`);
           const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
           const jobs = Array.isArray(idx.jobs) ? idx.jobs : [];
+          core.info(`[GTEST] Jobs detected: ${jobs.length}`);
           const out = [];
           for (const job of jobs) {
             const jobName = (job && job.name) ? String(job.name) : 'gtest';
             const files = Array.isArray(job.files) ? job.files : [];
+            core.info(`[GTEST] Processing job: name='${jobName}', files=${files.length}`);
             for (const rel of files) {
               try {
                 const abs = path.join(runLogsDir, rel);
-                if (!fs.existsSync(abs)) continue;
+                if (!fs.existsSync(abs)) { core.info(`[GTEST]   Skip missing file: ${abs}`); continue; }
                 const text = fs.readFileSync(abs, 'utf8');
                 const lines = text.split(/\r?\n/);
+                core.info(`[GTEST]   Parsing file: ${abs} (lines=${lines.length})`);
                 let currentTest = undefined;
                 let inInfo = false;
                 let infoLines = [];
+                let fileSnippets = 0;
                 const flushIfFailBlock = () => {
                   if (currentTest && infoLines.length) {
                     const infoMsg = infoLines.join('\n').trim();
                     if (infoMsg) {
                       out.push({ label: `${jobName}: ${currentTest}`, snippet: infoMsg });
+                      fileSnippets++;
+                      core.info(`[GTEST]     Added snippet for test '${currentTest}' (len=${infoMsg.length})`);
                     }
                   }
                   inInfo = false;
@@ -327,49 +335,67 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                   const line = lines[i];
                   const runMatch = line && line.match(/^\s*\[\s*RUN\s*\]\s+(.+?)\s*$/);
                   if (runMatch) {
-                    // entering a test block; finalize any prior captured block
                     flushIfFailBlock();
                     currentTest = runMatch[1];
+                    core.info(`[GTEST]     RUN -> '${currentTest}' @ line ${i+1}`);
                     continue;
                   }
-                  // Detect test end markers
                   const endOk = line && line.match(/^\s*\[\s*\w*OK\s*\]\s+(.+?)\s*$/);
                   const endFailed = line && line.match(/^\s*\[\s*FAILED\s*\]\s+(.+?)\s*$/);
                   if (endOk || endFailed) {
-                    // If failed, we want to keep captured info; if ok, discard
                     if (!endFailed) {
-                      // discard accumulated info for non-failing
                       inInfo = false; infoLines = []; currentTest = undefined;
+                      core.info(`[GTEST]     OK -> end test @ line ${i+1}`);
                     } else {
-                      // finalize failure block
                       flushIfFailBlock();
                       currentTest = undefined;
+                      core.info(`[GTEST]     FAILED -> finalize @ line ${i+1}`);
                     }
                     continue;
                   }
-                  // Capture info: ... until backtrace:
-                  const lc = String(line || '').toLowerCase();
-                  if (!inInfo && /^\s*info:\s*$/i.test(line)) {
-                    inInfo = true; infoLines = []; continue;
+                  const infoStart = line && line.match(/^\s*info:\s*(.*)$/i);
+                  if (!inInfo && infoStart) {
+                    const lower = line.toLowerCase();
+                    const btIdx = lower.indexOf('backtrace:');
+                    if (btIdx !== -1) {
+                      const infoIdx = lower.indexOf('info:');
+                      const between = line.substring(infoIdx + 5, btIdx).replace(/^\s*|\s*$/g, '');
+                      if (between) infoLines.push(between);
+                      core.info(`[GTEST]       info:..backtrace: same-line capture (len=${between.length})`);
+                      flushIfFailBlock();
+                      continue;
+                    }
+                    const trailing = infoStart[1];
+                    inInfo = true;
+                    infoLines = [];
+                    if (trailing) infoLines.push(trailing);
+                    core.info(`[GTEST]       info: begin capture @ line ${i+1}`);
+                    continue;
                   }
                   if (inInfo) {
-                    if (/^\s*backtrace:\s*$/i.test(line)) {
-                      // stop at backtrace
-                      inInfo = false; continue;
+                    const lower = line.toLowerCase();
+                    const btIdx2 = lower.indexOf('backtrace:');
+                    if (btIdx2 !== -1) {
+                      const head = line.substring(0, btIdx2).replace(/^\s*|\s*$/g, '');
+                      if (head) infoLines.push(head);
+                      inInfo = false;
+                      core.info(`[GTEST]       backtrace: end capture @ line ${i+1}`);
+                      continue;
                     }
-                    // Avoid including overly long lines of backtrace-like content
                     infoLines.push(line);
                   }
                 }
-                // finalize at EOF
                 flushIfFailBlock();
-              } catch (_) { /* ignore file parse errors */ }
+                core.info(`[GTEST]   File complete: snippets_added=${fileSnippets}`);
+              } catch (errFile) {
+                core.info(`[GTEST]   Failed parsing file '${rel}': ${errFile && errFile.message || String(errFile)}`);
+              }
             }
           }
           if (out.length) {
+            core.info(`[GTEST] Total snippets before cap: ${out.length}`);
             snippets = out.slice(0, Math.max(1, Math.min(maxSnippets, out.length)));
-            core.info(`Collected ${snippets.length} gtest snippet(s) from logs for run ${runId}`);
-            // Attach owners for gtest too
+            core.info(`[GTEST] Collected ${snippets.length} gtest snippet(s) from logs for run ${runId}`);
             try {
               const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
               for (const it of snippets) {
@@ -380,7 +406,11 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               }
             } catch (_) { /* ignore */ }
             return snippets;
+          } else {
+            core.info(`[GTEST] No snippets extracted from logs for run ${runId}`);
           }
+        } else {
+          core.info(`[GTEST] Logs present but missing index or extract dir for run ${runId}: idxExists=${fs.existsSync(idxPath)}, extractExists=${fs.existsSync(extractDir)}`);
         }
       }
     } catch (e) {
