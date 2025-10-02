@@ -23,8 +23,9 @@ inline void _calculate_clamp_(const int iterations, uint param0, uint param1, ui
     sfpi::s2vFloat16::Format format = sfpi::s2vFloat16::fp16a;
 
     // SFPU microcode
-    sfpi::vFloat min = sfpi::s2vFloat16(param0, format);
-    sfpi::vFloat max = sfpi::s2vFloat16(param1, format);
+    sfpi::vFloat min    = sfpi::s2vFloat16(param0, format);
+    sfpi::vFloat max    = sfpi::s2vFloat16(param1, format);
+    sfpi::vFloat offset = sfpi::s2vFloat16b(param2); // 12 bits
 #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++)
     {
@@ -32,15 +33,15 @@ inline void _calculate_clamp_(const int iterations, uint param0, uint param1, ui
 
         v_if (val < min)
         {
-            val = sfpi::s2vFloat16(param0, format);
+            val = min;
         }
         v_elseif (val >= max)
         {
-            val = sfpi::s2vFloat16(param1, format);
+            val = max;
         }
         v_endif;
 
-        sfpi::dst_reg[0] = val + sfpi::s2vFloat16b(param2); // 12 bits
+        sfpi::dst_reg[0] = val + offset;
 
         sfpi::dst_reg++;
     }
