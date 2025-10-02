@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     constexpr uint32_t table_address = get_compile_time_arg_val(0);

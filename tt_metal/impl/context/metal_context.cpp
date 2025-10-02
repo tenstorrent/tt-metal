@@ -891,7 +891,7 @@ void MetalContext::initialize_logical_to_virtual_tables(
     const uint32_t logical_col_to_virtual_col_sz_in_bytes =
         logical_col_to_virtual_col_[device_id].size() * sizeof(uint8_t);
     const uint8_t firmware_grid_size_x =
-        ((soc_desc.grid_size.x + 3) / 4) * 4;  // Ensure multiple of 4 for uint32_t alignment
+        tt::round_up(soc_desc.grid_size.x, 4);  // Ensure multiple of 4 for uint32_t alignment
     const uint32_t logical_row_to_virtual_row_sz_in_bytes =
         logical_row_to_virtual_row_[device_id].size() * sizeof(uint8_t);
     const uint64_t logical_to_virtual_map_addr =
@@ -912,7 +912,7 @@ void MetalContext::initialize_logical_to_virtual_tables(
 
     // Size of the data in the firmware is the full size of the grid, not the harvested size.
     // Therefore, we must adjust the address to account for the full grid size.
-    uint64_t logical_row_to_virtual_row_addr = logical_to_virtual_map_addr + firmware_grid_size_x * sizeof(uint8_t);
+    uint64_t logical_row_to_virtual_row_addr = logical_to_virtual_map_addr + (firmware_grid_size_x * sizeof(uint8_t));
     cluster_->write_core(
         &logical_row_to_virtual_row_[device_id][0],
         logical_row_to_virtual_row_sz_in_bytes,
