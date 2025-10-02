@@ -119,10 +119,13 @@ private:
     // Output directory for noc trace data
     std::filesystem::path noc_trace_data_output_dir;
 
+    // Storage for trace ids that have been replayed
     std::vector<uint32_t> traces_replayed;
 
+    // Storage for trace ids that are currently being recorded
     std::unordered_set<uint32_t> traces_being_recorded;
 
+    // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;
 
     // Read all control buffers
@@ -200,6 +203,9 @@ private:
     // Iterate over all markers and update their data if needed
     void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
 
+    // Get the trace id and trace id count
+    std::pair<uint64_t, uint64_t> getTraceIdAndCount(uint32_t run_host_id, uint32_t device_trace_counter) const;
+
 public:
     DeviceProfiler(const IDevice* device, bool new_logs);
 
@@ -228,14 +234,6 @@ public:
 
     // frequency scale
     double freq_scale = 1.0;
-
-    void markTraceBegin(uint32_t trace_id);
-
-    void markTraceEnd(uint32_t trace_id);
-
-    void markTraceReplay(uint32_t trace_id);
-
-    void addRuntimeIdToTrace(uint32_t trace_id, uint32_t runtime_id);
 
     // Freshen device logs
     void freshDeviceLog();
@@ -275,7 +273,17 @@ public:
     // Get marker details for the marker corresponding to the given timer id
     tracy::MarkerDetails getMarkerDetails(uint16_t timer_id) const;
 
-    std::pair<uint64_t, uint64_t> getTraceIdAndCount(uint32_t run_host_id, uint32_t device_trace_counter) const;
+    // Mark the beginning of a trace recording
+    void markTraceBegin(uint32_t trace_id);
+
+    // Mark the end of a trace recording
+    void markTraceEnd(uint32_t trace_id);
+
+    // Mark the replay of a trace
+    void markTraceReplay(uint32_t trace_id);
+
+    // Associate a runtime id with a trace
+    void addRuntimeIdToTrace(uint32_t trace_id, uint32_t runtime_id);
 
     // setter and getter on last fast dispatch read
     void setLastFDReadAsDone();
@@ -283,8 +291,6 @@ public:
     void setLastFDReadAsNotDone();
 
     bool isLastFDReadDone() const;
-
-    void addTraceId(uint32_t trace_id);
 };
 
 bool useFastDispatch(IDevice* device);
