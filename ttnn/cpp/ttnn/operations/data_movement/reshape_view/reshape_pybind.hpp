@@ -10,6 +10,4 @@ namespace ttnn::operations::data_movement {
 
 void py_bind_reshape_view(pybind11::module& module);
 
-void py_bind_reshape_enum(pybind11::module& module);
-
 }  // namespace ttnn::operations::data_movement
