@@ -125,58 +125,50 @@ def main():
                 self.layers.append(
                     {
                         # First layer normalization weights
-                        "ln_1_weight": convert_ttnn_dtype(
+                        "ln_1_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.layer_norm1.weight"], ttnn.bfloat16
                         ),
-                        "ln_1_bias": convert_ttnn_dtype(
-                            state_dict[f"{resblock_prefix}.layer_norm1.bias"], ttnn.bfloat16
-                        ),
+                        "ln_1_bias": ttnn.typecast(state_dict[f"{resblock_prefix}.layer_norm1.bias"], ttnn.bfloat16),
                         # Multi-head attention projection weights (Q, K, V)
-                        "q_proj_weight": convert_ttnn_dtype(
+                        "q_proj_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.q_proj.weight"], ttnn.bfloat16
                         ),
-                        "q_proj_bias": convert_ttnn_dtype(
+                        "q_proj_bias": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.q_proj.bias"], ttnn.bfloat16
                         ),
-                        "k_proj_weight": convert_ttnn_dtype(
+                        "k_proj_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.k_proj.weight"], ttnn.bfloat16
                         ),
-                        "k_proj_bias": convert_ttnn_dtype(
+                        "k_proj_bias": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.k_proj.bias"], ttnn.bfloat16
                         ),
-                        "v_proj_weight": convert_ttnn_dtype(
+                        "v_proj_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.v_proj.weight"], ttnn.bfloat16
                         ),
-                        "v_proj_bias": convert_ttnn_dtype(
+                        "v_proj_bias": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.v_proj.bias"], ttnn.bfloat16
                         ),
                         # Attention output projection weights
-                        "out_proj_weight": convert_ttnn_dtype(
+                        "out_proj_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.out_proj.weight"], ttnn.bfloat16
                         ),
-                        "out_proj_bias": convert_ttnn_dtype(
+                        "out_proj_bias": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.self_attn.out_proj.bias"], ttnn.bfloat16
                         ),
                         # Second layer normalization weights
-                        "ln_2_weight": convert_ttnn_dtype(
+                        "ln_2_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.layer_norm2.weight"], ttnn.bfloat16
                         ),
-                        "ln_2_bias": convert_ttnn_dtype(
-                            state_dict[f"{resblock_prefix}.layer_norm2.bias"], ttnn.bfloat16
-                        ),
+                        "ln_2_bias": ttnn.typecast(state_dict[f"{resblock_prefix}.layer_norm2.bias"], ttnn.bfloat16),
                         # MLP weights (feed-forward network)
-                        "mlp_c_fc_weight": convert_ttnn_dtype(
+                        "mlp_c_fc_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.mlp.fc1.weight"], ttnn.bfloat16
                         ),
-                        "mlp_c_fc_bias": convert_ttnn_dtype(
-                            state_dict[f"{resblock_prefix}.mlp.fc1.bias"], ttnn.bfloat16
-                        ),
-                        "mlp_c_proj_weight": convert_ttnn_dtype(
+                        "mlp_c_fc_bias": ttnn.typecast(state_dict[f"{resblock_prefix}.mlp.fc1.bias"], ttnn.bfloat16),
+                        "mlp_c_proj_weight": ttnn.typecast(
                             state_dict[f"{resblock_prefix}.mlp.fc2.weight"], ttnn.bfloat16
                         ),
-                        "mlp_c_proj_bias": convert_ttnn_dtype(
-                            state_dict[f"{resblock_prefix}.mlp.fc2.bias"], ttnn.bfloat16
-                        ),
+                        "mlp_c_proj_bias": ttnn.typecast(state_dict[f"{resblock_prefix}.mlp.fc2.bias"], ttnn.bfloat16),
                     }
                 )
 
@@ -189,8 +181,8 @@ def main():
 
             def multi_head_attention(
                 hidden_states,
-                fused_qkv_weight,
-                fused_qkv_bias,
+                qkv_weights,
+                qkv_biases,
                 self_output_weight,
                 self_output_bias,
                 attention_mask=None,
@@ -198,57 +190,70 @@ def main():
             ):
                 seq_length, batch_size, hidden_size = hidden_states.shape
 
-                self._embed_dim = hidden_size
-                self._head_dim = hidden_size // self.heads
-                self._scale = self._head_dim**-0.5
-                self._attention_dropout = 0.0  # Unused
+                embed_dim = hidden_size
+                head_dim = hidden_size // self.heads
+                # Scale factor for attention scores: 1/sqrt(head_dim) for numerical stability
+                scale = head_dim**-0.5
 
+                # Configure compute kernel for high-precision attention computation
                 compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi4,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=True,
-                    packer_l1_acc=True,
+                    math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity mode for accurate computation
+                    math_approx_mode=False,  # Disable approximations for exact results
+                    fp32_dest_acc_en=True,  # Enable FP32 accumulation in destination register for better precision
+                    packer_l1_acc=True,  # Enable L1 accumulation in packer for improved accuracy
                 )
 
                 # Note: KV-caching not implemented (not needed for single forward pass)
-                (q_weights, k_weights, v_weights) = fused_qkv_weight
-                (q_bias, k_bias, v_bias) = fused_qkv_bias
+                (q_weights, k_weights, v_weights) = qkv_weights
+                (q_bias, k_bias, v_bias) = qkv_biases
 
-                # Compute Q, K, V projections
+                # Compute Q, K, V projections from input hidden states
+                # Each projection: [seq_length, batch_size, hidden_size] -> [seq_length, batch_size, hidden_size]
                 q = ttnn.linear(hidden_states, q_weights, bias=q_bias, transpose_b=True)
                 k = ttnn.linear(hidden_states, k_weights, bias=k_bias, transpose_b=True)
                 v = ttnn.linear(hidden_states, v_weights, bias=v_bias, transpose_b=True)
 
-                # Reshape to [batch_size, seq_length, num_heads, head_dim]
-                q = ttnn.reshape(q, (seq_length, batch_size * self.heads, self._head_dim))
-                k = ttnn.reshape(k, (seq_length, batch_size * self.heads, self._head_dim))
-                v = ttnn.reshape(v, (seq_length, batch_size * self.heads, self._head_dim))
+                # Reshape for multi-head attention: split hidden_size into (num_heads * head_dim)
+                # [seq_length, batch_size, hidden_size] -> [seq_length, batch_size * num_heads, head_dim]
+                q = ttnn.reshape(q, (seq_length, batch_size * self.heads, head_dim))
+                k = ttnn.reshape(k, (seq_length, batch_size * self.heads, head_dim))
+                v = ttnn.reshape(v, (seq_length, batch_size * self.heads, head_dim))
 
-                # Transpose to [batch_size, num_heads, seq_length, head_dim] for attention computation
+                # Transpose to bring batch*heads dimension first for parallel attention computation
+                # [seq_length, batch_size * num_heads, head_dim] -> [batch_size * num_heads, seq_length, head_dim]
                 q = ttnn.transpose(q, 0, 1)
                 k = ttnn.transpose(k, 0, 1)
                 v = ttnn.transpose(v, 0, 1)
 
-                # Compute attention scores with proper scaling
+                # Compute attention scores: Q @ K^T
+                # [batch*heads, seq_len, head_dim] @ [batch*heads, head_dim, seq_len] -> [batch*heads, seq_len, seq_len]
                 scores = ttnn.matmul(q, ttnn.transpose(k, -2, -1))
-                scores = scores * self._scale
+                # Scale scores by 1/sqrt(head_dim) to prevent softmax saturation
+                scores = scores * scale
 
-                # Apply attention mask if provided (matching PyTorch MHA behavior)
+                # Apply attention mask if provided (for causal attention in text encoder)
                 if attention_mask is not None:
-                    # Convert attention mask to the right shape and add to scores
-                    # PyTorch MHA expects mask to be broadcastable to [batch_size, num_heads, seq_len, seq_len]
+                    # Add mask to scores (mask contains -inf for positions that should be ignored)
+                    # Mask is broadcastable to [batch_size * num_heads, seq_len, seq_len]
                     scores = scores + attention_mask
 
+                # Apply softmax to get attention weights
+                # numeric_stable=True uses the numerically stable softmax: softmax(x) = softmax(x - max(x))
+                # This prevents overflow when computing exp(x) for large values
                 attn_weights = ttnn.softmax(
                     scores, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
                 )
 
-                # Apply attention weights to values
+                # Apply attention weights to values: weighted sum of values
+                # [batch*heads, seq_len, seq_len] @ [batch*heads, seq_len, head_dim] -> [batch*heads, seq_len, head_dim]
                 attn_output = ttnn.matmul(attn_weights, v)
 
-                # Reshape to [batch_size, seq_length, embed_dim]
+                # Transpose back to sequence-first format
+                # [batch*heads, seq_len, head_dim] -> [seq_len, batch*heads, head_dim]
                 attn_output = ttnn.transpose(attn_output, 0, 1)
-                attn_output = ttnn.reshape(attn_output, (seq_length, batch_size, self._embed_dim))
+                # Merge heads back into hidden dimension
+                # [seq_len, batch*heads, head_dim] -> [seq_len, batch_size, hidden_size]
+                attn_output = ttnn.reshape(attn_output, (seq_length, batch_size, embed_dim))
 
                 # Apply output projection
                 dense_out = ttnn.linear(
@@ -270,8 +275,8 @@ def main():
                 # This must be equal to nn.MultiheadAttention(d_model, n_head)(x, x, x, need_weights=False, attn_mask=self.attn_mask)
                 x_attn = multi_head_attention(
                     x,
-                    fused_qkv_weight=(layer["q_proj_weight"], layer["k_proj_weight"], layer["v_proj_weight"]),
-                    fused_qkv_bias=(layer["q_proj_bias"], layer["k_proj_bias"], layer["v_proj_bias"]),
+                    qkv_weights=(layer["q_proj_weight"], layer["k_proj_weight"], layer["v_proj_weight"]),
+                    qkv_biases=(layer["q_proj_bias"], layer["k_proj_bias"], layer["v_proj_bias"]),
                     self_output_weight=layer["out_proj_weight"],
                     self_output_bias=layer["out_proj_bias"],
                     attention_mask=self.attention_mask,
@@ -296,7 +301,6 @@ def main():
 
     class VisionTransformer:
         def __init__(self, state_dict):
-            torch.manual_seed(0)
             self.output_dim = 0
 
             conv2_state_dict_name = "vision_model.embeddings.patch_embedding.weight"
@@ -304,30 +308,19 @@ def main():
             self.patch_size = state_dict[conv2_state_dict_name].shape[-1]
             self.vision_heads = self.vision_width // 64
 
-            self.class_embedding = convert_ttnn_dtype(
+            self.class_embedding = ttnn.typecast(
                 state_dict["vision_model.embeddings.class_embedding"], dtype=ttnn.bfloat16
             )
-            self.positional_embedding = convert_ttnn_dtype(
+            self.positional_embedding = ttnn.typecast(
                 state_dict["vision_model.embeddings.position_embedding.weight"], dtype=ttnn.bfloat16
             )
 
-            self.proj = convert_ttnn_dtype(state_dict["visual_projection.weight"], dtype=ttnn.bfloat16)
+            self.proj = ttnn.typecast(state_dict["visual_projection.weight"], dtype=ttnn.bfloat16)
 
-            # Weights for convolution layer
-            # For sharding; use all cores; strategy = block sharding
-            core_grid = ttnn.CoreGrid(x=8, y=8)
-            # Error: Physical shard shape (8216, 4) must be tile {32, 32} sized
-            # memory_config = ttnn.create_sharded_memory_config(conv1_weights_shape, core_grid, ttnn.ShardStrategy.HEIGHT)
-            memory_config = ttnn.DRAM_MEMORY_CONFIG
-            self.conv1_weights = ttnn.to_layout(
-                state_dict[conv2_state_dict_name],
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=memory_config,
-                dtype=ttnn.bfloat16,
-            )
-            self.conv1_weights = convert_ttnn_dtype(self.conv1_weights, dtype=ttnn.bfloat16)
-
-            assert self.conv1_weights.dtype == ttnn.bfloat16
+            # self.conv1_weights = ttnn.typecast(s, dtype=ttnn.bfloat16)
+            self.conv1_weights = ttnn.from_device(state_dict[conv2_state_dict_name])
+            self.conv1_weights = ttnn.to_dtype(self.conv1_weights, dtype=ttnn.bfloat16)
+            self.conv1_weights = ttnn.to_layout(self.conv1_weights, layout=ttnn.ROW_MAJOR_LAYOUT)
 
             # Layer normalization applied before transformer layers
             self.ln_pre_weights = state_dict["vision_model.pre_layrnorm.weight"]
@@ -344,93 +337,136 @@ def main():
         def forward(self, x):
             (batch_size, in_channels, height, width) = x.shape
 
-            # Note: ttnn.conv2d uses 'Array of Struct' shape for input tensor:
-            # (N, H, W, C_in)
-            # whereas torch.nn.Conv2d uses 'Struct of Array' shape for input tensor:
-            # (N, C_in, H, W)
+            # === Important: TT-NN conv2d differs from PyTorch in tensor layout ===
             #
-            # # Moreover, ttnn.conv2d produces a flattened output tensor:
-            # (N, C_in, H, W) -> (1, 1, N * H * W, C_out)
-            # whereas torch.nn.Conv2d produces a 4D tensor:
-            # (N, C_out, H_out, W_out)
+            # PyTorch Conv2d expects: (N, C_in, H, W) - channels-first "Struct of Arrays"
+            # TT-NN conv2d expects:   (N, H, W, C_in) - channels-last "Array of Structs"
+            #
+            # PyTorch Conv2d output:  (N, C_out, H_out, W_out) - 4D tensor
+            # TT-NN conv2d output:    (1, 1, N*H_out*W_out, C_out) - flattened 4D tensor
+            #
+            # This is why we need to permute and reshape before and after convolution.
 
-            # Also:
-            # ttnn.conv2d only take a tuple for kernel_size and stride
+            # Step 1: Rearrange from channels-first to channels-last layout
+            # [N, C_in, H, W] -> [N, H, W, C_in]
+            x = ttnn.permute(x, [0, 2, 3, 1])
 
-            # Change tensor layout to (N, H, W, C_in)
-            x = ttnn.permute(x, [0, 2, 3, 1])  # (N, C_in, H, W) -> (N, H, W, C_in)
-
-            # Note: ttnn.conv2d requires row-major layout for weight tensor
+            # Step 2: Convert to row-major layout (required by ttnn.conv2d)
+            # TT-NN convolution kernels are optimized for row-major data access
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+            # Output channels for patch embedding (standard ViT uses 768)
             out_channels = 768
 
-            x = ttnn.conv2d(
-                input_tensor=x,
+            self.conv1_weights = ttnn.prepare_conv_weights(
                 weight_tensor=self.conv1_weights,
+                input_memory_config=x.memory_config(),
+                input_layout=x.layout,
+                weights_format="OIHW",
                 in_channels=in_channels,
                 out_channels=out_channels,
                 batch_size=batch_size,
                 input_height=height,
                 input_width=width,
-                kernel_size=(self.patch_size, self.patch_size),
-                stride=(self.patch_size, self.patch_size),
-                padding=(0, 0),
-                dilation=(1, 1),
-                groups=0,  # No grouped convolution (standard convolution)
+                kernel_size=[self.patch_size, self.patch_size],
+                stride=[self.patch_size, self.patch_size],
+                padding=[0, 0],
+                dilation=[1, 1],
+                has_bias=False,
+                groups=1,
                 device=get_device(),
-                return_weights_and_bias=False,
-                return_output_dim=False,
+                input_dtype=x.dtype,
             )
 
-            # Check Convolution result
+            # Step 3: Apply patch embedding convolution
+            # This converts the 2D image into a sequence of patch embeddings
+            # For patch_size=32 and image 224x224: creates (224/32)^2 = 49 patches
+            x = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=self.conv1_weights,
+                in_channels=in_channels,  # Input channels (3 for RGB)
+                out_channels=out_channels,  # Embedding dimension (768)
+                batch_size=batch_size,
+                input_height=height,
+                input_width=width,
+                kernel_size=(self.patch_size, self.patch_size),  # Patch size (e.g., 32x32)
+                stride=(self.patch_size, self.patch_size),  # Non-overlapping patches: stride = kernel_size
+                padding=(0, 0),  # No padding needed
+                dilation=(1, 1),  # Standard convolution (no dilation)
+                groups=0,  # Standard convolution (not grouped/depthwise)
+                device=get_device(),
+                return_weights_and_bias=False,  # We already have weights, don't return them
+                return_output_dim=False,  # We know the output dimensions
+            )
+
+            # Step 4: Reshape convolution output from flattened to sequence format
+            # Convert to tile layout for subsequent operations (TT-NN's optimized 2D tiled format)
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+            # Unflatten: [1, 1, N*H_out*W_out, C_out] -> [N, num_patches, embed_dim]
+            # where num_patches = H_out * W_out = (224/32)^2 = 49
             x = ttnn.reshape(x, (x.shape[0], x.shape[1] * x.shape[2], x.shape[3]))
 
-            class_embedding = convert_ttnn_dtype(self.class_embedding, x.dtype, (x.shape[0], 1, x.shape[-1]))
+            # Step 5: Prepare the [CLS] token (class embedding)
+            # ViT prepends a learnable class token to the sequence of patch embeddings
+            # Reshape class token: [embed_dim] -> [batch_size, 1, embed_dim]
+            class_embedding = ttnn.reshape(self.class_embedding, (x.shape[0], 1, x.shape[-1]))
 
-            # Create zero tensor to ensure proper broadcasting and memory layout
-            # This helps align the class embedding tensor with the expected shape and memory configuration
+            # Create a zero tensor with matching shape to ensure proper memory layout
+            # This workaround ensures the class embedding tensor has compatible memory configuration
+            # for subsequent operations (concatenation requires matching memory layouts)
             zero_tensor = ttnn.zeros(
                 shape=(x.shape[0], 1, x.shape[-1]), dtype=x.dtype, device=device, layout=ttnn.TILE_LAYOUT
             )
 
+            # Align class embedding to proper shape and layout
             class_embedding = ttnn.reshape(class_embedding, zero_tensor.shape)
-            class_embedding = (
-                class_embedding + zero_tensor
-            )  # Addition with zero preserves values but ensures proper layout
+            # Adding zero preserves values while ensuring proper memory layout
+            class_embedding = class_embedding + zero_tensor
 
-            # Move tensor to DRAM memory for concatenation operation
-            # Future optimization: Use L1 sharded memory for better performance
+            # Step 6: Prepare tensors for concatenation
+            # Move to DRAM memory (larger but slower than L1) for concatenation operation
+            # Note: Concatenation currently requires DRAM memory; future optimizations may use L1 sharded memory
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+            # Ensure class_embedding has matching memory configuration
             class_embedding = ttnn.reshape(
                 class_embedding, (class_embedding.shape[0], class_embedding.shape[1], class_embedding.shape[2])
             )
             class_embedding = ttnn.to_memory_config(class_embedding, memory_config=x.memory_config())
 
-            # Concatenate class embedding with patch embeddings
-            # Note: Future optimization could avoid host transfers for better performance
-            x = ttnn.concat([class_embedding, x], dim=1, memory_config=None)  # shape = [*, grid ** 2 + 1, width]
+            # Step 7: Prepend class token to patch sequence
+            # [batch, 1, embed] + [batch, num_patches, embed] -> [batch, num_patches+1, embed]
+            # This creates: [[CLS], patch_1, patch_2, ..., patch_49]
+            x = ttnn.concat([class_embedding, x], dim=1, memory_config=None)
 
-            positional_embedding = convert_ttnn_dtype(self.positional_embedding, x.dtype, (1, x.shape[1], x.shape[2]))
+            # Step 8: Add positional embeddings
+            # Positional embeddings encode the position of each token in the sequence
+            # [1, num_patches+1, embed] -> broadcast and add to [batch, num_patches+1, embed]
+            positional_embedding = ttnn.reshape(self.positional_embedding, (1, x.shape[1], x.shape[2]))
             x = x + positional_embedding
 
-            # LayerNorm
+            # Step 9: Pre-transformer layer normalization
             x = ttnn.layer_norm(x, weight=self.ln_pre_weights, bias=self.ln_pre_bias)
 
-            # Permute
-            x = ttnn.permute(x, (1, 0, 2))  # NLD -> LND
+            # Step 10: Permute to sequence-first format for transformer
+            # [batch, seq_len, embed] -> [seq_len, batch, embed]
+            # Transformers typically process in sequence-first format
+            x = ttnn.permute(x, (1, 0, 2))
 
-            # Transformer
+            # Step 11: Pass through transformer encoder layers
             x = self.transformer.forward(x)
 
-            # Permute
-            x = ttnn.permute(x, (1, 0, 2))  # LND -> NLD
+            # Step 12: Permute back to batch-first format
+            # [seq_len, batch, embed] -> [batch, seq_len, embed]
+            x = ttnn.permute(x, (1, 0, 2))
 
-            # LayerNorm
+            # Step 13: Extract [CLS] token and apply post-layer normalization
+            # In ViT, the [CLS] token (first token) is used for classification
+            # x[:, 0, :] extracts the [CLS] token: [batch, seq_len, embed] -> [batch, embed]
             x = ttnn.layer_norm(x[:, 0, :], weight=self.ln_post_weights, bias=self.ln_post_bias)
 
+            # Step 14: Project to final embedding space (optional projection layer)
+            # Maps from hidden dimension to the shared vision-language embedding space
             if self.proj is not None:
                 x = ttnn.matmul(x, self.proj, transpose_b=True)
 
@@ -463,8 +499,18 @@ def main():
             )
 
         def build_attention_mask(self):
-            # lazily create causal attention mask, with full attention between the vision tokens
-            # pytorch uses additive attention mask; fill with -inf
+            """
+            Build causal attention mask for text transformer.
+
+            Causal masking ensures each token can only attend to itself and previous tokens,
+            preventing the model from "cheating" by looking at future tokens. This is essential
+            for autoregressive language modeling.
+
+            Returns:
+                Upper triangular mask [context_length, context_length] with -inf above diagonal
+            """
+            # Create a square mask filled with -inf (tokens cannot attend to masked positions)
+            # Shape: [context_length, context_length]
             mask = ttnn.full(
                 shape=[self.context_length, self.context_length],
                 fill_value=float("-inf"),
@@ -472,6 +518,8 @@ def main():
                 device=get_device(),
                 layout=ttnn.TILE_LAYOUT,
             )
+            # Keep only upper triangle (excluding diagonal): prevents attending to future tokens
+            # diagonal=1 means the diagonal itself is not masked (tokens can attend to themselves)
             mask = ttnn.triu(mask, diagonal=1)
             return mask
 
@@ -479,54 +527,89 @@ def main():
             return self.visual.forward(image)
 
         def encode_text(self, tokens):
+            """
+            Encode text tokens into feature embeddings.
+
+            Args:
+                tokens: Tokenized text input [batch_size, context_length]
+
+            Returns:
+                Text embeddings in shared vision-language space [batch_size, embed_dim]
+            """
+            # Convert token IDs to uint32 for embedding lookup
             tokens = convert_ttnn_dtype(tokens, dtype=ttnn.uint32)
 
+            # Token embedding: [batch, seq_len] -> [batch, seq_len, embed_dim]
             x = ttnn.embedding(tokens, weight=self.token_embedding, dtype=ttnn.bfloat16)
 
-            # Add positional embedding
+            # Add learned positional embeddings
+            # Positional embeddings help the model understand token order
             x = x + self.positional_embedding
 
-            # Permute
-            x = ttnn.permute(x, (1, 0, 2))  # NLD -> LND
+            # Permute to sequence-first format for transformer
+            # [batch, seq_len, embed] -> [seq_len, batch, embed]
+            x = ttnn.permute(x, (1, 0, 2))
 
-            # Call Text Transformer
+            # Pass through text transformer with causal masking
+            # Causal masking prevents tokens from attending to future tokens
             x = self.transformer.forward(x)
 
-            # Permute back
-            x = ttnn.permute(x, (1, 0, 2))  # LND -> NLD
+            # Permute back to batch-first format
+            # [seq_len, batch, embed] -> [batch, seq_len, embed]
+            x = ttnn.permute(x, (1, 0, 2))
 
-            # LayerNorm
+            # Final layer normalization
             x = ttnn.layer_norm(x, weight=self.ln_final_weights, bias=self.ln_final_bias)
 
-            # Extract features at the end-of-sequence token position and apply text projection
-            # Currently falling back to PyTorch for argmax operation
+            # Extract text features from the end-of-text (EOT) token position
+            # In CLIP, the EOT token aggregates information from the entire sequence
+            # Note: Using PyTorch for argmax since TT-NN doesn't support advanced indexing yet
             torch_tokens = ttnn.to_torch(tokens)
             torch_x = ttnn.to_torch(x)
+            # Find EOT token position (highest token ID) and extract features at that position
+            eot_indices = torch_tokens.argmax(dim=-1)  # [batch_size]
+            torch_selected_features = torch_x[torch.arange(torch_x.shape[0]), eot_indices]  # [batch_size, embed_dim]
 
-            torch_selected_features = torch_x[torch.arange(torch_x.shape[0]), torch_tokens.argmax(dim=-1)]
-
-            # Put tensor back on device for text projection
+            # Move back to TT device and apply text projection
+            # Projects from transformer hidden size to shared embedding space
             x = ttnn.from_torch(torch_selected_features, device=get_device(), layout=ttnn.TILE_LAYOUT)
             x = ttnn.matmul(x, self.text_projection, transpose_b=True)
 
             return x
 
         def forward(self, image, tokens):
-            text_features = self.encode_text(tokens)
-            image_features = self.encode_image(image)
+            """
+            Compute similarity scores between images and text descriptions.
 
-            # Normalize features
+            Args:
+                image: Preprocessed image tensor [batch_size, channels, height, width]
+                tokens: Tokenized text tensor [batch_size, context_length]
+
+            Returns:
+                logits_per_image: Image-to-text similarity scores [batch_size_image, batch_size_text]
+                logits_per_text: Text-to-image similarity scores [batch_size_text, batch_size_image]
+            """
+            # Encode both modalities into the shared embedding space
+            text_features = self.encode_text(tokens)  # [batch_text, embed_dim]
+            image_features = self.encode_image(image)  # [batch_image, embed_dim]
+
+            # Normalize features to unit vectors for cosine similarity
+            # L2 norm: ||x||_2 = sqrt(sum(x_i^2))
             norm_image_features = ttnn.operations.moreh.norm(image_features, p=2.0, dim=1, keepdim=True)
             norm_text_features = ttnn.operations.moreh.norm(text_features, p=2.0, dim=1, keepdim=True)
 
+            # Normalize: x / ||x|| -> unit vector
             image_features = ttnn.divide(image_features, norm_image_features)
             text_features = ttnn.divide(text_features, norm_text_features)
 
-            # Cosine similarity as logits
+            # Compute cosine similarity scaled by learned temperature parameter
+            # logit_scale is learned during training to control the sharpness of the distribution
             logit_scale = math.exp(self.logit_scale)
 
-            # Compute `logit_scale * image_features @ text_features.t()`
+            # Compute similarity matrix: scaled dot product of normalized features
+            # Result: [batch_image, embed] @ [embed, batch_text] = [batch_image, batch_text]
             logits_per_image = ttnn.matmul(logit_scale * image_features, text_features, transpose_b=True)
+            # Transpose for text-to-image direction
             logits_per_text = ttnn.transpose(logits_per_image, 0, 1)
 
             return logits_per_image, logits_per_text
@@ -573,11 +656,8 @@ def main():
         # Initialize TT-NN device for hardware acceleration
         open_ttnn()
 
-        # Set up logging for debugging (optional)
-        logging_file = open("logging.csv", "w")
-
         # Load pre-trained CLIP model and convert weights to TT-NN format
-        print("Loading pre-trained CLIP model...")
+        logger.info("Loading pre-trained CLIP model...")
         model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         state_dict = convert_model_to_ttnn(model.state_dict())
 
@@ -585,45 +665,56 @@ def main():
         clip = CLIP(state_dict)
 
         # Download and preprocess test image
-        print("Downloading and preprocessing image...")
+        logger.info("Downloading and preprocessing image...")
         image_url = "https://media.githubusercontent.com/media/tenstorrent/tutorial-assets/nmaurice/clip-tutorial/media/clip_tutorial/CLIP.png"
         image = download_image(image_url)
 
-        # Preprocess image to model requirements (224x224, normalized)
+        # Preprocess image to model requirements (224x224, normalized with ImageNet statistics)
+        # unsqueeze(0) adds batch dimension: [C, H, W] -> [1, C, H, W]
         image = preprocess_image(image, 224).unsqueeze(0).to("cpu")
 
-        # Convert image to TT-NN tensor with bfloat16 precision
+        # Convert PyTorch image tensor to TT-NN tensor with bfloat16 precision
+        # bfloat16 provides good balance between precision and memory/compute efficiency
         preferred_dtype = ttnn.bfloat16
         tt_image = to_ttnn(image, preferred_dtype)
 
         # Define text prompts for zero-shot classification
+        # The model will compute similarity between the image and each text description
         prompts = ["a diagram", "a dog", "a cat"]
 
         # Tokenize text prompts using CLIP's tokenizer
-        print("Tokenizing text prompts...")
+        logger.info("Tokenizing text prompts...")
         tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+        # padding="max_length" ensures all sequences are padded to context_length (77 tokens)
+        # return_tensors="pt" returns PyTorch tensors
         tokenized_inputs = tokenizer(prompts, padding="max_length", max_length=clip.context_length, return_tensors="pt")
-        tokens_pretrained_host = tokenized_inputs["input_ids"]
+        tokens_pretrained_host = tokenized_inputs["input_ids"]  # Shape: [num_prompts, context_length]
+        # Convert tokenized text to TT-NN tensors for device execution
         tokens_pretrained = ttnn.from_torch(tokens_pretrained_host, device=get_device(), layout=ttnn.TILE_LAYOUT)
 
         # Perform CLIP inference: compute similarity between image and text
-        print("Running CLIP inference...")
+        logger.info("Running CLIP inference...")
         time_start = time.time()
         logits_per_image, logits_per_text = clip.forward(tt_image, tokens_pretrained)
         time_end = time.time()
-        print(f"Time taken: {time_end - time_start} seconds")
+        logger.info(f"Time taken: {time_end - time_start:.3f} seconds")
 
-        # Convert logits to probabilities using softmax
+        # Convert logits (similarity scores) to probabilities using softmax
+        # Softmax normalizes scores so they sum to 1.0, representing a probability distribution
         probs = ttnn.softmax(logits_per_image, dim=-1)
-        print(f"==== Classification probabilities:")
+        logger.info(f"\n==== Zero-shot Classification Results ====")
+        logger.info(f"Image: {image_url.split('/')[-1]}")
+        logger.info(f"\nClassification probabilities:")
 
-        # Display results
+        # Display results sorted by probability (highest first)
         probs_torch = ttnn.to_torch(probs)
-        for i, prompt in enumerate(prompts):
-            print(f"'{prompt}': {probs_torch[0][i].item():.4f}")
+        results = [(prompt, probs_torch[0][i].item()) for i, prompt in enumerate(prompts)]
+        results.sort(key=lambda x: x[1], reverse=True)
+
+        for prompt, prob in results:
+            logger.info(f"  '{prompt}': {prob:.4f} ({prob*100:.2f}%)")
 
         # Clean up resources
-        logging_file.close()
         close_ttnn()
 
 
