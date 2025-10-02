@@ -58,6 +58,8 @@ jobs:
           TIMEOUT=300
 
           rm -rf "$TRAY_PODS_DIR"
+          rm -rf ./tt-metal/.ttnn_runtime_artifacts
+          
           mkdir -p "$TRAY_PODS_DIR"
 
           EPOCH_START=$(date +%s)
