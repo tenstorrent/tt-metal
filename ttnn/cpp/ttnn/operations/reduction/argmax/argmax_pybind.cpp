@@ -66,13 +66,14 @@ void bind_reduction_argmax_operation(py::module& module) {
                 - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
 
             Example:
-                input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+              .. code-block:: python
+                  input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-                # Last dim reduction yields shape of [1, 1, 32, 1]
-                output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
+                  # Last dim reduction yields shape of [1, 1, 32, 1]
+                  output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
 
-                # All dim reduction yields shape of []
-                output_alldim = ttnn.argmax(input_tensor)
+                  # All dim reduction yields shape of []
+                  output_alldim = ttnn.argmax(input_tensor)
 
         )doc";
 
