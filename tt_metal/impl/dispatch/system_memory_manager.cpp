@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,12 +7,14 @@
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <optional>
+#include <thread>
 #include <string>
 #include <tuple>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
@@ -24,7 +26,6 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
-#include <utils.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
@@ -36,6 +37,39 @@ bool wrap_ge(uint32_t a, uint32_t b) {
     // Works as long as a and b are 2^31 apart
     int32_t diff = a - b;
     return diff >= 0;
+}
+
+// Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
+// Please note that the FuncBody is going to loop until the FuncWait returns false.
+template <typename FuncBody, typename FuncWait, typename OnTimeout>
+void loop_and_wait_with_timeout(
+    const FuncBody& func_body,
+    const FuncWait& wait_condition,
+    const OnTimeout& on_timeout,
+    std::chrono::duration<float> timeout_duration) {
+    if (timeout_duration.count() > 0.0f) {
+        auto start_time = std::chrono::high_resolution_clock::now();
+
+        do {
+            func_body();
+            if (wait_condition()) {
+                // If somehow finished up the operation, we don't need to yield
+                std::this_thread::yield();
+            }
+
+            auto current_time = std::chrono::high_resolution_clock::now();
+            auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
+
+            if (elapsed >= timeout_duration.count()) {
+                on_timeout();
+                break;
+            }
+        } while (wait_condition());
+    } else {
+        do {
+            func_body();
+        } while (wait_condition());
+    }
 }
 }  // namespace
 
@@ -369,21 +403,36 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             return;
         }
         ZoneScopedN("wait_for_fetch_q_space");
-        // Loop until space frees up
-        while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
+
+        // Body of the operation
+        auto fetch_operation_body = [&]() {
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
-        }
+        };
+
+        // Condition to check if should continue waiting
+        auto fetch_wait_condition = [&]() -> bool {
+            return this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id];
+        };
+
+        // Handler for timeout
+        auto fetch_on_timeout = [&]() {
+            TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
+        };
+
+        auto timeout_duration =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+
+        loop_and_wait_with_timeout(fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration);
     };
 
     wait_for_fetch_q_space();
-
     // Wrap FetchQ if possible
     uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
         CommandQueueDeviceAddrType::UNRESERVED);
-    uint32_t prefetch_q_limit = prefetch_q_base + MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
-                                                      sizeof(DispatchSettings::prefetch_q_entry_type);
+    uint32_t prefetch_q_limit = prefetch_q_base + (MetalContext::instance().dispatch_mem_map().prefetch_q_entries() *
+                                                   sizeof(DispatchSettings::prefetch_q_entry_type));
     if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         wait_for_fetch_q_space();
@@ -423,7 +472,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
     };
 
-    tt::utils::loop_and_wait_with_timeout(
+    loop_and_wait_with_timeout(
         wait_operation_body,
         wait_condition,
         on_timeout,

@@ -8,7 +8,6 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/buffer_types.hpp"
@@ -146,8 +145,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 
-    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
     uint32_t num_cores_with_work_c = num_blocks_x;
     uint32_t num_cores_with_work_r = num_blocks_y;
     if (transpose_mcast) {
@@ -528,8 +527,12 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             mm_kernel_defines["PACK_RELU"] = "1";
         } else {
             using ttnn::operations::unary::utils::get_defines;
-            mm_kernel_defines.merge(
-                get_defines(fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+            mm_kernel_defines.merge(get_defines(
+                fused_activation.value().op_type,
+                fused_activation.value().params,
+                "ACTIVATION",
+                "i",
+                tt_metal::dataformat_to_datatype_converter(output_data_format)));
         }
     }
     if (packer_l1_acc_en) {
@@ -572,10 +575,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
-    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     tt::tt_metal::KernelHandle mm_kernel_in0_sender_id = 0;
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
@@ -876,10 +879,10 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
-    uint32_t last_out_num_blocks_h = (last_per_core_M - 1) / out_block_h + 1;
-    uint32_t last_out_num_blocks_w = (last_per_core_N - 1) / out_block_w + 1;
-    uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
+    uint32_t last_out_num_blocks_h = ((last_per_core_M - 1) / out_block_h) + 1;
+    uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
+    uint32_t last_block_num_nonzero_subblocks_h = ((last_out_block_h - 1) / out_subblock_h) + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
     uint32_t last_subblock_of_last_block_h =
         last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w =
@@ -1057,7 +1060,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                     // WRITER
                     // out tensor args
                     (std::uint32_t)out_buffer->address(),
-                    (std::uint32_t)in1_idx * per_core_N + in0_idx * per_core_M * N  // out_tensor_start_tile_id
+                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
                 if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
@@ -1185,8 +1188,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
                     // WRITER
                     // out tensor args
-                    (std::uint32_t)out_buffer->address(),                           // out_tensor_addr
-                    (std::uint32_t)in1_idx * per_core_N + in0_idx * per_core_M * N  // out_tensor_start_tile_id
+                    (std::uint32_t)out_buffer->address(),                               // out_tensor_addr
+                    ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)  // out_tensor_start_tile_id
                 };
 
                 if (in1_idx == in1_end_idx and in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
@@ -1486,8 +1489,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
-    uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
-    uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
+    uint32_t num_blocks_y = ((Mt - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
     if (transpose_mcast) {
         std::swap(num_blocks_x, num_blocks_y);
     }

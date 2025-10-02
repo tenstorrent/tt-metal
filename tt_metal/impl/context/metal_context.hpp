@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -91,6 +91,7 @@ public:
     tt_fabric::FabricConfig get_fabric_config() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
+    std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 
     // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);

@@ -10,7 +10,7 @@
 #include <unordered_map>
 #include <enchantum/enchantum.hpp>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"

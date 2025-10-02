@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -84,26 +84,6 @@ TEST_F(DropoutTest, TestProb) {
     EXPECT_NEAR(mean_ratio, 1.0F - prob, 0.05);
     EXPECT_NEAR(std_ratio, 0.05, 0.05);
 }
-
-namespace {
-xt::xarray<float> golden_dropout(
-    const xt::xarray<float>& input, float p = 0.5f, bool scale = true, uint64_t seed = 42ULL) {
-    // 1) Create a random engine seeded for reproducibility
-    std::mt19937_64 rng(seed);
-
-    auto rand_vals = xt::empty<float>(input.shape());
-    ttml::core::parallel_generate(
-        std::span{rand_vals.data(), rand_vals.size()},
-        []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
-        seed);
-    auto mask = xt::cast<float>(rand_vals >= p);
-
-    float scale_factor = (scale && (1.0f - p) > 1e-7f) ? (1.0f / (1.0f - p)) : 1.0f;
-    auto output = input * mask * scale_factor;
-
-    return output;
-}
-}  // namespace
 
 TEST_F(DropoutTest, TestKeepRatioApproximatelyNormal) {
     GTEST_SKIP() << "Currently random number generator using in the WH is not perfect. This Test show that "

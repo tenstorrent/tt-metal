@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -149,7 +149,6 @@ LlamaConfig read_config(const YAML::Node& config) {
             llama_config.original_context_length = rope_scaling["original_context_length"].as<uint32_t>();
         }
     }
-
     return llama_config;
 }
 

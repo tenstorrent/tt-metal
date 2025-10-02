@@ -9,7 +9,7 @@ import ttnn
 import pytest
 import math
 
-from models.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -710,3 +710,74 @@ def test_panoptic_maxpool_sliced(device, input_shape_nchw, kernel_size, padding,
     passed, pcc_score = assert_with_pcc(ttnn_output_torch_nchw, torch_output, pcc=0.999)
     logger.info(f"PCC Score: {pcc_score}")
     assert passed, f"PCC check failed. PCC: {pcc_score}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("padding", [(0, 0), [0, 0, 0, 0]])
+def test_golden_maxpool2d_with_vovnet_params(device, padding):
+    """
+    Test that golden_maxpool2d function correctly handles VoVNet parameters,
+    specifically the 4D padding format that caused issue #27576.
+
+    This test directly compares the golden function output with torch reference
+    to ensure the golden implementation is correct.
+    """
+    from ttnn.operations.pool import golden_maxpool2d
+
+    # VoVNet test parameters from the original issue
+    batch_size, in_h, in_w, in_c = 1, 56, 56, 256
+    kernel_size = (3, 3)
+    stride = (2, 2)
+    dilation = (1, 1)
+    ceil_mode = True
+
+    # Create input tensor
+    torch.manual_seed(0)
+    torch_input = torch.randn(batch_size, in_c, in_h, in_w, dtype=torch.bfloat16)
+
+    # Convert to ttnn format for golden function (1, 1, NHW, C)
+    ttnn_format_input = torch_input.permute(0, 2, 3, 1).reshape(1, 1, batch_size * in_h * in_w, in_c)
+    ttnn_input = ttnn.from_torch(ttnn_format_input, device=device)
+
+    # Golden function expects a torch tensor that will be converted internally
+    torch_input_for_golden = ttnn.to_torch(ttnn_input)
+
+    # Test golden function with the given padding format
+    golden_output = golden_maxpool2d(
+        input_tensor=torch_input_for_golden,
+        batch_size=batch_size,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        ceil_mode=ceil_mode,
+    )
+
+    # Run torch reference
+    torch_output = torch.nn.functional.max_pool2d(
+        torch_input,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=(0, 0),  # torch expects 2D
+        dilation=dilation,
+        ceil_mode=ceil_mode,
+    )
+
+    # Convert golden output back to NCHW for comparison
+    # First get the expected output shape
+    expected_out_h = torch_output.shape[2]
+    expected_out_w = torch_output.shape[3]
+
+    # Reshape golden output from (1, 1, N*H*W, C) to (N, C, H, W)
+    # Golden function returns a torch tensor already
+    golden_torch = golden_output.reshape(batch_size, expected_out_h, expected_out_w, in_c)
+    golden_torch = golden_torch.permute(0, 3, 1, 2)  # NHWC to NCHW
+
+    # Verify golden function produces correct results
+    # For bfloat16 maxpool tests we use torch.equal since we don't expect any loss
+    assert torch.equal(
+        golden_torch, torch_output
+    ), f"Golden function produces incorrect output. Expected shape: {torch_output.shape}, got: {golden_torch.shape}"

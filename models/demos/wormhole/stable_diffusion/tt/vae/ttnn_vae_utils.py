@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -96,6 +96,7 @@ def split_conv_and_run(
         "groups": 1,
         "device": device,
         "conv_config": conv_config,
+        "slice_config": ttnn.Conv2dL1FullSliceConfig,
     }
 
     outputs = []

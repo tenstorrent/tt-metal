@@ -8,7 +8,6 @@ import pytest
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_grayskull
 from models.experimental.swin_s.reference.swin_transformer import SwinTransformer
 from models.experimental.swin_s.tt.tt_swin_transformer import TtSwinTransformer
 from models.experimental.swin_s.tests.pcc.test_ttnn_swin_transformer_block import (
@@ -130,7 +129,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_S_L1_SMALL_SIZE}], indirect=True, ids=["0"])
 @pytest.mark.parametrize(
     "use_pretrained_weight",
