@@ -247,7 +247,7 @@ inline void fabric_send_chip_unicast_noc_unicast(
     const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
 
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         addrgen,
@@ -356,7 +356,7 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore(
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
 
     return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
@@ -394,7 +394,7 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
 
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         addrgen,
@@ -427,7 +427,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
-    fabric_set_unicast_route((LowLatencyMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
+    fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dest_chip_id, dest_mesh_id);
 
     // Send only the packet header (for semaphore increment)
     fabric_connections[route].wait_for_empty_write_slot();
