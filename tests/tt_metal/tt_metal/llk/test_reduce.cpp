@@ -606,7 +606,7 @@ TEST_F(DeviceFixture, TensixComputeReduceH) {
 }
 
 TEST_F(DeviceFixture, TensixComputeReduceW) {
-    std::vector<uint32_t> shape = {1, 1, 20 * TILE_HEIGHT, 10 * TILE_WIDTH};
+    std::vector<uint32_t> shape = {1, 1, 20 * TILE_HEIGHT, 16 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::HiFi4); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1

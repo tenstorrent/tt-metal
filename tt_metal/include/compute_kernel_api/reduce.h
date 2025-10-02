@@ -188,14 +188,11 @@ ALWI void reduce_tile_max_row_math(uint32_t idst) { MATH((llk_math_reduce_max_ro
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
  * | Template   | block_ct_dim              | The number of tiles in the width dimension to process as a block                        | uint32_t  | 1 to 2^32-1                                   | True     |
- * | Function   | icb                       | The identifier of the circular buffer (CB) containing operand A                         | uint32_t  | 0 to 31                                        | True     |
- * | Function   | icb_scaler                | CB holding scaling factors                                                              | uint32_t  | 0 to 31                                        | True     |
- * | Function   | ocb                       | The identifier of the output circular buffer (CB)                                       | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
 template <uint32_t block_ct_dim>
-ALWI void reduce_block_max_row_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim>(icb, icb_scaler)));
+ALWI void reduce_block_max_row_init() {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init<block_ct_dim>()));
     MATH((llk_math_reduce_block_max_row_init<block_ct_dim>()));
     PACK((llk_pack_reduce_max_row_mask_config()));
 }

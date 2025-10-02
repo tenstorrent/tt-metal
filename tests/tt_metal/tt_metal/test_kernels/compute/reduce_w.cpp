@@ -21,7 +21,6 @@ void MAIN {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
     // Use block-based reduce initialization
-    reduce_block_max_row_init<Wt>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     // Wait on scaler and all input tiles at once (like reduce_c pattern)
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
@@ -80,12 +79,12 @@ void MAIN {
     // Block-based reduce pattern: outer loop over channels and rows, block reduce over cols
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {
+            reduce_block_max_row_init<Wt>();
             acquire_dst();
             // Reduce across W dimension (cols) for this row using block-based reduce
             uint32_t row_start_index = nc * Ht * Wt + ht * Wt;  // Starting tile index for this row
             reduce_block_max_row<Wt>(tt::CBIndex::c_0, tt::CBIndex::c_2, row_start_index, reduce_dst_idx);
             // Pack result to output CB (implicit pack_tile behavior like reduce_c)
-            uint32_t output_idx = nc * Ht + ht;
             pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
             release_dst();
         }
