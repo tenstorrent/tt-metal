@@ -13,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "impl/allocator/bank_manager.hpp"
+#include "impl/allocator/allocator_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
@@ -257,6 +258,8 @@ uint32_t Allocator::get_alignment(BufferType buffer_type) const {
         }
     }
 }
+
+size_t Allocator::get_worker_l1_size() const { return config_->worker_l1_size; }
 
 DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const {
     switch (mem_type) {

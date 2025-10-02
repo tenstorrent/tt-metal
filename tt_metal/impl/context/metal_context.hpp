@@ -19,6 +19,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
+#include <impl/allocator/allocator_types.hpp>
 
 #include <array>
 #include <umd/device/types/cluster_descriptor_types.hpp>

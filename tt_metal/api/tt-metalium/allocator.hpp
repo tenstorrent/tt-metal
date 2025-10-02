@@ -25,13 +25,25 @@ namespace tt_metal {
 
 class BankManager;
 class Buffer;
-// Fwd declares
+// Fwd declares, these are supplied from impl
 enum class BufferType;
+struct AllocatorConfig;
 
 // THREAD SAFETY: Allocator is thread safe.
 class Allocator {
 public:
-    Allocator(const AllocatorConfig& alloc_config);
+    // AllocatorConfig is not in the API directory, thus Allocator currently cannot be constructed publicly,
+    // this is because we are in the middle of moving Allocator into implementaiton details.
+    // This iniative is established from our analysis that Allocator is only used to query memory profiles
+    // (e.g. how much memory is left in L1?)
+    // but not for allocator-specific operations (managing allocations).
+    //
+    // While in the middle of this refactory,
+    // runtime (river) splits moving AllocatorConfig out of pulic API,
+    // coming up with a memory profile access interface to replace current Allocator API into two (or more) PRs.
+    //
+    // See: #29569
+    explicit Allocator(const AllocatorConfig& alloc_config);
 
     ~Allocator();
 
@@ -61,6 +73,11 @@ public:
     // Alignment can be pulled out of the AllocatorConfig but this getter is a helper
     // so client code does not need to condition based on BufferType
     uint32_t get_alignment(BufferType buffer_type) const;
+
+    // This a proxy of get_config().worker_l1_size,
+    // this helper function is made for reports.cpp in TTNN and act as a tranistent member function
+    // before we figure out a good memory profile accessor.
+    size_t get_worker_l1_size() const;
 
     Statistics get_statistics(const BufferType& buffer_type) const;
     MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const;
@@ -103,9 +120,9 @@ private:
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids_;
     std::unordered_set<Buffer*> allocated_buffers_;
 
-    // config_ is stored in a unique_ptr because AllocatorConfig maybe an incomplete type
+    // config_ is stored in a unique_ptr because AllocatorConfig is current an incomplete type in API directory.
     //
-    // TODO(river): change revert this if we can sholve Allocator into impl.
+    // TODO(river): revert this to inplace storage if we can sholve Allocator into impl.
     std::unique_ptr<AllocatorConfig> config_;
 };
 

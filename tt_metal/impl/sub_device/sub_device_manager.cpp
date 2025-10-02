@@ -21,7 +21,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/allocator/allcator_types.hpp"
+#include "impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
