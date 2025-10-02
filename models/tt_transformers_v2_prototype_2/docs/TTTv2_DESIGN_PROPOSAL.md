@@ -799,6 +799,13 @@ Key Design Decisions:
 
 This approach could be combined with the metaclass approach to generate the source code for the class. Or we could make it simpler by specializing a compile_function for each specialized forward function. Such compile_function could generate the specialized forward function that contains concretized configurations based on the tensor shape and hardware configurations
 
+I have an idea: there is that env var that will skip execution of all kernels! So, we could have a compile time option to skip execution of all kernels even today!!!
+- `TT_METAL_NULL_KERNELS`
+- `TT_METAL_KERNELS_EARLY_RETURN`: https://github.com/tenstorrent/tt-metal/pull/19016
+> We'd like to be able to determine dispatch time if kernels aren't running. We have a TT_METAL_NULL_KERNELS flag, but it's targeted towards unit tests and optimizes out the kernel body.
+
+So, `TT_METAL_KERNELS_EARLY_RETURN` may be able to allow us to compile all the kernels without having to run them! I am asking John Bauman to see if this idea would work. The firmware team is working on proper compile support.
+
 ### 6. Migration
 
 We will not provide migration tools. We will migrate select models to TTTv2.
@@ -847,8 +854,7 @@ This design achieves the goal of supporting 100+ models by making TTTv2 a stable
   #### Composable Model performance from module performance data
   Based on unit tests of modules, we should be able to use module performance data to compose model performance expectations.
 
-  #### Compile Time vs Runtime
-  I have an idea: there is that env var that will skip execution of all kernels! So, we could have a compile time option to skip execution of all kernels even today!!! The firmware team is working on proper compile support.
+
 
   #### Community Governance - Clear process for accepting new patterns/modules
 
@@ -1005,6 +1011,10 @@ TTTv2 as a library provides the flexibility to choose different higher level mod
 After we get things working with the current design, we should spend some time to study and refactor the hardware configs of TTNN ops for each module. Maybe there is a smaller number of patterns for config than there are models! This could be a good thing to create an abstraction layer for hardware configs -- patching up the only leak in the abstract interface in this design.
 
 For exampl, instead of specifying config for a TTNN matmul op, we could say RingMatmulConfig, BcastMatMul, etc.
+
+#### ttt_ops as a sub-module level library
+
+These sub-modules could be as small as a single TTNN op (with nice wrappers exposing standard APIs like comparable torch ops).
 
 #### Code Coverage in Testing
 
