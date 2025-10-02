@@ -215,7 +215,7 @@ struct boot_results_t {
 #define MEM_SYSENG_ETH_LIVE_STATUS (MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status))
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "tt_metal/hw/inc/risc_common.h"
+#include "tt_metal/hw/inc/tt-1xx/risc_common.h"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "dev_msgs.h"
 
