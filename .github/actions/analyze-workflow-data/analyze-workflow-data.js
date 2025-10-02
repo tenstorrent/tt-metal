@@ -1341,8 +1341,8 @@ async function run() {
       }
       if (stayedFailingDetails.length > 0) { // check if there are any pipelines that stayed failing
         const lines = stayedFailingDetails.map(it => { // for each stayed-failing pipeline, build a markdown line
-          // Build the base line: workflow name with optional link
-          const base = it.workflow_url ? `- [${it.name}](${it.workflow_url})` : `- ${it.name}`;
+          // Build the workflow name with optional link for the summary
+          const workflowName = it.workflow_url ? `[${it.name}](${it.workflow_url})` : it.name;
 
           if (it.first_failed_run_url) { // if we found the first failing run in the window
             // Extract the short SHA for the first failing commit
@@ -1355,9 +1355,9 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            // Indent the table content to be inside the details block
-            const indentedTable = errorsHtml2.split('\n').map(line => line ? '  ' + line : '').join('\n');
-            errorsList = ['','  <details>','  <summary>Errors (click to expand)</summary>','', indentedTable, '  </details>',''].join('\n');
+            // Indent the table content to be inside the nested details block (4 spaces total)
+            const indentedTable = errorsHtml2.split('\n').map(line => line ? '    ' + line : '').join('\n');
+            errorsList = ['','    <details>','    <summary>Errors (click to expand)</summary>','', indentedTable, '    </details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build information about the latest failing run
@@ -1369,22 +1369,23 @@ async function run() {
               const latestLine = it.run_url
                 ? ` | Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}` // link to latest failing run with details
                 : '';
-              // Return a message showing oldest failure in window and latest failure
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList].filter(Boolean).join('\n');
+              // Return a collapsible workflow with details
+              const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
+              return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList,'</details>',''].join('\n');
             }
 
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
             const commitsMd2 = renderCommitsTable(it.commits_between || []);
-            // Indent the table content to be inside the details block
-            const indentedCommits = commitsMd2.split('\n').map(line => line ? '  ' + line : '').join('\n');
+            // Indent the table content to be inside the nested details block (4 spaces total)
+            const indentedCommits = commitsMd2.split('\n').map(line => line ? '    ' + line : '').join('\n');
             commitsList = [
               '',
-              '  <details>',
-              '  <summary>Commits between last success and first failure (click to expand)</summary>',
+              '    <details>',
+              '    <summary>Commits between last success and first failure (click to expand)</summary>',
               '',
               indentedCommits,
-              '  </details>',
+              '    </details>',
               ''
             ].join('\n');
 
@@ -1397,11 +1398,12 @@ async function run() {
             const latestLine = it.run_url
               ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}` // link to latest failing run with details
               : '';
-            // Return the full details: first failure info, latest failure info, errors, and commits
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
+            // Return the full collapsible workflow with all details
+            const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
+            return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
           }
-          // If no first_failed_run_url, just return the workflow name
-          return base;
+          // If no first_failed_run_url, just return a collapsed workflow name
+          return ['<details>',`<summary>${workflowName}</summary>`,'','  - No failure details available','</details>',''].join('\n');
         });
         // Build the stayed-failing section with header and all lines
         stayedFailingSection = ['', '## Still Failing (No Recovery)', ...lines, ''].join('\n');
