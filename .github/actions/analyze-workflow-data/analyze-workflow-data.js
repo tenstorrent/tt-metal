@@ -267,6 +267,32 @@ function renderErrorsTable(errorSnippets) {
     // HTML escape the content
     const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     const jobEsc = escapeHtml(jobDisplay).replace(/\r?\n/g, ' ⇥ ');
+    // Build a forced two-line HTML for the job label by inserting a <br/> near the midpoint.
+    // Preference: split at '/' boundary; fallback to nearest space; otherwise hard split at midpoint.
+    let jobHtml = jobEsc;
+    try {
+      const plain = String(jobDisplay).replace(/\r?\n/g, ' ').trim();
+      const mid = Math.floor(plain.length / 2);
+      let breakIdx = -1;
+      // Prefer splitting at slash
+      const slashIdx = plain.indexOf('/');
+      if (slashIdx !== -1) {
+        breakIdx = slashIdx + 1; // keep slash at end of first line
+      } else {
+        // Look for a breakable space near the midpoint (normal or NBSP)
+        const window = 25;
+        const right = plain.slice(mid, Math.min(plain.length, mid + window)).search(/[\u00A0\s]/);
+        const left = plain.slice(Math.max(0, mid - window), mid).lastIndexOf(' ');
+        const leftNbsp = plain.slice(Math.max(0, mid - window), mid).lastIndexOf('\u00A0');
+        const leftBest = Math.max(left, leftNbsp);
+        if (right !== -1) breakIdx = mid + right + 1;
+        else if (leftBest !== -1) breakIdx = Math.max(1, Math.max(0, mid - window) + leftBest + 1);
+      }
+      if (breakIdx <= 0 || breakIdx >= plain.length) breakIdx = Math.max(1, mid);
+      const part1 = plain.slice(0, breakIdx).trimEnd();
+      const part2 = plain.slice(breakIdx).trimStart();
+      jobHtml = `${escapeHtml(part1).replace(/\s/g, '\u00A0')}<br/>${escapeHtml(part2).replace(/\s/g, '\u00A0')}`;
+    } catch (_) { /* keep fallback jobEsc */ }
     // Track longest job (by characters shown) to size the column later (2-line target ≈ len/2ch)
     try { __maxJobLen = Math.max(__maxJobLen, jobDisplay.length); } catch (_) { /* ignore */ }
     const testEsc = escapeHtml(testName).replace(/\r?\n/g, ' ⇥ ');
@@ -277,7 +303,7 @@ function renderErrorsTable(errorSnippets) {
       if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
-    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto;">${jobEsc}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow-wrap: normal; hyphens: none;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
+    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;">${jobHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow-wrap: normal; hyphens: none;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
   }).join('\n');
   // Compute dynamic width for Job column based on longest job label; cap to reasonable bounds
   const jobWidthCh = (() => {
