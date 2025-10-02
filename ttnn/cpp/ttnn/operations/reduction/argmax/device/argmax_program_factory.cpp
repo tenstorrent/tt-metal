@@ -186,6 +186,159 @@ operation::ProgramWithCallbacks argmax_single_core(
     return {std::move(program), override_runtime_args_callback};
 }
 
+// Can we merge tile_layout version with the one above?
+operation::ProgramWithCallbacks argmax_single_core_tile_layout(
+    const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim) {
+    tt::tt_metal::Program program{};
+
+    // TODO: what happens when padded_shape() != logical_shape()
+    // where do we check that output shape is compatible with input shape?
+    const auto& input_shape = input.padded_shape();
+    const uint32_t rank = input_shape.size();
+
+    // TODO: make sure reduce_all works
+    const bool reduce_all = not dim.has_value();
+    // Number of input data elements being reduced -
+    // size of the reduction dimension.
+    //
+    // TODO: meaning of reduce_units when reduce_all is true
+    // TODO: instead of rank - 1, can we have 'dim'?
+    //       and assert that dim == rank - 1
+    const uint32_t reduce_units = input_shape[rank - 1];
+
+    // TODO: what is the meaning of this?
+    //       do we have tests with rank < 2 ?
+    //       Can we simply take this from output_shape?
+    const auto output_last_dim = reduce_all or keepdim or (rank < 2) ? 1 : input_shape[rank - 2];
+
+    // Tile dimensions
+    // TODO: think about how the data should be processed: input/output tile sizes
+    constexpr uint32_t tile_height = TILE_HEIGHT;
+    constexpr uint32_t tile_width = TILE_WIDTH;
+
+    const tt::tt_metal::IDevice* device = output.device();
+    // TODO: what is this object?
+    const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+
+    // TODO: how split_work_to_cores work?
+    // is there specialized version for the single core case?
+    // we only need num_cores and all_cores
+    const uint32_t num_units = 1;  // single-core
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_units);
+
+    const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+
+    // TODO: revisit the tile sizes - maybe this should be called page_size.
+    constexpr uint32_t src_tile_size = tile_height * tile_width;
+    constexpr uint32_t dst_tile_size = tile_height * tile_width;
+
+    // CB for input data
+    // TODO: can we use the utility from cb_utils.hpp?
+    const uint32_t src_cb_idx = tt::CBIndex::c_0;
+    tt::tt_metal::CircularBufferConfig src_cb_config =
+        tt::tt_metal::CircularBufferConfig(src_tile_size, {{src_cb_idx, input_cb_data_format}})
+            .set_page_size(src_cb_idx, src_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, src_cb_config);
+
+    // CB for output data
+    const uint32_t dst_cb_idx = tt::CBIndex::c_1;
+    const tt::tt_metal::CircularBufferConfig dst_cb_config =
+        tt::tt_metal::CircularBufferConfig(dst_tile_size, {{dst_cb_idx, output_cb_data_format}})
+            .set_page_size(dst_cb_idx, dst_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, dst_cb_config);
+
+    // TODO: input and output buffers should be tiled
+    //       how to assert that both buffers are tiled?
+    const auto src_buffer = input.buffer();
+    const auto dst_buffer = output.buffer();
+
+    // TODO: what is the meaning of inner, outer units?
+    //       maybe we could have: inner_loop_size, outer_loop_size?
+    const auto inner_dim_units = output_last_dim;
+    const auto outer_dim_units = input.logical_volume() / inner_dim_units / reduce_units;
+
+    // There is only one kernel used in this op.
+    std::vector<uint32_t> compile_time_args = {
+        src_cb_idx,
+        dst_cb_idx,
+        src_tile_size,
+        dst_tile_size,
+        tile_height,
+        tile_width,
+        outer_dim_units,
+        inner_dim_units,
+        reduce_units,
+        (uint32_t)(reduce_all),
+    };
+
+    // TODO: how are accessors used, what is the API
+    //       Is there something like TensorIterator?
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(compile_time_args);
+
+    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    // TODO: what is the cores object?
+    const auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
+
+    const std::map<std::string, std::string> no_kernel_defines;
+
+    log_info(tt::LogMetal, "Using tile layout kernel");
+    const tt::tt_metal::KernelHandle kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_tile_layout.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, no_kernel_defines));
+
+    log_info(tt::LogMetal, "dst_buffer address: {}", dst_buffer->address());
+    log_info(tt::LogMetal, "dst_buffer size: {}", dst_buffer->size());
+    log_info(tt::LogMetal, "dst_buffer page_size: {}", dst_buffer->page_size());
+    log_info(tt::LogMetal, "dst_buffer num_pages: {}", dst_buffer->num_pages());
+    log_info(tt::LogMetal, "dst_buffer buffer_layout: {}", dst_buffer->buffer_layout());
+    log_info(tt::LogMetal, "dst tensor logical shape: {}", output.logical_shape());
+    log_info(tt::LogMetal, "dst tensor padded shape: {}", output.padded_shape());
+    log_info(tt::LogMetal, "dst tensor layout: {}", output.layout());
+
+    log_info(tt::LogMetal, "src tensor dtype: {}", input.dtype());
+    log_info(tt::LogMetal, "dst tensor dtype: {}", output.dtype());
+
+    for (const auto& core : cores) {
+        tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, {src_buffer->address(), dst_buffer->address()});
+    }
+
+    auto override_runtime_args_callback = [kernel_id, cores](
+                                              const void* operation,
+                                              const Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        const auto& output = output_tensors.at(0);
+
+        log_info(tt::LogMetal, "Override args");
+        log_info(tt::LogMetal, "\tdst_buffer address: {}", dst_buffer->address());
+        log_info(tt::LogMetal, "\tdst_buffer size: {}", dst_buffer->size());
+        log_info(tt::LogMetal, "\tdst_buffer page_size: {}", dst_buffer->page_size());
+        log_info(tt::LogMetal, "\tdst_buffer num_pages: {}", dst_buffer->num_pages());
+        log_info(tt::LogMetal, "\tdst_buffer buffer_layout: {}", dst_buffer->buffer_layout());
+        log_info(tt::LogMetal, "\tdst tensor logical shape: {}", output.logical_shape());
+        log_info(tt::LogMetal, "\tdst tensor padded shape: {}", output.padded_shape());
+        log_info(tt::LogMetal, "\tdst tensor layout: {}", output.layout());
+
+        for (const auto& core : cores) {
+            auto& runtime_args = GetRuntimeArgs(program, kernel_id, core);
+            runtime_args[0] = src_buffer->address();
+            runtime_args[1] = dst_buffer->address();
+        }
+    };
+
+    return {std::move(program), override_runtime_args_callback};
+}
+
 /*
  * Design of argmax_multi_core:
  *

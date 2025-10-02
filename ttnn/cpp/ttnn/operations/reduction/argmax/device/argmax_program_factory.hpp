@@ -10,6 +10,10 @@ using namespace tt::constants;
 tt::tt_metal::operation::ProgramWithCallbacks argmax_single_core(
     const Tensor& input, const Tensor& output, std::optional<uint32_t> dim, bool keepdim);
 
+// Note: maybe this can be merged with the one above
+tt::tt_metal::operation::ProgramWithCallbacks argmax_single_core_tile_layout(
+    const Tensor& input, const Tensor& output, const std::optional<uint32_t> dim, const bool keepdim);
+
 tt::tt_metal::operation::ProgramWithCallbacks argmax_multi_core(
     const Tensor& input,
     const Tensor& output,

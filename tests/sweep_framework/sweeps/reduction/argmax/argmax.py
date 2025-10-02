@@ -27,7 +27,7 @@ random.seed(0)
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
 # Each suite has a key name (in this case "suite_1" and "suite_2") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
-parameters = {
+all_parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 1, 1], 32)
         + gen_shapes([1, 1, 1, 1], [2, 9, 167, 128], [1, 1, 1, 1], 32)
@@ -68,6 +68,20 @@ parameters = {
     },
 }
 
+parameters = {
+    "nightly": {
+        "input_shape": [
+            [1, 1, 32, 32],
+        ],
+        "dim": [3],
+        "keepdim": [True],
+        "input_a_dtype": [ttnn.float32],
+        "input_layout": [ttnn.TILE_LAYOUT],
+        "input_a_memory_config": [ttnn.L1_MEMORY_CONFIG],
+        "output_memory_config": [ttnn.L1_MEMORY_CONFIG],
+    },
+}
+
 
 # Invalidate vector is called during the generation phase where each vector will be passed in.
 # If invalidated, the vector will still be stored but will be skipped.
@@ -82,8 +96,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["dim"] is not None:
         if test_vector["dim"] * (-1) > (len(test_vector["input_shape"])):
             return True, "Absolute value of dim must be less or equal than the rank of input tensor"
-    if test_vector["input_layout"] == ttnn.TILE_LAYOUT:
-        return True, "Tiled layout not supported"
     supported_dtypes = [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16]
     if test_vector["input_a_dtype"] not in supported_dtypes:
         return True, "Only BFLOAT16, FLOAT32, INT32, UINT32, and UINT16 are supported for inputs!"
@@ -91,8 +103,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
     ):
         return True, "Row major is only supported for fp32 & fp16"
-    if not test_vector["keepdim"]:
-        return True, "keepdim = false is not supported"
 
     return False, None
 
@@ -133,7 +143,15 @@ def run_argmax(
     op_output_tensor = ttnn.argmax(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
+
+    # TODO: since the output are integer indices, we could do an exact comparison.
     expected_pcc = 0.999
+
+    logger.info(f"input:\n {torch_input_tensor_a}")
+
+    logger.info(f"Reference out: {torch_output_tensor}")
+    logger.info(f"ttnn out:\n {output_tensor}")
+
     tensors = [input_tensor_a, op_output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 

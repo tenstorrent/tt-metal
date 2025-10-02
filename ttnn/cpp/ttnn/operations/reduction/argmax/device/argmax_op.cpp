@@ -59,9 +59,11 @@ void ArgMax::validate_with_output_tensors(
             input_tensor_a.dtype() == DataType::INT32 || input_tensor_a.dtype() == DataType::UINT32 ||
             input_tensor_a.dtype() == DataType::UINT16,
         "Only BFLOAT16, FLOAT32, INT32, UINT32, and UINT16 are supported for inputs!");
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for inputs!");
 
     TT_FATAL(this->output_dtype == DataType::UINT32, "Only UINT32 is supported for outputs!");
+
+    // TODO: can we have different layout in input and output tensor (mix ROW_MAJOR and TILE_LAYOUT)
+
     TT_FATAL(
         this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only INTERLEAVED memory layout is supported for outputs!");
@@ -83,29 +85,46 @@ void ArgMax::validate_with_output_tensors(
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
     }
 
-    if (this->use_multicore && this->sub_core_grids.has_value()) {
+    if (this->use_multicore) {
+        // TODO: How about the output?
         TT_FATAL(
-            this->sub_core_grids->ranges().size() <= 2,
-            "Multicore argmax only supports up to 2 core grid ranges, but got {} ranges",
-            this->sub_core_grids->ranges().size());
+            input_tensor_a.layout() == Layout::ROW_MAJOR,
+            "Multicore argmax only supports ROW_MAJOR layout for inputs!");
+        if (this->sub_core_grids.has_value()) {
+            TT_FATAL(
+                this->sub_core_grids->ranges().size() <= 2,
+                "Multicore argmax only supports up to 2 core grid ranges, but got {} ranges",
+                this->sub_core_grids->ranges().size());
+        }
     }
 }
 
 std::vector<TensorSpec> ArgMax::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    log_info(tt::LogMetal, "ArgMax::compute_output_specs, has output: {}", output_tensors.at(0).has_value());
     if (output_tensors.at(0).has_value()) {
+        log_info(tt::LogMetal, "\toutput_spec: {}", output_tensors.at(0)->tensor_spec());
         return {output_tensors.at(0)->tensor_spec()};
     }
 
     const auto& input_tensor = input_tensors[0];
     auto output_shape = this->get_output_shape(input_tensor);
-    return {TensorSpec(
+    log_info(tt::LogMetal, "\toutput_shape: {}", output_shape);
+    log_info(tt::LogMetal, "\toutput_dtype: {}", output_dtype);
+    auto out_spec = TensorSpec(
+        ttnn::Shape(output_shape), TensorLayout(output_dtype, PageConfig(input_tensor.layout()), output_mem_config));
+    /*return {TensorSpec(
         ttnn::Shape(output_shape), TensorLayout(output_dtype, PageConfig(input_tensor.layout()), output_mem_config))};
+    */
+    return {out_spec};
 }
 
 std::vector<Tensor> ArgMax::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
-    if (output_tensors.at(0).has_value()) {
+    const bool has_output = output_tensors.at(0).has_value();
+    log_info(tt::LogMetal, "ArgMax::create_output_tensors, has output: {}", has_output);
+    if (has_output) {
+        log_info(tt::LogMetal, "\toutput_spec: {}", output_tensors.at(0)->tensor_spec());
         return {output_tensors.at(0).value()};
     }
 
@@ -118,11 +137,26 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const auto& output_tensor = output_tensors.at(0);
     const auto normalized_dim =
         this->dim.has_value() ? *this->dim + (input_tensor.padded_shape().rank() * (*this->dim < 0)) : this->dim;
+
+    log_info(tt::LogMetal, "argmax dim: {}", this->dim);
+    log_info(tt::LogMetal, "normalized dim: {}", normalized_dim);
+
+    // TODO: make sure there is only one input and one output tensor, somewhere.
+
     if (this->use_multicore) {
+        log_info(tt::LogMetal, "choosing multicore program");
         return detail::argmax_multi_core(
             input_tensor, output_tensor, normalized_dim, this->keepdim, this->sub_core_grids);
     }
-    return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
+
+    // For single core, select based on layout
+    if (input_tensor.layout() == Layout::TILE) {
+        log_info(tt::LogMetal, "choosing tiled program");
+        return detail::argmax_single_core_tile_layout(input_tensor, output_tensor, normalized_dim, this->keepdim);
+    } else {
+        log_info(tt::LogMetal, "choosing row-major program");
+        return detail::argmax_single_core(input_tensor, output_tensor, normalized_dim, this->keepdim);
+    }
 }
 
 }  // namespace ttnn::operations::reduction
