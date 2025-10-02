@@ -69,6 +69,11 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             input_shape[i],
             indices_shape[i]);
     }
+    TT_FATAL(
+        operation_attributes.output_concat_dim == 1 || operation_attributes.output_concat_dim == 2,
+        "Output concat dimension must be 1 or 2, got {}. Output concat dimension is used to determine the dimension to "
+        "concat the output tokens along.",
+        operation_attributes.output_concat_dim);
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(

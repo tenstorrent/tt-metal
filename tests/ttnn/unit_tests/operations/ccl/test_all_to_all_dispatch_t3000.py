@@ -1006,7 +1006,6 @@ def test_all_to_all_dispatch_skew(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
@@ -1015,9 +1014,9 @@ def test_all_to_all_dispatch_skew(
 @pytest.mark.parametrize("select_experts_k", [2])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
-    "batch, seq_len, num_iters, warmup_iters",
+    "batch, seq_len",
     [
-        (1, 8, 1, 1),
+        (1, 8),
     ],
     ids=["b1s8"],
 )
@@ -1027,7 +1026,6 @@ def test_all_to_all_dispatch_skew(
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 def test_all_to_all_dispatch_no_trace_batch1(
     mesh_device,
-    trace_mode,
     mesh_shape,
     cluster_axis,
     batch,
@@ -1035,8 +1033,6 @@ def test_all_to_all_dispatch_no_trace_batch1(
     select_experts_k,
     hidden_size,
     seq_len,
-    num_iters,
-    warmup_iters,
     num_links,
     dtype,
     input_memory_config,

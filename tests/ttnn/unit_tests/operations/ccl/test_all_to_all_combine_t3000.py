@@ -994,11 +994,12 @@ def test_all_to_all_combine_batch_1(
         local_reduce=local_reduce,
         axis=axis,
         output_shard_dim=2,
+        memory_config=output_memory_config,
     )
 
     logger.info(f"Batch = 1 tt_output_tensor shape: {tt_output_tensor.shape}")
-
-    torch_tt_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+    torch_tt_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))
+    logger.info(f"Batch = 1 torch_tt_output_tensor shape: {torch_tt_output_tensor.shape}")
 
     torch_tt_output_tensor = torch_tt_output_tensor.reshape(-1, torch_tt_output_tensor.shape[-1])
 

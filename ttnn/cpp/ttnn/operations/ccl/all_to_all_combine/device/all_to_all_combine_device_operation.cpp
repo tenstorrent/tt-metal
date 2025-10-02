@@ -94,7 +94,8 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     const auto& axis_group = (axis == 0) ? mesh_rows : mesh_cols;
     TT_FATAL(
         operation_attributes.output_shard_dim == 1 || operation_attributes.output_shard_dim == 2,
-        "Dispatch dimension must be 1 or 2, got {}",
+        "Output shard dimension must be 1 or 2, got {}. Output shard dimension is used to determine the dimension to "
+        "shard the output tokens along.",
         operation_attributes.output_shard_dim);
     uint32_t output_shard_dim = operation_attributes.output_shard_dim;
     if (output_shard_dim == 1) {
@@ -134,7 +135,6 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
 
     const auto& axis = operation_attributes.axis;
     const uint32_t replicate_dim = axis.has_value() ? mesh_device->shape()[!axis.value()] : 1;
-    ;
 
     const uint32_t total_batch_per_device_size =
         (output_shard_dim == 1) ? (batch_size * replicate_dim) / num_devices : batch_size;
