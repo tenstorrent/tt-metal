@@ -409,8 +409,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     CoreRangeSet cr_set = program_config.cr_set;
 
     uint32_t rta_base_dm0 = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t rta_base_dm1 = rta_base_dm0 + num_runtime_args_dm0 * sizeof(uint32_t);
-    uint32_t rta_base_compute = rta_base_dm1 + num_runtime_args_dm1 * sizeof(uint32_t);
+    uint32_t rta_base_dm1 = rta_base_dm0 + (num_runtime_args_dm0 * sizeof(uint32_t));
+    uint32_t rta_base_compute = rta_base_dm1 + (num_runtime_args_dm1 * sizeof(uint32_t));
     std::map<std::string, std::string> dm_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args_dm0)},
@@ -524,8 +524,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     constexpr uint32_t kCommonRTASeparation = 1024 * sizeof(uint32_t);
 
     uint32_t rta_base_dm0 = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t rta_base_dm1 = rta_base_dm0 + 2048 * sizeof(uint32_t);
-    uint32_t rta_base_compute = rta_base_dm1 + 4096 * sizeof(uint32_t);
+    uint32_t rta_base_dm1 = rta_base_dm0 + (2048 * sizeof(uint32_t));
+    uint32_t rta_base_compute = rta_base_dm1 + (4096 * sizeof(uint32_t));
     // Copy max # runtime args in the kernel for simplicity
     std::map<std::string, std::string> dm_defines0 = {
         {"COMMON_RUNTIME_ARGS", "1"},
@@ -1961,7 +1961,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         }
 
         if (not at_least_one_kernel) {
-            uint32_t random_risc = rand() % 3 + 1;
+            uint32_t random_risc = (rand() % 3) + 1;
             if (random_risc == 1) {
                 auto dummy_brisc_kernel = CreateKernel(
                     program_,
@@ -2241,7 +2241,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestRandomizedProgram) {
         }
 
         if (not at_least_one_kernel) {
-            uint32_t random_risc = rand() % 3 + 1;
+            uint32_t random_risc = (rand() % 3) + 1;
             if (random_risc == 1) {
                 auto dummy_brisc_kernel = CreateKernel(
                     program_,

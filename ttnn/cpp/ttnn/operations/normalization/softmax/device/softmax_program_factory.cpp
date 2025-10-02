@@ -142,7 +142,7 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -276,7 +276,7 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -411,7 +411,7 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        const CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        const CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -547,7 +547,7 @@ SoftmaxProgramFactoryGeneralHLarge::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -688,7 +688,7 @@ SoftmaxProgramFactoryGeneralCLarge::cached_program_t SoftmaxProgramFactoryGenera
     const auto core_y_offset = core_range.start_coord.y;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
-        CoreCoord core = {i / core_h + core_x_offset, i % core_h + core_y_offset};
+        CoreCoord core = {(i / core_h) + core_x_offset, (i % core_h) + core_y_offset};
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
@@ -1013,7 +1013,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         uint32_t mask_curr_ht = curr_ht % mask_Ht;            // the start offset for causal mask
         uint32_t mask_offset = curr_row / Ht * mask_Ht * Wt;  // causal mask batch offset
         uint32_t mask_id = attributes.is_causal_mask
-                               ? (mask_curr_ht * Wt + mask_offset)
+                               ? ((mask_curr_ht * Wt) + mask_offset)
                                : (curr_row / Ht * Wt);  // causal mask start offset + causal mask batch offset
 
         if (attributes.is_causal_mask) {
@@ -1230,7 +1230,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
         uint32_t mask_curr_ht = curr_ht % Wt;            // the start offset for causal mask
         uint32_t mask_offset = curr_row / Ht * Wt * Wt;  // causal mask batch offset
         uint32_t mask_id = attributes.is_causal_mask
-                               ? (mask_curr_ht * Wt + mask_offset)
+                               ? ((mask_curr_ht * Wt) + mask_offset)
                                : (curr_row / Ht * Wt);  // causal mask start offset + causal mask batch offset
 
         reader_kernel_args[0] = src_buffer_address;

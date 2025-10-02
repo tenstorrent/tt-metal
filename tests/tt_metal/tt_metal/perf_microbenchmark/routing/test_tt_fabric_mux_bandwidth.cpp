@@ -164,7 +164,7 @@ void create_mux_kernel(
 
     auto memory_regions_to_clear = mux_kernel_config->get_memory_regions_to_clear();
     std::vector<uint32_t> memory_regions_to_clear_args;
-    memory_regions_to_clear_args.reserve(memory_regions_to_clear.size() * 2 + 1);
+    memory_regions_to_clear_args.reserve((memory_regions_to_clear.size() * 2) + 1);
     memory_regions_to_clear_args.push_back(static_cast<uint32_t>(memory_regions_to_clear.size()));
     for (const auto& [address, size] : memory_regions_to_clear) {
         memory_regions_to_clear_args.push_back(static_cast<uint32_t>(address));
@@ -231,7 +231,7 @@ void create_drainer_kernel(
 
     auto memory_regions_to_clear = drainer_kernel_config->get_memory_regions_to_clear();
     std::vector<uint32_t> memory_regions_to_clear_args;
-    memory_regions_to_clear_args.reserve(memory_regions_to_clear.size() * 2 + 1);
+    memory_regions_to_clear_args.reserve((memory_regions_to_clear.size() * 2) + 1);
     memory_regions_to_clear_args.push_back(static_cast<uint32_t>(memory_regions_to_clear.size()));
     for (const auto& [address, size] : memory_regions_to_clear) {
         memory_regions_to_clear_args.push_back(static_cast<uint32_t>(address));

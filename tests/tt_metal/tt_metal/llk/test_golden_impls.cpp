@@ -48,7 +48,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
                 for (int j = 0; j < num_tile_cols; j++) {  // num columns top two faces
                     // Left face row copy
                     for (int k = 0; k < num_c_dim; k++) {
-                        int idx = physical_start_for_tile_row + i * num_c_dim + k + j * tile_size;
+                        int idx = physical_start_for_tile_row + (i * num_c_dim) + k + (j * tile_size);
                         TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                         ind.insert(idx);
                         dst_vec.push_back(src_vec.at(idx));
@@ -57,7 +57,7 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
                     if (config.num_faces > 1) {
                         // Right face row copy
                         for (int k = 0; k < num_c_dim; k++) {
-                            int idx = physical_start_for_tile_row + i * num_c_dim + k + face_size + j * tile_size;
+                            int idx = physical_start_for_tile_row + (i * num_c_dim) + k + face_size + (j * tile_size);
                             TT_FATAL(ind.find(idx) == ind.end(), "{}", t);
                             ind.insert(idx);
                             dst_vec.push_back(src_vec.at(idx));
@@ -82,14 +82,14 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
     int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1)) / 2;
     for (int x = 0; x < num_rows; x += 32) {
         for (int y = 0; y < num_cols; y += 16) {
-            int start = x * num_cols + y;
+            int start = (x * num_cols) + y;
 
             // Top faces
             for (int j = 0; j < 2; j++) {
-                int start_ = start + 8 * j;
+                int start_ = start + (8 * j);
                 for (int k = 0; k < 16; k++) {
                     for (int i = 0; i < 8; i++) {
-                        int idx = start_ + num_cols * k + i;
+                        int idx = start_ + (num_cols * k) + i;
                         dst_vec.push_back(src_vec.at(idx));
                     }
                 }
@@ -99,10 +99,10 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
                 // Bottom faces
                 start += 16 * num_cols;
                 for (int j = 0; j < 2; j++) {
-                    int start_ = start + 8 * j;
+                    int start_ = start + (8 * j);
                     for (int k = 0; k < 16; k++) {
                         for (int i = 0; i < 8; i++) {
-                            int idx = start_ + num_cols * k + i;
+                            int idx = start_ + (num_cols * k) + i;
                             dst_vec.push_back(src_vec.at(idx));
                         }
                     }

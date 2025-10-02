@@ -489,10 +489,10 @@ bool validation_bfp8_b(
             for (size_t j = 0; j < per_core_n; ++j) {
                 float sum = 0;
                 for (size_t k = 0; k < kt * 32; ++k) {
-                    sum += to_float(in0_values[n * kt * 32 + i * num_receivers * kt * 32 + k]) *
-                           to_float(in1_values[n * per_core_n + k * nt * 32 + j]);
+                    sum += to_float(in0_values[(n * kt * 32) + (i * num_receivers * kt * 32) + k]) *
+                           to_float(in1_values[(n * per_core_n) + (k * nt * 32) + j]);
                 }
-                golden_vec[i * nt * 32 + n * per_core_n + j] = sum;
+                golden_vec[(i * nt * 32) + (n * per_core_n) + j] = sum;
             }
         }
     }
@@ -540,10 +540,10 @@ bool validation_fp16(
             for (size_t j = 0; j < per_core_n; ++j) {
                 float sum = 0;
                 for (size_t k = 0; k < kt * 32; ++k) {
-                    sum += to_float(in0_values[n * kt * 32 + i * num_receivers * kt * 32 + k]) *
-                           to_float(in1_values[n * per_core_n + k * nt * 32 + j]);
+                    sum += to_float(in0_values[(n * kt * 32) + (i * num_receivers * kt * 32) + k]) *
+                           to_float(in1_values[(n * per_core_n) + (k * nt * 32) + j]);
                 }
-                golden_vec[i * nt * 32 + n * per_core_n + j] = sum;
+                golden_vec[(i * nt * 32) + (n * per_core_n) + j] = sum;
             }
         }
     }

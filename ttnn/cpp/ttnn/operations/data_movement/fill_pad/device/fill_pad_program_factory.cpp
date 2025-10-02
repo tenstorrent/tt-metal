@@ -35,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     TT_ASSERT(tens_buffer != nullptr, "Input buffer should be allocated on device!");
 
     uint32_t input_element_size_bytes = data_type_to_size.at(input_tensor.dtype());
-    uint32_t cb_page_size = input_element_size_bytes * tt::constants::FACE_HEIGHT + sizeof(uint16_t);
+    uint32_t cb_page_size = (input_element_size_bytes * tt::constants::FACE_HEIGHT) + sizeof(uint16_t);
     uint32_t height = input_tensor.logical_shape()[-2];
     uint32_t width = input_tensor.logical_shape()[-1];
 

@@ -588,7 +588,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
             start_dst_stick_wi = 0;
             int32_t rem_src_stick_size_nbytes = unpadded_row_size_nbytes;
             for (uint32_t i = 0; i < ncores_w; ++i) {
-                CoreCoord core = {i, b * ncores_per_batch_h + j};
+                CoreCoord core = {i, (b * ncores_per_batch_h) + j};
                 uint32_t curr_stick_size_nbytes = 0;
                 int32_t curr_stick_diff_nbytes = 0;
                 if (rem_src_stick_size_nbytes - dst_nbytes_per_core_w >= 0) {

@@ -484,8 +484,8 @@ void validate_input_params(
         kernel_size[1]);
 
     // ensure effective kernel size (with dilation) doesn't exceed padded input
-    uint32_t effective_kernel_h = dilation_h * (kernel_size[0] - 1) + 1;
-    uint32_t effective_kernel_w = dilation_w * (kernel_size[1] - 1) + 1;
+    uint32_t effective_kernel_h = (dilation_h * (kernel_size[0] - 1)) + 1;
+    uint32_t effective_kernel_w = (dilation_w * (kernel_size[1] - 1)) + 1;
     uint32_t padded_input_h = input_h + pad_top + pad_bottom;
     uint32_t padded_input_w = input_w + pad_left + pad_right;
     TT_FATAL(

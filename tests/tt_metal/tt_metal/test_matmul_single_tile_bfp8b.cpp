@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
         int num_float_in_tile = 32 * 32;
         std::vector<float> vec(num_float_in_tile, (float)0);
         for (int i = 0; i < 32; i++) {
-            vec.at(i * 32 + i) = (float)1;
+            vec.at((i * 32) + i) = (float)1;
         }
         std::vector<uint32_t> weights =
             pack_as_bfp8_tiles(tt::stl::make_const_span(vec), /*row_major_input=*/true, /*is_exp_a=*/false);

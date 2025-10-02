@@ -122,7 +122,7 @@ int main(int argc, char** argv) {
             CoreCoord end_core = {
                 (std::size_t)num_cores_c - 1,
                 (core_group_idx == num_core_groups - 1) ? (std::size_t)num_cores_r - 1
-                                                        : (num_cores_r / num_core_groups) * (core_group_idx + 1) - 1};
+                                                        : ((num_cores_r / num_core_groups) * (core_group_idx + 1)) - 1};
             CoreRange group_of_cores(start_core, end_core);
 
             log_info(
@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
             for (int i = start_core.y; i <= end_core.y; i++) {
                 for (int j = start_core.x; j <= end_core.x; j++) {
                     CoreCoord core = {(std::size_t)j, (std::size_t)i};
-                    int core_index = i * num_cores_c + j;
+                    int core_index = (i * num_cores_c) + j;
 
                     std::array<uint32_t, 255> reader_runtime_args{};
                     std::array<uint32_t, 255> writer_runtime_args{};

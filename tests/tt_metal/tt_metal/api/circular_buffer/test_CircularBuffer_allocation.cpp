@@ -236,8 +236,8 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         initialize_program(program_, cr_set);
 
         uint32_t num_pages =
-            (l1_buffer->address() - devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1)) /
-                NUM_CIRCULAR_BUFFERS / page_size +
+            ((l1_buffer->address() - devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1)) /
+             NUM_CIRCULAR_BUFFERS / page_size) +
             1;
         CBConfig cb_config = {.num_pages = num_pages};
         for (uint32_t buffer_id = 0; buffer_id < NUM_CIRCULAR_BUFFERS; buffer_id++) {
