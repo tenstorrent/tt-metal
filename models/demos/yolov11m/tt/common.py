@@ -213,6 +213,7 @@ class TtnnConv:
         reshard=False,
         activation="",
         deallocate_activation=False,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
         self.enable_act = enable_act
         if self.enable_act:
@@ -225,6 +226,7 @@ class TtnnConv:
             reshard=reshard,
             activation=activation,
             deallocate_activation=deallocate_activation,
+            shard_layout=shard_layout,
         )
 
     def __call__(self, device, x):
