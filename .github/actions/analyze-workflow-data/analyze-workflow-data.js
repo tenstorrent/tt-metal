@@ -303,7 +303,31 @@ function renderErrorsTable(errorSnippets) {
       if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
-    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;">${jobHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow-wrap: normal; hyphens: none;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
+    // Force owner to at most two lines using a smart break; short strings stay single-line
+    let ownerHtml = ownerEsc;
+    try {
+      const plainO = String(ownerDisplay).replace(/\r?\n/g, ' ').trim();
+      if (plainO.length > 18) {
+        const midO = Math.floor(plainO.length / 2);
+        let breakO = -1;
+        const commaIdx = plainO.indexOf(',');
+        if (commaIdx !== -1) breakO = commaIdx + 1;
+        else {
+          const window = 20;
+          const rightO = plainO.slice(midO, Math.min(plainO.length, midO + window)).search(/[\u00A0\s]/);
+          const leftO = plainO.slice(Math.max(0, midO - window), midO).lastIndexOf(' ');
+          const leftNbspO = plainO.slice(Math.max(0, midO - window), midO).lastIndexOf('\u00A0');
+          const leftBestO = Math.max(leftO, leftNbspO);
+          if (rightO !== -1) breakO = midO + rightO + 1;
+          else if (leftBestO !== -1) breakO = Math.max(1, Math.max(0, midO - window) + leftBestO + 1);
+        }
+        if (breakO <= 0 || breakO >= plainO.length) breakO = Math.max(1, midO);
+        const p1 = plainO.slice(0, breakO).trimEnd();
+        const p2 = plainO.slice(breakO).trimStart();
+        ownerHtml = `${escapeHtml(p1).replace(/\s/g, '\u00A0')}<br/>${escapeHtml(p2).replace(/\s/g, '\u00A0')}`;
+      }
+    } catch (_) { /* keep fallback ownerEsc */ }
+    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;">${jobHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style=\"line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;\">${ownerHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
   }).join('\n');
   // Compute dynamic width for Job column based on longest job label; cap to reasonable bounds
   const jobWidthCh = (() => {
