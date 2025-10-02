@@ -124,7 +124,7 @@ class CLIPEncoder:
         model = cls(
             config=config,
             mesh_device=device,
-            ccl_manager=ccl_manager,  # use CCL manager for submesh 0
+            ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             eos_token_id=2,  # default EOS token ID for CLIP
         )
