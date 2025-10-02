@@ -16,12 +16,29 @@ from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_
 class TtnnYoloV11:
     def __init__(self, device, parameters):
         self.device = device
+        
+        # 🔍 DEBUGGING: YOLOv11 layer shard configuration analysis
+        print(f"🔍 [YOLOV11 DEBUG] Initializing YOLOv11 layers with shard configurations:")
+        
+        print(f"    conv1: Default HEIGHT_SHARDED")
         self.conv1 = TtnnConv(device, parameters.conv_args[0], parameters.model[0], deallocate_activation=True)
+        
+        print(f"    conv2: Default HEIGHT_SHARDED")
         self.conv2 = TtnnConv(device, parameters.conv_args[1], parameters.model[1], deallocate_activation=True)
+        
+        print(f"    c3k2_1: Default (contains convs)")
         self.c3k2_1 = TtnnC3k2(device, parameters.conv_args[2], parameters.model[2], is_bk_enabled=False)
+        
+        print(f"    conv3: Default HEIGHT_SHARDED")
         self.conv3 = TtnnConv(device, parameters.conv_args[3], parameters.model[3], deallocate_activation=True)
+        
+        print(f"    c3k2_2: Default (contains convs)")
         self.c3k2_2 = TtnnC3k2(device, parameters.conv_args[4], parameters.model[4], is_bk_enabled=False)
+        
+        print(f"    conv5: shard_layout=None (special case)")
         self.conv5 = TtnnConv(device, parameters.conv_args[5], parameters.model[5], deallocate_activation=True, shard_layout=None)
+        
+        print(f"    c3k2_3: Default (contains convs)")
         self.c3k2_3 = TtnnC3k2(device, parameters.conv_args[6], parameters.model[6], is_bk_enabled=False)
         self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7])
         self.c3k2_4 = TtnnC3k2(device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False)
@@ -65,6 +82,18 @@ class TtnnYoloV11:
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
         x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        
+        # 🔍 DEBUGGING: Analyze tensor state before conv5 (which has shard_layout=None)
+        print(f"🔍 [CONV5 ANALYSIS] Tensor state before conv5 call:")
+        print(f"    Shape: {x.shape}")
+        print(f"    Memory config: {x.memory_config()}")
+        print(f"    Memory layout: {x.memory_config().memory_layout}")
+        print(f"    Buffer type: {x.memory_config().buffer_type}")
+        print(f"    Is sharded: {x.is_sharded()}")
+        print(f"    Storage type: {x.storage_type()}")
+        print(f"    Conv5 will use shard_layout=None (auto-determine)")
+        print()
+        
         x = self.conv5(self.device, x)
         x = self.c3k2_3(self.device, x)
         x6 = x

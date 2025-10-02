@@ -53,6 +53,8 @@ class Yolov11Conv2D:
             activation_param = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
         # Add more activation types as needed
 
+        print(f"    Input shard_layout parameter: {shard_layout}")
+
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
@@ -61,6 +63,7 @@ class Yolov11Conv2D:
             reshard_if_not_optimal=True if self.reshard else False,
             activation=activation_param,
         )
+
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -113,7 +116,7 @@ class Yolov11Conv2D:
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
             x = x[:, :, :hw, :]
         return x
 
@@ -215,6 +218,13 @@ class TtnnConv:
         deallocate_activation=False,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ):
+        # 🔍 DEBUGGING: TtnnConv shard layout configuration
+        print(f"🔍 [TTNN_CONV DEBUG] TtnnConv initialization:")
+        print(f"    Provided shard_layout: {shard_layout}")
+        print(f"    Enable activation: {enable_act}")
+        print(f"    Is detect: {is_detect}")
+        print(f"    Deallocate activation: {deallocate_activation}")
+        
         self.enable_act = enable_act
         if self.enable_act:
             activation = "silu"
@@ -228,6 +238,8 @@ class TtnnConv:
             deallocate_activation=deallocate_activation,
             shard_layout=shard_layout,
         )
+        print(f"    Created Yolov11Conv2D with shard_layout: {shard_layout}")
+        print()
 
     def __call__(self, device, x):
         x = self.conv(x)
