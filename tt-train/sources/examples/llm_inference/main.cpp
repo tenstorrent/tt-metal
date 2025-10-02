@@ -134,9 +134,6 @@ int main(int argc, char **argv) {
         std::fill(prompt_tokens_padded.begin(), prompt_tokens_padded.end(), 0);
         std::copy(prompt_tokens.begin() + start_idx, prompt_tokens.end(), prompt_tokens_padded.begin());
 
-        // for (uint32_t i = start_idx; i < prompt_tokens.size(); ++i) {
-        //     prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
-        // }
         auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             prompt_tokens_padded,
