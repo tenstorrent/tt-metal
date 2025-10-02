@@ -101,12 +101,11 @@ public:
                 reliability_mode = it->second;
                 log_info(tt::LogTest, "Fabric Reliability Mode: {}", reliability_mode_to_string(reliability_mode));
             } else {
+                // reliability_mode remains default
                 log_warning(
                     tt::LogTest,
-                    "Invalid RELIABILITY_MODE '{}'. Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE",
+                    "Invalid RELIABILITY_MODE '{}'. Fabric Reliability Mode set to: STRICT_SYSTEM_HEALTH_SETUP_MODE",
                     mode_str);
-                // reliability_mode remains default
-                log_info(tt::LogTest, "Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE");
             }
         } else {
             log_info(tt::LogTest, "Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE");
