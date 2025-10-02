@@ -57,6 +57,20 @@ struct ConnectionInfo {
     tt::tt_metal::EthernetMetrics metrics;
 };
 
+struct FaultyLink {
+    // Link Identifier
+    std::string host;
+    tt::tt_metal::AsicID asic_id;
+    tt::tt_metal::TrayID tray_id;
+    tt::tt_metal::ASICLocation asic_location;
+    uint8_t channel;
+
+    // Metrics Upon Fault Detection
+    tt::tt_metal::EthernetMetrics metrics;
+    uint32_t num_bytes_xfered;
+    uint32_t packet_size_bytes;
+};
+
 void configure_local_kernels(
     const PhysicalSystemDescriptor& physical_system_descriptor,
     std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
@@ -231,16 +245,22 @@ void execute_workloads(
     }
 }
 
+bool link_unhealthy(const tt::tt_metal::EthernetMetrics& metrics) { return metrics.retrain_count > 0; }
+
 void validate_traffic(
     std::vector<uint32_t>& inputs,
-    const PhysicalSystemDescriptor& physical_system_descriptor,
+    PhysicalSystemDescriptor& physical_system_descriptor,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
-    size_t data_size) {
+    size_t data_size,
+    size_t packet_size_bytes,
+    std::vector<FaultyLink>& faulty_links) {
     const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     const auto& host_name = physical_system_descriptor.my_host_name();
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(host_name);
+    const auto& asic_descriptors = physical_system_descriptor.get_asic_descriptors();
+    physical_system_descriptor.generate_local_ethernet_metrics();
 
     for (const auto& [asic_id, asic_connections] : asic_topology) {
         auto chip_id = asic_id_to_chip_id[*asic_id];
@@ -254,7 +274,20 @@ void validate_traffic(
                     devices[chip_id]->ethernet_core_from_logical_core(coord),
                     src_eth_l1_byte_address,
                     data_size);
-                TT_FATAL(result_vec == inputs, "Validation failed");
+
+                if (result_vec != inputs or
+                    link_unhealthy(physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan))) {
+                    faulty_links.push_back(FaultyLink{
+                        .host = host_name,
+                        .asic_id = asic_descriptors.at(asic_id).unique_id,
+                        .tray_id = asic_descriptors.at(asic_id).tray_id,
+                        .asic_location = asic_descriptors.at(asic_id).asic_location,
+                        .channel = src_chan,
+                        .metrics = physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan),
+                        .num_bytes_xfered = data_size,
+                        .packet_size_bytes = packet_size_bytes,
+                    });
+                }
             }
         }
     }
@@ -278,8 +311,8 @@ std::vector<ValueType> generate_uniform_random_vector(
     return results;
 }
 
-void send_traffic_across_all_links(
-    const PhysicalSystemDescriptor& physical_system_descriptor, const InputArgs& input_args) {
+std::vector<FaultyLink> send_traffic_and_validate_links(
+    PhysicalSystemDescriptor& physical_system_descriptor, const InputArgs& input_args) {
     uint32_t packet_size_bytes = input_args.packet_size_bytes;
     uint32_t packet_size_words = input_args.packet_size_bytes >> 4;
     uint32_t data_size = input_args.data_size;
@@ -303,6 +336,7 @@ void send_traffic_across_all_links(
         asic_id_to_chip_id[asic_id] = chip_id;
     }
 
+    std::vector<FaultyLink> faulty_links;
     for (int i = 0; i < input_args.num_iterations; i++) {
         std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
         auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, data_size / sizeof(uint32_t));
@@ -329,7 +363,14 @@ void send_traffic_across_all_links(
 
         execute_workloads(programs, devices);
 
-        validate_traffic(inputs, physical_system_descriptor, devices, asic_id_to_chip_id, data_size);
+        validate_traffic(
+            inputs,
+            physical_system_descriptor,
+            devices,
+            asic_id_to_chip_id,
+            data_size,
+            packet_size_bytes,
+            faulty_links);
     }
 }
 
@@ -661,7 +702,8 @@ int main(int argc, char* argv[]) {
             "Sending traffic across all links. Num Iterations: " + std::to_string(input_args.num_iterations) +
             " Packet Size (Bytes): " + std::to_string(input_args.packet_size_bytes) +
             " Total Data Size: (Bytes): " + std::to_string(input_args.data_size));
-        send_traffic_across_all_links(physical_system_descriptor, input_args);
+        auto faulty_links = send_traffic_and_validate_links(physical_system_descriptor, input_args);
+        // if ()
     }
 
     if (*distributed_context.rank() == 0) {
