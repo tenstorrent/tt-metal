@@ -9,6 +9,7 @@ set(LLRT_SRC
     tt_elffile.cpp
     tt_memory.cpp
     hal.cpp
+    tunnels_from_mmio_device.cpp
 )
 
 add_library(llrt OBJECT ${LLRT_SRC})
