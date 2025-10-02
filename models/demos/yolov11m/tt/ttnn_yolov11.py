@@ -40,7 +40,7 @@ class TtnnYoloV11:
         
         print(f"    c3k2_3: Default (contains convs)")
         self.c3k2_3 = TtnnC3k2(device, parameters.conv_args[6], parameters.model[6], is_bk_enabled=False)
-        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7])
+        self.conv6 = TtnnConv(device, parameters.conv_args[7], parameters.model[7],  deallocate_activation=True, shard_layout=None)
         self.c3k2_4 = TtnnC3k2(device, parameters.conv_args[8], parameters.model[8], is_bk_enabled=False)
         self.sppf = TtnnSPPF(device, parameters.conv_args[9], parameters.model[9])
         self.c2psa = TtnnC2PSA(device, parameters.conv_args[10], parameters.model[10])
