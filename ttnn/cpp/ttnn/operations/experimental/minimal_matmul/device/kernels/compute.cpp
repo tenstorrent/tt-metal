@@ -11,6 +11,8 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/tile_move_copy.h"
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     copy_tile_to_dst_init_short(in_cb);
@@ -20,7 +22,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
         copy_tile(in_cb, i, 0 /*dst*/);
-        pack_tile(0, out_cb);
+        pack_tile<true>(0, out_cb, i);
         release_dst();
     }
 }
@@ -94,6 +96,12 @@ void matmul_blocks(
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
+void safe_print_full_tile(uint32_t cb_id) {
+#if defined(DEBUG_PRINT_ENABLED)
+    UNPACK(tt::compute::common::print_full_tile(cb_id));
+#endif
+}
+
 namespace NAMESPACE {
 void MAIN {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -130,6 +138,10 @@ void MAIN {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 cb_wait_front(in0_cb, in0_block_num_tiles);
                 cb_wait_front(in1_cb, in1_block_num_tiles);
+                // safe_print_full_tile(in0_cb);
+                // safe_print_full_tile(in1_cb);
+                DPRINT << "matmul on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
+                       << ENDL();
                 matmul_blocks(
                     in0_cb,
                     in1_cb,
@@ -147,6 +159,7 @@ void MAIN {
             }
             cb_push_back(intermediate_cb, out_block_num_tiles);
             cb_wait_front(intermediate_cb, out_block_num_tiles);
+            // safe_print_full_tile(intermediate_cb);
             cb_reserve_back(out_cb, out_block_num_tiles);
             copy_block(intermediate_cb, out_cb, out_block_num_tiles);
             cb_push_back(out_cb, out_block_num_tiles);

@@ -42,16 +42,28 @@ void py_bind_minimal_matmul(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt});
 
-    auto py_minimal_matmul_config =
-        py::class_<MinimalMatmulConfig>(
-            module,
-            "MinimalMatmulConfig",
-            R"doc(
+    auto py_minimal_matmul_config = py::class_<MinimalMatmulConfig>(
+                                        module,
+                                        "MinimalMatmulConfig",
+                                        R"doc(
                             Configuration for the MinimalMatmul operation.
                             )doc")
-            .def(py::init<>())
-            .def(py::init<CoreCoord>(), py::kw_only(), py::arg("compute_with_storage_grid_size") = CoreCoord{1, 1});
+                                        .def(py::init<>())
+                                        .def(
+                                            py::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
+                                            py::kw_only(),
+                                            py::arg("M_block_size") = 1,
+                                            py::arg("K_block_size") = 1,
+                                            py::arg("N_block_size") = 1,
+                                            py::arg("subblock_h") = 1,
+                                            py::arg("subblock_w") = 1,
+                                            py::arg("compute_with_storage_grid_size") = CoreCoord{1, 1});
 
+    py_minimal_matmul_config.def_readwrite("M_block_size", &MinimalMatmulConfig::M_block_size, "");
+    py_minimal_matmul_config.def_readwrite("K_block_size", &MinimalMatmulConfig::K_block_size, "");
+    py_minimal_matmul_config.def_readwrite("N_block_size", &MinimalMatmulConfig::N_block_size, "");
+    py_minimal_matmul_config.def_readwrite("subblock_h", &MinimalMatmulConfig::subblock_h, "");
+    py_minimal_matmul_config.def_readwrite("subblock_w", &MinimalMatmulConfig::subblock_w, "");
     py_minimal_matmul_config.def_readwrite(
         "compute_with_storage_grid_size", &MinimalMatmulConfig::compute_with_storage_grid_size, "");
 
