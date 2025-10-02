@@ -124,7 +124,7 @@ TEST_F(MeshDeviceFixture, PingAllLegalDramChannels) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
@@ -167,7 +167,7 @@ TEST_F(MeshDeviceFixture, TensixPingAllLegalL1Cores) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
@@ -236,7 +236,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
                 .noc = tt_metal::NOC::NOC_0,
                 .compile_args = {l1_address, intermediate_l1_addr, size_bytes}});
 
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);
 
         std::vector<uint32_t> output;
@@ -286,7 +286,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     EXPECT_TRUE(device->is_mmio_capable());
@@ -349,7 +349,7 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     uint32_t sem0_id = tt_metal::CreateSemaphore(program_, core, 0);

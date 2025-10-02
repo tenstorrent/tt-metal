@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "height_sharded_reader_common.hpp"
+#include "conv_reader_common.hpp"
 #include "debug/debug.h"
 
 void kernel_main() {
@@ -32,9 +32,9 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(24);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr uint32_t weights_size_h = get_compile_time_arg_val(27);
 
 #ifdef ACTIVATION_REUSE
-    constexpr uint32_t weights_size_h = get_compile_time_arg_val(27);
     constexpr uint32_t act_reuse_cb_tiles = get_compile_time_arg_val(28);
     constexpr uint32_t act_block_w_tiles = get_compile_time_arg_val(29);
     constexpr bool readers_process_full_image_widths = get_compile_time_arg_val(30) == 1;
@@ -105,6 +105,7 @@ void kernel_main() {
 #ifdef SPLIT_READER
 #ifdef ACTIVATION_REUSE
         uint32_t l1_write_addr_act = cb_start_addr;
+        get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr = l1_write_addr_act;
 #endif
         uint32_t reader_offset = act_l1_read_addr;
 #endif

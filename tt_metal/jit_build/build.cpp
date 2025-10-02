@@ -52,7 +52,9 @@ void sync_events(auto& events) {
 
 namespace tt::tt_metal {
 
-static void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
+namespace {
+
+void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
     std::ifstream file{log_file};
     if (file.is_open()) {
@@ -63,17 +65,19 @@ static void build_failure(const string& target_name, const string& op, const str
     }
 }
 
-static void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
+void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
     const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
                                                  : build.get_out_path() + settings->get_full_kernel_name() + "/";
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
-static void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
+void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path) {
     if (dir_path.compare(git_hash_path) != 0) {
         std::filesystem::remove_all(dir_path);
     }
 }
+
+}  // namespace
 
 std::string get_default_root_path() {
     const std::string emptyString("");
@@ -135,7 +139,7 @@ void JitBuildEnv::init(
 
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
-        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv32-tt-elf-g++";
+        auto gxx = sfpi_roots[i] + "/compiler/bin/riscv-tt-elf-g++";
         if (std::filesystem::exists(gxx)) {
             this->gpp_ += gxx + " ";
             this->gpp_include_dir_ = sfpi_roots[i] + "/include";

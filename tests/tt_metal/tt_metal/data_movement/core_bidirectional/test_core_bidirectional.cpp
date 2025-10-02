@@ -63,7 +63,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
 
     // Assigns a "safe" L1 local address for the master and subordinate cores
     uint32_t l1_base_write_address = master_l1_info.base_address;
-    uint32_t l1_base_read_address = l1_base_write_address + master_l1_info.size / 2;
+    uint32_t l1_base_read_address = l1_base_write_address + (master_l1_info.size / 2);
 
     // Physical Core Coordinates
     CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
@@ -165,7 +165,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const CoreBi
     vector<uint32_t> coord_data = {0, 0};
     auto target_devices =
         distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
-    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+    mesh_workload.add_program(target_devices, std::move(program));
 
     auto& cq = mesh_device->mesh_command_queue();
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);

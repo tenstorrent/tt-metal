@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -203,6 +203,8 @@ void MetalContext::initialize(
     }
 }
 
+// IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
+// undefined behavior. Do not create threads in this function or any functions it calls.
 void MetalContext::teardown() {
     ZoneScoped;
 
@@ -230,7 +232,6 @@ void MetalContext::teardown() {
     }
 
     if (profiler_state_manager_) {
-        profiler_state_manager_->cleanup_device_profilers();
         profiler_state_manager_.reset();
     }
 
@@ -279,6 +280,11 @@ MetalContext::MetalContext() {
 distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return *distributed_context_;
+}
+
+std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_distributed_context_ptr() {
+    TT_FATAL(distributed_context_, "Distributed context not initialized.");
+    return distributed_context_;
 }
 
 MetalContext::~MetalContext() {
@@ -945,7 +951,9 @@ void MetalContext::initialize_firmware(
         dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
     for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
         std::copy(
-            launch_msg.data(), launch_msg.data() + launch_msg_size, init_launch_msg_data.data() + i * launch_msg_size);
+            launch_msg.data(),
+            launch_msg.data() + launch_msg_size,
+            init_launch_msg_data.data() + (i * launch_msg_size));
     }
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     cluster_->write_core(

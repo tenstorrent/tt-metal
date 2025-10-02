@@ -26,7 +26,7 @@ pytest models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py
 ```sh
 pytest models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
-- end-2-end perf is 6 FPS
+- end-2-end perf is 11 FPS
 
 ### Multi Device (DP=2, N300):
 
@@ -34,7 +34,7 @@ pytest models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_pe
 ```sh
 pytest  models/experimental/swin_s/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
 ```
-- end-2-end perf is 13 FPS
+- end-2-end perf is 23 FPS
 
 ## Performant demo with Trace+2CQ
 

@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole, is_blackhole, torch_random
+from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -84,7 +84,6 @@ def test_prod(device, batch_size, c, h, w, dim, keepdim, dtype):
     # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -110,7 +109,6 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -136,7 +134,6 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [1])
 @pytest.mark.parametrize("dim_2", [2])
 @pytest.mark.parametrize("dim_3", [3])
@@ -161,7 +158,6 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
-@skip_for_grayskull("Not a tile size multiple, may fail on GS if run all tests. #17084")
 @pytest.mark.parametrize("dim_1", [33])
 @pytest.mark.parametrize("dim_2", [5])
 @pytest.mark.parametrize("dim_3", [7])
@@ -558,7 +554,6 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_for_grayskull("Not a tile size multiple, will fail on GS. #17132")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4096}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
