@@ -385,9 +385,9 @@ def test_prefill_perf(
 @pytest.mark.parametrize(
     "batch, seq_len",
     [
-        (1, 8),
+        (1, 128),
     ],
-    ids=["b1s8"],
+    ids=["b1s128"],
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
