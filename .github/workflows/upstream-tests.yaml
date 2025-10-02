@@ -322,6 +322,7 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
