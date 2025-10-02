@@ -44,7 +44,7 @@ def from_torch(
     layout: ttnn.Layout = ttnn.Layout.TILE,
     dtype: ttnn.DataType = ttnn.bfloat16,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-    mesh_mapping: Mapping[int, int] | None = None,
+    mesh_mapping: Mapping[int | None, int | None] | None = None,
     to_host: bool = False,
 ) -> ttnn.Tensor:
     mesh_mapper = create_mesh_mapper(mesh_mapping or {}, device=device)
@@ -60,7 +60,7 @@ def from_torch(
 
 
 def to_torch(
-    x: ttnn.Tensor, /, *, device: ttnn.MeshDevice, mesh_mapping: Mapping[int, int] | None = None
+    x: ttnn.Tensor, /, *, device: ttnn.MeshDevice, mesh_mapping: Mapping[int | None, int | None] | None = None
 ) -> torch.Tensor:
     first_size = x.shape[0]
     mesh_composer = create_mesh_composer(mesh_mapping or {}, device=device)
