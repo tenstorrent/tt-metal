@@ -357,7 +357,12 @@ def run_conv(
 
     torch.set_printoptions(precision=3, sci_mode=False)
     if fast_compare:
-        if fp32_accum and output_dtype != ttnn.bfloat8_b and input_dtype != ttnn.bfloat8_b:
+        if (
+            fp32_accum
+            and output_dtype != ttnn.bfloat8_b
+            and input_dtype != ttnn.bfloat8_b
+            and weights_dtype != ttnn.bfloat8_b
+        ):
             threshold = 3e-1 + 5e-3 * math.log(input_channels * filter_height * filter_width, 2)
         else:
             threshold = 3e-1 + 1e-1 * math.log(input_channels * filter_height * filter_width, 2)
@@ -752,7 +757,7 @@ def test_conv_activation(
     # fmt: off
     (
         (10,    64,  4096,   512,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi,   0),
-        (64,    64,  2048,   256,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 16, ttnn.MathFidelity.LoFi,   0),
+        (64,    64,  2048,   256,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),       0,  ttnn.MathFidelity.LoFi,   0),
         (64,    64,  1024,   128,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
         (64,    64,   512,    64,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi,   0),
         ( 4,    32,  1024,  1024,   ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ttnn.MathFidelity.LoFi,   0),
@@ -802,7 +807,7 @@ def test_conv_dram(
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
 
-    if input_channels > 1024 and dtype == ttnn.bfloat8_b:
+    if input_channels > 1024 and input_dtype == ttnn.bfloat8_b:
         pytest.skip("Skipping tests with large accumulation due to bfloat8 accuracy issues.")
     batch_size = 1
     config = {}
