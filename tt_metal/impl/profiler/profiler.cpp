@@ -1474,7 +1474,7 @@ void DeviceProfiler::readDeviceMarkerData(
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
 
-    const auto& [new_marker_it, new_marker_inserted] = device_markers.emplace(
+    const auto& [_, new_marker_inserted] = device_markers.emplace(
         run_host_id,
         trace_id,
         trace_id_count,
@@ -1681,8 +1681,6 @@ void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = fal
 void DeviceProfiler::setLastFDReadAsDone() { this->is_last_fd_read_done = true; }
 
 bool DeviceProfiler::isLastFDReadDone() const { return this->is_last_fd_read_done; }
-
-void DeviceProfiler::addTraceId(uint32_t trace_id) { this->traces_replayed.push_back(trace_id); }
 
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #if defined(TRACY_ENABLE)
