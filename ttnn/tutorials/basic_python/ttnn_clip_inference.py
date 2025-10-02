@@ -12,6 +12,7 @@ from transformers import CLIPTokenizer, CLIPModel
 import requests
 from io import BytesIO
 import time
+import safetensors.torch
 
 from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize, InterpolationMode
 
@@ -614,6 +615,10 @@ def main():
 
         # Load pre-trained CLIP model and convert weights to TT-NN format
         logger.info("Loading pre-trained CLIP model...")
+
+        # model = safetensors.torch.load_file("/home/nmaurice/.cache/huggingface/hub/models--openai--clip-vit-base-patch32/snapshots/c237dc49a33fc61debc9276459120b7eac67e7ef/model.safetensors")
+        # state_dict = convert_model_to_ttnn(model)
+
         model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         state_dict = convert_model_to_ttnn(model.state_dict())
 
