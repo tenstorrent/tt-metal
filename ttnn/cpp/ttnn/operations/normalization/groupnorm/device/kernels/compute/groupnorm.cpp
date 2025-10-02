@@ -18,6 +18,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -124,12 +126,15 @@ void MAIN {
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(24);
 
+    constexpr uint32_t one_minus_pad_correction_factor = get_compile_time_arg_val(28);
+
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
 
     // dst regs
     constexpr uint32_t dst0 = 0;
+    constexpr uint32_t dst1 = 1;
     constexpr uint32_t scaler0 = 0;
 
     // input cbs
@@ -501,11 +506,24 @@ void MAIN {
                     reduce_tile(cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
                 }
                 cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
+                reduce_uninit();
+
+                // Remove residual padding error
+                mul_tiles_init(cb_ex_global, cb_ex_global);
+                mul_tiles(cb_ex_global, cb_ex_global, 0, 0, dst1);
+
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst1, one_minus_pad_correction_factor);
+
+                add_binary_tile_init();
+                add_binary_tile(dst0, dst1, dst0);
+                // End remove residual padding error
+
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2_global);
                 tile_regs_release();
-                reduce_uninit();
+
                 cb_push_back(cb_ex2_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex2, 1);

@@ -1953,6 +1953,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
     // compute kernel compile time args
+    float pad_correction_factor = shape[1] * shape[2] * (1.0 / (a.logical_shape()[1] * a.logical_shape()[2]));
+    union {
+        float f;
+        uint32_t u;
+    } one_minus_pad_correction_factor = {1.0 - pad_correction_factor};
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {
         (std::uint32_t)1,
         (std::uint32_t)gamma.has_value(),
@@ -1960,18 +1965,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_cores_per_mcast_group,
         (std::uint32_t)num_batches_per_core_group_1,
         (std::uint32_t)num_groups_per_core,
-
         (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht_group_1 * block_wt,
-
         (std::uint32_t)subblock_wt,
         (std::uint32_t)num_subblocks_w,
-
         (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_Mt_group_1 * per_core_Nt,
-
         (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
         (std::uint32_t)num_groups_per_reset,
         (std::uint32_t)single_tile_size,
@@ -1985,8 +1986,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
-
-        (std::uint32_t)num_reciprocals};
+        (std::uint32_t)num_reciprocals,
+        (std::uint32_t)one_minus_pad_correction_factor.u};
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {
         (std::uint32_t)1,
         (std::uint32_t)gamma.has_value(),
@@ -1994,18 +1995,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_cores_per_mcast_group,
         (std::uint32_t)num_batches_per_core_group_2,
         (std::uint32_t)num_groups_per_core,
-
         (std::uint32_t)block_ht_group_2,
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht_group_2 * block_wt,
-
         (std::uint32_t)subblock_wt,
         (std::uint32_t)num_subblocks_w,
-
         (std::uint32_t)per_core_Mt_group_2,
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_Mt_group_2 * per_core_Nt,
-
         (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
         (std::uint32_t)num_groups_per_reset,
         (std::uint32_t)single_tile_size,
@@ -2019,9 +2016,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2,
-
-        (std::uint32_t)num_reciprocals};
-
+        (std::uint32_t)num_reciprocals,
+        (std::uint32_t)one_minus_pad_correction_factor.u};
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
@@ -2029,18 +2025,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_cores_per_mcast_group,
         (std::uint32_t)num_batches_per_core_group_1,
         (std::uint32_t)num_groups_per_core,
-
         (std::uint32_t)block_ht_group_1,
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht_group_1 * block_wt,
-
         (std::uint32_t)subblock_wt,
         (std::uint32_t)num_subblocks_w,
-
         (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_Mt_group_1 * per_core_Nt,
-
         (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
         (std::uint32_t)num_groups_per_reset,
         (std::uint32_t)single_tile_size,
@@ -2054,8 +2046,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_1,
-
-        (std::uint32_t)num_reciprocals};
+        (std::uint32_t)num_reciprocals,
+        (std::uint32_t)one_minus_pad_correction_factor.u};
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_2 = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
@@ -2063,18 +2055,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_cores_per_mcast_group,
         (std::uint32_t)num_batches_per_core_group_2,
         (std::uint32_t)num_groups_per_core,
-
         (std::uint32_t)block_ht_group_2,
         (std::uint32_t)block_wt,
         (std::uint32_t)block_ht_group_2 * block_wt,
-
         (std::uint32_t)subblock_wt,
         (std::uint32_t)num_subblocks_w,
-
         (std::uint32_t)per_core_Mt_group_2,
         (std::uint32_t)per_core_Nt,
         (std::uint32_t)per_core_Mt_group_2 * per_core_Nt,
-
         (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
         (std::uint32_t)num_groups_per_reset,
         (std::uint32_t)single_tile_size,
@@ -2088,8 +2076,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_out_blocks,
         (std::uint32_t)num_channels_per_group,
         (std::uint32_t)num_rows_per_batch_per_core_group_2,
-
-        (std::uint32_t)num_reciprocals};
+        (std::uint32_t)num_reciprocals,
+        (std::uint32_t)one_minus_pad_correction_factor.u};
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -2357,7 +2345,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         packed_winv_value_group_2 =
             pack_two_bfloat16_into_uint32({bfloat_winv_value_group_2, bfloat_winv_value_group_2});
     }
-    float cinv = 1.0f / std::sqrt(num_cores_per_batch * num_cores_per_group);  // bcast-cores scaler
+    float cinv = std::sqrt(
+        pad_correction_factor /
+        (num_cores_per_batch *
+         num_cores_per_group));  // bcast-cores scaler. Pad correction factor=(padded_size/logical_size) to account for
+                                 // scaling error from padding.
     bfloat16 bfloat_cinv_value = bfloat16::truncate(cinv);
     uint32_t packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv_value, bfloat_cinv_value});
     union {
