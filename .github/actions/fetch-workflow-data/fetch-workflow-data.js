@@ -342,6 +342,7 @@ async function run() {
       fs.mkdirSync(logsRoot, { recursive: true });
     }
     const annotationsIndex = {};
+    const logsIndex = {};
     for (const [name, runs] of grouped.entries()) {
       try {
         // Consider only the target branch and sort newest first
@@ -374,6 +375,8 @@ async function run() {
           const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
           const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
           const checkRunIds = [];
+          const gtestJobs = [];
+          const gtestAnnotationJobNames = new Set();
           for (const j of jobs) {
             const cru = j && j.check_run_url;
             if (typeof cru === 'string' && cru.includes('/check-runs/')) {
@@ -381,10 +384,20 @@ async function run() {
               const id = idStr ? parseInt(idStr, 10) : NaN;
               if (!Number.isNaN(id)) checkRunIds.push({ id, job_name: j.name });
             }
+            // Heuristic: mark jobs that look like gtests and are not successful
+            try {
+              const jobName = (j && j.name) ? String(j.name) : '';
+              const isGtest = /gtest/i.test(jobName) || /gtests/i.test(jobName);
+              const conc = j && j.conclusion;
+              if (isGtest && conc !== 'success' && conc !== 'skipped' && conc !== 'cancelled') {
+                gtestJobs.push({ id: j.id, name: jobName });
+              }
+            } catch (_) { /* ignore */ }
           }
           const annRoot = path.join(workspace, 'annotations', String(targetRun.id));
           if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
           const allAnnotations = [];
+          let sawFailingAnnotationForGtest = false;
           for (const { id: checkRunId, job_name } of checkRunIds) {
             let page = 1;
             const budget = 500; // safety cap per run
@@ -404,6 +417,25 @@ async function run() {
                   title: a.title,
                   raw_details: a.raw_details,
                 });
+                // If any failing/error annotation belongs to a job that looks like gtest, note it
+                try {
+                  const levelLc = String(a.annotation_level || '').toLowerCase();
+                  const msgTrim = String(a.message || '').trim();
+                  const msgLc = msgTrim.toLowerCase();
+                  const isUnknownFileLead = msgLc.startsWith('unknown file');
+                  // Primary heuristic: failing/error annotation whose message starts with 'unknown file' is a gtest indicator
+                  if (levelLc === 'failure' || levelLc === 'error') {
+                    if (isUnknownFileLead) {
+                      sawFailingAnnotationForGtest = true;
+                      if (job_name) gtestAnnotationJobNames.add(String(job_name));
+                    }
+                    // Keep legacy job-name heuristic as a secondary signal
+                    else if ((/gtest/i.test(String(job_name || '')) || /gtests/i.test(String(job_name || '')))) {
+                      sawFailingAnnotationForGtest = true;
+                      if (job_name) gtestAnnotationJobNames.add(String(job_name));
+                    }
+                  }
+                } catch (_) { /* ignore */ }
               }
               if (arr.length < perPage) break;
               page += 1;
@@ -414,6 +446,67 @@ async function run() {
           const relativeAnn = path.relative(workspace, annRoot) || annRoot;
           annotationsIndex[String(targetRun.id)] = relativeAnn;
           core.info(`Fetched annotations for failing run ${targetRun.id} → ${allAnnotations.length} items`);
+
+          // If any failing gtest job detected, download and extract run logs once and index gtest job logs
+          try {
+            const shouldFetchGtestLogs = sawFailingAnnotationForGtest || (Array.isArray(gtestJobs) && gtestJobs.length > 0);
+            if (shouldFetchGtestLogs) {
+              const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
+              const runDir = path.join(logsRoot, String(targetRun.id));
+              if (!fs.existsSync(runDir)) fs.mkdirSync(runDir, { recursive: true });
+              const zipPath = path.join(runDir, `logs-${targetRun.id}.zip`);
+              fs.writeFileSync(zipPath, Buffer.from(runLogsZip.data));
+              const extractDir = path.join(runDir, 'extract');
+              if (!fs.existsSync(extractDir)) fs.mkdirSync(extractDir, { recursive: true });
+              // Extract quietly to avoid ENOBUFS
+              execFileSync('unzip', ['-o', zipPath, '-d', extractDir], { stdio: 'ignore' });
+
+              // Helper to sanitize strings for fuzzy file matching
+              const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+              const wanted = new Map();
+              for (const gj of gtestJobs) {
+                const key = sanitize(gj.name);
+                if (!wanted.has(key)) wanted.set(key, { name: gj.name, files: [] });
+              }
+              // Add any job names discovered via 'unknown file' annotations
+              for (const jn of Array.from(gtestAnnotationJobNames.values())) {
+                const key = sanitize(jn);
+                if (!wanted.has(key)) wanted.set(key, { name: jn, files: [] });
+              }
+              if (shouldFetchGtestLogs && wanted.size === 0) {
+                // If we didn't identify explicit gtest jobs from jobs API, fall back to any file containing 'gtest'
+                wanted.set('gtest', { name: 'gtest', files: [] });
+              }
+              // Walk extracted tree and record .txt files that match wanted keys
+              const stack = [extractDir];
+              while (stack.length) {
+                const dir = stack.pop();
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const ent of entries) {
+                  const p = path.join(dir, ent.name);
+                  if (ent.isDirectory()) {
+                    stack.push(p);
+                  } else if (ent.isFile() && /\.txt$/i.test(ent.name)) {
+                    const fileKey = sanitize(p);
+                    for (const [k, rec] of wanted.entries()) {
+                      if (fileKey.includes(k)) {
+                        const rel = path.relative(runDir, p);
+                        if (!rec.files.includes(rel)) rec.files.push(rel);
+                      }
+                    }
+                  }
+                }
+              }
+              const gtestIndex = { jobs: Array.from(wanted.values()).filter(j => (j.files || []).length > 0) };
+              const gtestIndexPath = path.join(runDir, 'gtest-jobs.json');
+              fs.writeFileSync(gtestIndexPath, JSON.stringify(gtestIndex));
+              const relativeRunDir = path.relative(workspace, runDir) || runDir;
+              logsIndex[String(targetRun.id)] = relativeRunDir;
+              core.info(`Downloaded and indexed logs for failing gtest run ${targetRun.id} → ${gtestIndex.jobs.length} job(s)`);
+            }
+          } catch (e) {
+            core.warning(`Failed to download/index logs for run ${targetRun.id}: ${e.message}`);
+          }
         } catch (e) {
           core.warning(`Failed to fetch annotations for run ${targetRun.id}: ${e.message}`);
         }
@@ -426,6 +519,14 @@ async function run() {
     if (!fs.existsSync(annotationsRoot)) fs.mkdirSync(annotationsRoot, { recursive: true });
     const annotationsIndexPath = path.join(annotationsRoot, 'annotations-index.json');
     fs.writeFileSync(annotationsIndexPath, JSON.stringify(annotationsIndex));
+
+    // Persist logs index
+    const logsIndexPath = path.join(logsRoot, 'logs-index.json');
+    try {
+      fs.writeFileSync(logsIndexPath, JSON.stringify(logsIndex));
+    } catch (e) {
+      core.warning(`Failed to write logs index: ${e.message}`);
+    }
 
     // Build a commits index for the main branch within the last N days
     // The index is an array of commits sorted by commit author/commit date ascending.
@@ -471,6 +572,7 @@ async function run() {
     core.setOutput('workflow-count', grouped.size);
     core.setOutput('cache-path', outputPath);
     core.setOutput('logs-root', logsRoot);
+    core.setOutput('logs-index-path', logsIndexPath);
     core.setOutput('annotations-root', annotationsRoot);
     core.setOutput('annotations-index-path', annotationsIndexPath);
     core.setOutput('commits-path', commitsPath);

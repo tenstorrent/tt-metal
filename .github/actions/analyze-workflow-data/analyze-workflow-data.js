@@ -25,6 +25,9 @@ const EMPTY_VALUE = '—';
 // This is populated when action inputs provide their paths.
 let __annotationsIndexMap = undefined;
 
+// Optional logs index mapping (runId -> directory)
+let __logsIndexMap = undefined;
+
 
 
 /**
@@ -51,6 +54,32 @@ function getAnnotationsDirForRunId(runId) {
     if (!__annotationsIndexMap) return undefined;
     const key = String(runId);
     return __annotationsIndexMap.get(key);
+  } catch (_) {
+    return undefined;
+  }
+}
+
+function loadLogsIndexFromFile(filePath) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return undefined;
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const json = JSON.parse(raw);
+    const map = new Map();
+    if (json && typeof json === 'object' && !Array.isArray(json)) {
+      for (const [k, v] of Object.entries(json)) {
+        if (typeof v === 'string' && v) map.set(String(k), v);
+      }
+      return map;
+    }
+  } catch (_) { /* ignore */ }
+  return undefined;
+}
+
+function getLogsDirForRunId(runId) {
+  try {
+    if (!__logsIndexMap) return undefined;
+    const key = String(runId);
+    return __logsIndexMap.get(key);
   } catch (_) {
     return undefined;
   }
@@ -257,12 +286,109 @@ async function fetchCommitAuthor(_octokit, _context, _commitSha) {
  * Download workflow run logs and extract up to N error snippets.
  * Returns an array of strings (snippets).
  */
-async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, _logsDirPath = undefined, annotationsDirPath = undefined) {
+async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = undefined, annotationsDirPath = undefined) {
   try {
     await core.startGroup(`Extracting error snippets for run ${runId}`); // start a group to log the error snippets (we log this to the console)
-    // Primary: use annotations if available
-    const annDir = annotationsDirPath || getAnnotationsDirForRunId(runId);
     let snippets = [];
+
+    // If logs (gtest) are available for this run, parse them and return. This leaves pytest/others unchanged.
+    try {
+      const runLogsDir = logsDirPath || getLogsDirForRunId(runId);
+      if (runLogsDir && fs.existsSync(runLogsDir)) {
+        const idxPath = path.join(runLogsDir, 'gtest-jobs.json');
+        const extractDir = path.join(runLogsDir, 'extract');
+        if (fs.existsSync(idxPath) && fs.existsSync(extractDir)) {
+          const idx = JSON.parse(fs.readFileSync(idxPath, 'utf8'));
+          const jobs = Array.isArray(idx.jobs) ? idx.jobs : [];
+          const out = [];
+          for (const job of jobs) {
+            const jobName = (job && job.name) ? String(job.name) : 'gtest';
+            const files = Array.isArray(job.files) ? job.files : [];
+            for (const rel of files) {
+              try {
+                const abs = path.join(runLogsDir, rel);
+                if (!fs.existsSync(abs)) continue;
+                const text = fs.readFileSync(abs, 'utf8');
+                const lines = text.split(/\r?\n/);
+                let currentTest = undefined;
+                let inInfo = false;
+                let infoLines = [];
+                const flushIfFailBlock = () => {
+                  if (currentTest && infoLines.length) {
+                    const infoMsg = infoLines.join('\n').trim();
+                    if (infoMsg) {
+                      out.push({ label: `${jobName}: ${currentTest}`, snippet: infoMsg });
+                    }
+                  }
+                  inInfo = false;
+                  infoLines = [];
+                };
+                for (let i = 0; i < lines.length; i++) {
+                  const line = lines[i];
+                  const runMatch = line && line.match(/^\s*\[\s*RUN\s*\]\s+(.+?)\s*$/);
+                  if (runMatch) {
+                    // entering a test block; finalize any prior captured block
+                    flushIfFailBlock();
+                    currentTest = runMatch[1];
+                    continue;
+                  }
+                  // Detect test end markers
+                  const endOk = line && line.match(/^\s*\[\s*\w*OK\s*\]\s+(.+?)\s*$/);
+                  const endFailed = line && line.match(/^\s*\[\s*FAILED\s*\]\s+(.+?)\s*$/);
+                  if (endOk || endFailed) {
+                    // If failed, we want to keep captured info; if ok, discard
+                    if (!endFailed) {
+                      // discard accumulated info for non-failing
+                      inInfo = false; infoLines = []; currentTest = undefined;
+                    } else {
+                      // finalize failure block
+                      flushIfFailBlock();
+                      currentTest = undefined;
+                    }
+                    continue;
+                  }
+                  // Capture info: ... until backtrace:
+                  const lc = String(line || '').toLowerCase();
+                  if (!inInfo && /^\s*info:\s*$/i.test(line)) {
+                    inInfo = true; infoLines = []; continue;
+                  }
+                  if (inInfo) {
+                    if (/^\s*backtrace:\s*$/i.test(line)) {
+                      // stop at backtrace
+                      inInfo = false; continue;
+                    }
+                    // Avoid including overly long lines of backtrace-like content
+                    infoLines.push(line);
+                  }
+                }
+                // finalize at EOF
+                flushIfFailBlock();
+              } catch (_) { /* ignore file parse errors */ }
+            }
+          }
+          if (out.length) {
+            snippets = out.slice(0, Math.max(1, Math.min(maxSnippets, out.length)));
+            core.info(`Collected ${snippets.length} gtest snippet(s) from logs for run ${runId}`);
+            // Attach owners for gtest too
+            try {
+              const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
+              for (const it of snippets) {
+                if (!it) continue;
+                const cleaned = stripBracketSuffix(it.label || '');
+                const owner = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
+                if (owner && !it.owner) it.owner = owner;
+              }
+            } catch (_) { /* ignore */ }
+            return snippets;
+          }
+        }
+      }
+    } catch (e) {
+      core.warning(`Failed gtest log parsing for run ${runId}: ${e.message}`);
+    }
+
+    // Primary (default): use annotations if available (non-gtest)
+    const annDir = annotationsDirPath || getAnnotationsDirForRunId(runId);
     if (annDir && fs.existsSync(annDir)) {
       try {
         const filePath = path.join(annDir, 'annotations.json');
@@ -688,6 +814,7 @@ async function run() {
     const alertAll = String(core.getInput('alert-all') || 'false').toLowerCase() === 'true'; // get the alert-all input from the action inputs
     const annotationsIndexPath = core.getInput('annotations-index-path', { required: false }); // optional: path to JSON mapping runId -> annotations dir
     const commitsPath = core.getInput('commits-path', { required: false }); // optional: path to commits index JSON
+    const logsIndexPath = core.getInput('logs-index-path', { required: false }); // optional: path to logs index JSON
 
     // Validate inputs
     if (!fs.existsSync(cachePath)) {
@@ -712,6 +839,15 @@ async function run() {
         core.info(`Loaded annotations index with ${__annotationsIndexMap.size} entries from ${annotationsIndexPath}`);
       } else if (annotationsIndexPath) {
         core.info(`No valid entries found in annotations index file at ${annotationsIndexPath}`);
+      }
+    }
+
+    if (logsIndexPath) {
+      __logsIndexMap = loadLogsIndexFromFile(logsIndexPath);
+      if (__logsIndexMap && __logsIndexMap.size) {
+        core.info(`Loaded logs index with ${__logsIndexMap.size} entries from ${logsIndexPath}`);
+      } else if (logsIndexPath) {
+        core.info(`No valid entries found in logs index file at ${logsIndexPath}`);
       }
     }
 
