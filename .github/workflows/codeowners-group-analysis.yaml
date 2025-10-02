@@ -195,8 +195,8 @@ jobs:
           fi
 
   get-reviews:
-    needs: find-pr
-    if: needs.find-pr.outputs.pr-exists == 'true'
+    needs: [find-pr]
+    if: always() && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     outputs:
       approved-reviewers: ${{ steps.get-reviews.outputs.approved-reviewers }}
@@ -229,7 +229,7 @@ jobs:
 
   analyze-codeowners:
     needs: [find-pr, get-reviews]
-    if: needs.find-pr.outputs.pr-exists == 'true'
+    if: always() && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     outputs:
       codeowners-groups: ${{ steps.analyze.outputs.codeowners-groups }}
@@ -539,7 +539,7 @@ jobs:
 
   post-comment:
     needs: [find-pr, analyze-codeowners, get-reviews, parse-comment]
-    if: needs.find-pr.outputs.pr-exists == 'true'
+    if: always() && needs.find-pr.outputs.pr-exists == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Generate comment data
