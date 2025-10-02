@@ -1428,7 +1428,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','<details>','<summary>Errors (click to expand)</summary>','', errorsHtml, '</details>',''].join('\n');
+            errorsList = ['','<details style="margin-left: 1.5em;">','<summary>Errors (click to expand)</summary>','', errorsHtml, '</details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build a link to the latest (most recent) failing run with timestamp and commit
@@ -1496,7 +1496,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','<details>','<summary>Errors (click to expand)</summary>','', errorsHtml2, '</details>',''].join('\n');
+            errorsList = ['','<details style="margin-left: 1.5em;">','<summary>Errors (click to expand)</summary>','', errorsHtml2, '</details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build information about the latest failing run
