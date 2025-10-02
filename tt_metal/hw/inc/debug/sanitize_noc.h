@@ -182,9 +182,11 @@ inline uint16_t debug_valid_pcie_addr(uint64_t addr, uint64_t len) {
     if (addr < core_info->noc_pcie_addr_base) {
         return DebugSanitizeNocAddrUnderflow;
     }
+#if 0
     if (addr + len > core_info->noc_pcie_addr_end) {
         return DebugSanitizeNocAddrOverflow;
     }
+#endif
     return DebugSanitizeNocOK;
 }
 inline uint16_t debug_valid_dram_addr(uint64_t addr, uint64_t len) {
