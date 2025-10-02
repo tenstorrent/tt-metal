@@ -24,15 +24,18 @@ namespace physical_discovery {
 
 TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     using namespace tt::tt_metal::distributed::multihost;
-    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    constexpr bool using_mock_cluster_descriptor = false;
+    constexpr bool run_discovery = true;
 
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
+    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(), distributed_context, using_mock_cluster_descriptor, run_discovery);
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.run_discovery();
     auto hostnames = physical_system_desc.get_all_hostnames();
     // Validate number of hosts discovered
-    EXPECT_EQ(hostnames.size(), *(distributed_context.size()));
+    EXPECT_EQ(hostnames.size(), *(distributed_context->size()));
     // Validate Graph Nodes
     const auto& asic_descs = physical_system_desc.get_asic_descriptors();
     for (const auto& host : hostnames) {
@@ -127,7 +130,7 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
         }
     }
 
-    if (*(distributed_context.rank()) == 0) {
+    if (*(distributed_context->rank()) == 0) {
         // Dump the Generated Physical System Descriptor
         log_info(tt::LogTest, "Dumping Physical System Descriptor to YAML");
         physical_system_desc.dump_to_yaml();

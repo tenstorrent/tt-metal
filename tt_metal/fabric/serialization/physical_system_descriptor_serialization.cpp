@@ -6,6 +6,8 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
 
+#include <umd/device/cluster.hpp>
+
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <fstream>
@@ -187,12 +189,18 @@ void physical_system_descriptor_to_proto(
             exit_node_connection_to_proto(exit_conn, proto_table->add_exit_connections());
         }
     }
+
+    // Set mock cluster flag
+    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
-    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(false);  // Don't run discovery
+    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
+        cluster, distributed_context, proto_desc.mock_cluster(), false);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -287,13 +295,16 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const Physica
     return result;
 }
 
-PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data) {
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    const std::vector<uint8_t>& data) {
     tt::fabric::proto::PhysicalSystemDescriptor proto_desc;
     if (!proto_desc.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc));
+    return std::move(*proto_to_physical_system_descriptor(cluster, distributed_context, proto_desc));
 }
 
 }  // namespace tt::tt_metal
