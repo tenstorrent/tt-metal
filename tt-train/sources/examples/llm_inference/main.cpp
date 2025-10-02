@@ -49,6 +49,8 @@ int main(int argc, char **argv) {
     // Set up device and context
     ttml::autograd::ctx().set_seed(seed);
 
+    fmt::print("Setting random seed to: {}\n", seed);
+
     ttml::autograd::ctx().open_device(MeshShape{1, 1}, {});
 
     auto *device = &ttml::autograd::ctx().get_device();
