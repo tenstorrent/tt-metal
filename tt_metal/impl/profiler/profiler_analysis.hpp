@@ -11,7 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include <common/TracyTTDeviceData.hpp>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 namespace tt {
 
