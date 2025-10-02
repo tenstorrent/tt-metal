@@ -20,6 +20,10 @@ from conftest import is_galaxy
 
 from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 
+MAX_SEQUENCE_LENGTH = 77
+TEXT_ENCODER_2_PROJECTION_DIM = 1280
+CONCATENATED_TEXT_EMBEDINGS_SIZE = 2048  # text_encoder_1_hidden_size + text_encoder_2_hidden_size (768 + 1280)
+
 
 @torch.no_grad()
 def run_demo_inference(
@@ -34,11 +38,11 @@ def run_demo_inference(
     capture_trace,
     guidance_scale,
     use_cfg_parallel,
+    fixed_seed_for_batch,
 ):
     batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
-    torch.manual_seed(0)
 
     if isinstance(prompts, str):
         prompts = [prompts]
@@ -81,23 +85,12 @@ def run_demo_inference(
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
-    (
-        all_prompt_embeds_torch,
-        torch_add_text_embeds,
-    ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
 
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        all_prompt_embeds_torch,
-        torch_add_text_embeds,
+        all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
+        torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
     )
 
-    tt_sdxl.prepare_input_tensors(
-        [
-            tt_latents,
-            tt_prompt_embeds[0],
-            tt_add_text_embeds[0],
-        ]
-    )
     tt_sdxl.compile_image_processing()
 
     logger.info("=" * 80)
@@ -113,17 +106,38 @@ def run_demo_inference(
     images = []
     logger.info("Starting ttnn inference...")
     for iter in range(len(prompts) // batch_size):
+        profiler.start("end_to_end_generation")
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
+        )
+
+        prompts_batch = prompts[iter * batch_size : (iter + 1) * batch_size]
+        negative_prompts_batch = (
+            negative_prompts[iter * batch_size : (iter + 1) * batch_size]
+            if isinstance(negative_prompts, list)
+            else negative_prompts
+        )
+
+        (
+            all_prompt_embeds_torch,
+            torch_add_text_embeds,
+        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
+
+        tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+            all_prompt_embeds_torch,
+            torch_add_text_embeds,
+            start_latent_seed=0,
+            fixed_seed_for_batch=fixed_seed_for_batch,
         )
 
         tt_sdxl.prepare_input_tensors(
             [
                 tt_latents,
-                tt_prompt_embeds[iter],
-                tt_add_text_embeds[iter],
+                tt_prompt_embeds[0],
+                tt_add_text_embeds[0],
             ]
         )
+
         imgs = tt_sdxl.generate_images()
 
         logger.info(
@@ -137,6 +151,8 @@ def run_demo_inference(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
         logger.info(f"Output tensor read completed in {profiler.times['read_output_tensor'][-1]:.2f} seconds")
+
+        profiler.end("end_to_end_generation")
 
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
@@ -182,6 +198,10 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ],
     indirect=["device_params"],
     ids=["use_cfg_parallel", "no_cfg_parallel"],
+)
+@pytest.mark.parametrize(
+    "fixed_seed_for_batch",
+    (False,),
 )
 @pytest.mark.parametrize(
     "prompt",
@@ -236,6 +256,7 @@ def test_demo(
     evaluation_range,
     guidance_scale,
     use_cfg_parallel,
+    fixed_seed_for_batch,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -250,4 +271,5 @@ def test_demo(
         capture_trace,
         guidance_scale,
         use_cfg_parallel,
+        fixed_seed_for_batch,
     )
