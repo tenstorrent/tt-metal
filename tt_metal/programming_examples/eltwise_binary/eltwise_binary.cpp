@@ -87,23 +87,17 @@ int main(int argc, char** argv) {
         // However there is a trade off, The more tiles in a circular buffer, the more memory is used. And Circular buffers are
         // backed by L1(SRAM) memory and L1 is a precious resource.
         // The hardware supports up to 32 circular buffers and they all act the same.
-        constexpr uint32_t tiles_per_cb = 2;
-        tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
+        tt::CBIndex src_cb_index = tt::CBIndex::c_0;
         CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/tiles_per_cb * tile_size_bytes,                    // The total size of the circular buffer in bytes
-            /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
-            .set_page_size(src0_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
+            /*total_size=*/4 * tile_size_bytes,                    // The total size of the circular buffer in bytes
+            /*data_format_spec=*/{{src_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
+            .set_page_size(src_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
                                                                               // the page size to the tile size (and thus
                                                                               // total_size / page_size = tiles_per is the number of
                                                                               // entries in the circular buffer)
-        tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
+        tt::CBIndex dst_cb_index = tt::CBIndex::c_1;
         CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/tiles_per_cb * tile_size_bytes,
-            /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, tile_size_bytes));
-        tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
-        CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/tiles_per_cb * tile_size_bytes,
+            /*total_size=*/2 * tile_size_bytes,
             /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(dst_cb_index, tile_size_bytes));
 
@@ -115,35 +109,33 @@ int main(int argc, char** argv) {
         // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them available in the
         // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
         // back to DRAM.
-        std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
+
+        std::vector<uint32_t> compute_compile_time_args = {tile_size_bytes};
+        TensorAccessorArgs(*src0_dram_buffer).append_to(compute_compile_time_args);
+        TensorAccessorArgs(*src1_dram_buffer).append_to(compute_compile_time_args);
+        TensorAccessorArgs(*dst_dram_buffer).append_to(compute_compile_time_args);
+
         auto reader = CreateKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
-        std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = compute_compile_time_args});
         auto writer = CreateKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = compute_compile_time_args});
         auto compute = CreateKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
             core,
-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
-                                                                // that trade off performance for accuracy. HiFi4 is the most accurate
-                                                                // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The
-                                                                // difference between them is the number of bits used during computation.
+            ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_compile_time_args});
 
         // Set the runtime arguments for the kernels. This also registers
         // the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, compute, core, {n_tiles});
+        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, writer, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), n_tiles});
+        SetRuntimeArgs(program, compute, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), n_tiles});
 
         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates
         // to Metalium that the operation is non-blocking. The function is allowed to return upon the kernel being queued. We must

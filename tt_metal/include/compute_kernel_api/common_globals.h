@@ -6,11 +6,15 @@
 
 #define ALWI inline __attribute__((always_inline))
 
+#ifdef COMPILE_FOR_TRISC
 #include "chlkc_list.h"
 #include "ckernel.h"
 #include "firmware_common.h"
 #include "ckernel_include.h"
 #include "hostdevcommon/kernel_structs.h"
+#else
+#include "llk_defs.h"
+#endif
 
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
