@@ -13,7 +13,6 @@ struct ReshapeDeviceOperation {
     const ttnn::Shape logical_output_shape;
     const ttnn::Shape padded_output_shape;
     tt::tt_metal::MemoryConfig output_mem_config;
-    const bool recreate_mapping_tensor;
 
     // Required functions to all tensor op functions
     void update_structure(const Tensor& input_tensor);
@@ -25,8 +24,6 @@ struct ReshapeDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
-    // custom hash function, don't hash on `recreate_mapping_tensor`
-    tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
 }  // namespace ttnn
