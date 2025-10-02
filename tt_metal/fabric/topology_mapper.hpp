@@ -70,24 +70,27 @@ private:
     void build_mapping();
 
     /**
-     * @brief Use BFS to find all hosts in the system and map them to mesh IDs and host ranks
+     * @brief Build the mapping between mesh IDs and host ranks
      *
-     * This method performs a breadth-first search starting from the current host to discover
-     * all hosts in the system and creates mappings between mesh IDs and host rank vectors.
-     * Each host rank vector contains hostnames indexed by host rank.
-     *
-     * @return A map from mesh IDs to host rank vectors (vector of hostnames)
+     * This method iterates through all meshes in the mesh graph and creates mappings
+     * based on the mesh IDs and fabric chip IDs from the mesh_container, mapping them
+     * to the ASIC IDs of the physical descriptor.
      */
     std::unordered_map<MeshId, HostRank> build_host_mesh_mappings();
-    void discover_hosts_dfs(const HostName& hostname, std::unordered_map<MeshId, HostRank>& mesh_id_to_host_rank);
 
     /**
-     * @brief Get all mesh IDs for a given host
+     * @brief Discover hosts using DFS
      *
-     * @param hostname The hostname to get mesh information for
-     * @return A vector of mesh IDs that the given host is associated with
+     * This method performs a depth-first search starting from the current host to discover
+     * all hosts in the system and creates mappings between mesh IDs and host rank vectors.
+
+     @return true if when solution is found, false otherwise
      */
-    std::vector<MeshId> get_mesh_info_for_host(const HostName& hostname) const;
+    bool discover_hosts_dfs(
+        const MeshId mesh_id,
+        const HostName& hostname,
+        std::unordered_map<MeshId, HostRank>& mesh_id_to_host_rank,
+        std::unordered_set<HostName>& visited_hosts);
 
     const MeshGraph& mesh_graph_;
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor_;

@@ -32,7 +32,7 @@ void TopologyMapper::build_mapping() {
     log_debug(tt::LogFabric, "TopologyMapper: Building mapping between fabric node IDs and physical ASIC IDs");
 
     // Use BFS to build the complete host to mesh mapping
-    auto mesh_id_host_rank_to_host_name = build_host_mesh_mapping_bfs();
+    auto mesh_id_host_rank_to_host_name = build_host_mesh_mappings();
 
     log_debug(
         tt::LogFabric,
@@ -57,40 +57,91 @@ std::unordered_map<MeshId, HostRank> TopologyMapper::build_host_mesh_mappings() 
     // Populate initial current host mapping
     mesh_id_to_host_rank[mesh_id] = {current_host};
 
+    std::unordered_set<HostName> visited_hosts = {};
+
     // Discover all hosts
-    discover_hosts_dfs(mesh_id, current_host, mesh_id_to_host_rank);
+    discover_hosts_dfs(mesh_id, current_host, mesh_id_to_host_rank, visited_hosts);
 
     return mesh_id_to_host_rank;
 }
 
-void TopologyMapper::discover_hosts_dfs(
-    MeshId mesh_id, HostName& host_name, std::unordered_map<MeshId, HostRank>& mesh_id_to_host_rank) {
-    // Get the mesh size
+bool TopologyMapper::discover_hosts_dfs(
+    const MeshId mesh_id,
+    const HostName& host_name,
+    std::unordered_map<MeshId, HostRank>& mesh_id_to_host_rank,
+    std::unordered_set<HostName>& visited_hosts) {
+    // Mesh Graph related information
     auto mesh_size = mesh_graph_.get_mesh_shape(mesh_id).mesh_size();
+    auto host_ranks = mesh_graph_.get_host_ranks(mesh_id);
 
-    // Get the host size
+    // Physical system related information
     auto host_size = physical_system_descriptor_.get_asics_connected_to_host(host_name).size();
 
-    // Calculate how many ranks are needed to cover the mesh
-    auto num_ranks = mesh_size / host_size;
+    // Rank sizes
+    auto rank_size = mesh_size / host_size;
 
-    // If Greater than 1, Big mesh
-    if (num_ranks == 1) {
+    // If Equal to 1, Single mesh per host
+    if (rank_size == 1) {
         mesh_id_to_host_rank[mesh_id] = {host_name};
+
+        // If Greater than 1, Big mesh
+    } else if (rank_size > 1) {
+        mesh_id_to_host_rank[mesh_id].resize(host_ranks.size());
+
+        // mesh_id_to_host_rank[mesh_id][*host_ranks.begin()] = host_name;
+
+        // If Less than 1, many meshes per host
+    } else {
+        mesh_id_to_host_rank[mesh_id] = {host_name};
+
+        // TODO: Find adjacent meshes on same host
+    }
+
+    if (visited_hosts.size() == physical_system_descriptor_.get_all_hostnames().size()) {
+        // FINISH!
+        return true;
+    }
+
+    // Size of the mesh ratio to host size does not match the number of host ranks means the match is incorrect
+    if (host_ranks.size() > 1 && host_ranks.size() != rank_size) {
+        return false;
+    }
+
+    if (host_ranks.size() == 1 && mesh_size > host_size) {
+        return false;
+    }
+
+    if (visited_hosts.contains(host_name)) {
+        // Add the chain to the mapping
+        return false;
+    }
+
+    // If Equal to 1, Single mesh per host
+    if (rank_size == 1) {
+        // Find adjacent hosts
+        auto adjacent_hosts = physical_system_descriptor_.get_host_neighbors(host_name);
+
+        // Find adjacent meshes
+        auto adjacent_meshes = mesh_graph_.get_adjacent_meshes(mesh_id);
+
+        for (const auto& adjacent_host : adjacent_hosts) {
+            for (const auto& adjacent_mesh : adjacent_meshes) {
+                if (discover_hosts_dfs(adjacent_mesh, adjacent_host, mesh_id_to_host_rank, visited_hosts)) {
+                    return true;
+                }
+            }
+        }
+
+        // If Greater than 1, Big mesh
+    } else if (rank_size > 1) {
         // TODO: Find adjacent hosts
 
-        else if (num_ranks > 1) {
-            mesh_id_to_host_rank[mesh_id].resize(num_ranks);
-
-            // TODO: Find adjacent hosts
-        }
-        else {  // If Less than 1, many meshes per host
-            mesh_id_to_host_rank[mesh_id] = {host_name};
-
-            // TODO: Find adjacent meshes on same host
-        }
-
-        // For each host neighbor, discover the hosts
+        // If Less than 1, many meshes per host
+    } else {
+        // TODO: Find adjacent meshes on same host
     }
+
+    return false;
+}
 
 }  // namespace tt::tt_fabric

@@ -724,6 +724,21 @@ std::vector<MeshId> MeshGraph::get_mesh_ids() const {
     return mesh_ids;
 }
 
+std::vector<MeshId> MeshGraph::get_adjacent_meshes(MeshId mesh_id) const {
+    validate_mesh_id(mesh_id);
+    std::unordered_set<MeshId> adjacent;
+    // Outgoing connections
+    for (const auto& chip_map : inter_mesh_connectivity_[*mesh_id]) {
+        for (const auto& pair : chip_map) {
+            MeshId dest = pair.first;
+            if (dest != mesh_id) {
+                adjacent.insert(dest);
+            }
+        }
+    }
+    return std::vector<MeshId>(adjacent.begin(), adjacent.end());
+}
+
 MeshContainer<chip_id_t> MeshGraph::get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank) const {
     auto it = mesh_to_chip_ids_.find(mesh_id);
     TT_FATAL(it != mesh_to_chip_ids_.end(), "MeshGraph: mesh_id {} not found", mesh_id);
