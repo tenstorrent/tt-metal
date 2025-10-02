@@ -72,7 +72,7 @@ class Generator:
         page_table=None,
         kv_cache=None,
         prompt_lens=None,
-        enable_trace=True,
+        enable_trace=False,
         sampling_params=None,
         empty_slots=None,
         tt_out_logits_all_users=None,
