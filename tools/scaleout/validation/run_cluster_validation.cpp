@@ -11,8 +11,17 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <cabling_generator/cabling_generator.hpp>
+#include <tt-metalium/hal.hpp>
 #include <algorithm>
 #include <random>
+
+template <typename T1, typename T2>
+constexpr std::common_type_t<T1, T2> align_down(T1 value, T2 alignment) {
+    static_assert(std::is_integral<T1>::value, "align_down() requires integral types");
+    static_assert(std::is_integral<T2>::value, "align_down() requires integral types");
+    using T = std::common_type_t<T1, T2>;
+    return static_cast<T>(value) & ~(static_cast<T>(alignment) - 1);
+}
 
 // Captures current list of supported inputargs
 struct InputArgs {
@@ -25,6 +34,10 @@ struct InputArgs {
     bool log_ethernet_metrics = false;
     bool print_connectivity = false;
     bool help = false;
+    bool send_traffic = false;
+    uint32_t data_size = align_down(tt::tt_metal::hal::get_erisc_l1_unreserved_size(), 64);
+    uint32_t packet_size_bytes = 64;
+    uint32_t num_iterations = 50;
 };
 
 // Struct to store connection information
@@ -57,10 +70,8 @@ void configure_local_kernels(
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(host_name);
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-    const size_t dst_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> kernel_coords;
 
@@ -153,10 +164,8 @@ void configure_cross_host_kernels(
     const auto& host_name = physical_system_descriptor.my_host_name();
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-    const size_t dst_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+    const size_t dst_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     for (const auto& host_neighbor : physical_system_descriptor.get_host_neighbors(host_name)) {
         const auto& exit_nodes = physical_system_descriptor.get_connecting_exit_nodes(host_name, host_neighbor);
@@ -228,8 +237,7 @@ void validate_traffic(
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
     size_t data_size) {
-    const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
+    const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     const auto& host_name = physical_system_descriptor.my_host_name();
     const auto& asic_topology = physical_system_descriptor.get_asic_topology(host_name);
@@ -270,10 +278,11 @@ std::vector<ValueType> generate_uniform_random_vector(
     return results;
 }
 
-void send_traffic_across_all_links(const PhysicalSystemDescriptor& physical_system_descriptor) {
-    constexpr uint32_t packet_size_bytes = 16;
-    constexpr uint32_t packet_size_words = packet_size_bytes >> 4;
-    constexpr uint32_t data_size = 256 * packet_size_bytes;
+void send_traffic_across_all_links(
+    const PhysicalSystemDescriptor& physical_system_descriptor, const InputArgs& input_args) {
+    uint32_t packet_size_bytes = input_args.packet_size_bytes;
+    uint32_t packet_size_words = input_args.packet_size_bytes >> 4;
+    uint32_t data_size = input_args.data_size;
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
@@ -290,37 +299,38 @@ void send_traffic_across_all_links(const PhysicalSystemDescriptor& physical_syst
         tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
 
     std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
-    std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
-
     for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
         asic_id_to_chip_id[asic_id] = chip_id;
     }
 
-    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, data_size / sizeof(uint32_t));
+    for (int i = 0; i < input_args.num_iterations; i++) {
+        std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
+        auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, data_size / sizeof(uint32_t));
 
-    configure_local_kernels(
-        physical_system_descriptor,
-        asic_id_to_chip_id,
-        devices,
-        inputs,
-        programs,
-        packet_size_bytes,
-        packet_size_words,
-        data_size);
+        configure_local_kernels(
+            physical_system_descriptor,
+            asic_id_to_chip_id,
+            devices,
+            inputs,
+            programs,
+            packet_size_bytes,
+            packet_size_words,
+            data_size);
 
-    configure_cross_host_kernels(
-        physical_system_descriptor,
-        asic_id_to_chip_id,
-        devices,
-        inputs,
-        programs,
-        packet_size_bytes,
-        packet_size_words,
-        data_size);
+        configure_cross_host_kernels(
+            physical_system_descriptor,
+            asic_id_to_chip_id,
+            devices,
+            inputs,
+            programs,
+            packet_size_bytes,
+            packet_size_words,
+            data_size);
 
-    execute_workloads(programs, devices);
+        execute_workloads(programs, devices);
 
-    validate_traffic(inputs, physical_system_descriptor, devices, asic_id_to_chip_id, data_size);
+        validate_traffic(inputs, physical_system_descriptor, devices, asic_id_to_chip_id, data_size);
+    }
 }
 
 void log_output_rank0(const std::string& message) {
@@ -376,6 +386,7 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
     input_args.fail_on_warning = test_args::has_command_option(args_vec, "--hard-fail");
     input_args.log_ethernet_metrics = test_args::has_command_option(args_vec, "--log-ethernet-metrics");
     input_args.print_connectivity = test_args::has_command_option(args_vec, "--print-connectivity");
+    input_args.send_traffic = test_args::has_command_option(args_vec, "--send-traffic");
     input_args.help = test_args::has_command_option(args_vec, "--help");
 
     TT_FATAL(
@@ -645,11 +656,13 @@ int main(int argc, char* argv[]) {
         log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     }
 
-    std::cout << "Sending traffic across all links" << std::endl;
-    for (int i = 0; i < 10; i++) {
-        send_traffic_across_all_links(physical_system_descriptor);
+    if (input_args.send_traffic) {
+        log_output_rank0(
+            "Sending traffic across all links. Num Iterations: " + std::to_string(input_args.num_iterations) +
+            " Packet Size (Bytes): " + std::to_string(input_args.packet_size_bytes) +
+            " Total Data Size: (Bytes): " + std::to_string(input_args.data_size));
+        send_traffic_across_all_links(physical_system_descriptor, input_args);
     }
-    std::cout << "Traffic sent across all links" << std::endl;
 
     if (*distributed_context.rank() == 0) {
         std::string unexpected_status_log =
