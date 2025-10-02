@@ -55,6 +55,9 @@ void bind_reduction_moe_operation(py::module& module) {
 
                 The output tensor will match the data type and layout of the input tensor.
 
+            Memory Support:
+                - Interleaved: DRAM and L1
+
             Limitations:
                 - Tensors must be 4D with shape [N, C, H, W], and must be located on the device.
                 - For the :attr:`input_tensor`, N*C*H must be a multiple of 32. The last dimension must be a power of two and ≥64.
@@ -62,7 +65,7 @@ void bind_reduction_moe_operation(py::module& module) {
                 - For the :attr:`topk_mask_tensor`, H must be 32 and W must match :attr:`k` (i.e. 32).
                 - For the :attr:`expert_mask_tensor`, H must be 32 and W must match W of the :attr:`input_tensor`.
                 - All of the shape validations are performed on padded shapes.
-                - Sharded outputs are not supported for this operation.
+                - Sharding is not supported for this operation.
 
             Example:
                 .. code-block:: python

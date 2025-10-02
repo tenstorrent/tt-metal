@@ -61,9 +61,13 @@ void bind_reduction_argmax_operation(py::module& module) {
                     * - UINT32
                       - ROW_MAJOR
 
+            Memory Support:
+                - Interleaved: DRAM and L1
+
             Limitations:
                 - All input tensors must be on-device.
                 - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
+                - Sharding is not supported for this operation
 
             Example:
               .. code-block:: python

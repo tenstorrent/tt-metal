@@ -68,9 +68,13 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                     * - BFLOAT16
                       - TILE
 
+            Memory Support:
+                - Interleaved: DRAM and L1
+
             Limitations:
                 - All input tensors must be on-device.
                 - When :attr:`dim` is not specified (i.e. full product), the :attr:`input_tensor` must be bfloat16, and keepdim=True is not supported  (as this operation results in a scalar).
+                - Sharding is not supported for this operation
 
             Example:
                 .. code-block:: python

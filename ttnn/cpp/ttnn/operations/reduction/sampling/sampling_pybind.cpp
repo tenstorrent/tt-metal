@@ -116,6 +116,9 @@ void bind_reduction_sampling_operation(py::module& module) {
             Returns:
                 ttnn.Tensor: The output tensor containing sampled indices.
 
+            Memory Support:
+              - Interleaved: DRAM and L1
+
             Limitations:
               - Inputs must be 4D tensors with shape [N, C, H, W], and must be located on the device.
               - The input tensors must represent exactly `32 users` based on their shape (i.e. N*C*H = 32).
@@ -124,7 +127,6 @@ void bind_reduction_sampling_operation(py::module& module) {
               - :attr:`k`: Must contain 32 values, in the range  '(0,32]'.
               - :attr:`p`, :attr:`temp`: Must contain 32 values in the range `[0.0, 1.0]`.
               - :attr:`sub_core_grids` (if provided): number of cores must equal the number of users (which is constrained to 32).
-              - All tensors use an INTERLEAVED memory layout.
 
             Example:
                 .. code-block:: python

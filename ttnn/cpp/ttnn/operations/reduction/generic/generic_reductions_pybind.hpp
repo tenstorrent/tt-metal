@@ -56,6 +56,11 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
 
             The output tensor will match the data type and layout of the input tensor.
 
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded (L1): Width, Height, and ND sharding
+            - Output sharding/layout will mirror the input
+
         Example:
             .. code-block:: python
 
