@@ -41,7 +41,7 @@ namespace tt::tt_fabric {
  * The consumer when issuing an acknowledgement, will increment the producer's free slots counter.
  */
 template <uint8_t EDM_NUM_BUFFER_SLOTS>
-struct RouterElasticChannelWriterAdapter {
+struct RouterStaticSizedChannelWriterAdapter {
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;
@@ -58,7 +58,7 @@ struct RouterElasticChannelWriterAdapter {
     static constexpr uint32_t close_connection_request_value = 2;
     // HACK: Need a way to properly set this up
 
-    RouterElasticChannelWriterAdapter() = default;
+    RouterStaticSizedChannelWriterAdapter() = default;
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE void init(
@@ -116,7 +116,7 @@ struct RouterElasticChannelWriterAdapter {
     }
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
-    FORCE_INLINE RouterElasticChannelWriterAdapter(
+    FORCE_INLINE RouterStaticSizedChannelWriterAdapter(
         bool connected_to_persistent_fabric,
         uint8_t edm_worker_x,
         uint8_t edm_worker_y,
@@ -400,6 +400,6 @@ private:
 };
 
 template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
-using EdmToEdmSender = RouterElasticChannelWriterAdapter<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
+using EdmToEdmSender = RouterStaticSizedChannelWriterAdapter<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
 
 }  // namespace tt::tt_fabric
