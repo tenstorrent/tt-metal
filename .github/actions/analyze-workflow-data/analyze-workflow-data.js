@@ -272,16 +272,16 @@ function renderErrorsTable(errorSnippets) {
       if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
-    return `<tr><td style="overflow-wrap: break-word;">${jobEsc}</td><td style="overflow-wrap: break-word;">${testEsc}</td><td style="overflow-wrap: break-word;">${ownerEsc}</td><td style="overflow-wrap: break-word;">${snippetOneLine}</td></tr>`;
+    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: anywhere;">${jobEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: anywhere;">${testEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: anywhere;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: anywhere;">${snippetOneLine}</td></tr>`;
   }).join('\n');
   return [
-    '<table style="table-layout: fixed; width: 100%; word-wrap: break-word;">',
+    '<table style="table-layout: auto; width: 100%;">',
     '<thead>',
     '<tr>',
-    '<th style="width: 60%;">Job</th>',
-    '<th style="width: 12%;">Test</th>',
-    '<th style="width: 10%;">Owner</th>',
-    '<th style="width: 18%;">Error</th>',
+    '<th style="width: 68%;">Job</th>',
+    '<th style="width: 10%;">Test</th>',
+    '<th style="width: 8%;">Owner</th>',
+    '<th style="width: 14%;">Error</th>',
     '</tr>',
     '</thead>',
     '<tbody>',
