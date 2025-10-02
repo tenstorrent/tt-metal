@@ -26,6 +26,9 @@ class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
+
+class TopologyMapper;
+
 // TODO: remove this once UMD provides API for UBB ID
  struct UbbId {
      std::uint32_t tray_id;
@@ -198,10 +201,6 @@ public:
     const std::unordered_map<tt_metal::distributed::multihost::Rank, std::pair<MeshId, MeshHostRankId>>&
     get_global_logical_bindings() const;
 
-    // Get adjacent chips from ethernet connections
-    std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
-        chip_id_t chip_id, std::uint32_t num_ports_per_side) const;
-
 private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
@@ -371,6 +370,7 @@ private:
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
+    std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
 };
 
 }  // namespace tt::tt_fabric
