@@ -37,10 +37,7 @@ def test_with_ops(device):
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(5):
-        print(f"execute_trace {i}")
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        # ttnn.ReadDeviceProfiler(device)
-    print("release trace")
     ttnn.release_trace(device, tid)
 
 
@@ -66,15 +63,12 @@ def test_with_ops_single_core(device):
 
     ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    for i in range(5):
+    for i in range(100):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=1, x=1))
     ttnn.end_trace_capture(device, tid, cq_id=0)
 
     for i in range(5):
-        print(f"execute_trace {i}")
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        # ttnn.ReadDeviceProfiler(device)
-    print("release trace")
     ttnn.release_trace(device, tid)
 
 
@@ -97,16 +91,13 @@ def test_with_ops_multiple_trace_ids(device):
 
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
-    print(device.compute_with_storage_grid_size())
 
     ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
-    # ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=4, x=5))
 
     trace_ids = []
     for _ in range(3):
         tid = ttnn.begin_trace_capture(device, cq_id=0)
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
-        # ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=4, x=5))
         ttnn.end_trace_capture(device, tid, cq_id=0)
         trace_ids.append(tid)
 
@@ -120,15 +111,14 @@ def test_with_ops_multiple_trace_ids(device):
         random.seed(i)
         shuffled_trace_ids = random.sample(trace_ids, len(trace_ids))
         for tid in shuffled_trace_ids:
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(device)
+            ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+
         ttnn.ReadDeviceProfiler(device)
 
     for tid in trace_ids:
         ttnn.release_trace(device, tid)
 
 
-# add test where trace ops are in between non-trace ops
 @pytest.mark.parametrize(
     "device_params", [{"trace_region_size": 1996800, "dispatch_core_type": ttnn.DispatchCoreType.WORKER}], indirect=True
 )
@@ -148,7 +138,6 @@ def test_with_ops_trace_with_non_trace(device):
 
     a = ttnn.to_layout(a, ttnn.TILE_LAYOUT)
     b = ttnn.to_layout(b, ttnn.TILE_LAYOUT)
-    print(device.compute_with_storage_grid_size())
 
     for _ in range(5):
         ttnn.matmul(a, b, core_grid=ttnn.CoreGrid(y=8, x=8))
