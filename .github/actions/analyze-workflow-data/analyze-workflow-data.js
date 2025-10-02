@@ -238,7 +238,7 @@ function renderErrorsTable(errorSnippets) {
   }).join('\n');
   return [
     '| Job | Test | Owner | Error |',
-    '|------|-------|-------|',
+    '|------|------|-------|-------|',
     rows,
     ''
   ].join('\n');
