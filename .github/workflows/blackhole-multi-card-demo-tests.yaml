@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       regenerate-ttnn-cache:
-        description: "Regenerate model ttnn cache (removes :ro from volume mount)"
+        description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
         required: false
         type: boolean
         default: false
