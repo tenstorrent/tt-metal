@@ -120,7 +120,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama demo model tests"
     verify_llama_dir_
 
-    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+    if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         local data_parallel_devices="4"
@@ -140,7 +140,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
     verify_llama_dir_
 
-    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+    if [[ "$hw_topology" == "blackhole_deskbox" ]] || [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
     elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
         local data_parallel_devices="4"
@@ -231,6 +231,14 @@ test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_loudbox"]="
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
+
+hw_topology_test_suites["blackhole_p300"]="
+test_suite_bh_umd_unit_tests
+test_suite_bh_pcie_didt_tests
+test_suite_bh_single_pcie_python_unit_tests
+test_suite_bh_single_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
