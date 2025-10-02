@@ -100,4 +100,27 @@ std::optional<tt::tt_metal::distributed::MeshCoordinate> TensorTopology::get_ten
     return std::nullopt;
 }
 
+bool operator==(const TensorTopology& lhs, const TensorTopology& rhs) {
+    return lhs.distribution_shape() == rhs.distribution_shape() && lhs.placements() == rhs.placements() &&
+           lhs.mesh_coords() == rhs.mesh_coords();
+}
+
+bool operator!=(const TensorTopology& lhs, const TensorTopology& rhs) { return !(lhs == rhs); }
+
+std::ostream& operator<<(std::ostream& os, const TensorTopology& tensor_topology) {
+    os << "TensorTopology(";
+    os << "distribution_shape=" << tensor_topology.distribution_shape();
+    os << ", placements=" << tensor_topology.placements();
+    os << ", mesh_coords=";
+    for (size_t i = 0; i < tensor_topology.mesh_coords().size(); i++) {
+        const auto& coord = tensor_topology.mesh_coords()[i];
+        if (i > 0) {
+            os << ", ";
+        }
+        os << coord;
+    }
+    os << ")";
+    return os;
+}
+
 }  // namespace tt::tt_metal
