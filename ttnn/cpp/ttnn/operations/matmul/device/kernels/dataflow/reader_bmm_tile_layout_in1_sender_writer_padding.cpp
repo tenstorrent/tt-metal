@@ -321,14 +321,10 @@ void kernel_main() {
 #else
                                     noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_helper);
                                     noc_async_read_barrier();
-
-                                    volatile tt_l1_ptr uint8_t* src =
-                                        reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr_helper);
-                                    volatile tt_l1_ptr uint8_t* dst =
-                                        reinterpret_cast<volatile tt_l1_ptr uint8_t*>(l1_write_addr_in1);
-                                    for (uint32_t i = 0; i < in1_single_tile_size_bytes; ++i) {
-                                        dst[i] = src[i];
-                                    }
+                                    memcpy(
+                                        reinterpret_cast<void*>(l1_write_addr_in1),
+                                        reinterpret_cast<const void*>(l1_write_addr_helper),
+                                        in1_single_tile_size_bytes);
 #endif  // INTERMEDIATE_CB_READ
                                 }
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;

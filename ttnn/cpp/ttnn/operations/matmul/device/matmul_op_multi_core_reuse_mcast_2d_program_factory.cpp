@@ -597,18 +597,11 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     Note: This workaround should only be used for this specific alignment issue case.
     */
-    bool in0_needs_intermediate_cb_read = false;
     bool in1_needs_intermediate_cb_read = false;
     if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
         in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            // mm_kernel_in0_sender_interleaved_defines["INTERMEDIATE_CB_READ"] = "1"; // TODO: Check if needed
-        }
         if (in1_needs_intermediate_cb_read) {
             mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
-            // mm_kernel_in1_receiver_writer_defines["IN1_NEEDS_INTERMEDIATE_CB"] = "1";
-            // mm_kernel_in1_receiver_writer_other_noc_setup_defines["IN1_NEEDS_INTERMEDIATE_CB"] = "1";
         }
     }
 
@@ -920,7 +913,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 .set_tile_dims(intermediate_cb_index, in1_tile);
         tt_metal::CreateCircularBuffer(program, all_cores, cb_intermediate_config);
     }
-    // TODO: Check for in0
 
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
