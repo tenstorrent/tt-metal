@@ -119,5 +119,7 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
     output_tensor = ttnn.to_torch(result)
 
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    return [pcc, e2e_perf]
+    passed, pcc_value = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    status = "PASS" if passed else "FAIL"
+    output_string = f"Output: {status} (PCC: {pcc_value})"
+    return [(passed, output_string), e2e_perf]

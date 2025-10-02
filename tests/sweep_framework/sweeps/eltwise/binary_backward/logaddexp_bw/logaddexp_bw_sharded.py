@@ -145,12 +145,15 @@ def run(
         output_tensor[i] = ttnn.to_torch(output_tensor[i])
     e2e_perf = stop_measuring_time(start_time)
 
-    pcc = [True, 1.0]
+    passed = True
+    min_pcc = 1.0
 
     for i in range(len(output_tensor)):
         pcc_tmp = check_with_pcc(torch_output_tensor[i], output_tensor[i], 0.99)
-        pcc[0] = pcc[0] and pcc_tmp[0]
-        pcc[1] = min(pcc[1], str_to_float(pcc_tmp[1]))
+        passed = passed and pcc_tmp[0]
+        min_pcc = min(min_pcc, str_to_float(pcc_tmp[1]))
 
-    pcc[1] = str(pcc[1])
-    return [pcc, e2e_perf]
+    # Convert to status message
+    status = "PASS" if passed else "FAIL"
+    output_string = f"Output: {status} (PCC: {min_pcc})"
+    return [(passed, output_string), e2e_perf]

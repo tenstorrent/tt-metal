@@ -121,9 +121,11 @@ def run(
     # ttnn operates on channels-last tensors
     output_tensor = torch.permute(result, (0, 3, 1, 2))
 
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
-    print(f"pcc {pcc}")
-    return [pcc, e2e_perf]
+    passed, pcc_value = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
+    status = "PASS" if passed else "FAIL"
+    output_string = f"Output: {status} (PCC: {pcc_value})"
+    print(f"pcc ({passed}, {pcc_value})")
+    return [(passed, output_string), e2e_perf]
 
 
 # Run sweeps locally

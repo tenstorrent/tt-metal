@@ -129,5 +129,8 @@ def run(
         ttnn.to_torch(result.real).to(torch.float32), ttnn.to_torch(result.imag).to(torch.float32)
     )
 
-    pcc = check_with_pcc(torch.view_as_real(torch_output_tensor), torch.view_as_real(output_tensor), 0.99)
-    return [pcc, e2e_perf]
+    passed, pcc_value = check_with_pcc(torch.view_as_real(torch_output_tensor), torch.view_as_real(output_tensor), 0.99)
+
+    status = "PASS" if passed else "FAIL"
+    output_string = f"Output: {status} (PCC: {pcc_value})"
+    return [(passed, output_string), e2e_perf]

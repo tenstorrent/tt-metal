@@ -90,6 +90,10 @@ def run(
     output_tensor = output_tensor.resolve_conj()
     e2e_perf = stop_measuring_time(start_time)
 
-    pcc = check_with_pcc(torch.view_as_real(torch_output_tensor), torch.view_as_real(output_tensor), 0.99)
+    passed, pcc_value = check_with_pcc(torch.view_as_real(torch_output_tensor), torch.view_as_real(output_tensor), 0.99)
+
+    status = "PASS" if passed else "FAIL"
+    output_string = f"Output: {status} (PCC: {pcc_value})"
     # print(f"pcc {pcc} input_a_dtype {input_a_dtype}")
-    return [pcc, e2e_perf]
+
+    return [(passed, output_string), e2e_perf]
