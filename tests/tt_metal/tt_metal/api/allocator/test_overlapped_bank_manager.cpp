@@ -988,7 +988,7 @@ TEST(OverlappedAllocators, OverlappedAllocationsFromBothSides) {
 }
 
 TEST(OverlappedAllocators, NonzeroAddressLimit) {
-    // This test tests the clamping logic in BankManager::allocate_buffer when address_limit is not 0
+    // Tests the clamping logic in BankManager::allocate_buffer when address_limit is not 0
 
     // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
     const uint64_t total_size = 1024 * 1024;
@@ -1009,7 +1009,7 @@ TEST(OverlappedAllocators, NonzeroAddressLimit) {
         deps);
 
     const uint32_t alloc_size_1K = 1024;
-    const uint32_t alloc_size_a_bit_more_than_half_of_total_size = total_size / 2 + alloc_size_1K;
+    const uint32_t alloc_size_a_bit_more_than_half_of_total_size = (total_size / 2) + alloc_size_1K;
     const uint32_t alloc_size_same_as_address_limit = address_limit;
 
     // Allocate 1K in allocator 0 - should be placed at address_limit (256KB)
@@ -1095,4 +1095,84 @@ TEST(OverlappedAllocators, NonzeroAddressLimit) {
         std::nullopt,
         AllocatorID{0});
     EXPECT_EQ(alloc0_addr0_realloc, address_limit);  // Should still start at 256KB
+}
+
+TEST(OverlappedAllocators, NonzeroAllocOffset) {
+    // Tests that BankManager::allocate_buffer properly accounts for allocator offsets
+    // If there are dependencies, allocate_buffer will rely on available_addresses, allocated_addresses, and
+    // allocate_at_address APIs. Returned addresses must be absolute addresses otherwise possible bugs:
+    // - If top-down allocation and offset is larger than the allocation size, subsequent allocations will fail
+    //   * First allocation will incorrectly allocate at local address - offset
+    //   * Available addresses will incorrectly include top offset-sized gap as available address
+    //   * Subsequent allocation will attempt to call allocate_at_address at same allocated address and fail
+    // - If bottom-up allocation and offset is larger than the allocation size, subsequent allocations will fail but for
+    //   a different reason. If you assume address_limit is same as alloc offset, this is what will happen:
+    //   * First allocation will try to allocate at address_limit because of clamping logic so first allocation will be
+    //   correct
+    //   * Available addresses will include [alloc_size, ) as available address, which will still get clamped to
+    //   address_limit
+    //   * Subsequent allocation will attempt to call allocate_at_address at same allocated address and fail
+    // TLDR: Support for address_limit, alloc_offset, and bottom_up/top_down allocation seems very fragile
+
+    // Two independent allocators (0 and 1); allocator 2 overlaps both 0 and 1
+    BankManager::AllocatorDependencies deps{{{AllocatorID{0}, {AllocatorID{2}}}, {AllocatorID{1}, {AllocatorID{2}}}}};
+
+    // Create a BankManager mocking how L1BankingAllocator is setup
+    std::unordered_map<uint32_t, int64_t> bank_id_to_offset = {{0, 0}};
+    const uint64_t allocatable_l1_size = 1398720;
+    const DeviceAddr interleaved_address_limit = 100432;  // address_limit
+    const uint32_t l1_alignment = 16;
+    const DeviceAddr l1_unreserved_base = 100416;  // offset
+    const bool disable_interleaved = false;
+    BankManager bank_manager(
+        BufferType::L1,
+        bank_id_to_offset,
+        allocatable_l1_size,
+        interleaved_address_limit,
+        l1_alignment,
+        l1_unreserved_base,
+        disable_interleaved,
+        deps);
+
+    // Two consecutive top-down allocations
+    const uint32_t alloc_size_4K = 4096;
+    const auto alloc0_addr0 = bank_manager.allocate_buffer(
+        alloc_size_4K,
+        alloc_size_4K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+    EXPECT_EQ(alloc0_addr0, allocatable_l1_size - alloc_size_4K + l1_unreserved_base);
+
+    const auto alloc0_addr1 = bank_manager.allocate_buffer(
+        alloc_size_4K,
+        alloc_size_4K,
+        /*bottom_up=*/false,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+    EXPECT_EQ(alloc0_addr1, alloc0_addr0 - alloc_size_4K);
+
+    // Two consecutive bottom-up allocations
+    const auto alloc0_addr2 = bank_manager.allocate_buffer(
+        alloc_size_4K,
+        alloc_size_4K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+    // With dependent allocators, the clamping logic will find an address above address limit
+    // With independent allocators, regular allocate API will actually fail for this use case
+    // - But in practice, we always allocate top-down so it's not an issue
+    EXPECT_EQ(alloc0_addr2, interleaved_address_limit);
+
+    const auto alloc0_addr3 = bank_manager.allocate_buffer(
+        alloc_size_4K,
+        alloc_size_4K,
+        /*bottom_up=*/true,
+        CoreRangeSet(std::vector<CoreRange>{}),
+        std::nullopt,
+        AllocatorID{0});
+    EXPECT_EQ(alloc0_addr3, alloc0_addr2 + alloc_size_4K);
 }

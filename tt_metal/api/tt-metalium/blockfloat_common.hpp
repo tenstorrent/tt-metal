@@ -4,7 +4,7 @@
 
 #pragma once
 #include <stdint.h>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/span.hpp>

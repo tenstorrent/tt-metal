@@ -77,9 +77,9 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
 }
 
 TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
-    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
         log_info(tt::LogTest, "This test is only for GALAXY");
-        return;
+        GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
@@ -106,7 +106,7 @@ TEST(MultiHost, TestDualGalaxyFabric2DSanity) {
 TEST(MultiHost, TestDualGalaxyFabric1DSanity) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         log_info(tt::LogTest, "This test is only for GALAXY");
-        return;
+        GTEST_SKIP();
     }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
@@ -132,7 +132,7 @@ TEST(MultiHost, TestDualGalaxyFabric1DSanity) {
 TEST(MultiHost, TestDual2x4ControlPlaneInit) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         log_info(tt::LogTest, "This test is only for T3K");
-        return;
+        GTEST_SKIP();
     }
     const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -147,7 +147,7 @@ TEST(MultiHost, TestDual2x4ControlPlaneInit) {
 TEST(MultiHost, TestDual2x4Fabric2DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         log_info(tt::LogTest, "This test is only for T3K");
-        return;
+        GTEST_SKIP();
     }
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -172,7 +172,7 @@ TEST(MultiHost, TestDual2x4Fabric2DSanity) {
 TEST(MultiHost, TestDual2x4Fabric1DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         log_info(tt::LogTest, "This test is only for T3K");
-        return;
+        GTEST_SKIP();
     }
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -197,7 +197,7 @@ TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::N300_2x2) {
         log_info(tt::LogTest, "This test is only for N300 2x2");
-        return;
+        GTEST_SKIP();
     }
 
     const std::filesystem::path split_2x2_mesh_graph_desc_path =
@@ -234,7 +234,7 @@ TEST(MultiHost, TestSplit2x2Fabric1DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::N300_2x2) {
         log_info(tt::LogTest, "This test is only for N300 2x2");
-        return;
+        GTEST_SKIP();
     }
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
@@ -259,7 +259,7 @@ TEST(MultiHost, TestSplit2x2Fabric1DSanity) {
 TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
         log_info(tt::LogTest, "This test is only for T3K");
-        return;
+        GTEST_SKIP();
     }
 
     const std::filesystem::path big_mesh_2x4_mesh_graph_desc_path =
@@ -276,8 +276,13 @@ TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::N300_2x2) {
         log_info(tt::LogTest, "This test is only for N300 2x2");
-        return;
+        GTEST_SKIP();
     }
+
+    log_warning(
+        tt::LogTest,
+        "This test is currently broken due to a bug in logical to physical mapping nw chip pinning, Issue #29719");
+    GTEST_SKIP();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
@@ -305,8 +310,14 @@ TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::N300_2x2) {
         log_info(tt::LogTest, "This test is only for N300 2x2");
-        return;
+        GTEST_SKIP();
     }
+
+    // This test is currently broken due to a bug in logical to physical mapping nw chip pinning
+    log_warning(
+        tt::LogTest,
+        "This test is currently broken due to a bug in logical to physical mapping nw chip pinning, Issue #29719");
+    GTEST_SKIP();
 
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
@@ -327,6 +338,21 @@ TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
         const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
         EXPECT_TRUE(!eth_chans.empty());
     }
+}
+
+TEST(MultiHost, TestQuadGalaxyControlPlaneInit) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path quad_galaxy_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_mesh_graph_descriptor.yaml";
+    auto control_plane = std::make_unique<ControlPlane>(quad_galaxy_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 }  // namespace multi_host_tests

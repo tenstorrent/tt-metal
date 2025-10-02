@@ -287,7 +287,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
             inputs[i],
-            src_eth_l1_byte_address + i * byte_size_per_device);
+            src_eth_l1_byte_address + (i * byte_size_per_device));
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
@@ -341,10 +341,8 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     ths.reserve(sender_receivers.size());
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        distributed::AddProgramToMeshWorkload(
-            workloads[device->get_devices()[0]->id()],
-            std::move(programs[device->get_devices()[0]->id()]),
-            device_range);
+        workloads[device->get_devices()[0]->id()].add_program(
+            device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
             distributed::EnqueueMeshWorkload(
                 device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], false);
@@ -500,10 +498,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     ths.reserve(sender_receivers.size());
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        distributed::AddProgramToMeshWorkload(
-            workloads[device->get_devices()[0]->id()],
-            std::move(programs[device->get_devices()[0]->id()]),
-            device_range);
+        workloads[device->get_devices()[0]->id()].add_program(
+            device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
             distributed::EnqueueMeshWorkload(
                 device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], false);

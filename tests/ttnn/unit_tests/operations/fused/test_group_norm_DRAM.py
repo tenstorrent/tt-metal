@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_blackhole
+from models.common.utility_functions import is_blackhole
 
 
 # Helper function to get welford parameters based on device type

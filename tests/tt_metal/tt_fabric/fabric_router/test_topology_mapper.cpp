@@ -1,16 +1,14 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
 #include <gtest/gtest.h>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/mesh_graph_descriptor.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "tt_metal/fabric/topology_mapper.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 
-#include <memory>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/fabric/topology_mapper.hpp"
 
 namespace tt::tt_fabric {
 
@@ -33,7 +31,15 @@ TEST_F(TopologyMapperTest, T3kMeshGraphTest) {
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
 
     auto mesh_graph = MeshGraph(t3k_mesh_graph_desc_path.string());
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor();
+
+    // Create PhysicalSystemDescriptor with proper parameters from MetalContext
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    constexpr bool using_mock_cluster_descriptor = false;
+    constexpr bool run_discovery = true;
+
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(), distributed_context, using_mock_cluster_descriptor, run_discovery);
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;
@@ -51,7 +57,15 @@ TEST_F(TopologyMapperTest, T3kBigMeshTest) {
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.yaml";
 
     auto mesh_graph = MeshGraph(t3k_big_mesh_graph_desc_path.string());
-    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor();
+
+    // Create PhysicalSystemDescriptor with proper parameters from MetalContext
+    auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    constexpr bool using_mock_cluster_descriptor = false;
+    constexpr bool run_discovery = true;
+
+    auto physical_system_descriptor = tt::tt_metal::PhysicalSystemDescriptor(
+        cluster.get_driver(), distributed_context, using_mock_cluster_descriptor, run_discovery);
 
     // Create a local mesh binding for testing
     LocalMeshBinding local_mesh_binding;

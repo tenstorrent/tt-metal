@@ -9,6 +9,14 @@
 #include <optional>
 #include <vector>
 
+namespace tt::umd {
+class Cluster;
+}
+
+namespace tt::tt_metal::distributed::multihost {
+class DistributedContext;
+}
+
 namespace tt::tt_metal {
 
 class PhysicalSystemDescriptor;
@@ -19,6 +27,9 @@ void emit_physical_system_descriptor_to_text_proto(
 std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PhysicalSystemDescriptor& descriptor);
 
 // Deserialize from protobuf binary format to PhysicalSystemDescriptor (byte vector)
-PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data);
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(
+    const std::unique_ptr<tt::umd::Cluster>& cluster,
+    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
+    const std::vector<uint8_t>& data);
 
 }  // namespace tt::tt_metal

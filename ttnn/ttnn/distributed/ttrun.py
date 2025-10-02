@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
@@ -86,11 +86,11 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
             mock_data = yaml.safe_load(f)
 
         # Validate mock cluster rank binding configuration
-        for rank, path in mock_data["rank_to_filename"].items():
+        for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
             if not Path(path).expanduser().resolve().is_file():
                 raise ValueError(f"Mock cluster rank binding configuration file not found: {path}")
 
-        config.mock_cluster_rank_binding = mock_data["rank_to_filename"]
+        config.mock_cluster_rank_binding = mock_data["rank_to_cluster_mock_cluster_desc"]
 
     return config
 
@@ -164,6 +164,18 @@ def build_mpi_command(
         mpi_launcher = "mpirun"
 
     cmd = [mpi_launcher]
+
+    # Check if --bind-to is already specified in mpi_args
+    bind_to_already_specified = False
+    if mpi_args:
+        for i, arg in enumerate(mpi_args):
+            if arg == "--bind-to":
+                bind_to_already_specified = True
+                break
+
+    # Add --bind-to none only if not already specified
+    if not bind_to_already_specified:
+        cmd.extend(["--bind-to", "none"])
 
     if mpi_args:
         cmd.extend(mpi_args)
@@ -316,7 +328,7 @@ def main(
     The mock cluster descriptor mapping file is a YAML file that maps each rank to a mock cluster descriptor file.
 
     Mock Cluster Rank Binding YAML Example:
-        rank_to_filename:
+        rank_to_cluster_mock_cluster_desc:
           - rank: 0
             filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_0.yaml"
           - rank: 1

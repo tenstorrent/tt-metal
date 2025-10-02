@@ -47,8 +47,8 @@ bool is_softmax_general_w_small_available(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
-    auto intermed_tile_size = tt::tt_metal::detail::TileSize(intermed_data_format);
+    auto tile_size = tt::tile_size(data_format);
+    auto intermed_tile_size = tt::tile_size(intermed_data_format);
 
     // Calculate total circular buffer memory requirements
     int32_t cb_usage = 0;        // bytes
@@ -84,8 +84,8 @@ bool is_softmax_general_h_small_available(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
 
-    auto tile_size = tt::tt_metal::detail::TileSize(data_format);
-    auto intermed_tile_size = tt::tt_metal::detail::TileSize(intermed_data_format);
+    auto tile_size = tt::tile_size(data_format);
+    auto intermed_tile_size = tt::tile_size(intermed_data_format);
 
     int32_t cb_usage = 0;        // bytes
     cb_usage += Ht * tile_size;  // input;
@@ -160,7 +160,7 @@ SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program
 
 void SoftmaxDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    return validate_on_program_cache_miss(attributes, tensor_args);
+    validate_on_program_cache_miss(attributes, tensor_args);
 }
 
 void SoftmaxDeviceOperation::validate_on_program_cache_miss(

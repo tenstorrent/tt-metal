@@ -109,7 +109,15 @@ constexpr static uint32_t datum_size(const DataFormat& format) {
     }
 }
 
-// Size of tile in bytes
+/**
+ * Returns tile size of given data format in bytes
+ *
+ * Return value: uint32_t
+ *
+ * | Argument    | Description    | Type                | Valid Range | Required |
+ * |-------------|----------------|---------------------|-------------|----------|
+ * | format      | Format of data | tt::DataFormat enum |             | Yes      |
+ */
 constexpr static uint32_t tile_size(const DataFormat& format) {
     switch (format) {
         case DataFormat::Bfp2:
