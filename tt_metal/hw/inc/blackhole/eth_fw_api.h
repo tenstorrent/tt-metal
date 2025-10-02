@@ -305,24 +305,25 @@ FORCE_INLINE bool is_port_up() {
 }
 
 static void service_eth_msg() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
-    invalidate_l1_cache();
-    reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
-#endif
+    // #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
+    //     invalidate_l1_cache();
+    //     reinterpret_cast<void
+    //     (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+    // #endif
 }
 
 static void update_boot_results_eth_link_status_check() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
-    uint64_t curr_timestamp = eth_read_ptp_clock();
-    // Debounce to only be called at every interval
-    if (curr_timestamp > get_next_link_status_check_timestamp()) {
-        invalidate_l1_cache();
-        reinterpret_cast<void (*)(uint32_t)>(
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    // #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
+    //     uint64_t curr_timestamp = eth_read_ptp_clock();
+    //     // Debounce to only be called at every interval
+    //     if (curr_timestamp > get_next_link_status_check_timestamp()) {
+    //         invalidate_l1_cache();
+    //         reinterpret_cast<void (*)(uint32_t)>(
+    //             (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
 
-        update_next_link_status_check_timestamp();
-    }
-#endif
+    //         update_next_link_status_check_timestamp();
+    //     }
+    // #endif
 }
 
 #endif

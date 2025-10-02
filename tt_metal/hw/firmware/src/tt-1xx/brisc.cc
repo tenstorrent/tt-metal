@@ -371,6 +371,7 @@ int main() {
             ((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
+            noc_async_read(get_noc_addr(31, 25, 0), 0x50000, 64 * 1024);
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||

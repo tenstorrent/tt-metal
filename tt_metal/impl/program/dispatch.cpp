@@ -1807,9 +1807,16 @@ void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, 
             ringbuffer_size =
                 hal.get_dev_size(hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
         }
+
+        // if (hal.get_programmable_core_type(index) == tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+        //     config_buffer_mgr.init_add_buffer(
+        //         0x00011520,
+        //         ringbuffer_size);
+        // } else {
         config_buffer_mgr.init_add_buffer(
             hal.get_dev_addr(hal.get_programmable_core_type(index), tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
             ringbuffer_size);
+        // }
     }
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.

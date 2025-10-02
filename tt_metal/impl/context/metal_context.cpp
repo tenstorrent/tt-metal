@@ -327,7 +327,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) 
 }
 
 void MetalContext::clear_l1_state(chip_id_t device_id) {
-    log_debug(tt::LogMetal, "Clearing L1 for device {}", device_id);
+    log_info(tt::LogMetal, "Clearing L1 for device {}", device_id);
     // Clear all clearable Tensix and Eth L1
     CoreCoord logical_grid_size = cluster_->get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     uint32_t l1_size_per_core = cluster_->get_soc_desc(device_id).worker_l1_size;
@@ -354,6 +354,20 @@ void MetalContext::clear_l1_state(chip_id_t device_id) {
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         cluster_->write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
     }
+    // Clear erisc kernels
+    for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
+        static uint32_t zero_vec_size =
+            0x50000;  // hal_->get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG);
+        auto zero_vec_addr = 1024;
+        hal_->get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG);
+
+        static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
+
+        CoreCoord virtual_core =
+            cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
+        cluster_->write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
+    }
+
     // TODO: clear idle eriscs as well
     cluster_->l1_barrier(device_id);
 }

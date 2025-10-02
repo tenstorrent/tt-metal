@@ -117,8 +117,8 @@ void __attribute__((noinline)) Application(void) {
 
     ((volatile uint32_t*)(0x20))[0]++;
 
-    disable_interrupts();
-    update_next_link_status_check_timestamp();
+    // disable_interrupts();
+    // update_next_link_status_check_timestamp();
 
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
@@ -138,7 +138,7 @@ void __attribute__((noinline)) Application(void) {
     ncrisc_noc_full_sync();
 
     deassert_all_reset();
-    wait_subordinate_eriscs();
+    // wait_subordinate_eriscs();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -187,7 +187,7 @@ void __attribute__((noinline)) Application(void) {
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
-            run_subordinate_eriscs(enables);
+            // run_subordinate_eriscs(enables);
 
             constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
@@ -199,36 +199,11 @@ void __attribute__((noinline)) Application(void) {
                 uint32_t kernel_text_offset =
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
                 uint32_t kernel_lma = kernel_config_base + kernel_text_offset;
-
-                // uint32_t sp_before_asm;
-                // asm volatile("mv %0, sp" : "=r"(sp_before_asm));
-                // ((volatile uint32_t*)0x20)[0] = sp_before_asm;       // SP before assembly call
-
-                // __asm__ volatile(
-                //     "jalr ra, %0, 0     \n\t"
-                //     :
-                //     : "r"(kernel_lma)
-                //     : "ra", "memory"
-                // );
-
-                // uint32_t sp_after_asm;
-                // asm volatile("mv %0, sp" : "=r"(sp_after_asm));
-                // ((volatile uint32_t*)0x20)[1] = sp_after_asm;        // SP after assembly return
-
-                // uint32_t sp_before_func;
-                // asm volatile("mv %0, sp" : "=r"(sp_before_func));
-                // ((volatile uint32_t*)0x20)[0] = sp_before_func;      // SP before function call
-                // __asm__ volatile("" : : : "memory");
                 reinterpret_cast<volatile void (*)()>(kernel_lma)();
-                // uint32_t sp_after_func;
-                // asm volatile("mv %0, sp" : "=r"(sp_after_func));
-                // ((volatile uint32_t*)0x20)[1] = sp_after_func;       // SP after function return
-
-                // Kernel returned successfully!
                 WAYPOINT("D");
             }
 
-            wait_subordinate_eriscs();
+            // wait_subordinate_eriscs();
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed

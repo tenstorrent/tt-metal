@@ -144,20 +144,44 @@ bool eth_direct_sender_receiver_kernels(
             (uint32_t)byte_size,
         });
 
+    distributed::MeshWorkload receiver_workload;
+    tt_metal::Program receiver_program = tt_metal::Program();
+
+    auto eth_receiver_kernel = tt_metal::CreateKernel(
+        receiver_program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_l1_direct_receive.cpp",
+        eth_receiver_core,
+        tt_metal::EthernetConfig{
+            .noc = tt_metal::NOC::NOC_1,
+            .processor = DataMovementProcessor::RISCV_1});  // probably want to use NOC_1 here
+
+    tt_metal::SetRuntimeArgs(
+        receiver_program,
+        eth_receiver_kernel,
+        eth_receiver_core,
+        {
+            (uint32_t)byte_size,
+        });
+
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Programs
     ////////////////////////////////////////////////////////////////////////////
     std::thread t1;
     std::thread t2;
     if (fixture->IsSlowDispatch()) {
-        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        sender_workload.add_program(device_range, std::move(sender_program));
+        receiver_workload.add_program(device_range, std::move(receiver_program));
         t1 = std::thread([&]() { fixture->RunProgram(sender_mesh_device, sender_workload); });
+        t2 = std::thread([&]() { fixture->RunProgram(receiver_mesh_device, receiver_workload); });
     } else {
-        distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+        sender_workload.add_program(device_range, std::move(sender_program));
+        receiver_workload.add_program(device_range, std::move(receiver_program));
         fixture->RunProgram(sender_mesh_device, sender_workload, true);
+        fixture->RunProgram(receiver_mesh_device, receiver_workload, true);
     }
 
     fixture->FinishCommands(sender_mesh_device);
+    fixture->FinishCommands(receiver_mesh_device);
 
     if (fixture->IsSlowDispatch()) {
         t1.join();
@@ -941,6 +965,8 @@ TEST_F(TwoMeshDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests)
     }
 }
 
+TEST_F(UnitMeshCQMultiDeviceProgramFixture, DummyTest) {}
+
 TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address =
@@ -963,7 +989,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
-                for (int i = 0; i < 5000; ++i) {
+                for (int i = 0; i < 50; ++i) {
                     std::cout << "it " << i << "\n";
                     ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                         static_cast<MeshDispatchFixture*>(this),

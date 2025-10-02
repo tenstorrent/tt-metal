@@ -23,17 +23,10 @@ volatile inline uint32_t* flag_disable = (uint32_t*)(eth_l1_mem::address_map::LA
 namespace internal_ {
 inline __attribute__((always_inline)) void risc_context_switch() {
 #if defined(COMPILE_FOR_ERISC)
-#if defined(COOPERATIVE_ERISC)
-    ncrisc_noc_full_sync();
-    rtos_context_switch_ptr();
-    ncrisc_noc_counters_init();
-#elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
-    // Only NoC0
-    ncrisc_noc_full_sync<1>();
-    service_eth_msg();
-    update_boot_results_eth_link_status_check();
-    ncrisc_noc_counters_init<1>();
-#endif
+    // volatile uint32_t* ptr = reinterpret_cast<volatile uint32_t*>(0x10);
+    // for (int i = 0; i < 5000; ++i) {
+    //     ptr[0]++;
+    // }
 #endif
 }
 
@@ -42,7 +35,7 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
 #if defined(COOPERATIVE_ERISC)
     rtos_context_switch_ptr();
 #elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
-    update_boot_results_eth_link_status_check();
+    // update_boot_results_eth_link_status_check();
 #elif defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 1
     lite_fabric::service_lite_fabric_channels();
 #endif

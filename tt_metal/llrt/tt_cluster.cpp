@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>                                                     // for get
+#include <umd/device/driver_atomics.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
