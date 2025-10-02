@@ -1101,6 +1101,7 @@ def test_all_to_all_dispatch_no_trace_batch1(
         cluster_axis=cluster_axis,
         num_links=num_links,
         memory_config=output_memory_config,
+        output_concat_dim=2,
     )
 
     logger.info(f"Batch = 1 tt_output_tensor per-device shape: {tt_output_tensor.shape}")

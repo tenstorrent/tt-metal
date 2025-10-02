@@ -45,9 +45,10 @@ void py_bind_all_to_all_combine(py::module& module) {
                 axis (int, optional): the cluster axis to combine along. Defaults to `None` though we assert out when it is not specified.
                 subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
                 optional_output_tensor (ttnn.Tensor, optional): the optional output tensor to use for the combined tokens. Defaults to `None`.
+                output_shard_dim (int, optional): the dimension to shard the output tokens along. Defaults to `None`.
 
             Returns:
-                ttnn.Tensor: The combined tokens tensor. The tensor is expected to be [K, B, S, H] ([K, B/D[A], S, H] per device) where each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
+                ttnn.Tensor: The combined tokens tensor. The tensor is expected to be [K, B, S, H] ([K, B/D[A], S, H] per device if output_shard_dim is 1 or [K, B, S/D[A], H] per device if output_shard_dim is 2) where each row is either a token if that token was dispatched to that device, or a placeholder row if that token was not dispatched to that device. The tensor is expected to be in Row Major, Interleaved format.
 
             Example:
 
@@ -59,7 +60,8 @@ void py_bind_all_to_all_combine(py::module& module) {
                                         topology=topology,
                                         memory_config=output_memory_config,
                                         local_reduce=local_reduce,
-                                        axis=axis)
+                                        axis=axis,
+                                        output_shard_dim=output_shard_dim)
             )doc";
 
     using OperationType = decltype(ttnn::all_to_all_combine);
