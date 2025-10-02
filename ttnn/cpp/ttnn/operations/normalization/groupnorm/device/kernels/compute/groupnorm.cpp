@@ -359,7 +359,7 @@ void MAIN {
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex_global);
                 tile_regs_release();
-                reduce_uniniti<FP32_DEST_ACC>();
+                reduce_uninit<FP32_DEST_ACC>();
                 cb_push_back(cb_ex_global, 1);
                 if (num_cores_per_mcast_group > 1) {
                     cb_push_back(cb_ex, 1);
