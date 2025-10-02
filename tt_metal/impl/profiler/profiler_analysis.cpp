@@ -5,10 +5,10 @@
 #include <algorithm>
 #include <string>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include <type_traits>
 #include <fstream>
 
-#include "assert.hpp"
 #include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include "profiler_analysis.hpp"
