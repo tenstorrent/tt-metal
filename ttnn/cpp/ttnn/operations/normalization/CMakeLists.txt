@@ -32,9 +32,11 @@ target_sources(
             rmsnorm/rmsnorm.hpp
             softmax/device/softmax_operation_types.hpp
             softmax/device/softmax_device_operation.hpp
-            softmax_backward/device/softmax_backward_device_operation.hpp
             softmax/device/softmax_program_factory.hpp
             softmax/softmax.hpp
+            softmax_backward/device/softmax_backward_operation_types.hpp
+            softmax_backward/device/softmax_backward_device_operation.hpp
+            softmax_backward/device/softmax_backward_program_factory.hpp
             softmax_backward/softmax_backward.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -61,10 +63,11 @@ target_sources(
         layernorm_distributed/layernorm_pre_all_gather.cpp
         rmsnorm/rmsnorm.cpp
         softmax/softmax.cpp
-        softmax_backward/softmax_backward.cpp
         softmax/device/softmax_device_operation.cpp
         softmax/device/softmax_program_factory.cpp
+        softmax_backward/softmax_backward.cpp
         softmax_backward/device/softmax_backward_device_operation.cpp
+        softmax_backward/device/softmax_backward_program_factory.cpp
 )
 
 target_include_directories(ttnn_op_normalization PRIVATE ${FixmeOpIncDirs})

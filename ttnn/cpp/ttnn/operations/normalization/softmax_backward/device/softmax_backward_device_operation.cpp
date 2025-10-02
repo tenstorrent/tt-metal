@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_backward_device_operation.hpp"
-
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/unary/unary_composite.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "tt_stl/assert.hpp"
+#include "ttnn/tensor/layout/page_config.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -16,26 +15,59 @@ namespace ttnn::operations::normalization::softmax_backward {
 
 SoftmaxBackwardDeviceOperation::program_factory_t SoftmaxBackwardDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    bool some_condition_based_on_operation_attributes_and_or_tensor_args = true;
-    if (some_condition_based_on_operation_attributes_and_or_tensor_args) {
-        return SingleCore{};
-    }
-    return MultiCore{};
+    // For now, always use the fused kernel implementation
+    // In the future, we could add logic to choose between different implementations
+    // based on tensor size, device capabilities, etc.
+    return SingleCore{};
 }
 
 void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    const auto& softmax_output = tensor_args.softmax_output;
+    const auto& upstream_grad = tensor_args.upstream_grad;
+
+    // Validate tensor shapes match
+    TT_ASSERT(
+        softmax_output.logical_shape() == upstream_grad.logical_shape(),
+        "Softmax output and upstream gradient tensors must have the same shape");
+
+    // Validate tensor dtypes are supported
+    TT_ASSERT(
+        softmax_output.dtype() == DataType::BFLOAT16 || softmax_output.dtype() == DataType::FLOAT32,
+        "Softmax backward only supports BFLOAT16 and FLOAT32 dtypes");
+    TT_ASSERT(
+        upstream_grad.dtype() == softmax_output.dtype(),
+        "Softmax output and upstream gradient must have the same dtype");
+
+    // Validate tensor layout
+    TT_ASSERT(softmax_output.layout() == Layout::TILE, "Softmax backward requires TILE layout");
+    TT_ASSERT(upstream_grad.layout() == Layout::TILE, "Softmax backward requires TILE layout");
+
+    // Validate dimension
+    const auto rank = softmax_output.logical_shape().rank();
+    TT_ASSERT(
+        attributes.dim == rank - 1 || attributes.dim == static_cast<uint32_t>(-1),
+        "Currently only supporting softmax_backward on last dimension");
+}
 
 void SoftmaxBackwardDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {}
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // Perform lighter validation for cache hits
+    const auto& softmax_output = tensor_args.softmax_output;
+    const auto& upstream_grad = tensor_args.upstream_grad;
+
+    TT_ASSERT(
+        softmax_output.logical_shape() == upstream_grad.logical_shape(),
+        "Softmax output and upstream gradient tensors must have the same shape");
+}
 
 SoftmaxBackwardDeviceOperation::spec_return_value_t SoftmaxBackwardDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.softmax_output;
-    return TensorSpec(
+    return {
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), MemoryConfig{}));
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), MemoryConfig{})};
 }
 
 SoftmaxBackwardDeviceOperation::tensor_return_value_t SoftmaxBackwardDeviceOperation::create_output_tensors(
@@ -45,19 +77,19 @@ SoftmaxBackwardDeviceOperation::tensor_return_value_t SoftmaxBackwardDeviceOpera
 }
 
 std::tuple<SoftmaxBackwardDeviceOperation::operation_attributes_t, SoftmaxBackwardDeviceOperation::tensor_args_t>
-SoftmaxBackwardDeviceOperation::invoke(const Tensor& input_tensor, const Tensor& grad, uint32_t dim) {
-    return {operation_attributes_t{dim}, tensor_args_t{input_tensor, grad}};
+SoftmaxBackwardDeviceOperation::invoke(
+    const ttnn::Tensor& softmax_output, const ttnn::Tensor& upstream_grad, uint32_t dim) {
+    return {
+        operation_attributes_t{dim}, tensor_args_t{.softmax_output = softmax_output, .upstream_grad = upstream_grad}};
 }
 
-Tensor softmax_backward(
-    const Tensor& y,     // softmax output
-    const Tensor& grad,  // upstream grad dL/dy
-    uint32_t dim         // reduction dimension (same as fwd)
+ttnn::Tensor softmax_backward(
+    const ttnn::Tensor& softmax_output,  // softmax output
+    const ttnn::Tensor& upstream_grad,   // upstream grad dL/dy
+    uint32_t dim                         // reduction dimension (same as fwd)
 ) {
-    const ttnn::Tensor mul = ttnn::multiply(y, grad);
-    auto grad_scaled_dot = ttnn::multiply(
-        y, ttnn::subtract(grad, ttnn::sum(mul, static_cast<int>(dim), /*keepdim=*/true, std::nullopt, std::nullopt)));
-    return grad_scaled_dot;
+    // Use the fused kernel implementation via the device operation
+    return ttnn::prim::softmax_backward(softmax_output, upstream_grad, dim);
 }
 
 }  // namespace ttnn::operations::normalization::softmax_backward

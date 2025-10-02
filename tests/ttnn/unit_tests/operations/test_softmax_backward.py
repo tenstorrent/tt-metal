@@ -34,24 +34,29 @@ def reference_softmax_backward_output(y: torch.Tensor, grad: torch.Tensor, axis:
     "range",
     [20, 200],
 )
-def test_bw_softmax(input_shapes, dtype, range, device):
+@pytest.mark.parametrize(
+    "dim",
+    [-1, 3],  # only last dimension supported for now
+)
+def test_bw_softmax(input_shapes, dtype, range, dim, device):
     grad_data, grad_tensor = data_gen_with_range_dtype(input_shapes, -range, range, device, ttnn_dtype=dtype)
     in_data, input_tensor = data_gen_with_range_dtype(
         input_shapes, -range, range, device, required_grad=True, ttnn_dtype=dtype
     )
 
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
-    pt_softmax_tensor = torch.softmax(in_data, dim=3, dtype=torch_dtype)
+    pt_softmax_tensor = torch.softmax(in_data, dim=dim, dtype=torch_dtype)
     tt_softmax_tensor = torch_to_device(pt_softmax_tensor, dtype, device)
 
-    tt_output_tensor_on_device_composite = ttnn.softmax_backward(tt_softmax_tensor, grad_tensor, dim=3)
-    pt_output_tensor_on_device_composite = ttnn.to_torch(tt_output_tensor_on_device_composite)
-    pt_output_tensor_reference = reference_softmax_backward_output(pt_softmax_tensor, grad_data, axis=3)
+    # Test the fused kernel implementation
+    tt_output_tensor_fused = ttnn.softmax_backward(tt_softmax_tensor, grad_tensor, dim=dim)
+    pt_output_tensor_fused = ttnn.to_torch(tt_output_tensor_fused)
+    pt_output_tensor_reference = reference_softmax_backward_output(pt_softmax_tensor, grad_data, axis=dim)
 
-    relative_tolerance = min(0.03, (1 / range))
-    absolute_tolerance = range / 200
+    relative_tolerance = 0.01
+    absolute_tolerance = 0.1
     assert torch.allclose(
-        pt_output_tensor_on_device_composite,
+        pt_output_tensor_fused,
         pt_output_tensor_reference,
         rtol=relative_tolerance,
         atol=absolute_tolerance,
