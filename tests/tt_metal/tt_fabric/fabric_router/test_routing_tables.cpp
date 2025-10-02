@@ -72,7 +72,7 @@ TEST(MeshGraphValidation, TestTGMeshGraphInit) {
 }
 
 TEST(MeshGraphValidation, TestMGDConnections) {
-    // TODO: This test is currently not implemented completely connnection types currently cannot be mixed
+    // TODO: This test is currently not implemented completely connection types currently cannot be mixed
     // Skip for now
     log_warning(tt::LogTest, "Skipping TestMGDConnections because connection types currently cannot be mixed");
     GTEST_SKIP();
