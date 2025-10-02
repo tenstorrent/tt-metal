@@ -307,6 +307,7 @@ jobs:
       - get-image-tags
       - test-wh-6u-image
       - test-bh-image
+      - test-bh-p300-image
       - test-bh-multicard-image
     permissions:
       packages: write
