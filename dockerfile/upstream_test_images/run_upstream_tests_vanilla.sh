@@ -113,6 +113,8 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py
+    elif [[ "$hw_topology" == "blackhole_p300" ]]; then
+        pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_p300.py
     fi
 }
 
