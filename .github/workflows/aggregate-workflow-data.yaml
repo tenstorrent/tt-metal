@@ -58,6 +58,15 @@ jobs:
           path: ${{ steps.fetch.outputs.commits-path }}
           retention-days: 1
 
+      - name: Upload logs artifact (if any)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 #@v4
+        with:
+          name: workflow-logs
+          path: |
+            ${{ steps.fetch.outputs.logs-root }}/
+            ${{ steps.fetch.outputs.logs-index-path }}
+          retention-days: 1
+
       - name: Debug cache file
         run: ls -l ${{ github.workspace }}/workflow-data.json || echo "File not found"
 
@@ -130,6 +139,11 @@ jobs:
         with:
           name: workflow-annotations
           path: ${{ github.workspace }}/annotations
+      - name: Download logs (if any)
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: workflow-logs
+          path: ${{ github.workspace }}/logs
       - name: Download commits index
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
@@ -145,7 +159,7 @@ jobs:
           previous-cache-path: ${{ github.workspace }}/prev/workflow-data.json
           annotations-index-path: ${{ github.workspace }}/annotations/annotations-index.json
           commits-path: ${{ github.workspace }}/commits-main.json
-          logs-index-path: ${{ needs.fetch-data.outputs.logs-index-path }}
+          logs-index-path: ${{ github.workspace }}/logs/logs-index.json
           alert-all: 'true'
           workflow_configs: |
             [
