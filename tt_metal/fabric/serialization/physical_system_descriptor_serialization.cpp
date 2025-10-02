@@ -6,7 +6,7 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
 
-#include <third_party/umd/device/api/umd/device/cluster.hpp>
+#include <umd/device/cluster.hpp>
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
