@@ -101,8 +101,17 @@ def create_custom_preprocessor(device):
 
             parameters[f"decoder1"] = {}
             parameters[f"decoder1"][0] = {}
-            parameters[f"decoder1"][0]["weight"] = ttnn.from_torch(model.decoder1[0].weight, dtype=ttnn.bfloat16)
-            parameters[f"decoder1"][0]["bias"] = None
+            conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(
+                getattr(model, f"decoder1")[0], getattr(model, f"decoder1")[1]
+            )
+            parameters[f"decoder1"][0]["weight"] = ttnn.from_torch(
+                conv_weight,
+                dtype=ttnn.bfloat16,
+            )
+            parameters[f"decoder1"][0]["bias"] = ttnn.from_torch(
+                torch.reshape(conv_bias, (1, 1, 1, -1)),
+                dtype=ttnn.bfloat16,
+            )
 
             bn_layer = model.decoder1[1]  # BatchNorm2d layer
             channel_size = bn_layer.num_features
