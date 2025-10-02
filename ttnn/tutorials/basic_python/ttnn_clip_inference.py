@@ -7,7 +7,6 @@ import torch
 from loguru import logger
 import re
 import math
-import numpy as np
 from PIL import Image
 from transformers import CLIPTokenizer, CLIPModel
 import requests
@@ -34,37 +33,6 @@ def main():
         global device
         return device
 
-    def convert_from_ttnn(x):
-        """Convert TT-NN tensor to PyTorch tensor if needed."""
-        global device
-        if isinstance(x, ttnn._ttnn.tensor.Tensor):
-            return ttnn.to_torch(x)
-        return x
-
-    def to_ttnn(torch_tensor, dtype=None, layout=ttnn.TILE_LAYOUT):
-        """Convert PyTorch tensor to TT-NN tensor with specified dtype and layout."""
-        global device
-        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=layout, dtype=dtype)
-        return ttnn_tensor
-
-    def to_torch_shape(ttnn_shape):
-        """Convert TT-NN shape to PyTorch-compatible tuple."""
-        return tuple(ttnn_shape)
-
-    def convert_ttnn_dtype(ttnn_tensor, dtype, new_shape=None):
-        """
-        Change dtype of TT-NN tensor and optionally reshape.
-        Note: Currently requires moving tensor to host for dtype conversion.
-        """
-        device = get_device()
-        # Move tensor to host for dtype conversion (current TT-NN limitation)
-        host_tensor = ttnn.from_device(ttnn_tensor)
-        host_tensor = ttnn.to_dtype(host_tensor, dtype=dtype)
-        if new_shape is not None:
-            host_tensor = ttnn.reshape(host_tensor, new_shape)
-
-        return ttnn.to_device(host_tensor, device=device)
-
     def convert_model_to_ttnn(state_dict):
         """
         Convert a PyTorch model's state dictionary to TT-NN format.
@@ -82,7 +50,7 @@ def main():
         for key, value in state_dict.items():
             if isinstance(value, torch.Tensor):
                 # Convert PyTorch tensors to TT-NN tensors
-                ttnn_state_dict[key] = to_ttnn(value)
+                ttnn_state_dict[key] = ttnn.from_torch(value, layout=ttnn.TILE_LAYOUT, device=get_device())
             elif isinstance(value, torch.Size):
                 # Convert PyTorch Size objects to TT-NN Size objects
                 ttnn_state_dict[key] = ttnn.Size(value)
@@ -525,7 +493,7 @@ def main():
                 Text embeddings in shared vision-language space [batch_size, embed_dim]
             """
             # Convert token IDs to uint32 for embedding lookup
-            tokens = convert_ttnn_dtype(tokens, dtype=ttnn.uint32)
+            tokens = ttnn.typecast(tokens, dtype=ttnn.uint32)
 
             # Token embedding: [batch, seq_len] -> [batch, seq_len, embed_dim]
             x = ttnn.embedding(tokens, weight=self.token_embedding, dtype=ttnn.bfloat16)
