@@ -41,6 +41,12 @@ void SGDFusedDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
         TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Tensor '{}' must be in DRAM. Got buffer type: '{}'",
+            name,
+            enchantum::to_string(tensor.buffer()->buffer_type()));
+
+        TT_FATAL(
             tensor.layout() == required_layout,
             "Tensor '{}' must have layout '{}', but got '{}'",
             name,
@@ -62,7 +68,21 @@ void SGDFusedDeviceOperation::validate_on_program_cache_miss(
     };
 
     const auto& param = tensor_args.param;
-    check_tensor(param, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    const auto& grad = tensor_args.grad;
+    const auto& momentum_buffer = tensor_args.momentum_buffer;
+    check_tensor(param, "Parameter", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(grad, "Gradient", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    if (momentum_buffer.has_value()) {
+        check_tensor(
+            momentum_buffer.value(), "Momentum Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    }
+
+    const auto& momentum = args.momentum;
+    const auto& use_momentum = (momentum > 0.0F);
+    TT_FATAL(
+        use_momentum && momentum_buffer.has_value(),
+        "Momentum buffer must be provided when using momentum. Got: {}",
+        momentum);
 }
 
 SGDFusedDeviceOperation::spec_return_value_t SGDFusedDeviceOperation::compute_output_specs(
