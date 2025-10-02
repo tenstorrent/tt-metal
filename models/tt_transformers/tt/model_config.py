@@ -1757,17 +1757,43 @@ class ModelArgs:
         self._set_params_from_dict(config, is_hf=True)
 
         # compatibility with _set_params
-        if ("llama" in self.model_name.lower()) and ("3.2-11B" in checkpoint_dir):
-            logger.warning(f"-Vision is removed from model_name {self.model_name}")
-            # TODO: do not remove "-Vision" part
-            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
-        elif ("llama" in self.model_name.lower()) and ("3.1-70B" in checkpoint_dir):
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-        elif ("llama" in self.model_name.lower()) and ("3.2-90B" in checkpoint_dir):
-            logger.warning(f"-Vision is removed from model_name {self.model_name}")
-            # TODO: do not remove "-Vision" part
-            self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
-            self.is_90b = True
+        if "llama" in self.model_name.lower():
+            self.orig_context_len = 8192
+            if "3.2-1B" in checkpoint_dir:
+                self.rope_scaling_factor = 32
+            elif "3.2-3B" in checkpoint_dir:
+                self.rope_scaling_factor = 32
+            elif "3.1-8B" in checkpoint_dir:
+                self.rope_scaling_factor = 8
+            elif "3.2-11B" in checkpoint_dir:
+                logger.warning(f"-Vision is removed from model_name {self.model_name}")
+                # TODO: do not remove "-Vision" part
+                self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
+                self.rope_scaling_factor = 8  # shared with 3.1-8B
+            elif "3.1-70B" in checkpoint_dir:
+                self.rope_scaling_factor = 8
+                self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            elif "3.2-90B" in checkpoint_dir:
+                logger.warning(f"-Vision is removed from model_name {self.model_name}")
+                # TODO: do not remove "-Vision" part
+                self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
+                self.rope_scaling_factor = 8
+                self.is_90b = True
+            else:
+                self.rope_scaling_factor = None
+                self.orig_context_len = None
+                logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
+            self.rope_scaling = (
+                rope_scaling_model_factory(
+                    {
+                        "rope_type": "llama3",
+                        "factor": self.rope_scaling_factor,
+                        "original_max_position_embeddings": self.orig_context_len,
+                    }
+                )
+                if self.rope_scaling_factor is not None
+                else None
+            )
 
     def __repr__(self):
         return f"""ModelArgs(
