@@ -7,11 +7,7 @@
 #include <map>
 #include <vector>
 
-<<<<<<< HEAD
 #include <umd/device/cluster.hpp>
-=======
-#include <third_party/umd/device/api/umd/device/cluster.hpp>
->>>>>>> 4a1e8748fe (Removed temporary PSD and placed changes into PhysicalSystemDescriptor, added tunnels_from_mmio_device.cpp)
 
 namespace tt::llrt {
 

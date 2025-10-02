@@ -1,16 +1,12 @@
-//  SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
-//  SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #include "physical_system_descriptor_serialization.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
 
-<<<<<<< HEAD
 #include <umd/device/cluster.hpp>
-=======
-#include <third_party/umd/device/api/umd/device/cluster.hpp>
->>>>>>> 4a1e8748fe (Removed temporary PSD and placed changes into PhysicalSystemDescriptor, added tunnels_from_mmio_device.cpp)
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
