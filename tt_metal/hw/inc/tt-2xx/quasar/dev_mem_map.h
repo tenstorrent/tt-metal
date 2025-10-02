@@ -51,7 +51,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_DM_FIRMWARE_SIZE (6 * 1024 + 1024)
+#define MEM_DM_FIRMWARE_SIZE (8 * 1024 + 1024)
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
 #define MEM_TRISC1_FIRMWARE_SIZE 1536
 #define MEM_TRISC2_FIRMWARE_SIZE 1536
