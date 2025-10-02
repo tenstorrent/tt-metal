@@ -101,8 +101,9 @@ ttsl::hash::hash_t SGDFusedDeviceOperation::compute_program_hash(
     const auto& param_logical_shape = param_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     auto nesterov = args.nesterov;
+    auto momentum_initialized = tensor_args.momentum_buffer.has_value();
     auto hash = tt::tt_metal::operation::hash_operation<SGDFusedDeviceOperation>(
-        nesterov, program_factory.index(), param_tensor.dtype(), param_logical_shape);
+        nesterov, momentum_initialized, program_factory.index(), param_tensor.dtype(), param_logical_shape);
 
     return hash;
 }
