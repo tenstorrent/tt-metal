@@ -27,12 +27,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
-namespace tt {
-namespace tt_metal {
-class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
-
 using namespace tt::tt_metal;
 
 constexpr CoreCoord worker_core = {0, 0};
