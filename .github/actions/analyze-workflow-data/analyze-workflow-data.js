@@ -183,7 +183,7 @@ function renderErrorsTable(errorSnippets) {
     return `| ${label} | ${ownerDisplay} | ${snippetOneLine} |`;
   }).join('\n');
   return [
-    '| Test | Owner | Error |',
+    '| Job | Owner | Error |',
     '|------|-------|-------|',
     rows,
     ''
