@@ -34,6 +34,7 @@ def multi_user_containers(num_containers, image):
             "working_dir": "/app/tt-metal",
             "environment": {
                 "HOME": "/app",
+                "TT_METAL_HOME": "/app/tt-metal",
                 "LD_LIBRARY_PATH": "/app/tt-metal/build/lib",
                 "PYTHONPATH": "/app/tt-metal",
                 "TT_MESH_GRAPH_DESC_PATH": "/app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml",
