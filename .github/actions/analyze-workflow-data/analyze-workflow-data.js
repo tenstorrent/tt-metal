@@ -351,6 +351,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                     } else {
                       // Prefer pairing the nearest pending info block to this FAILED marker
                       const failedName = endFailed[1] ? String(endFailed[1]).trim() : (currentTest || '');
+                      core.info(`[GTEST]     FAILED for '${failedName}' @ line ${i+1} (pending=${pendingInfoBlocks.filter(b => !b.used).length})`);
                       let paired = false;
                       for (let j = pendingInfoBlocks.length - 1; j >= 0; j--) {
                         const blk = pendingInfoBlocks[j];
@@ -391,8 +392,8 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                       const textBlock = infoLines.join('\n').trim();
                       if (textBlock) {
                         pendingInfoBlocks.push({ text: textBlock, endLine: i+1, used: false });
+                        core.info(`[GTEST]       info:..backtrace: same-line capture (len=${textBlock.length}) -> queued @ line ${i+1}`);
                       }
-                      core.info(`[GTEST]       info:..backtrace: same-line capture (len=${between.length}) -> queued`);
                       // reset capture
                       inInfo = false; infoLines = [];
                       continue;
@@ -413,9 +414,9 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                       const textBlock = infoLines.join('\n').trim();
                       if (textBlock) {
                         pendingInfoBlocks.push({ text: textBlock, endLine: i+1, used: false });
+                        core.info(`[GTEST]       backtrace: end capture -> queued block (len=${textBlock.length}) @ line ${i+1}`);
                       }
                       inInfo = false; infoLines = [];
-                      core.info(`[GTEST]       backtrace: end capture @ line ${i+1} -> queued`);
                       continue;
                     }
                     infoLines.push(line);
