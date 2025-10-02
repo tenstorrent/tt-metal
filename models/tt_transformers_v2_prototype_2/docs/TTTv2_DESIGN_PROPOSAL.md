@@ -836,8 +836,19 @@ The rest of the models should migrate to TTTv2 by their owners. We will provide 
 This design achieves the goal of supporting 100+ models by making TTTv2 a stable foundation that models build upon, rather than a monolithic framework that owns all models.
 
 ## Future Design Options
+  Good sources for inspiration:
+  - https://docs.google.com/document/d/1U_SSgQF_sX8n58s4aAtUYPmU17zwS6HCBOageyFB3P4/edit?tab=t.0#heading=h.esiriihac5fj
+  - https://docs.google.com/document/d/113TpLUoOiUOkXyHRvfHAuVICtk6IoaRqaG9CGo9PgUk/edit?tab=t.0
+  - https://docs.google.com/document/d/1KmaawWqk4nZ_cBQoc8LBE6EYbXwjjD8A8FBA7vTen_g/edit?tab=t.0
+  - https://docs.google.com/document/d/1ZSLFTBloSjAWCjV1lN1Wjap3lBVfNY87XK22KnCJo6o/edit?tab=t.0#heading=h.av5yl7o68evz
 
   #### (finally) double check against the "Library, not Framework" design philosophy
+
+  #### Composable Model performance from module performance data
+  Based on unit tests of modules, we should be able to use module performance data to compose model performance expectations.
+
+  #### Compile Time vs Runtime
+  I have an idea: there is that env var that will skip execution of all kernels! So, we could have a compile time option to skip execution of all kernels even today!!! The firmware team is working on proper compile support.
 
   #### Community Governance - Clear process for accepting new patterns/modules
 
