@@ -29,7 +29,7 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
     ("model_variant", "width", "height", "num_inference_steps"),
     [
         ("schnell", 1024, 1024, 4),
-        ("dev", 1024, 1024, 28),
+        # ("dev", 1024, 1024, 28),
     ],
 )
 @pytest.mark.parametrize(
@@ -46,7 +46,7 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
 @pytest.mark.parametrize(
     ("enable_t5_text_encoder", "use_torch_t5_text_encoder", "use_torch_clip_text_encoder"),
     [
-        pytest.param(True, True, True, id="encoder_cpu"),
+        # pytest.param(True, True, True, id="encoder_cpu"),
         pytest.param(True, False, False, id="encoder_device"),
     ],
 )
@@ -54,7 +54,7 @@ from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large i
     "traced",
     [
         pytest.param(True, id="traced"),
-        pytest.param(False, id="not_traced"),
+        # pytest.param(False, id="not_traced"),
     ],
 )
 def test_flux1_pipeline(

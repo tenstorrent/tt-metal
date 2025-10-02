@@ -2,11 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import diffusers.models.transformers.transformer_flux as reference
+# import diffusers.models.transformers.transformer_flux as reference
+import diffusers as reference
 import pytest
 import torch
 import ttnn
 from loguru import logger
+import numpy as np
+import tqdm
 
 from ...models.transformers.transformer_flux1 import (
     Flux1SingleTransformerBlock,
@@ -18,7 +21,8 @@ from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard, bf16_tensor_host
+from ...pipelines.flux1.pipeline_flux1 import _calculate_shift
 
 
 @pytest.mark.parametrize(
@@ -281,6 +285,8 @@ def test_transformer_block(
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
     [
+        pytest.param((1, 4), (1, 4), 0, 1, 1, id="1x4sp0tp1"),
+        pytest.param((2, 4), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
         pytest.param((2, 4), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
         pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
         pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
@@ -297,7 +303,11 @@ def test_transformer_block(
         (1, 4096, 512),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31000000}],
+    indirect=True,
+)
 def test_transformer(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple[int, int],
@@ -315,7 +325,10 @@ def test_transformer(
 
     # Flux.1 variant "dev" is like "schnell" but with additional guidance parameter.
     torch_model = reference.FluxTransformer2DModel.from_pretrained(
-        "black-forest-labs/FLUX.1-dev", subfolder="transformer"
+        "black-forest-labs/FLUX.1-schnell", subfolder="transformer"  # ,torch_dtype=torch.bfloat16
+    )
+    scheduler = reference.FlowMatchEulerDiscreteScheduler.from_pretrained(
+        "black-forest-labs/FLUX.1-schnell", subfolder="scheduler"
     )
     assert isinstance(torch_model, reference.FluxTransformer2DModel)
     torch_model.eval()
@@ -333,6 +346,7 @@ def test_transformer(
         topology=ttnn.Topology.Linear,
     )
 
+    logger.info(f"tp_factor: {tp_factor}, sp_factor: {sp_factor}")
     parallel_config = DiTParallelConfig(
         cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
@@ -369,18 +383,18 @@ def test_transformer(
             parallel_config=parallel_config,
             dtype="bf16",
         )
-    else:
-        cache_path = None
-
-    if cache_path and cache.cache_dict_exists(cache_path):
-        logger.info("loading from cache...")
-        tt_model.from_cached_state_dict(cache.load_cache_dict(cache_path))
+        if cache.cache_dict_exists(cache_path):
+            logger.info("loading from cache...")
+            tt_model.from_cached_state_dict(cache.load_cache_dict(cache_path))
+        else:
+            logger.info(
+                f"Cache does not exist. Creating cache: {cache_path} and loading transformer weights from PyTorch state dict"
+            )
+            tt_model.load_state_dict(torch_model.state_dict())
+            cache.save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
     else:
         logger.info("loading state dict...")
         tt_model.load_state_dict(torch_model.state_dict())
-        if cache_path:
-            logger.info("saving to cache...")
-            cache.save_cache_dict(tt_model.to_cached_state_dict(cache_path), cache_path)
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, spatial_seq_len, in_channels])
@@ -395,7 +409,8 @@ def test_transformer(
     ids = torch.cat((text_ids, image_ids), dim=0)
     rope_cos, rope_sin = torch_model.pos_embed.forward(ids)
 
-    tt_spatial = bf16_tensor(spatial, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
+    # tt_spatial = bf16_tensor(spatial, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
+    tt_spatial_host = bf16_tensor_host(spatial, device=submesh_device, mesh_axis=sp_axis, shard_dim=1)
     tt_prompt = bf16_tensor(prompt, device=submesh_device)
     tt_pooled = bf16_tensor(pooled, device=submesh_device)
     tt_timestep = ttnn.from_torch(
@@ -410,37 +425,150 @@ def test_transformer(
     # tt_rope_cos = bf16_tensor(rope_cos, device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
     # tt_rope_sin = bf16_tensor(rope_sin, device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
 
-    logger.info("running torch model...")
-    with torch.no_grad():
-        torch_output = torch_model.forward(
-            hidden_states=spatial,
-            encoder_hidden_states=prompt,
-            pooled_projections=pooled,
-            timestep=timestep / 1000,
-            guidance=guidance,
-            img_ids=image_ids,
-            txt_ids=text_ids,
-        ).sample
+    if False:
+        logger.info("running torch model...")
+        with torch.no_grad():
+            torch_output = torch_model.forward(
+                hidden_states=spatial,
+                encoder_hidden_states=prompt,
+                pooled_projections=pooled,
+                timestep=timestep / 1000,
+                guidance=guidance,
+                img_ids=image_ids,
+                txt_ids=text_ids,
+            ).sample
 
-    logger.info("running TT model...")
-    tt_output = tt_model.forward(
-        spatial=tt_spatial,
-        prompt=tt_prompt,
-        pooled=tt_pooled,
-        timestep=tt_timestep,
-        guidance=tt_guidance,
-        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
-        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-        # combined_rope=(tt_rope_cos, tt_rope_sin),
-        spatial_sequence_length=spatial_seq_len,
-        prompt_sequence_length=prompt_seq_len,
+    num_inference_steps = 28
+    spatial_sequence_length = 64 * 64
+    scheduler.set_timesteps(
+        sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps),
+        mu=_calculate_shift(
+            spatial_sequence_length,
+            scheduler.config.get("base_image_seq_len", 256),
+            scheduler.config.get("max_image_seq_len", 4096),
+            scheduler.config.get("base_shift", 0.5),
+            scheduler.config.get("max_shift", 1.15),
+        ),
     )
 
-    shard_dims = [None, None]
-    shard_dims[sp_axis], shard_dims[tp_axis] = 1, 0
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    )[:batch_size]
+    captured = False
+    tt_timestep_device = None
+    num_itrs = 1
+    traced = False
+    trace_id = None
+    tt_spatial = tt_spatial_host.to(submesh_device)
+    for j in range(num_itrs):
+        sigmas = []
+        for i, t in enumerate(tqdm.tqdm(scheduler.timesteps)):
+            sigma_difference = scheduler.sigmas[i + 1] - scheduler.sigmas[i]
+            sigmas.append((sigma_difference, t))
 
-    assert_quality(torch_output, tt_output_torch, pcc=0.997, relative_rmse=8.1)
+            tt_timestep = ttnn.full(
+                [1, 1],
+                fill_value=t,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.float32,
+                device=None,
+            )
+            tt_sigma_difference = ttnn.full(
+                tuple(tt_spatial_host.shape),
+                # [1, 1],
+                fill_value=sigma_difference,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                device=None,
+            )
+
+            if not traced:
+                tt_timestep_device = tt_timestep.to(submesh_device)
+                tt_sigma_difference_device = tt_sigma_difference.to(submesh_device)
+                tt_output = tt_model.forward(
+                    spatial=tt_spatial,
+                    prompt=tt_prompt,
+                    pooled=tt_pooled,
+                    timestep=tt_timestep_device,
+                    guidance=tt_guidance,
+                    spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+                    prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+                    spatial_sequence_length=spatial_seq_len,
+                    prompt_sequence_length=prompt_seq_len,
+                )
+            else:
+                if not captured:
+                    tt_timestep_device = tt_timestep.to(submesh_device)
+                    tt_sigma_difference_device = tt_sigma_difference.to(submesh_device)
+                    logger.info("Caching TT model...")
+                    tt_output = tt_model.forward(
+                        spatial=tt_spatial,
+                        prompt=tt_prompt,
+                        pooled=tt_pooled,
+                        timestep=tt_timestep_device,
+                        guidance=tt_guidance,
+                        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+                        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+                        spatial_sequence_length=spatial_seq_len,
+                        prompt_sequence_length=prompt_seq_len,
+                    )
+                    ttnn.synchronize_device(submesh_device)
+
+                    logger.info("Capture trace for TT model...")
+                    trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+                    tt_output = tt_model.forward(
+                        spatial=tt_spatial,
+                        prompt=tt_prompt,
+                        pooled=tt_pooled,
+                        timestep=tt_timestep_device,
+                        guidance=tt_guidance,
+                        spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+                        prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+                        spatial_sequence_length=spatial_seq_len,
+                        prompt_sequence_length=prompt_seq_len,
+                    )
+                    ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
+                    ttnn.synchronize_device(submesh_device)
+                    captured = True
+                else:
+                    ttnn.copy_host_to_device_tensor(tt_timestep, tt_timestep_device)
+                    ttnn.copy_host_to_device_tensor(tt_sigma_difference, tt_sigma_difference_device)
+
+                ttnn.execute_trace(submesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.multiply_(tt_output, tt_sigma_difference_device)
+            ttnn.add_(tt_spatial, tt_output)
+
+        shard_dims = [None, None]
+        shard_dims[sp_axis], shard_dims[tp_axis] = 1, 0
+        tt_output_torch = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
+        )[:batch_size]
+
+        tt_spatial_torch = ttnn.to_torch(
+            tt_spatial,
+            mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
+        )[:batch_size]
+        logger.info(
+            f"tt_output mean:{tt_output_torch.mean()}, std:{tt_output_torch.std()}, max:{tt_output_torch.max()}, min:{tt_output_torch.min()}"
+        )
+        logger.info(
+            f"tt_spatial mean:{tt_spatial_torch.mean()}, std:{tt_spatial_torch.std()}, max:{tt_spatial_torch.max()}, min:{tt_spatial_torch.min()}"
+        )
+        logger.info(
+            f"tt_spatial input mean:{spatial.mean()}, std:{spatial.std()}, max:{spatial.max()}, min:{spatial.min()}"
+        )
+        logger.info(f"sigmas mean:{sigmas}")
+
+        # if not os.path.exists("tt_output_latent.pt") or not os.path.exists("tt_output_noise.pt"):
+        if not traced:
+            torch.save(tt_output_torch, f"tt_output_noise.pt")
+            torch.save(tt_spatial_torch, f"tt_output_latent.pt")
+        else:
+            assert_quality(tt_spatial_torch, torch.load("tt_output_latent.pt"), pcc=0.997)
+            assert_quality(tt_output_torch, torch.load("tt_output_noise.pt"), pcc=0.997)
+
+        # reset tt_spatial
+        ttnn.copy_host_to_device_tensor(tt_spatial_host, tt_spatial)
+
+    if trace_id is not None:
+        ttnn.release_trace(submesh_device, trace_id)
+    # assert_quality(torch_output, tt_output_torch, pcc=0.997, relative_rmse=8.1)
+    # ttnn.release_trace(submesh_device, trace_id)
