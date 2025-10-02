@@ -260,10 +260,10 @@ function renderErrorsTable(errorSnippets) {
       if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
-    return `<tr><td>${jobEsc}</td><td>${testEsc}</td><td>${ownerEsc}</td><td>${snippetOneLine}</td></tr>`;
+    return `<tr><td style="overflow-wrap: break-word;">${jobEsc}</td><td style="overflow-wrap: break-word;">${testEsc}</td><td style="overflow-wrap: break-word;">${ownerEsc}</td><td style="overflow-wrap: break-word;">${snippetOneLine}</td></tr>`;
   }).join('\n');
   return [
-    '<table style="table-layout: fixed; width: 100%;">',
+    '<table style="table-layout: fixed; width: 100%; word-wrap: break-word;">',
     '<colgroup>',
     '<col style="width: 60%;">',
     '<col style="width: 12%;">',
