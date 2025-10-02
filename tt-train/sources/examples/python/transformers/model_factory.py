@@ -4,7 +4,7 @@
 
 """Factory for creating transformer models from configuration."""
 import ttml
-from config import DeviceConfig
+from ttml.common.config import DeviceConfig
 from utils import round_up_to_tile
 
 

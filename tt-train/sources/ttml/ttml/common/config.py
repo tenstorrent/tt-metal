@@ -64,5 +64,24 @@ class TrainingConfig:
         self.eval_every = int(tc.get("eval_every", 200))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
 
-        tcfg = tc.get("transformer_config", yaml_config.get("transformer_config", {}))
+        tcfg = TransformerConfig(tc.get("transformer_config", {}))
         self.seq_len = int(tcfg.get("max_sequence_length", 256))
+
+
+class TransformerConfig:
+    """Configuration for transformer model hyperparameters."""
+
+    def __init__(self, yaml_config: dict):
+        """Initialize transformer configuration from YAML config.
+
+        Args:
+            yaml_config: Dictionary containing configuration
+        """
+        self.runner_type = yaml_config.get("runner_type", "default")
+        self.num_heads = int(yaml_config.get("num_heads", 6))
+        self.embedding_dim = int(yaml_config.get("embedding_dim", 384))
+        self.dropout_prob = float(yaml_config.get("dropout_prob", 0.2))
+        self.num_blocks = int(yaml_config.get("num_blocks", 6))
+        self.vocab_size = int(yaml_config.get("vocab_size", 96))
+        self.weight_tying = yaml_config.get("weight_tying", "enabled")
+        self.max_sequence_length = int(yaml_config.get("max_sequence_length", 128))
