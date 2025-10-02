@@ -274,7 +274,7 @@ function renderErrorsTable(errorSnippets) {
       if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
-    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${jobEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow-wrap: normal; hyphens: none;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
+    return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto;">${jobEsc}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow-wrap: normal; hyphens: none;">${ownerEsc}</td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
   }).join('\n');
   return [
     '<table style="table-layout: auto; width: 100%;">',
