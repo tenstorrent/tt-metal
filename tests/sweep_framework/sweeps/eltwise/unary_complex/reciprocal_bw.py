@@ -131,13 +131,12 @@ def run(
         result_imag = ttnn.to_torch(output_tensor[i].imag).to(torch.float32)
         output_tensor[i] = torch.complex(result_real, result_imag)
     e2e_perf = stop_measuring_time(start_time)
-    passed = True
-    min_pcc = 1.0
+    pcc = [True, 1.0]
 
     for i in range(len(output_tensor)):
         pcc_tmp = check_with_pcc(torch.view_as_real(torch_output_tensor[i]), torch.view_as_real(output_tensor[i]), 0.99)
-        passed = passed and pcc_tmp[0]
-        min_pcc = min(min_pcc, str_to_float(pcc_tmp[1]))
+        pcc[0] = pcc[0] and pcc_tmp[0]
+        pcc[1] = min(pcc[1], str_to_float(pcc_tmp[1]))
 
     # print(f"pcc {pcc} input_a_dtype {input_a_dtype}")
-    return [(passed, output_string), e2e_perf]
+    return [pcc, e2e_perf]

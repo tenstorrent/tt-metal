@@ -103,12 +103,9 @@ def run(
     elif len(input_shape) == 2:
         output_tensor = torch.permute(result, (1, 0))
 
-    passed, pcc_value = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
-    status = "PASS" if passed else "FAIL"
-    output_string = f"Output: {status} (PCC: {pcc_value})"
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
     # print(f"pcc {pcc}")
-
-    return [(passed, output_string), e2e_perf]
+    return [pcc, e2e_perf]
 
 
 # Run sweeps locally

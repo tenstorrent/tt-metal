@@ -331,10 +331,9 @@ def run(
 
     ttnn_output_tensor = ttnn.to_torch(expanded_ttnn_tensor)
 
-    passed, pcc_value = check_with_pcc(expanded_tensor, ttnn_output_tensor, 0.999)
-    status = "PASS" if passed else "FAIL"
-    output_string = f"Output: {status} (PCC: {pcc_value})"
-    return [(passed, output_string), e2e_perf]
+    result = check_with_pcc(expanded_tensor, ttnn_output_tensor, 0.999)
+
+    return [result, e2e_perf]
     # raise Exception("Expand is not supported, TODO: implement via recursive concat with itself")
 
 
