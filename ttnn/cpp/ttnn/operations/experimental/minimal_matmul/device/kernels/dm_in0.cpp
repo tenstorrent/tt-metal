@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#include "debug/dprint.h"
+
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t K_tiles = get_compile_time_arg_val(1);
@@ -19,7 +21,7 @@ void kernel_main() {
     const uint32_t in0_addr = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<6>();
+    constexpr auto in0_args = TensorAccessorArgs<7>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, input_tile_size);
 
     constexpr uint32_t M_num_blocks = M_tiles / M_block_tiles;
@@ -32,18 +34,25 @@ void kernel_main() {
     for (uint32_t m_block = 0; m_block < M_num_blocks; m_block++) {
         for (uint32_t n_block = 0; n_block < N_num_blocks; n_block++) {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+                DPRINT << "read in0 on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
+                       << ENDL();
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+
+#ifndef SKIP_IN0
                 uint32_t in0_write_ptr = get_write_ptr(cb_id_in0);
                 for (uint32_t m = 0; m < M_block_tiles; m++) {
                     uint32_t m_id = m_block * M_block_tiles + m;
                     for (uint32_t k = 0; k < K_block_tiles; k++) {
                         uint32_t k_id = k_block * K_block_tiles + k;
                         uint32_t tile_id = m_id * K_tiles + k_id;
+                        DPRINT << "read in0 tile " << tile_id << ENDL();
                         noc_async_read_tile(tile_id, in0_reader, in0_write_ptr);
                         in0_write_ptr += input_tile_size;
                     }
                 }
                 noc_async_read_barrier();
+#endif
+
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
             }
         }

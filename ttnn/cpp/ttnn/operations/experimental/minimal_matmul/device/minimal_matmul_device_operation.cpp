@@ -34,7 +34,7 @@ std::vector<TensorSpec> MinimalMatmulOp::compute_output_specs(const std::vector<
     const auto& memory_config = input_tensor_a.memory_config();
     auto dtype = input_tensor_a.dtype();
 
-    return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config))};
+    return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks MinimalMatmulOp::create_program(
