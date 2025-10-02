@@ -14,7 +14,9 @@ TensorTopology TensorTopology::create_fully_replicated_tensor_topology(
         tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
     mesh_coords.reserve(mesh_shape.mesh_size());
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+    tt::tt_metal::distributed::MeshShape physical_mesh_shape =
+        mesh_shape.dims() == 1 ? tt::tt_metal::distributed::MeshShape(1, mesh_shape[0]) : mesh_shape;
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(physical_mesh_shape)) {
         mesh_coords.push_back(coord);
     }
 
@@ -29,7 +31,9 @@ TensorTopology TensorTopology::create_sharded_tensor_topology(
         tt::tt_metal::distributed::MeshMapperConfig::Shard{shard_dim}};
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
     mesh_coords.reserve(mesh_shape.mesh_size());
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+    tt::tt_metal::distributed::MeshShape physical_mesh_shape =
+        mesh_shape.dims() == 1 ? tt::tt_metal::distributed::MeshShape(1, mesh_shape[0]) : mesh_shape;
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(physical_mesh_shape)) {
         mesh_coords.push_back(coord);
     }
 

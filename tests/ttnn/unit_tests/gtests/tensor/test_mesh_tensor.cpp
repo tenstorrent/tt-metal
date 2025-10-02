@@ -286,8 +286,10 @@ TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
     ASSERT_NE(partial_device_storage, nullptr);
     EXPECT_NE(partial_device_storage->mesh_buffer, nullptr);
 
+    EXPECT_EQ(partial_tensor.tensor_topology().distribution_shape(), MeshShape(4));
     EXPECT_EQ(
-        partial_tensor.tensor_topology(), TensorTopology::create_sharded_tensor_topology(MeshShape(4), shard_dim));
+        std::get<distributed::MeshMapperConfig::Shard>(partial_tensor.tensor_topology().placements()[0]).dim,
+        shard_dim);
 
     // Validate the shards are sorted, and are as expected.
     ASSERT_THAT(partial_device_storage->coords, SizeIs(4));
