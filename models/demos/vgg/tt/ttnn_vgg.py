@@ -156,6 +156,7 @@ def ttnn_vgg16(
                 **conv_kwargs,
                 compute_config=compute_config,
                 dtype=model_config["ACTIVATIONS_DTYPE"],
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
             tt_x = ttnn.from_device(tt_output_tensor_on_device)
             ttnn.deallocate(tt_output_tensor_on_device)

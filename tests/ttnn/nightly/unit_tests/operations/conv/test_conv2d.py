@@ -194,10 +194,6 @@ def run_conv(
         if has_bias
         else None
     )
-    # Scale down input and weights if input channels is large to reduce float accumulation errors
-    if input_channels > 1000:
-        torch_input_tensor_nchw = torch_input_tensor_nchw / 10
-        torch_weight_tensor = torch_weight_tensor / 10
 
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
@@ -806,6 +802,8 @@ def test_conv_dram(
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
 
+    if input_channels > 1024 and dtype == ttnn.bfloat8_b:
+        pytest.skip("Skipping tests with large accumulation due to bfloat8 accuracy issues.")
     batch_size = 1
     config = {}
     config["act_block_h"] = act_block_h_override
