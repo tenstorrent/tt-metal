@@ -65,14 +65,16 @@ void bind_reduction_moe_operation(py::module& module) {
                 - Sharded outputs are not supported for this operation.
 
             Example:
-                N, C, H, W = 1, 1, 32, 64
-                k = 32
+                .. code-block:: python
 
-                input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-                expert_mask = ttnn.zeros([N, C, 1, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-                topE_mask = ttnn.zeros([N, C, 1, k], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                    N, C, H, W = 1, 1, 32, 64
+                    k = 32
 
-                ttnn_output = ttnn.moe(input_tensor, expert_mask, topE_mask, k)
+                    input_tensor = ttnn.rand([N, C, H, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                    expert_mask = ttnn.zeros([N, C, 1, W], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+                    topE_mask = ttnn.zeros([N, C, 1, k], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+                    ttnn_output = ttnn.moe(input_tensor, expert_mask, topE_mask, k)
 
         )doc";
 

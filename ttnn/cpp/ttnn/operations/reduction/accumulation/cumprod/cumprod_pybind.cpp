@@ -40,8 +40,10 @@ void bind_reduction_cumprod_operation(py::module& module) {
             ttnn.Tensor: the output tensor.
 
         Example:
-            input_tensor = ttnn.rand((N, N), device=device)
-            output_tensor = ttnn.cumprod(input_tensor, dim=0)
+            .. code-block:: python
+
+                input_tensor = ttnn.rand((N, N), device=device)
+                output_tensor = ttnn.cumprod(input_tensor, dim=0)
 
         Note:
             If both `dtype` and `output` are specified then `output.dtype` must match `dtype`.

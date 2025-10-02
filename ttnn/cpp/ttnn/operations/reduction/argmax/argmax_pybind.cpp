@@ -67,6 +67,7 @@ void bind_reduction_argmax_operation(py::module& module) {
 
             Example:
               .. code-block:: python
+
                   input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
                   # Last dim reduction yields shape of [1, 1, 32, 1]

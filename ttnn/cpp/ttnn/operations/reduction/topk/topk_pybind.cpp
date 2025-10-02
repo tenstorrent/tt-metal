@@ -78,8 +78,10 @@ void bind_reduction_topk_operation(py::module& module) {
                 - Sharded outputs are not supported for this operation.
 
             Example:
-                input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)
-                topk_values, topk_indices = ttnn.topk(input_tensor, k=32, dim=-1, largest=True, sorted=True)
+                .. code-block:: python
+
+                    input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.TILE_LAYOUT)
+                    topk_values, topk_indices = ttnn.topk(input_tensor, k=32, dim=-1, largest=True, sorted=True)
 
         )doc";
 

@@ -125,13 +125,15 @@ void bind_reduction_sampling_operation(py::module& module) {
                 ttnn.Tensor: The output tensor containing sampled indices.
 
             Example:
-                input_tensor = ttnn.rand([1, 1, 32, 64], layout=ttnn.TILE_LAYOUT, device=device)
-                input_indices_tensor = ttnn.rand([1, 1, 32, 64], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-                k_tensor = ttnn.rand([32], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-                p_tensor = ttnn.rand([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-                temp_tensor = ttnn.rand([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                .. code-block:: python
 
-                output = ttnn.sampling(input_tensor, input_indices_tensor, k=k_tensor, p=p_tensor, temp=temp_tensor)
+                    input_tensor = ttnn.rand([1, 1, 32, 64], layout=ttnn.TILE_LAYOUT, device=device)
+                    input_indices_tensor = ttnn.rand([1, 1, 32, 64], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                    k_tensor = ttnn.rand([32], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                    p_tensor = ttnn.rand([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+                    temp_tensor = ttnn.rand([32], layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+                    output = ttnn.sampling(input_tensor, input_indices_tensor, k=k_tensor, p=p_tensor, temp=temp_tensor)
 
         )doc";
 
