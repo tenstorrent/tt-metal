@@ -197,7 +197,7 @@ function findOwnerForLabel(label) {
 
 function renderErrorsTable(errorSnippets) {
   if (!Array.isArray(errorSnippets) || errorSnippets.length === 0) {
-    return '_No error info found_';
+    return '<p><em>No error info found</em></p>';
   }
   const rows = errorSnippets.map(obj => {
     const rawLabel = (obj && obj.label) ? String(obj.label) : '';
@@ -249,41 +249,66 @@ function renderErrorsTable(errorSnippets) {
     if (!jobName) jobName = rawLabel || '';
     // Aesthetics: drop trailing bracketed status like [failure] or [error]
     jobName = jobName.replace(/\s*\[[^\]]+\]\s*$/, '');
-    const jobEsc = jobName.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
-    const testEsc = testName.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
-    const snippetOneLine = String(errorForDisplay || '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ⇥ ');
+    // HTML escape the content
+    const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    const jobEsc = escapeHtml(jobName).replace(/\r?\n/g, ' ⇥ ');
+    const testEsc = escapeHtml(testName).replace(/\r?\n/g, ' ⇥ ');
+    const snippetOneLine = escapeHtml(errorForDisplay || '').replace(/\r?\n/g, ' ⇥ ');
     let ownerDisplay = 'no owner found';
     if (obj && Array.isArray(obj.owner) && obj.owner.length) {
       const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
       if (names.length) ownerDisplay = names.join(', ');
     }
-    ownerDisplay = ownerDisplay.replace(/\|/g, '\\|');
-    return `| ${jobEsc} | ${testEsc} | ${ownerDisplay} | ${snippetOneLine} |`;
+    const ownerEsc = escapeHtml(ownerDisplay);
+    return `<tr><td>${jobEsc}</td><td>${testEsc}</td><td>${ownerEsc}</td><td>${snippetOneLine}</td></tr>`;
   }).join('\n');
   return [
-    '| Job | Test | Owner | Error |',
-    '|------|------|-------|-------|',
+    '<table>',
+    '<colgroup>',
+    '<col style="width: 25%;">',
+    '<col style="width: 15%;">',
+    '<col style="width: 15%;">',
+    '<col style="width: 45%;">',
+    '</colgroup>',
+    '<thead>',
+    '<tr><th>Job</th><th>Test</th><th>Owner</th><th>Error</th></tr>',
+    '</thead>',
+    '<tbody>',
     rows,
+    '</tbody>',
+    '</table>',
     ''
   ].join('\n');
 }
 
 function renderCommitsTable(commits) {
   if (!Array.isArray(commits) || commits.length === 0) {
-    return '_None_';
+    return '<p><em>None</em></p>';
   }
+  const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
   const rows = commits.map(c => {
     const short = c.short || (c.sha ? c.sha.substring(0, 7) : '');
     const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : undefined);
     const who = c.author_login ? `@${c.author_login}` : (c.author_name || 'unknown');
-    const whoMd = (c.author_login && c.author_url) ? `[@${c.author_login}](${c.author_url})` : who;
-    const shaMd = url ? `[\`${short}\`](${url})` : `\`${short}\``;
-    return `| ${shaMd} | ${whoMd} |`;
+    const whoHtml = (c.author_login && c.author_url)
+      ? `<a href="${escapeHtml(c.author_url)}">@${escapeHtml(c.author_login)}</a>`
+      : escapeHtml(who);
+    const shaHtml = url ? `<a href="${escapeHtml(url)}"><code>${escapeHtml(short)}</code></a>` : `<code>${escapeHtml(short)}</code>`;
+    return `<tr><td>${shaHtml}</td><td>${whoHtml}</td></tr>`;
   }).join('\n');
   return [
-    '| SHA | Author |',
-    '|-----|--------|',
+    '<table>',
+    '<colgroup>',
+    '<col style="width: 30%;">',
+    '<col style="width: 70%;">',
+    '</colgroup>',
+    '<thead>',
+    '<tr><th>SHA</th><th>Author</th></tr>',
+    '</thead>',
+    '<tbody>',
     rows,
+    '</tbody>',
+    '</table>',
     ''
   ].join('\n');
 }
@@ -773,6 +798,15 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
  */
 async function generateSummaryBox(grouped, github, context) {
   const rows = [];
+  const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+
+  // Helper to convert markdown links to HTML
+  const mdToHtml = (md) => {
+    if (!md || md === EMPTY_VALUE) return escapeHtml(md);
+    // Match markdown link format: [text](url) or [`text`](url)
+    return md.replace(/\[`([^`]+)`\]\(([^)]+)\)/g, (_, text, url) => `<a href="${escapeHtml(url)}"><code>${escapeHtml(text)}</code></a>`)
+             .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => `<a href="${escapeHtml(url)}">${escapeHtml(text)}</a>`);
+  };
 
   for (const [name, runs] of grouped.entries()) {
     const mainBranchRuns = runs
@@ -789,17 +823,53 @@ async function generateSummaryBox(grouped, github, context) {
     const workflowLink = getWorkflowLink(context, runs[0]?.path); // get the link to the workflow page that lists all the runs
     const runInfo = await getLastRunInfo(mainBranchRuns, github, context); // get the last run info for the workflow
 
-    const row = `| [${name}](${workflowLink}) | ${stats.eventTypes || 'unknown'} | ${stats.totalRuns} | ${stats.successfulRuns} | ${stats.successRate} | ${stats.uniqueSuccessRate} | ${stats.retryRate} | ${runInfo.status} | ${runInfo.sha} | ${runInfo.run} | ${runInfo.pr} | ${runInfo.title} | ${runInfo.newestBadSha} | ${runInfo.newestGoodSha} |`; // build the row of the summary table
+    const row = `<tr>
+<td><a href="${escapeHtml(workflowLink)}">${escapeHtml(name)}</a></td>
+<td>${escapeHtml(stats.eventTypes || 'unknown')}</td>
+<td>${stats.totalRuns}</td>
+<td>${stats.successfulRuns}</td>
+<td>${escapeHtml(stats.successRate)}</td>
+<td>${escapeHtml(stats.uniqueSuccessRate)}</td>
+<td>${escapeHtml(stats.retryRate)}</td>
+<td>${escapeHtml(runInfo.status)}</td>
+<td>${mdToHtml(runInfo.sha)}</td>
+<td>${mdToHtml(runInfo.run)}</td>
+<td>${mdToHtml(runInfo.pr)}</td>
+<td>${escapeHtml(runInfo.title)}</td>
+<td>${mdToHtml(runInfo.newestBadSha)}</td>
+<td>${mdToHtml(runInfo.newestGoodSha)}</td>
+</tr>`;
     rows.push(row);
   }
 
   return [
     '## Workflow Summary',
-    '| Workflow | Event Type(s) | Total Runs | Successful Runs | Success Rate | Unique Success Rate | Retry Rate | Last Run on `main` | Last SHA | Last Run | Last PR | PR Title | Newest Bad SHA | Newest Good SHA |',
-    '|----------|---------------|------------|-----------------|--------------|-------------------|------------|-------------------|----------|----------|---------|-----------|----------------|-----------------|',
+    '<table>',
+    '<colgroup>',
+    '<col style="width: 12%;">',
+    '<col style="width: 8%;">',
+    '<col style="width: 5%;">',
+    '<col style="width: 7%;">',
+    '<col style="width: 6%;">',
+    '<col style="width: 9%;">',
+    '<col style="width: 6%;">',
+    '<col style="width: 5%;">',
+    '<col style="width: 7%;">',
+    '<col style="width: 7%;">',
+    '<col style="width: 6%;">',
+    '<col style="width: 10%;">',
+    '<col style="width: 6%;">',
+    '<col style="width: 6%;">',
+    '</colgroup>',
+    '<thead>',
+    '<tr><th>Workflow</th><th>Event Type(s)</th><th>Total Runs</th><th>Successful Runs</th><th>Success Rate</th><th>Unique Success Rate</th><th>Retry Rate</th><th>Last Run on <code>main</code></th><th>Last SHA</th><th>Last Run</th><th>Last PR</th><th>PR Title</th><th>Newest Bad SHA</th><th>Newest Good SHA</th></tr>',
+    '</thead>',
+    '<tbody>',
     ...rows,
-    ''  // Empty line for better readability
-  ].join('\n'); // turn the array of rows into a single string so it can be rendered as a markdown table
+    '</tbody>',
+    '</table>',
+    ''
+  ].join('\n');
 }
 
 /**
@@ -817,34 +887,50 @@ async function buildReport(grouped, github, context) {
     `# Workflow Summary (Last ${days} Days) - Generated at ${timestamp}\n`,
     await generateSummaryBox(grouped, github, context),
     '\n## Column Descriptions\n',
-    'A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).\n',
+    '<p>A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).</p>\n',
     '\n### Success Rate Calculations\n',
-    'The success rates are calculated based on unique runs (not including retries in the denominator):\n',
-    '- **Success Rate**: (Number of unique runs that eventually succeeded / Total number of unique runs) × 100%\n',
-    '  - Example: 3 successful unique runs out of 5 total unique runs = 60% success rate\n',
-    '- **Unique Success Rate**: (Number of unique runs that succeeded on first try / Total number of unique runs) × 100%\n',
-    '  - Example: 1 unique run succeeded on first try out of 5 total unique runs = 20% unique success rate\n',
-    '- **Retry Rate**: (Number of successful unique runs that needed retries / Total number of successful unique runs) × 100%\n',
-    '  - Example: 2 successful unique runs needed retries out of 3 total successful unique runs = 66.67% retry rate\n',
-    '\nNote: Unique Success Rate + Retry Rate does not equal 100% because they measure different things:\n',
-    '- Unique Success Rate is based on all unique runs\n',
-    '- Retry Rate is based only on successful unique runs\n',
-    '\n| Column | Description |',
-    '|--------|-------------|',
-    '| Workflow | Name of the workflow with link to its GitHub Actions page |',
-    '| Event Type(s) | Types of events that trigger this workflow (e.g., push, pull_request, schedule) |',
-    '| Total Runs | Total number of workflow runs including all retry attempts (e.g., 1 unique run with 2 retries = 3 total runs) |',
-    '| Successful Runs | Number of unique workflow runs that eventually succeeded, regardless of whether they needed retries |',
-    '| Success Rate | Percentage of unique workflow runs that eventually succeeded (e.g., 3/5 unique runs succeeded = 60%) |',
-    '| Unique Success Rate | Percentage of unique workflow runs that succeeded on their first attempt without needing retries (e.g., 1/5 unique runs succeeded on first try = 20%) |',
-    '| Retry Rate | Percentage of successful unique runs that needed retries to succeed (e.g., of 3 successful unique runs, 2 needed retries = 66.67%) |',
-    '| Last Run on `main` | Status of the most recent run on the main branch (✅ for success, ❌ for failure) |',
-    '| Last SHA | Short SHA of the most recent run on main |',
-    '| Last Run | Link to the most recent run on main, with attempt number if applicable |',
-    '| Last PR | Link to the PR associated with the most recent run, if any |',
-    '| PR Title | Title of the PR associated with the most recent run, if any |',
-    '| Newest Bad SHA | Short SHA of the most recent failing run on main (only shown if last run failed) |',
-    '| Newest Good SHA | Short SHA of the most recent successful run on main |'
+    '<p>The success rates are calculated based on unique runs (not including retries in the denominator):</p>\n',
+    '<ul>',
+    '<li><strong>Success Rate</strong>: (Number of unique runs that eventually succeeded / Total number of unique runs) × 100%',
+    '  <ul><li>Example: 3 successful unique runs out of 5 total unique runs = 60% success rate</li></ul>',
+    '</li>',
+    '<li><strong>Unique Success Rate</strong>: (Number of unique runs that succeeded on first try / Total number of unique runs) × 100%',
+    '  <ul><li>Example: 1 unique run succeeded on first try out of 5 total unique runs = 20% unique success rate</li></ul>',
+    '</li>',
+    '<li><strong>Retry Rate</strong>: (Number of successful unique runs that needed retries / Total number of successful unique runs) × 100%',
+    '  <ul><li>Example: 2 successful unique runs needed retries out of 3 total successful unique runs = 66.67% retry rate</li></ul>',
+    '</li>',
+    '</ul>\n',
+    '<p><strong>Note:</strong> Unique Success Rate + Retry Rate does not equal 100% because they measure different things:</p>',
+    '<ul>',
+    '<li>Unique Success Rate is based on all unique runs</li>',
+    '<li>Retry Rate is based only on successful unique runs</li>',
+    '</ul>\n',
+    '<table>',
+    '<colgroup>',
+    '<col style="width: 20%;">',
+    '<col style="width: 80%;">',
+    '</colgroup>',
+    '<thead>',
+    '<tr><th>Column</th><th>Description</th></tr>',
+    '</thead>',
+    '<tbody>',
+    '<tr><td>Workflow</td><td>Name of the workflow with link to its GitHub Actions page</td></tr>',
+    '<tr><td>Event Type(s)</td><td>Types of events that trigger this workflow (e.g., push, pull_request, schedule)</td></tr>',
+    '<tr><td>Total Runs</td><td>Total number of workflow runs including all retry attempts (e.g., 1 unique run with 2 retries = 3 total runs)</td></tr>',
+    '<tr><td>Successful Runs</td><td>Number of unique workflow runs that eventually succeeded, regardless of whether they needed retries</td></tr>',
+    '<tr><td>Success Rate</td><td>Percentage of unique workflow runs that eventually succeeded (e.g., 3/5 unique runs succeeded = 60%)</td></tr>',
+    '<tr><td>Unique Success Rate</td><td>Percentage of unique workflow runs that succeeded on their first attempt without needing retries (e.g., 1/5 unique runs succeeded on first try = 20%)</td></tr>',
+    '<tr><td>Retry Rate</td><td>Percentage of successful unique runs that needed retries to succeed (e.g., of 3 successful unique runs, 2 needed retries = 66.67%)</td></tr>',
+    '<tr><td>Last Run on <code>main</code></td><td>Status of the most recent run on the main branch (✅ for success, ❌ for failure)</td></tr>',
+    '<tr><td>Last SHA</td><td>Short SHA of the most recent run on main</td></tr>',
+    '<tr><td>Last Run</td><td>Link to the most recent run on main, with attempt number if applicable</td></tr>',
+    '<tr><td>Last PR</td><td>Link to the PR associated with the most recent run, if any</td></tr>',
+    '<tr><td>PR Title</td><td>Title of the PR associated with the most recent run, if any</td></tr>',
+    '<tr><td>Newest Bad SHA</td><td>Short SHA of the most recent failing run on main (only shown if last run failed)</td></tr>',
+    '<tr><td>Newest Good SHA</td><td>Short SHA of the most recent successful run on main</td></tr>',
+    '</tbody>',
+    '</table>'
   ].join('\n');
 }
 
@@ -1275,8 +1361,8 @@ async function run() {
       // Use the already-enriched regressedDetails and stayedFailingDetails arrays directly
       if (regressedDetails.length > 0) { // check if there are any regressed pipelines
         const lines = regressedDetails.map(it => { // for each regressed pipeline, build a markdown line with details
-          // Build the base line: workflow name with optional link
-          const base = it.workflow_url ? `- [${it.name}](${it.workflow_url})` : `- ${it.name}`;
+          // Build the workflow name with optional link for the summary (use HTML anchor tag, not markdown)
+          const workflowName = it.workflow_url ? `<a href="${it.workflow_url}">${it.name}</a>` : it.name;
 
           if (it.first_failed_run_url) { // if we found the first failing run in the window
             // Extract the short SHA for the first failing commit
@@ -1293,28 +1379,37 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['','  - Errors (table below):','', errorsHtml, ''].join('\n');
+            // Indent the table content to be inside the nested details block (4 spaces total)
+            const indentedTable = errorsHtml.split('\n').map(line => line ? '    ' + line : '').join('\n');
+            errorsList = ['','    <details>','    <summary>Errors (click to expand)</summary>','', indentedTable, '    </details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build a link to the latest (most recent) failing run with timestamp and commit
-              const latestLink = it.run_url ? ` | Latest failing run: [Run](${it.run_url}) ${it.created_at ? new Date(it.created_at).toISOString() : ''} ${it.commit_short ? `[\\\`${it.commit_short}\\"](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})` : ''}` : '';
-              // Return a special message indicating no success was found, show oldest and latest failures
-              return [`${base}\n  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLink}`, errorsList].filter(Boolean).join('\n');
+              const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : '';
+              const latestShaShort = it.commit_short || (it.commit_sha ? it.commit_sha.substring(0, SHA_SHORT_LENGTH) : undefined);
+              const latestShaLink = (latestShaShort && it.commit_sha)
+                ? ` [\`${latestShaShort}\`](https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${it.commit_sha})`
+                : '';
+              const latestLine = it.run_url
+                ? ` | Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}`
+                : '';
+              // Return a collapsible workflow with details
+              const content = `  - Failed to find any successful run in the last two weeks. Oldest failing run is: [Run](${it.first_failed_run_url}) ${when} ${shaLink}${latestLine}`;
+              return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList,'</details>',''].join('\n');
             }
 
             // If we found a success in the window, show commits between success and first failure
             let commitsList = '';
             const commitsMd = renderCommitsTable(it.commits_between || []);
-            // const rawUrlsMd = renderRawCommitUrlsTable(it.commits_between || []);
+            // Indent the table content to be inside the nested details block (4 spaces total)
+            const indentedCommits = commitsMd.split('\n').map(line => line ? '    ' + line : '').join('\n');
             commitsList = [
               '',
-              '  - Commits between last success and first failure (tables below):',
+              '    <details>',
+              '    <summary>Commits between last success and first failure (click to expand)</summary>',
               '',
-              commitsMd,
-              '',
-              '  - Raw commit URLs:',
-              '',
-              // rawUrlsMd,
+              indentedCommits,
+              '    </details>',
               ''
             ].join('\n');
 
@@ -1327,11 +1422,12 @@ async function run() {
             const latestLine = it.run_url
               ? `\n  - Latest failing run: [Run](${it.run_url}) ${latestWhenIso}${latestShaLink}` // link to latest failing run with details
               : '';
-            // Return the full details: first failure info, latest failure info, errors, and commits
-            return [`${base}\n  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`, errorsList, commitsList].filter(Boolean).join('\n');
+            // Return the full collapsible workflow with all details
+            const content = `  - First failing run on main: [Run](${it.first_failed_run_url}) ${when} ${shaLink} ${author}${latestLine}`;
+            return ['<details>',`<summary>${workflowName}</summary>`,'',content, errorsList, commitsList,'</details>',''].join('\n');
           }
-          // If no first_failed_run_url, just return the workflow name
-          return base;
+          // If no first_failed_run_url, just return a collapsed workflow name
+          return ['<details>',`<summary>${workflowName}</summary>`,'','  - No failure details available','</details>',''].join('\n');
         });
         // Build the regressions section with header and all lines
         regressionsSection = ['', '## Regressions (Pass → Fail)', ...lines, ''].join('\n');
