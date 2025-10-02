@@ -615,17 +615,6 @@ void DevicePool::wait_for_fabric_router_sync(const uint32_t timeout_ms) const {
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
-    auto edm_status_to_string = [](uint32_t status) -> std::string {
-        switch (status) {
-            case tt::tt_fabric::EDMStatus::STARTED: return "STARTED";
-            case tt::tt_fabric::EDMStatus::REMOTE_HANDSHAKE_COMPLETE: return "REMOTE_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE: return "LOCAL_HANDSHAKE_COMPLETE";
-            case tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC: return "READY_FOR_TRAFFIC";
-            case tt::tt_fabric::EDMStatus::TERMINATED: return "TERMINATED";
-            default: return fmt::format("UNKNOWN(0x{:08x})", status);
-        }
-    };
-
     auto wait_for_handshake = [&](IDevice* dev) {
         if (!dev) {
             TT_THROW("Fabric router sync on null device. All devices must be opened for Fabric.");
@@ -657,13 +646,10 @@ void DevicePool::wait_for_fabric_router_sync(const uint32_t timeout_ms) const {
                     master_router_logical_core.str(),
                     router_sync_address);
                 TT_THROW(
-                    "Fabric Router Sync: Timeout after {} ms. Device {}: Expected status {} (0x{:08x}), got {} "
-                    "(0x{:08x})",
+                    "Fabric Router Sync: Timeout after {} ms. Device {}: Expected status 0x{:08x}, got 0x{:08x}",
                     timeout_ms,
                     dev->id(),
-                    edm_status_to_string(expected_status),
                     expected_status,
-                    edm_status_to_string(master_router_status[0]),
                     master_router_status[0]);
             }
         }

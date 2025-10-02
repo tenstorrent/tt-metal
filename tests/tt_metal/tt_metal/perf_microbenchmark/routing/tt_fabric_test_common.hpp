@@ -109,18 +109,13 @@ public:
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
 
         // Fabric Reliability Mode
-        // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
-        // If RELIABILITY_MODE is set, it takes precedence over fabric_setup.fabric_reliability_mode
+        // Default to STRICT; if runtime option (from rtoptions) is set, it takes precedence over
+        // fabric_setup.fabric_reliability_mode
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-        const char* reliability_mode_env = std::getenv("RELIABILITY_MODE");
-        if (reliability_mode_env != nullptr) {
-            std::string mode_str(reliability_mode_env);
-            if (mode_str == "relaxed") {
-                reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
-            } else if (mode_str == "strict") {
-                reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-            }
+        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        if (reliability_mode_override.has_value()) {
+            reliability_mode = reliability_mode_override.value();
         } else if (fabric_setup.fabric_reliability_mode.has_value()) {
             reliability_mode = fabric_setup.fabric_reliability_mode.value();
         }

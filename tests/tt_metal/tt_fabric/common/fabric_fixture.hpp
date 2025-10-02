@@ -76,40 +76,15 @@ public:
 
         // Fabric Reliability Mode
         // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
-        // If RELIABILITY_MODE is set, use the value from the environment variable
-        static const std::map<std::string, tt::tt_fabric::FabricReliabilityMode> reliability_mode_map = {
-            {"strict", tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE},
-            {"relaxed", tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE}
-        };
-        auto reliability_mode_to_string = [](tt::tt_fabric::FabricReliabilityMode mode) -> std::string {
-            switch (mode) {
-                case tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE:
-                    return "STRICT_SYSTEM_HEALTH_SETUP_MODE";
-                case tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE:
-                    return "RELAXED_SYSTEM_HEALTH_SETUP_MODE";
-                default:
-                    return "UNKNOWN";
-            }
-        };
+        // If runtime option RELIABILITY_MODE is set, use the value from the runtime option
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-        const char* reliability_mode_env = getenv("RELIABILITY_MODE");
-        if (reliability_mode_env != nullptr) {
-            std::string mode_str(reliability_mode_env);
-            auto it = reliability_mode_map.find(mode_str);
-            if (it != reliability_mode_map.end()) {
-                reliability_mode = it->second;
-                log_info(tt::LogTest, "Fabric Reliability Mode: {}", reliability_mode_to_string(reliability_mode));
-            } else {
-                // reliability_mode remains default
-                log_warning(
-                    tt::LogTest,
-                    "Invalid RELIABILITY_MODE '{}'. Fabric Reliability Mode set to: STRICT_SYSTEM_HEALTH_SETUP_MODE",
-                    mode_str);
-            }
-        } else {
-            log_info(tt::LogTest, "Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE");
+        // Query runtime options for an env-parsed override
+        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        if (reliability_mode_override.has_value()) {
+            reliability_mode = reliability_mode_override.value();
         }
+        log_info(tt::LogTest, "Fabric Reliability Mode: {}", enchantum::to_string(reliability_mode));
 
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
