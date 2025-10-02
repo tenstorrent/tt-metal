@@ -51,7 +51,7 @@ TEST(MeshTensorHostTest, FromHostShardsDifferentSpecs) {
                     std::vector<float>(10),
                     TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
             };
-            from_host_shards(shards, MeshShape(2));
+            from_host_shards(shards, MeshShape(1, 2));
         }),
         ThrowsMessage<std::runtime_error>(HasSubstr("All tensor shards must have the same tensor spec")));
 }
@@ -69,7 +69,7 @@ TEST_F(MeshTensorTest, FromHostShardsDeviceStorage) {
                     TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{})),
                     mesh_device_.get()),
             };
-            from_host_shards(shards, MeshShape(2));
+            from_host_shards(shards, MeshShape(1, 2));
         }),
         ThrowsMessage<std::runtime_error>(HasSubstr("All tensor shards must be on host")));
 }
@@ -85,7 +85,7 @@ TEST(MeshTensorHostTest, FromHostShardsMeshShapeMismatch) {
                     std::vector<float>(10),
                     TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
             };
-            from_host_shards(shards, MeshShape(3));
+            from_host_shards(shards, MeshShape(1, 3));
         }),
         ThrowsMessage<std::runtime_error>(HasSubstr("Number of tensor shards must match mesh size")));
 }
@@ -106,11 +106,11 @@ TEST(MeshTensorHostTest, FromHostShards) {
                 host_data2,
                 TensorSpec(ttnn::Shape{10}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}))),
         },
-        MeshShape(2));
+        MeshShape(1, 2));
 
     EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
     EXPECT_EQ(tensor.storage_type(), StorageType::HOST);
-    EXPECT_EQ(tensor.tensor_topology(), TensorTopology::create_sharded_tensor_topology(MeshShape(2)));
+    EXPECT_EQ(tensor.tensor_topology(), TensorTopology::create_sharded_tensor_topology(MeshShape(1, 2)));
 
     auto tensors = get_device_tensors(tensor);
     ASSERT_THAT(tensors, SizeIs(2));

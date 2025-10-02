@@ -98,20 +98,17 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
             shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
     }
 
-    tt::tt_metal::distributed::MeshShape physical_mesh_shape =
-        mesh_shape.dims() == 1 ? tt::tt_metal::distributed::MeshShape(1, mesh_shape[0]) : mesh_shape;
-
-    auto distributed_host_buffer = DistributedHostBuffer::create(physical_mesh_shape);
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_shape);
     auto shard_it = tensor_shards.begin();
     std::vector<distributed::MeshCoordinate> coords;
-    for (const auto& coord : distributed::MeshCoordinateRange(physical_mesh_shape)) {
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
         HostBuffer buffer = host_buffer::get_host_buffer(*(shard_it++));
         distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
         coords.push_back(coord);
     }
 
     TensorTopology topology(
-        MeshShape(physical_mesh_shape.mesh_size()),
+        MeshShape(mesh_shape.mesh_size()),
         {tt::tt_metal::distributed::MeshMapperConfig::Shard{.dim = shard_dim}},
         coords);
 
