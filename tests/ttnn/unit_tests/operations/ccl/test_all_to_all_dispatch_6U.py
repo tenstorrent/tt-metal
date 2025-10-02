@@ -379,7 +379,7 @@ def test_prefill_perf(
     "mesh_shape, mesh_device", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["mesh_device"]
 )
 @pytest.mark.parametrize("cluster_axis", [1], ids=["cluster_col"])
-@pytest.mark.parametrize("experts", [8])
+@pytest.mark.parametrize("experts", [256])
 @pytest.mark.parametrize("select_experts_k", [2])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
