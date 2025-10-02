@@ -73,6 +73,31 @@ public:
         } else {
             log_info(tt::LogTest, "Running fabric api tests with fast dispatch");
         }
+
+        // Fabric Reliability Mode
+        // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
+        // If RELIABILITY_MODE is set, use the value from the environment variable
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        const char* reliability_mode_env = getenv("RELIABILITY_MODE");
+        if (reliability_mode_env != nullptr) {
+            std::string mode_str(reliability_mode_env);
+            if (mode_str == "strict") {
+                reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+                log_info(tt::LogTest, "Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE");
+            } else if (mode_str == "relaxed") {
+                reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+                log_info(tt::LogTest, "Fabric Reliability Mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE");
+            } else {
+                log_warning(
+                    tt::LogTest,
+                    "Invalid RELIABILITY_MODE '{}'. Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE",
+                    mode_str);
+            }
+        } else {
+            log_info(tt::LogTest, "Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE");
+        }
+
         // Set up all available devices
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -81,11 +106,7 @@ public:
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
-        tt::tt_fabric::SetFabricConfig(
-            fabric_config,
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-            num_routing_planes,
-            fabric_tensix_config);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config);
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         devices_map_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
