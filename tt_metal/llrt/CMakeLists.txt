@@ -21,9 +21,10 @@ target_link_libraries(
     llrt
     PUBLIC
         umd::device
-        Metalium::Metal::Hardware
+        TT::Metalium::HostDevCommon
     PRIVATE
         HAL::1xx
+        HAL::2xx
         Tracy::TracyClient
         nlohmann_json::nlohmann_json
         Reflect::Reflect
