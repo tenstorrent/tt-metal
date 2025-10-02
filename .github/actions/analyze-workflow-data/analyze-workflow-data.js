@@ -222,16 +222,25 @@ function renderErrorsTable(errorSnippets) {
     // - For generic infra errors, force Test to NA
     let errorForDisplay = rawSnippet;
     if (!testName) {
-      const hasBracket = rawSnippet.includes('[');
+      const trimmed = rawSnippet.replace(/^\s+/, '');
       const generic = /(lost\s+connection|timeout|timed\s*out|connection\s+reset|network\s+is\s+unreachable|no\s+space\s+left|killed\s+by|out\s+of\s+memory)/i;
-      if (generic.test(rawSnippet) || !hasBracket) {
+      const ib = trimmed.indexOf('[');
+      const ispace = trimmed.indexOf(' ');
+      const endWord = (ispace === -1 && ib === -1) ? trimmed.length : Math.min(...[ispace, ib].filter(v => v !== -1));
+      const firstToken = trimmed.slice(0, Math.max(0, endWord)).trim();
+      if (generic.test(trimmed)) {
         testName = 'NA';
         errorForDisplay = rawSnippet;
-      } else {
-        const idx = rawSnippet.indexOf('[');
-        const upto = rawSnippet.slice(0, idx).trim();
+      } else if (firstToken && /test/i.test(firstToken)) {
+        testName = firstToken;
+        errorForDisplay = trimmed.slice(endWord).trim() || rawSnippet;
+      } else if (ib !== -1) {
+        const upto = trimmed.slice(0, ib).trim();
         testName = upto || 'NA';
-        errorForDisplay = rawSnippet.slice(idx).trim();
+        errorForDisplay = trimmed.slice(ib).trim();
+      } else {
+        testName = 'NA';
+        errorForDisplay = rawSnippet;
       }
     } else {
       // If test name provided (e.g., gtest), leave error as-is
