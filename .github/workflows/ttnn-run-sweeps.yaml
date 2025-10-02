@@ -670,7 +670,7 @@ jobs:
           # Use smaller batch size for comprehensive runs (Friday night schedule or manual comprehensive dispatch)
           # Use larger batch size for nightly runs (Thursday schedule or manual nightly dispatch)
           if "${{ github.event.schedule }}" == "0 5 * * 6" or "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)":
-              BATCH_SIZE = 4  # Smaller batches for comprehensive runs
+              BATCH_SIZE = 2  # Smaller batches for comprehensive runs
           else:
               BATCH_SIZE = 10  # Larger batches for nightly runs
 
