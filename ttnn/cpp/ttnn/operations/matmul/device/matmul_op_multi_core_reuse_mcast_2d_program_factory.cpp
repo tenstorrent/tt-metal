@@ -580,8 +580,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
     issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
-    addresses are not necessarily aligned due to non-64-byte-aligned page sizes across
-    multiple DRAM banks.
+    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
 
     Example scenario:
     - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
