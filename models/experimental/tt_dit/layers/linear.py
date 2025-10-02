@@ -197,18 +197,10 @@ class ColParallelLinear:
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight)
-            weight = ttnn.experimental.all_gather_async(
-                unsqueezed_weight,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    unsqueezed_weight.shape, 2, self.fsdp_mesh_axis
-                ),
-                dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.fsdp_mesh_axis),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.fsdp_mesh_axis,
-                # **self.ccl_manager.get_ag_hyperparams(unsqueezed_weight.shape),
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=2, mesh_axis=self.fsdp_mesh_axis
             )
+
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:
             weight = self.weight
@@ -318,18 +310,10 @@ class RowParallelLinear:
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight)
-            weight = ttnn.experimental.all_gather_async(
-                unsqueezed_weight,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    unsqueezed_weight.shape, 3, self.fsdp_mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.fsdp_mesh_axis),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.fsdp_mesh_axis,
-                # **self.ccl_manager.get_ag_hyperparams(unsqueezed_weight.shape),
+            weight = self.ccl_manager.all_gather_persistent_buffer(
+                unsqueezed_weight, dim=3, mesh_axis=self.fsdp_mesh_axis
             )
+
             weight = ttnn.reshape(weight, (weight.shape[-2], weight.shape[-1]))
         else:
             weight = self.weight
