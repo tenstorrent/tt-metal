@@ -402,6 +402,7 @@ list(
 add_library(ttnncpp SHARED)
 add_library(TTNN::CPP ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
+add_library(tt-nn::tt-nn ALIAS ttnncpp) # Canonical alias — ensures consistency across find_package() usage
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
@@ -411,11 +412,9 @@ set_target_properties(
     ttnncpp
     PROPERTIES
         EXPORT_NAME
-            TTNN
-        PREFIX
-            "lib"
+            tt-nn
         OUTPUT_NAME
-            "ttnn"
+            "tt-nn"
         BUILD_RPATH
             "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
         INSTALL_RPATH
@@ -559,7 +558,7 @@ add_custom_command(
     COMMAND
         ${CMAKE_COMMAND} -E create_symlink "$<TARGET_FILE_NAME:ttnncpp>" "_ttnncpp$<TARGET_FILE_SUFFIX:ttnncpp>"
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:ttnncpp>"
-    COMMENT "Creating symlink _ttnncpp.so -> libttnn.so"
+    COMMENT "Creating symlink _ttnncpp.so -> $<TARGET_FILE_NAME:ttnncpp>"
 )
 
 if(TT_INSTALL)
@@ -575,7 +574,7 @@ if(TT_INSTALL)
     install(
         TARGETS
             ttnncpp
-        EXPORT TT-NN
+        EXPORT tt-nn
         FILE_SET
         api
             COMPONENT ttnn-dev
@@ -592,6 +591,7 @@ if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
     add_library(TTNN::PYTHON ALIAS ttnn)
     add_library(Metalium::TTNN ALIAS ttnn) # backwards compatibility. FIXME: remove
+    add_library(tt-nn::Python ALIAS ttnn) # Canonical alias — ensures consistency across find_package() usage
     target_compile_definitions(ttnn PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
     TT_ENABLE_UNITY_BUILD(ttnn)
 
@@ -639,7 +639,7 @@ if(WITH_PYTHON_BINDINGS)
             TT::Metalium
     )
     if(TT_INSTALL)
-        install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
+        install(TARGETS ttnn EXPORT tt-nn LIBRARY COMPONENT ttnn-runtime)
     endif()
 
     # Install .so into src files for pybinds implementation
@@ -663,7 +663,7 @@ if(WITH_PYTHON_BINDINGS)
     )
 endif()
 if(TT_INSTALL)
-    install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
+    install(EXPORT tt-nn NAMESPACE tt-nn:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
 endif()
 
 if(TTNN_BUILD_TESTS)

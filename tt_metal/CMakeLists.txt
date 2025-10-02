@@ -251,6 +251,6 @@ if(TT_INSTALL)
         FILE_SET
         api
             COMPONENT metalium-dev
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/metalium-thirdparty
     )
 endif()

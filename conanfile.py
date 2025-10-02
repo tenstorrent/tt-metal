@@ -11,7 +11,7 @@ from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
 
 
 class TTNNConan(ConanFile):
-    name = "ttnn"
+    name = "tt-nn"
     package_type = "library"
     license = "Apache-2.0"
     url = "https://github.com/tenstorrent/tt-metal"
@@ -62,11 +62,11 @@ class TTNNConan(ConanFile):
 
     def set_version(self):
         _version = subprocess.check_output("git describe --abbrev=0 --tags", shell=True).decode().strip()
-        m = re.fullmatch(r"[vV]?(\d+\.\d+\.\d+)(?:-rc(\d+))?", _version)
+        m = re.fullmatch(r"[vV]?(\d+\.\d+\.\d+).*", _version)
         if not m:
             raise ValueError(f"error: unsupported version format: {m!r}")
 
-        self.version = m.group(1) + ("." + m.group(2) if m.group(2) else "")
+        self.version = m.group(1)
 
     def layout(self):
         # Avoid collisions with any existing 'build' symlink/folder in sources
@@ -129,6 +129,7 @@ class TTNNConan(ConanFile):
             self.cpp_info.cxxflags = ["-fno-omit-frame-pointer"]
             self.cpp_info.link_options = ["-rdynamic"]
 
-        self.cpp_info.libs = ["tt_stl", "ttnn", "tt_metal"]
+        self.cpp_info.includedirs = ["include/metalium-thirdparty", "include"]
+        self.cpp_info.libs = ["tt_stl", "tt-nn", "tt_metal"]
         self.cpp_info.defines = ["SPDLOG_FMT_EXTERNAL", "FMT_HEADER_ONLY"]
         self.runenv_info.define("TT_METAL_HOME", str(self.package_folder) + "/bin/tt-metalium/")
