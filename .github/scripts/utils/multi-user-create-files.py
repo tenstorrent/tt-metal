@@ -1,6 +1,7 @@
 import yaml
 import os
 import argparse
+import shutil
 
 
 def multi_user_containers(num_containers, image):
@@ -41,7 +42,11 @@ def multi_user_containers(num_containers, image):
             "devices": devices,
         }
 
-        os.makedirs(f"/home/{username}/.cache/tt-metal-cache-{i}", exist_ok=True)
+        cache_path = f"/home/{username}/.cache/tt-metal-cache-{i}"
+        if os.path.exists(cache_path):
+            shutil.rmtree(cache_path)
+        os.makedirs(cache_path)
+
     return services
 
 
