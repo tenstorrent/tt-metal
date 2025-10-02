@@ -2,6 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Make traffic bidirectional
+// Monitor increasing retrain count: CRC should be zero (or should not be incrementing). Non zero uncorrected words
+// Sanity check current 150K is okay - stress 1G or more
+
+// Reset + validaiton Sequence (WH):
+//  - Check if specific link came up
+// If not, directed reset
+// Keep looping until all links are up
+// Send traffic
+// Check stats
+// If link unhealthy, issue a directed reset again
+// Give up at some point
+
 #include <iostream>
 #include <string>
 #include <iomanip>
