@@ -998,6 +998,190 @@ class AtenSafeSoftmax(WrappedOperation):
 
 
 @dataclass
+@register_operation("torch.ops.aten.bitwise_not")
+class AtenBitwiseNot(WrappedOperation):
+    """Represents the bitwise_not operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten._unique2")
+class AtenUnique2(WrappedOperation):
+    """Represents the _unique2 operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.rand_like")
+class AtenRandLike(WrappedOperation):
+    """Represents the rand_like operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.bitwise_and.Tensor")
+class AtenBitwiseAndTensor(WrappedOperation):
+    """Represents the bitwise_and.Tensor operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.lt.Scalar")
+class AtenLtScalar(WrappedOperation):
+    """Represents the lt.Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.any.dim")
+class AtenAnyDim(WrappedOperation):
+    """Represents the any.dim operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.eq.Scalar")
+class AtenEqScalar(WrappedOperation):
+    """Represents the eq.Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten._linalg_svd")
+class AtenLinalgSvd(WrappedOperation):
+    """Represents the _linalg_svd operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.gt.Tensor")
+class AtenGtTensor(WrappedOperation):
+    """Represents the gt.Tensor operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.abs")
+class AtenAbs(WrappedOperation):
+    """Represents the abs operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.where.self")
+class AtenWhereSelf(WrappedOperation):
+    """Represents the where.self operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.gt.Scalar")
+class AtenGtScalar(WrappedOperation):
+    """Represents the gt.Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.index_put_")
+class AtenIndexPut_(WrappedOperation):
+    """Represents the index_put_ operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.sub_.Tensor")
+class AtenSubTensor(WrappedOperation):
+    """Represents the sub_.Tensor operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.ne.Tensor")
+class AtenNeTensor(WrappedOperation):
+    """Represents the ne.Tensor operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.ones_like")
+class AtenOnesLike(WrappedOperation):
+    """Represents the ones_like operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten._linalg_det")
+class AtenLinalgDet(WrappedOperation):
+    """Represents the _linalg_det operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.reciprocal")
+class AtenReciprocal(WrappedOperation):
+    """Represents the reciprocal operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten._cdist_forward")
+class AtenCdistForward(WrappedOperation):
+    """Represents the _cdist_forward operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.gather")
+class AtenGather(WrappedOperation):
+    """Represents the gather operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.scatter_.value")
+class AtenScatterValue(WrappedOperation):
+    """Represents the scatter_.value operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.index_add_")
+class AtenIndexAdd_(WrappedOperation):
+    """Represents the index_add_ operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.nonzero")
+class AtenNonZero(WrappedOperation):
+    """Represents the nonzero operation."""
+
+    pass
+
+
+@dataclass
 class InputOp(Operation):
     """Represents an input operation in the graph."""
 

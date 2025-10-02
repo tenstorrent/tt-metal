@@ -31,6 +31,7 @@ from tracer_backend import (
 )
 from typing import ClassVar, List, Dict, Any, Tuple, Optional
 from collections import defaultdict
+import re
 
 
 class WrappedOpPatternObj:
@@ -177,7 +178,12 @@ class CompositeOperation(Operation):
         self.append_var_names_to_end = append_var_names_to_end
         local_var_names.extend(append_var_names_to_end)
         args.extend(append_arg_names_to_end)
-        self.local_var_names, self.code_lines, self.vars, self.consts = local_var_names, code_lines, args, consts
+        self.local_var_names, self.code_lines, self.vars, self.consts = (
+            local_var_names,
+            code_lines,
+            args,
+            consts,
+        )
         return local_var_names, code_lines, args, consts
 
     @property
@@ -197,9 +203,6 @@ class CompositeOperation(Operation):
         return result
 
     def get_fun_body(self) -> str:
-        """Generate import statements for this operation."""
-        # Default implementation returns an empty list, subclasses can override
-
         if self.fun_body is not None and self.func is not None:
             return self.func, self.fun_body
 
@@ -207,63 +210,44 @@ class CompositeOperation(Operation):
         args_not_in_var_names = list(dict.fromkeys([arg for arg in arg_names if arg not in var_names]))
         args_not_in_var_names = list(args_not_in_var_names)
         new_line = "\n    "
-        orig_func = f"""def {self.fun_name}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_names) > 0 else ""}{"*args" if len(consts) > 0 else ""}):
-    {new_line.join(code_lines)}
-    return {self.output_var_name()} END
-"""
-        new_func = str(orig_func)
+
+        orig_func = (
+            f"def {self.fun_name}({','.join(args_not_in_var_names) + ', ' if len(args_not_in_var_names) > 0 else ''}{'*args' if len(consts) > 0 else ''}):\n"
+            f"    {new_line.join(code_lines)}\n"
+            f"    return {self.output_var_name()}\n"
+        )
+
+        new_func = orig_func
         if self.id == "main":
-            new_func = new_func.replace("return OUTPUT END", f"return {', '.join(self.graph_outputs)} ")
+            new_func = new_func.replace("return OUTPUT", f"return {', '.join(self.graph_outputs)}")
 
-        for arg_index, arg in enumerate(args_not_in_var_names + var_names):
-            new_func = new_func.replace(f"({arg})", f"(var{arg_index})")
-            new_func = new_func.replace(f"({arg},", f"(var{arg_index},")
-            new_func = new_func.replace(f", {arg},", f", var{arg_index},")
-            new_func = new_func.replace(f",{arg},", f",var{arg_index},")
-            new_func = new_func.replace(f", {arg})", f", var{arg_index})")
-            new_func = new_func.replace(f",{arg})", f",var{arg_index})")
-            new_func = new_func.replace(f", {arg}[", f", var{arg_index}[")
-            new_func = new_func.replace(f", {arg} ", f", var{arg_index}")
-            new_func = new_func.replace(f" {arg})", f", var{arg_index})")
-            new_func = new_func.replace(f"= {arg}[", f"= var{arg_index}[")
-            new_func = new_func.replace(f"= {arg}.", f"= var{arg_index}.")
-            new_func = new_func.replace(f"[{arg}]", f"[var{arg_index}]")
-            new_func = new_func.replace(f"[{arg},", f"[var{arg_index},")
-            new_func = new_func.replace(f",{arg}]", f",var{arg_index}]")
-            new_func = new_func.replace(f", {arg}]", f", var{arg_index}]")
-            new_func = new_func.replace(f"\t{arg} = ", f"\tvar{arg_index} = ")
-            new_func = new_func.replace(f"    {arg} = ", f"    var{arg_index} = ")
-            new_func = new_func.replace(f"return {arg} END", f"return var{arg_index}")
-            new_func = new_func.replace(f"return {arg}, ", f"return var{arg_index}, ")
-        for arg_index, arg in enumerate(consts):
-            new_func = new_func.replace(f"({arg})", f"(args[{arg_index}])")
-            new_func = new_func.replace(f"({arg},", f"(args[{arg_index}],")
-            new_func = new_func.replace(f", {arg},", f", args[{arg_index}],")
-            new_func = new_func.replace(f",{arg},", f",args[{arg_index}],")
-            new_func = new_func.replace(f", {arg})", f", args[{arg_index}])")
-            new_func = new_func.replace(f" {arg})", f" args[{arg_index}])")
-            new_func = new_func.replace(f",{arg})", f",args[{arg_index}])")
-            new_func = new_func.replace(f" {arg})", f" args[{arg_index}])")
-            new_func = new_func.replace(f" {arg}[", f" args[{arg_index}][")
-            new_func = new_func.replace(f"= {arg}[", f"= args[{arg_index}][")
-            new_func = new_func.replace(f"[{arg}]", f"[args[{arg_index}]]")
-            new_func = new_func.replace(f"[{arg},", f"[args[{arg_index}],")
-            new_func = new_func.replace(f",{arg}]", f",args[{arg_index}]]")
-            new_func = new_func.replace(f", {arg}]", f", args[{arg_index}]]")
-            new_func = new_func.replace(f"\t{arg} = ", f"\targs[{arg_index}] = ")
-            new_func = new_func.replace(f"    {arg} = ", f"    args[{arg_index}] = ")
-            new_func = new_func.replace(f"return {arg} END", f"return args[{arg_index}]")
+        # --- Replacement maps ---
+        replace_map = {}
+        for idx, arg in enumerate(args_not_in_var_names + var_names):
+            replace_map[arg] = f"var{idx}"
+        for idx, arg in enumerate(consts):
+            replace_map[arg] = f"args[{idx}]"
 
-        fun_body = new_func.split(f"def {self.fun_name}")[1]
-        args_not_in_var_names = list(dict.fromkeys(arg for arg in arg_names if arg not in var_names))
-        args_not_in_var_names = list(args_not_in_var_names) + consts
+        # --- Regex replace in one pass ---
+        # Match identifiers whether in code or inside strings
+        pattern = re.compile(rf"(?<!\w)({'|'.join(map(re.escape, replace_map))})(?!\w)")
+
+        def replacer(match):
+            return replace_map[match.group(0)]
+
+        new_func = pattern.sub(replacer, new_func)
+
+        fun_body = new_func.split(f"def {self.fun_name}", 1)[1]
+
         if not self.is_duplicate(fun_body):
             CompositeOperation.generated_code[fun_body] = self.fun_name
         else:
             CompositeOperation.duplicate_ops[self.fun_name] = CompositeOperation.generated_code[fun_body]
+
         if CompositeOperation.prune:
-            for op in CompositeOperation.duplicate_ops:
-                new_func = new_func.replace(f"{op}(", f"{CompositeOperation.duplicate_ops[op]}(")
+            for op, repl in CompositeOperation.duplicate_ops.items():
+                new_func = new_func.replace(f"{op}(", f"{repl}(")
+
         self.fun_body = fun_body
         self.func = new_func
         return new_func, fun_body
@@ -372,11 +356,12 @@ def merge_nodes_as_composite(
         # If any node in nodes_to_merge is not in G, we cannot merge. Continue iteration
         return None
 
-    H = G.subgraph(nodes_to_merge)
+    H = G.subgraph(set(nodes_to_merge))
     # Get the topological order for the subset
     order = list(nx.topological_sort(H))
     if main_output is None and len(order):
         main_output = order[-1]
+        ancestors = order[:-1]
     if len(set([out_edge[0] for out_edge in outgoing if out_edge[0] != main_output])) != 0:
         return None
     for node in nodes_to_merge:
@@ -390,6 +375,9 @@ def merge_nodes_as_composite(
             return None
     if len(ancestors) == 0 and isinstance(G.nodes[main_output]["operation"], CompositeOperation):
         return None
+    for node in ancestors:
+        if not nx.has_path(G, node, main_output):
+            return None
     if keep_existing_name:
         prefix = G.nodes[main_output]["operation"].unique_name + "_" + prefix
     composite_node = f"{prefix}_{CompositeOperation.counter}"
@@ -411,15 +399,18 @@ def merge_nodes_as_composite(
     G.add_node(composite_node, operation=composite_op)
 
     # 4. Add edges from outside predecessors to composite node
+    new_in_edges = []
     for child in order:
         for pred, orig_child in incoming:
             if pred not in nodes_to_merge or child != orig_child:
-                G.add_edge(pred, composite_node)
+                new_in_edges.append((pred, composite_node))
     # 5. Add edges from composite node to outside successors
+    new_out_edges = []
     for _, succ in outgoing:
         if succ not in nodes_to_merge:
-            G.add_edge(composite_node, succ)
-
+            new_out_edges.append((composite_node, succ))
+    G.add_edges_from(set(new_in_edges))
+    G.add_edges_from(set(new_out_edges))
     return composite_op
 
 
@@ -502,7 +493,9 @@ def make_every_node_composite(operation_graph: OperationGraph):
     return operation_graph
 
 
-def combine_tuple_get_item_scaled_attention_tuple_get_item(operation_graph: OperationGraph):
+def combine_tuple_get_item_scaled_attention_tuple_get_item(
+    operation_graph: OperationGraph,
+):
     G = operation_graph.graph
     changed = True
     while changed:
@@ -531,7 +524,9 @@ def combine_tuple_get_item_scaled_attention_tuple_get_item(operation_graph: Oper
                         and isinstance(pred_op4, TupleOp)
                     ):
                         composite_op = merge_nodes_as_composite(
-                            operation_graph, main_output=node, ancestors=[pred_node, pred_node2, pred_node3, pred_node4]
+                            operation_graph,
+                            main_output=node,
+                            ancestors=[pred_node, pred_node2, pred_node3, pred_node4],
                         )
                         if composite_op is not None:
                             changed = True
@@ -652,7 +647,9 @@ def combine_custom_patterns(operation_graph, custom_patterns):
                         passed = False
                 if passed:
                     composite_op = merge_nodes_as_composite(
-                        operation_graph, main_output=ancestors[0], ancestors=ancestors[1:]
+                        operation_graph,
+                        main_output=ancestors[0],
+                        ancestors=ancestors[1:],
                     )
                     if composite_op is not None:
                         changed = True
@@ -718,7 +715,6 @@ def combine_constants(operation_graph):
         composite_op = merge_nodes_as_composite(operation_graph, main_output=suc, ancestors=list(nodes))
         if composite_op is not None:
             composite_op.is_const_fold_composite = True
-            print(f"Merged constant nodes {nodes} into {suc} as composite operation {composite_op.id}")
     return operation_graph
 
 
@@ -771,9 +767,9 @@ def compute_subgraph_fingerprints(
                 old_fingerprints.get(ancestor, hash_dict(representation))
                 for ancestor, representation in zip(ancestors, ancestors_representations)
             ]
-            combined = (node_attr_hash, ancestor_hashes)
-            combined_str = json.dumps(combined)
-            fingerprint = hashlib.sha256(combined_str.encode()).hexdigest()
+            combined = (node_attr_hash, tuple(ancestor_hashes))
+            combined_bytes = repr(combined).encode()
+            fingerprint = hashlib.sha256(combined_bytes).hexdigest()
             fingerprints[node] = (fingerprint, ancestors)
         reverse_index: Dict[str, List[Tuple[str, List[str]]]] = defaultdict(list)
         for node, fp in fingerprints.items():
@@ -799,7 +795,10 @@ def dump_graph_patterns(operation_graph: OperationGraph, file_path: str):
             parent_unique_names = [
                 (
                     to_valid_variable_name(G.nodes[parent]["operation"].unique_name)
-                    if isinstance(G.nodes[parent]["operation"], (WrappedOperation, TupleOp, CompositeOperation))
+                    if isinstance(
+                        G.nodes[parent]["operation"],
+                        (WrappedOperation, TupleOp, CompositeOperation),
+                    )
                     else "POFactory.WildcardPatternObj()"
                 )
                 for parent in parents
@@ -815,7 +814,8 @@ def dump_graph_patterns(operation_graph: OperationGraph, file_path: str):
 
 
 def find_repeated_subgraphs(
-    operation_graph: OperationGraph, custom_patterns: Optional[List[WrappedOpPatternObj]] = None
+    operation_graph: OperationGraph,
+    custom_patterns: Optional[List[WrappedOpPatternObj]] = None,
 ):
     orig_config = ConstantTensor.ConstantTensorFromModel
     ConstantTensor.ConstantTensorFromModel = True
@@ -944,7 +944,9 @@ def merge_nested_tree(tree, operation_graph):
                 nodes.extend(merge_nested_tree({child_name: child_node}, operation_graph))
             group_node["nodes"] = list(set(nodes))
         if len(group_node["nodes"]) > 1:
-            all_nodes.extend(merge_nodes(operation_graph, group_node["nodes"], group_name))
+            merged = merge_nodes(operation_graph, group_node["nodes"], group_name)
+            group_node["nodes"] = merged  # replace with composite
+            all_nodes.extend(merged)
         elif len(group_node["nodes"]) == 1:
             all_nodes.extend(group_node["nodes"])
     return list(set(all_nodes))
@@ -971,7 +973,7 @@ def unloop_composites_with_less_than_n_nodes(new_operation_graph, n=2):
                 for index, sub_op in enumerate(op.sub_operations):
                     if (
                         isinstance(sub_op, CompositeOperation)
-                        and len(sub_op.sub_operations) + len(op.sub_operations) <= n
+                        and (len(sub_op.sub_operations) + len(op.sub_operations) - 1) <= n
                     ):
                         op.sub_operations = (
                             op.sub_operations[:index] + sub_op.sub_operations + op.sub_operations[index + 1 :]

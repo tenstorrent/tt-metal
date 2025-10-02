@@ -853,7 +853,7 @@ def get_serialized_info(value):
         return [get_serialized_info(v) for v in value]
     elif isinstance(value, dict):
         return {k: get_serialized_info(v) for k, v in value.items()}
-    elif isinstance(value, (torch.memory_format, torch.dtype)):
+    elif isinstance(value, (torch.memory_format, torch.dtype, torch.device)):
         return str(value)
     return value
 
@@ -1066,7 +1066,12 @@ def set_is_graph_output(outputs, index=0):
             elif isinstance(output, (list, tuple)):
                 set_is_graph_output(output, index2)
     elif outputs is not None:
-        for output in outputs.__dict__.values():
+        values = []
+        if isinstance(outputs, dict):
+            values = list(outputs.values())
+        else:
+            values = list(outputs.__dict__.values())
+        for output in values:
             if isinstance(output, Trackable_Tensor):
                 output.graph_output_index = index
             elif isinstance(output, (list, tuple)):
@@ -1090,7 +1095,7 @@ def wrap_state_dict(state_dict):
             wrapped_tensor = Trackable_Tensor(value)
             wrapped_tensor.id = str(Trackable_Tensor.tracer_data.get_next_id())
             wrapped_tensor.const_name = key
-            wrapped_tensor.elem = value
+            wrapped_tensor.elem = value.to(wrapped_tensor.device)
             wrapped_state_dict[key] = wrapped_tensor
         else:
             wrapped_state_dict[key] = value
@@ -1111,7 +1116,7 @@ def get_input_tensors(input_shapes, input_dtypes=None):
             rand_tensor = rand_tensor.to(dtype=input_dtypes[index % len(input_dtypes)])
         input_tensor = Trackable_Tensor(rand_tensor)
         input_tensor.set_id(f"{(index+2)*-1}")
-        input_tensor.elem = rand_tensor
+        input_tensor.elem = rand_tensor.to(input_tensor.device)
         input_tensor.set_module_name(f"input_tensor_{index}")
         input_tensors.append(input_tensor)
     return input_tensors
