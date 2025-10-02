@@ -77,22 +77,36 @@ public:
         // Fabric Reliability Mode
         // Default to STRICT_SYSTEM_HEALTH_SETUP_MODE
         // If RELIABILITY_MODE is set, use the value from the environment variable
+        static const std::map<std::string, tt::tt_fabric::FabricReliabilityMode> reliability_mode_map = {
+            {"strict", tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE},
+            {"relaxed", tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE}
+        };
+        auto reliability_mode_to_string = [](tt::tt_fabric::FabricReliabilityMode mode) -> std::string {
+            switch (mode) {
+                case tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE:
+                    return "STRICT_SYSTEM_HEALTH_SETUP_MODE";
+                case tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE:
+                    return "RELAXED_SYSTEM_HEALTH_SETUP_MODE";
+                default:
+                    return "UNKNOWN";
+            }
+        };
         tt::tt_fabric::FabricReliabilityMode reliability_mode =
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         const char* reliability_mode_env = getenv("RELIABILITY_MODE");
         if (reliability_mode_env != nullptr) {
             std::string mode_str(reliability_mode_env);
-            if (mode_str == "strict") {
-                reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-                log_info(tt::LogTest, "Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE");
-            } else if (mode_str == "relaxed") {
-                reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
-                log_info(tt::LogTest, "Fabric Reliability Mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE");
+            auto it = reliability_mode_map.find(mode_str);
+            if (it != reliability_mode_map.end()) {
+                reliability_mode = it->second;
+                log_info(tt::LogTest, "Fabric Reliability Mode: {}", reliability_mode_to_string(reliability_mode));
             } else {
                 log_warning(
                     tt::LogTest,
                     "Invalid RELIABILITY_MODE '{}'. Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE",
                     mode_str);
+                // reliability_mode remains default
+                log_info(tt::LogTest, "Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE");
             }
         } else {
             log_info(tt::LogTest, "Fabric Reliability Mode: STRICT_SYSTEM_HEALTH_SETUP_MODE");
