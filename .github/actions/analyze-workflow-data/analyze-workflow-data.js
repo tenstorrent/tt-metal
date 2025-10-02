@@ -408,8 +408,16 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             }
           }
           if (out.length) {
-            core.info(`[GTEST] Total snippets before cap: ${out.length}`);
-            snippets = out.slice(0, Math.max(1, Math.min(maxSnippets, out.length)));
+            // Dedupe by normalized label+snippet to avoid repeated rows
+            const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+            const seen = new Set();
+            const unique = [];
+            for (const e of out) {
+              const key = `${norm(e && e.label)}|${norm(e && e.snippet)}`;
+              if (!seen.has(key)) { seen.add(key); unique.push(e); }
+            }
+            core.info(`[GTEST] Total snippets before cap: ${out.length}, after dedupe: ${unique.length}`);
+            snippets = unique.slice(0, Math.max(1, Math.min(maxSnippets, unique.length)));
             core.info(`[GTEST] Collected ${snippets.length} gtest snippet(s) from logs for run ${runId}`);
             // Attach owners for gtest too
             try {
