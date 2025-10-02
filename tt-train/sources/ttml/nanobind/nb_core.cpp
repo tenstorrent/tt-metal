@@ -28,6 +28,8 @@ void py_module_types(nb::module_& m) {
     nb::class_<ttnn::distributed::TensorToMesh>(py_distributed, "TensorToMesh");
     // Expose MeshToTensor composer for composing distributed tensors back to single tensor
     nb::class_<ttnn::distributed::MeshToTensor>(py_distributed, "MeshToTensor");
+    // Expose multihost DistributedContext under core.distributed
+    nb::class_<tt::tt_metal::distributed::multihost::DistributedContext>(py_distributed, "DistributedContext");
 }
 
 void py_module(nb::module_& m) {
@@ -52,6 +54,19 @@ void py_module(nb::module_& m) {
         // Synchronize gradients across devices for DDP
         py_distributed.def(
             "synchronize_parameters", &ttml::core::distributed::synchronize_parameters, nb::arg("parameters"));
+
+        // Bind DistributedContext methods
+        using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
+        auto py_dist_ctx = static_cast<nb::class_<DistributedContext>>(py_distributed.attr("DistributedContext"));
+        py_dist_ctx.def("size", [](DistributedContext& self) { return *self.size(); });
+        py_dist_ctx.def("rank", [](DistributedContext& self) { return *self.rank(); });
+        py_dist_ctx.def("barrier", [](DistributedContext& self) { self.barrier(); });
+        py_dist_ctx.def(
+            "create_sub_context",
+            [](DistributedContext& self, const std::vector<int>& ranks) {
+                return self.create_sub_context(ttsl::Span<int>(const_cast<int*>(ranks.data()), ranks.size()));
+            },
+            nb::arg("ranks"));
     }
 }
 

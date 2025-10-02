@@ -192,15 +192,22 @@ void py_module(nb::module_& m) {
         py_auto_context.def(
             "initialize_distributed_context",
             [](AutoContext& auto_context, nb::args args) {
-                const auto argc = args.size();
-                std::vector<const char*> argv(argc);
+                const int argc = static_cast<int>(args.size());
 
+                std::vector<std::string> storage;
+                storage.reserve(static_cast<size_t>(argc));
                 for (const auto& arg : args) {
-                    argv.push_back(nb::str(arg).c_str());
+                    storage.emplace_back(nb::str(arg).c_str());
+                }
+
+                std::vector<char*> argv;
+                argv.reserve(static_cast<size_t>(argc));
+                for (auto& s : storage) {
+                    argv.push_back(s.data());
                 }
                 argv.push_back(nullptr);
 
-                auto_context.initialize_distributed_context(argc, const_cast<char**>(argv.data()));
+                auto_context.initialize_distributed_context(argc, argv.data());
             },
             nb::arg("args"));
         py_auto_context.def("get_distributed_context", &AutoContext::get_distributed_context);
