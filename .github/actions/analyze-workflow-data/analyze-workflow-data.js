@@ -1355,9 +1355,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
-            // Indent the table content to be inside the nested details block (4 spaces total)
-            const indentedTable = errorsHtml.split('\n').map(line => line ? '    ' + line : '').join('\n');
-            errorsList = ['','    <details>','    <summary>Errors (click to expand)</summary>','', indentedTable, '    </details>',''].join('\n');
+            errorsList = ['','<details>','<summary>Errors (click to expand)</summary>','', errorsHtml, '</details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build a link to the latest (most recent) failing run with timestamp and commit
@@ -1377,15 +1375,13 @@ async function run() {
             // If we found a success in the window, show commits between success and first failure
             let commitsList = '';
             const commitsMd = renderCommitsTable(it.commits_between || []);
-            // Indent the table content to be inside the nested details block (4 spaces total)
-            const indentedCommits = commitsMd.split('\n').map(line => line ? '    ' + line : '').join('\n');
             commitsList = [
               '',
-              '    <details>',
-              '    <summary>Commits between last success and first failure (click to expand)</summary>',
+              '<details>',
+              '<summary>Commits between last success and first failure (click to expand)</summary>',
               '',
-              indentedCommits,
-              '    </details>',
+              commitsMd,
+              '</details>',
               ''
             ].join('\n');
 
@@ -1427,9 +1423,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            // Indent the table content to be inside the nested details block (4 spaces total)
-            const indentedTable = errorsHtml2.split('\n').map(line => line ? '    ' + line : '').join('\n');
-            errorsList = ['','    <details>','    <summary>Errors (click to expand)</summary>','', indentedTable, '    </details>',''].join('\n');
+            errorsList = ['','<details>','<summary>Errors (click to expand)</summary>','', errorsHtml2, '</details>',''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build information about the latest failing run
@@ -1449,15 +1443,13 @@ async function run() {
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
             const commitsMd2 = renderCommitsTable(it.commits_between || []);
-            // Indent the table content to be inside the nested details block (4 spaces total)
-            const indentedCommits = commitsMd2.split('\n').map(line => line ? '    ' + line : '').join('\n');
             commitsList = [
               '',
-              '    <details>',
-              '    <summary>Commits between last success and first failure (click to expand)</summary>',
+              '<details>',
+              '<summary>Commits between last success and first failure (click to expand)</summary>',
               '',
-              indentedCommits,
-              '    </details>',
+              commitsMd2,
+              '</details>',
               ''
             ].join('\n');
 
