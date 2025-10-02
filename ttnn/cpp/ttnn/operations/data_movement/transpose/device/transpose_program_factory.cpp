@@ -70,7 +70,7 @@ void override_runtime_args_mc_cn(
         uint32_t hw = num_tiles_read % HtWt;
         uint32_t curr_c = num_tiles_read / HtWt;
         uint32_t n = curr_c % N;
-        uint32_t start_tile = num_tiles_read + curr_c * batch_step - curr_c / N * channel_step;
+        uint32_t start_tile = num_tiles_read + (curr_c * batch_step) - (curr_c / N * channel_step);
 
         if constexpr (IS_CREATING) {
             tt::tt_metal::SetRuntimeArgs(
@@ -1297,7 +1297,7 @@ void override_runtime_args_wh(
                 core,
                 {input_tensor.buffer()->address(),
                  num_tiles_per_core,
-                 tt::round_down(num_tiles_read, HtWt) + h * Wt + w,
+                 tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
                  h,
                  w,
                  Ht,

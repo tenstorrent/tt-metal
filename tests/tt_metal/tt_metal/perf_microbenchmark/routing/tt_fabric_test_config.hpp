@@ -429,10 +429,11 @@ private:
     }
 
     // Convert ParsedTestConfig to TestConfig by resolving device identifiers
-    TestConfig resolve_test_config(const ParsedTestConfig& parsed_test) {
+    TestConfig resolve_test_config(const ParsedTestConfig& parsed_test, uint32_t iteration_number) {
         TestConfig resolved_test;
         resolved_test.name = parsed_test.name;
         resolved_test.parametrized_name = parsed_test.parametrized_name;
+        resolved_test.iteration_number = iteration_number;
         resolved_test.fabric_setup = parsed_test.fabric_setup;
         resolved_test.on_missing_param_policy = parsed_test.on_missing_param_policy;
         resolved_test.parametrization_params = parsed_test.parametrization_params;
@@ -512,6 +513,10 @@ private:
             for (const auto& p : p_config.patterns.value()) {
                 if (p.iterations.has_value()) {
                     max_iterations = std::max(max_iterations, p.iterations.value());
+                    // Edge Case: If both iterations and all_to_one are supplied, iterations will override the number of iterations set by all_to_one
+                    if (p.type == "all_to_one") {
+                        log_warning(tt::LogTest, "'iterations' specified alongside 'all_to_one' test, `iterations` will be followed instead of auto-generating iterations based on number of devices");
+                    }
                 } else if (p.type == "all_to_one") {
                     // Dynamically calculate iterations for all_to_one patterns based on number of devices
                     uint32_t num_devices = static_cast<uint32_t>(device_info_provider_.get_global_node_ids().size());
@@ -586,7 +591,7 @@ private:
             split_all_unicast_or_multicast_patterns(iteration_test);
 
             // Convert to resolved TestConfig
-            TestConfig resolved_test = resolve_test_config(iteration_test);
+            TestConfig resolved_test = resolve_test_config(iteration_test, i);
 
             validate_test(resolved_test);
             expanded_tests.push_back(resolved_test);
