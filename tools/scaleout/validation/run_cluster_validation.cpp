@@ -4,6 +4,8 @@
 
 #include <iostream>
 #include <string>
+#include <iomanip>
+#include <fstream>
 
 #include <factory_system_descriptor/utils.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -69,6 +71,10 @@ struct FaultyLink {
     tt::tt_metal::EthernetMetrics metrics;
     uint32_t num_bytes_xfered;
     uint32_t packet_size_bytes;
+
+    // Failure tracking
+    bool data_mismatch;
+    uint32_t iteration;
 };
 
 void configure_local_kernels(
@@ -139,7 +145,7 @@ void configure_local_kernels(
                         sender_program,
                         sender_kernel,
                         sender_coord,
-                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size, src_chan == 15});
 
                     auto receiver_kernel = tt::tt_metal::CreateKernel(
                         receiver_program,
@@ -247,14 +253,15 @@ void execute_workloads(
 
 bool link_unhealthy(const tt::tt_metal::EthernetMetrics& metrics) { return metrics.retrain_count > 0; }
 
-void validate_traffic(
+void validate_links(
     std::vector<uint32_t>& inputs,
     PhysicalSystemDescriptor& physical_system_descriptor,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
     size_t data_size,
     size_t packet_size_bytes,
-    std::vector<FaultyLink>& faulty_links) {
+    std::vector<FaultyLink>& faulty_links,
+    uint32_t iteration) {
     const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     const auto& host_name = physical_system_descriptor.my_host_name();
@@ -275,8 +282,11 @@ void validate_traffic(
                     src_eth_l1_byte_address,
                     data_size);
 
-                if (result_vec != inputs or
-                    link_unhealthy(physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan))) {
+                bool has_data_mismatch = (result_vec != inputs);
+                bool has_retrain =
+                    link_unhealthy(physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan));
+
+                if (has_data_mismatch || has_retrain) {
                     faulty_links.push_back(FaultyLink{
                         .host = host_name,
                         .asic_id = asic_descriptors.at(asic_id).unique_id,
@@ -286,6 +296,8 @@ void validate_traffic(
                         .metrics = physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan),
                         .num_bytes_xfered = data_size,
                         .packet_size_bytes = packet_size_bytes,
+                        .data_mismatch = has_data_mismatch,
+                        .iteration = iteration,
                     });
                 }
             }
@@ -363,15 +375,17 @@ std::vector<FaultyLink> send_traffic_and_validate_links(
 
         execute_workloads(programs, devices);
 
-        validate_traffic(
+        validate_links(
             inputs,
             physical_system_descriptor,
             devices,
             asic_id_to_chip_id,
             data_size,
             packet_size_bytes,
-            faulty_links);
+            faulty_links,
+            i);
     }
+    return faulty_links;
 }
 
 void log_output_rank0(const std::string& message) {
@@ -655,6 +669,91 @@ void log_unexpected_statuses(const std::string& unexpected_status_log) {
     }
 }
 
+void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::filesystem::path& output_path) {
+    if (faulty_links.empty()) {
+        return;
+    }
+
+    // Helper function to determine failure type string
+    auto get_failure_type = [](const FaultyLink& link) -> std::string {
+        bool has_retrain = link.metrics.retrain_count > 0;
+        bool has_data_mismatch = link.data_mismatch;
+
+        if (has_data_mismatch && has_retrain) {
+            return "Data+Retrain";
+        } else if (has_data_mismatch) {
+            return "Data Mismatch";
+        } else if (has_retrain) {
+            return "Link Retrain";
+        } else {
+            return "Unknown";
+        }
+    };
+
+    // Print console table
+    std::cout << std::endl;
+    std::cout << "==================================== FAULTY LINKS REPORT ===================================="
+              << std::endl;
+    std::cout << "Total Faulty Link Occurrences: " << faulty_links.size() << std::endl << std::endl;
+
+    // Table header
+    std::cout << std::left << std::setw(18) << "Host" << std::setw(6) << "Tray" << std::setw(14) << "ASIC Location"
+              << std::setw(5) << "Ch" << std::setw(6) << "Iter" << std::setw(12) << "Unique ID" << std::setw(10)
+              << "Retrains" << std::setw(12) << "CRC Err" << std::setw(14) << "Corrected CW" << std::setw(16)
+              << "Uncorrected CW" << std::setw(12) << "Data Xfer" << std::setw(13) << "Packet Size" << std::setw(18)
+              << "Failure Type" << std::endl;
+
+    std::cout << std::string(156, '-') << std::endl;
+
+    // Table rows
+    for (const auto& link : faulty_links) {
+        std::cout << std::left << std::setw(18) << link.host << std::setw(6) << *link.tray_id << std::setw(14)
+                  << *link.asic_location << std::setw(5) << static_cast<int>(link.channel) << std::setw(6)
+                  << link.iteration;
+
+        // Print Unique ID in hex
+        std::cout << "0x" << std::hex << std::setw(10) << std::setfill('0') << *link.asic_id << std::setfill(' ')
+                  << std::dec;
+
+        std::cout << std::setw(10) << link.metrics.retrain_count << "0x" << std::hex << std::setw(10)
+                  << link.metrics.crc_error_count << std::dec << "0x" << std::hex << std::setw(12)
+                  << link.metrics.corrected_codeword_count << std::dec << "0x" << std::hex << std::setw(14)
+                  << link.metrics.uncorrected_codeword_count << std::dec << std::setw(12)
+                  << (std::to_string(link.num_bytes_xfered) + " B") << std::setw(13)
+                  << (std::to_string(link.packet_size_bytes) + " B") << std::setw(18) << get_failure_type(link)
+                  << std::endl;
+    }
+
+    std::cout << std::endl;
+
+    // Write CSV file
+    std::filesystem::path csv_path = output_path / "faulty_links_report.csv";
+    std::ofstream csv_file(csv_path);
+
+    if (csv_file.is_open()) {
+        // CSV header
+        csv_file << "Host,Tray,ASIC,Channel,Iteration,Unique_ID,Retrain_Count,CRC_Errors,Corrected_Codewords,"
+                 << "Uncorrected_Codewords,Data_Transferred_Bytes,Packet_Size_Bytes,Failure_Type" << std::endl;
+
+        // CSV rows
+        for (const auto& link : faulty_links) {
+            csv_file << link.host << "," << *link.tray_id << "," << *link.asic_location << ","
+                     << static_cast<int>(link.channel) << "," << link.iteration << ","
+                     << "0x" << std::hex << *link.asic_id << std::dec << "," << link.metrics.retrain_count << ","
+                     << "0x" << std::hex << link.metrics.crc_error_count << std::dec << ","
+                     << "0x" << std::hex << link.metrics.corrected_codeword_count << std::dec << ","
+                     << "0x" << std::hex << link.metrics.uncorrected_codeword_count << std::dec << ","
+                     << link.num_bytes_xfered << "," << link.packet_size_bytes << "," << get_failure_type(link)
+                     << std::endl;
+        }
+
+        csv_file.close();
+        std::cout << "Detailed report written to: " << csv_path << std::endl << std::endl;
+    } else {
+        std::cerr << "Warning: Could not open CSV file for writing: " << csv_path << std::endl;
+    }
+}
+
 void print_usage_info() {
     std::cout << "Utility to validate Ethernet Links and Connections for a Multi-Node TT Cluster" << std::endl;
     std::cout << "Compares live system state against the requested Cabling and Deployment Specifications" << std::endl
@@ -703,7 +802,12 @@ int main(int argc, char* argv[]) {
             " Packet Size (Bytes): " + std::to_string(input_args.packet_size_bytes) +
             " Total Data Size: (Bytes): " + std::to_string(input_args.data_size));
         auto faulty_links = send_traffic_and_validate_links(physical_system_descriptor, input_args);
-        // if ()
+        if (faulty_links.size() > 0) {
+            log_output_rank0("Generating Faulty Link Report. Num Faulty Links: " + std::to_string(faulty_links.size()));
+            log_faulty_links(faulty_links, input_args.output_path);
+        } else {
+            log_output_rank0("All links are healthy");
+        }
     }
 
     if (*distributed_context.rank() == 0) {
