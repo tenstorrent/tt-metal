@@ -228,6 +228,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
+    // TODO create a function for this
+    const DataType halo_output_dtype = a.dtype() == DataType::FLOAT32 ? DataType::FLOAT32 : DataType::BFLOAT16;
+    const DataType conv_output_dtype = output.dtype();
+    const tt::DataFormat halo_output_df = datatype_to_dataformat_converter(halo_output_dtype);
+
+    const bool overlap_act_cb = block_sharded && (halo_output_dtype == conv_output_dtype) && !skip_activation_mcast;
+
     // parallelization config
     CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
     CoreRangeSet output_cores = output.memory_config().shard_spec().value().grid;
@@ -318,6 +325,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             fp32_dest_acc_en,
             output.dtype(),
             enable_activation_reuse));
+    const bool split_reader_overlapped = overlap_act_cb && enable_split_reader;
     log_debug(
         tt::LogOp,
         "force_split_reader: {}, enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, "
@@ -586,6 +594,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     uint32_t weights_mcast_receiver_semaphore_id{};
     uint32_t act_mcast_sender_semaphore_id = 0;
     uint32_t act_mcast_receiver_semaphore_id = 0;
+    uint32_t act_split_reader_sync_first_semaphore_id = 0;
+    uint32_t act_split_reader_sync_second_semaphore_id = 0;
 
     // Check if we should run BRISC kernels on cores that are not in the output grid ( when split reader is enabled and
     // the output grid is smaller than the input grid)
@@ -614,6 +624,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
 
         weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
         weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_cores, INVALID);
+
+        if (enable_split_reader && overlap_act_cb) {
+            act_split_reader_sync_first_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+            act_split_reader_sync_second_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
+        }
     } else {
         // 1D mcast
         if (!skip_weights_mcast) {
@@ -821,6 +836,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
     }
+    if (split_reader_overlapped) {
+        reader_compile_time_args.push_back(act_split_reader_sync_first_semaphore_id);
+        reader_compile_time_args.push_back(act_split_reader_sync_second_semaphore_id);
+    }
 
     if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
@@ -841,12 +860,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
                 fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
         }
     }
-
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";
         reader_defines["SPLIT_READER"] = "1";
         writer_mcast_sender_defines["SPLIT_READER"] = "1";
         writer_defines["SPLIT_READER"] = "1";
+        if (overlap_act_cb) {
+            compute_defines["SPLIT_READER_OVERLAPPED"] = "1";
+            reader_defines["SPLIT_READER_OVERLAPPED"] = "1";
+            writer_defines["SPLIT_READER_OVERLAPPED"] = "1";
+            writer_mcast_sender_defines["SPLIT_READER_OVERLAPPED"] = "1";
+        }
     }
 
     if (packer_l1_acc_en) {
@@ -874,7 +898,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
         (uint32_t)(bias_buffer == nullptr ? 0 : (bias_buffer->buffer_type() == BufferType::DRAM ? 1 : 0)),
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,
+        get_cb_info_by_name(cb_info, (split_reader_overlapped ? Conv2dCb::ACT : Conv2dCb::ACT_SECOND_READER)).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SHARDED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).index,
         num_blocks_act_w,
@@ -905,6 +929,33 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             (uint32_t)dilation_w,
             (uint32_t)stride_w,
             (uint32_t)filter_h};
+
+        if (split_reader_overlapped) {
+            const uint32_t act_cb_id_stride =
+                skip_activation_mcast ? 1 : 1 + get_num_cores_channels_from_parallel_config(parallel_config);
+            // get total number of blocks in the ACT CB so that we can compute the loop around when moving write pointer
+            // in second reader
+            const uint32_t act_cb_block_cnt = get_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages /
+                                              (act_block_num_tiles_split + act_block_num_tiles_split_last);
+
+            log_info(tt::LogOp, "split_reader_overlapped: {}", split_reader_overlapped);
+            log_info(tt::LogOp, "act_cb_id_stride: {}", act_cb_id_stride);
+            log_info(tt::LogOp, "act_cb_block_cnt: {}", act_cb_block_cnt);
+            log_info(
+                tt::LogOp, "act_split_reader_sync_first_semaphore_id: {}", act_split_reader_sync_first_semaphore_id);
+            log_info(
+                tt::LogOp, "act_split_reader_sync_second_semaphore_id: {}", act_split_reader_sync_second_semaphore_id);
+            log_info(tt::LogOp, "act_block_num_tiles_split: {}", act_block_num_tiles_split);
+            log_info(tt::LogOp, "act_block_num_tiles_split_last: {}", act_block_num_tiles_split_last);
+            log_info(tt::LogOp, "halo_output_df tile_size: {}", tt::tile_size(halo_output_df));
+            split_reader_args.push_back(act_split_reader_sync_first_semaphore_id);
+            split_reader_args.push_back(act_split_reader_sync_second_semaphore_id);
+            split_reader_args.push_back(act_block_num_tiles_split * tt::tile_size(halo_output_df));
+            split_reader_args.push_back(
+                (act_block_num_tiles_split_last + act_block_num_tiles_split) * tt::tile_size(halo_output_df));
+            split_reader_args.push_back(act_cb_id_stride);
+            split_reader_args.push_back(act_cb_block_cnt);
+        }
 
         if (enable_activation_reuse && height_sharded) {
             std::vector<uint32_t> activation_reuse_args = {

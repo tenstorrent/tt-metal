@@ -269,8 +269,15 @@ void MAIN {
 
 #ifdef SPLIT_READER
     constexpr bool split_reader = true;
+#ifndef SPLIT_READER_OVERLAPPED
     constexpr uint32_t in0_num_subblocks_read_last = reader_num_h_subblocks / 2;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks - in0_num_subblocks_read_last;
+    constexpr bool split_reader_overlapped = false;
+#else
+    constexpr uint32_t in0_num_subblocks_read_last = 0;
+    constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
+    constexpr bool split_reader_overlapped = true;
+#endif
 #else
     constexpr bool split_reader = false;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
@@ -329,11 +336,13 @@ void MAIN {
                         pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                         pack_reconfig_l1_acc(0);
 #endif
-                        tilize_in<true, !split_reader>(
+                        tilize_in<true, !split_reader || split_reader_overlapped>(
                             in0_pretilize_cb_id, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 #ifdef SPLIT_READER
+#ifndef SPLIT_READER_OVERLAPPED
                         tilize_in<false, true>(
                             in0_cb_second_reader_id, in0_block_w, in0_num_subblocks_read_last, tilized_in0_cb_id);
+#endif
 #endif
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,

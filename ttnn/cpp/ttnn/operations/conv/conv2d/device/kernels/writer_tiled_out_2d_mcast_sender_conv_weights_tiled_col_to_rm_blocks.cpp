@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 #include "conv_reader_common.hpp"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -49,8 +49,25 @@ void kernel_main() {
     constexpr uint32_t dilation_w = get_compile_time_arg_val(25);
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
     constexpr uint32_t weight_size_h = get_compile_time_arg_val(27);  // Input filter window height
+#ifdef SPLIT_READER_OVERLAPPED
+    const uint32_t act_split_reader_sync_first_semaphore_addr = get_semaphore(get_compile_time_arg_val(28));
+    const uint32_t act_split_reader_sync_second_semaphore_addr = get_semaphore(get_compile_time_arg_val(29));
+    constexpr uint32_t act_write_offset = get_compile_time_arg_val(30);
+    constexpr uint32_t act_block_size = get_compile_time_arg_val(31);
+    constexpr uint32_t read_ind_stride = get_compile_time_arg_val(32);
+    constexpr uint32_t act_cb_block_cnt = get_compile_time_arg_val(33);
 
+    const uint32_t base_write_addr = get_write_ptr(cb_id_act_second_reader);
+
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_first_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_first_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* act_split_reader_sync_second_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(act_split_reader_sync_second_semaphore_addr);
+
+    constexpr uint32_t ct_arg_idx = 34;
+#else
     constexpr uint32_t ct_arg_idx = 28;
+#endif
 #else
     constexpr bool split_reader_enabled = false;
     constexpr uint32_t ct_arg_idx = 18;
@@ -104,6 +121,8 @@ void kernel_main() {
 
     const uint32_t act_l1_read_addr = get_read_ptr(cb_id_sharded_act);
 
+    uint32_t cb_ind_offset = 0;
+
 #endif
 
 #ifndef SKIP_MCAST
@@ -151,11 +170,18 @@ void kernel_main() {
 #endif
             for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
 #ifdef SPLIT_READER
-                noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                 reader_idx = start_reader_idx;
+#ifdef SPLIT_READER_OVERLAPPED
+                noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
+                noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
+#else
                 cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
+#endif
                 if (is_sender_core) {
-                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
+                    DPRINT << "SECOND READER: CB ADDR " << get_write_ptr(cb_id_act_second_reader)
+                           << " ACT WRITE OFFSET " << act_write_offset << ENDL();
+                    noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                     read_activation_data<
                         sliced_inner_dim,
                         dilation_w,
@@ -174,11 +200,18 @@ void kernel_main() {
                         act_l1_read_addr,
                         stride_h_bytes);
                 }
+#ifdef SPLIT_READER_OVERLAPPED
+                cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
+                get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
+                    base_write_addr + cb_ind_offset * act_block_size;
+                noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
+#else
                 cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 #endif
                 if (skip_work) {
                     continue;
                 }
+#endif
                 // Compute height block offset once per outer loop iteration
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
