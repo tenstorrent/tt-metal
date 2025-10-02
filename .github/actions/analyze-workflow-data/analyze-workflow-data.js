@@ -311,24 +311,41 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             const jobName = (job && job.name) ? String(job.name) : 'gtest';
             const files = Array.isArray(job.files) ? job.files : [];
             core.info(`[GTEST] Processing job: name='${jobName}', files=${files.length}`);
+            let lastSeenTestName = undefined; // persist across files in this job
             for (const rel of files) {
               if (out.length >= maxSnippets) break;
               try {
                 const abs = path.join(runLogsDir, rel);
                 if (!fs.existsSync(abs)) { core.info(`[GTEST]   Skip missing file: ${abs}`); continue; }
                 const text = fs.readFileSync(abs, 'utf8');
-                const lines = text.split(/\r?\n/);
+                const rawLines = text.split(/\r?\n/);
+                const lines = rawLines.map(l =>
+                  stripAnsi(l)
+                    .replace(/^\s*\d{4}-\d{2}-\d{2}T[0-9:.]+Z\s+/, '')
+                    .replace(/^\s*\[[0-9]+,[0-9]+\]<[^>]+>:\s*/, '')
+                );
                 core.info(`[GTEST]   Parsing file: ${abs} (lines=${lines.length})`);
-                let currentTest = undefined;
+                let currentTest = lastSeenTestName;
                 let capturing = false;
                 let buf = [];
                 let snippetsAdded = 0;
 
-                const flush = (lineNo) => {
+                const flush = (lineNo, iIndex) => {
                   if (!capturing) return;
                   const msg = buf.join('\n').trim();
                   if (msg) {
-                    const labelName = (currentTest && String(currentTest).trim()) || 'unknown gtest';
+                    // If name unknown, try to infer by scanning forward a small window
+                    let labelName = (currentTest && String(currentTest).trim()) || '';
+                    if (!labelName) {
+                      for (let j = iIndex + 1; j < Math.min(lines.length, iIndex + 200); j++) {
+                        const l2 = lines[j];
+                        const mFail = l2 && l2.match(/\[\s*FAILED\s*\]\s+(.+?)\s*$/);
+                        if (mFail) { labelName = mFail[1]; break; }
+                        const mRun2 = l2 && l2.match(/\[\s*RUN\s*\]\s+(.+?)\s*$/);
+                        if (mRun2) { labelName = mRun2[1]; break; }
+                      }
+                    }
+                    if (!labelName) labelName = lastSeenTestName || 'unknown gtest';
                     out.push({ label: `${jobName}: ${labelName}`, snippet: msg });
                     snippetsAdded++;
                     core.info(`[GTEST]     Added snippet for '${labelName}' (len=${msg.length}) @ line ${lineNo}`);
@@ -346,6 +363,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                     // Starting a new test block; stop any capture in progress (without emitting)
                     capturing = false; buf = [];
                     currentTest = runMatch[1];
+                    lastSeenTestName = currentTest;
                     core.info(`[GTEST]     RUN -> '${currentTest}' @ line ${i+1}`);
                     continue;
                   }
@@ -360,7 +378,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                       const infoIdx = lower.indexOf('info:');
                       const between = line.substring(infoIdx + 5, btIdx).replace(/^\s*|\s*$/g, '');
                       if (between) buf.push(between);
-                      flush(i+1);
+                      flush(i+1, i);
                       continue;
                     }
                     // Start multi-line capture
@@ -377,7 +395,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                     if (btIdx2 !== -1) {
                       const head = line.substring(0, btIdx2).replace(/^\s*|\s*$/g, '');
                       if (head) buf.push(head);
-                      flush(i+1);
+                      flush(i+1, i);
                       continue;
                     }
                     buf.push(line);
