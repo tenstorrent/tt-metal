@@ -309,6 +309,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             const files = Array.isArray(job.files) ? job.files : [];
             core.info(`[GTEST] Processing job: name='${jobName}', files=${files.length}`);
             for (const rel of files) {
+              if (out.length >= maxSnippets) break;
               try {
                 const abs = path.join(runLogsDir, rel);
                 if (!fs.existsSync(abs)) { core.info(`[GTEST]   Skip missing file: ${abs}`); continue; }
@@ -316,115 +317,68 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                 const lines = text.split(/\r?\n/);
                 core.info(`[GTEST]   Parsing file: ${abs} (lines=${lines.length})`);
                 let currentTest = undefined;
-                let inInfo = false;
-                let infoLines = [];
-                let fileSnippets = 0;
-                // Collect info blocks even if we don't know the test yet; pair on FAILED later
-                const pendingInfoBlocks = [];
-                const flushIfFailBlock = () => {
-                  if (currentTest && infoLines.length) {
-                    const infoMsg = infoLines.join('\n').trim();
-                    if (infoMsg) {
-                      out.push({ label: `${jobName}: ${currentTest}`, snippet: infoMsg });
-                      fileSnippets++;
-                      core.info(`[GTEST]     Added snippet for test '${currentTest}' (len=${infoMsg.length})`);
-                    }
+                let capturing = false;
+                let buf = [];
+                let snippetsAdded = 0;
+
+                const flush = (lineNo) => {
+                  if (!capturing) return;
+                  const msg = buf.join('\n').trim();
+                  if (msg) {
+                    const labelName = (currentTest && String(currentTest).trim()) || 'unknown gtest';
+                    out.push({ label: `${jobName}: ${labelName}`, snippet: msg });
+                    snippetsAdded++;
+                    core.info(`[GTEST]     Added snippet for '${labelName}' (len=${msg.length}) @ line ${lineNo}`);
                   }
-                  inInfo = false;
-                  infoLines = [];
+                  capturing = false; buf = [];
                 };
-                for (let i = 0; i < lines.length; i++) {
+
+                for (let i = 0; i < lines.length && out.length < maxSnippets; i++) {
                   const line = lines[i];
+                  // Detect new test start
                   const runMatch = line && line.match(/^\s*\[\s*RUN\s*\]\s+(.+?)\s*$/);
                   if (runMatch) {
-                    flushIfFailBlock();
+                    // Starting a new test block; stop any capture in progress (without emitting)
+                    capturing = false; buf = [];
                     currentTest = runMatch[1];
                     core.info(`[GTEST]     RUN -> '${currentTest}' @ line ${i+1}`);
                     continue;
                   }
-                  const endOk = line && line.match(/^\s*\[\s*\w*OK\s*\]\s+(.+?)\s*$/);
-                  const endFailed = line && line.match(/^\s*\[\s*FAILED\s*\]\s+(.+?)\s*$/);
-                  if (endOk || endFailed) {
-                    if (!endFailed) {
-                      inInfo = false; infoLines = []; currentTest = undefined;
-                      core.info(`[GTEST]     OK -> end test @ line ${i+1}`);
-                    } else {
-                      // Prefer pairing the nearest pending info block to this FAILED marker
-                      const failedName = endFailed[1] ? String(endFailed[1]).trim() : (currentTest || '');
-                      core.info(`[GTEST]     FAILED for '${failedName}' @ line ${i+1} (pending=${pendingInfoBlocks.filter(b => !b.used).length})`);
-                      let paired = false;
-                      for (let j = pendingInfoBlocks.length - 1; j >= 0; j--) {
-                        const blk = pendingInfoBlocks[j];
-                        if (!blk || blk.used) continue;
-                        // Simple proximity rule: last un-used block before current line
-                        blk.used = true;
-                        out.push({ label: `${jobName}: ${failedName}`, snippet: blk.text });
-                        fileSnippets++;
-                        core.info(`[GTEST]     FAILED -> paired with info block ending @ line ${blk.endLine}`);
-                        paired = true;
-                        break;
-                      }
-                      if (!paired) {
-                        // Fallback: if we had a live infoLines, use it
-                        if (infoLines.length) {
-                          const infoMsg = infoLines.join('\n').trim();
-                          if (infoMsg) {
-                            out.push({ label: `${jobName}: ${failedName}`, snippet: infoMsg });
-                            fileSnippets++;
-                            core.info(`[GTEST]     FAILED -> used immediate info lines (len=${infoMsg.length})`);
-                          }
-                        } else {
-                          core.info(`[GTEST]     FAILED -> no nearby info block to pair`);
-                        }
-                      }
-                      currentTest = undefined; inInfo = false; infoLines = [];
-                    }
-                    continue;
-                  }
-                  const infoStart = line && line.match(/^\s*info:\s*(.*)$/i);
-                  if (!inInfo && infoStart) {
+
+                  // Look for info/backtrace block boundaries
+                  const infoMatch = line && line.match(/^\s*info:\s*(.*)$/i);
+                  if (!capturing && infoMatch) {
                     const lower = line.toLowerCase();
                     const btIdx = lower.indexOf('backtrace:');
                     if (btIdx !== -1) {
+                      // Same-line info..backtrace
                       const infoIdx = lower.indexOf('info:');
                       const between = line.substring(infoIdx + 5, btIdx).replace(/^\s*|\s*$/g, '');
-                      if (between) infoLines.push(between);
-                      const textBlock = infoLines.join('\n').trim();
-                      if (textBlock) {
-                        pendingInfoBlocks.push({ text: textBlock, endLine: i+1, used: false });
-                        core.info(`[GTEST]       info:..backtrace: same-line capture (len=${textBlock.length}) -> queued @ line ${i+1}`);
-                      }
-                      // reset capture
-                      inInfo = false; infoLines = [];
+                      if (between) buf.push(between);
+                      flush(i+1);
                       continue;
                     }
-                    const trailing = infoStart[1];
-                    inInfo = true;
-                    infoLines = [];
-                    if (trailing) infoLines.push(trailing);
+                    // Start multi-line capture
+                    capturing = true;
+                    buf = [];
+                    if (infoMatch[1]) buf.push(infoMatch[1]);
                     core.info(`[GTEST]       info: begin capture @ line ${i+1}`);
                     continue;
                   }
-                  if (inInfo) {
+
+                  if (capturing) {
                     const lower = line.toLowerCase();
                     const btIdx2 = lower.indexOf('backtrace:');
                     if (btIdx2 !== -1) {
                       const head = line.substring(0, btIdx2).replace(/^\s*|\s*$/g, '');
-                      if (head) infoLines.push(head);
-                      const textBlock = infoLines.join('\n').trim();
-                      if (textBlock) {
-                        pendingInfoBlocks.push({ text: textBlock, endLine: i+1, used: false });
-                        core.info(`[GTEST]       backtrace: end capture -> queued block (len=${textBlock.length}) @ line ${i+1}`);
-                      }
-                      inInfo = false; infoLines = [];
+                      if (head) buf.push(head);
+                      flush(i+1);
                       continue;
                     }
-                    infoLines.push(line);
+                    buf.push(line);
                   }
                 }
-                flushIfFailBlock();
-                core.info(`[GTEST]   Pending info blocks at EOF: ${pendingInfoBlocks.filter(b => !b.used).length}`);
-                core.info(`[GTEST]   File complete: snippets_added=${fileSnippets}`);
+                core.info(`[GTEST]   File complete: snippets_added=${snippetsAdded}`);
               } catch (errFile) {
                 core.info(`[GTEST]   Failed parsing file '${rel}': ${errFile && errFile.message || String(errFile)}`);
               }
@@ -434,6 +388,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             core.info(`[GTEST] Total snippets before cap: ${out.length}`);
             snippets = out.slice(0, Math.max(1, Math.min(maxSnippets, out.length)));
             core.info(`[GTEST] Collected ${snippets.length} gtest snippet(s) from logs for run ${runId}`);
+            // Attach owners for gtest too
             try {
               const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
               for (const it of snippets) {
@@ -447,8 +402,6 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
           } else {
             core.info(`[GTEST] No snippets extracted from logs for run ${runId}`);
           }
-        } else {
-          core.info(`[GTEST] Logs present but missing index or extract dir for run ${runId}: idxExists=${fs.existsSync(idxPath)}, extractExists=${fs.existsSync(extractDir)}`);
         }
       }
     } catch (e) {
@@ -456,6 +409,10 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
     }
 
     // Primary (default): use annotations if available (non-gtest)
+    // If we already collected snippets from logs, skip annotations entirely
+    if (Array.isArray(snippets) && snippets.length > 0) {
+      return snippets;
+    }
     const annDir = annotationsDirPath || getAnnotationsDirForRunId(runId);
     if (annDir && fs.existsSync(annDir)) {
       try {
