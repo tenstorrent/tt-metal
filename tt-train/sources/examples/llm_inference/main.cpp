@@ -29,27 +29,25 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string model_path = "configs/training_shakespeare_gpt2s";
-    std::string tokenizer_path =
-        "/home/ubuntu/.cache/huggingface/hub/models--gpt2/snapshots/607a30d783dfa663caf39e06633721c8d4cfcd7e/"
-        "tokenizer.json";
-    std::string prompt;
-    std::string safetensors_path =
-        "/home/ubuntu/.cache/huggingface/hub/models--gpt2/snapshots/607a30d783dfa663caf39e06633721c8d4cfcd7e/";
+    std::string tokenizer_path = "data/gpt2-tokenizer.json";
+    std::string prompt = "";
+    std::string safetensors_path = "";
     float temperature = 0.0F;
     uint32_t tokens_to_generate = 256;
+    uint32_t seed = ttml::autograd::ctx().get_generator()();
 
     app.add_option("-c,--config", model_path, "Path to the LLM config")->default_val(model_path);
-    app.add_option("-t,--tokenizer", tokenizer_path, "Path to the tokenizer")->default_val(tokenizer_path);
-    app.add_option("-p,--prompt", prompt, "Prompt for text generation")->default_val("");
+    app.add_option("-p,--prompt", prompt, "Prompt for text generation")->default_val(prompt);
     app.add_option("--safetensors", safetensors_path, "Path to the model safetensors file")
         ->default_val(safetensors_path);
+    app.add_option("--tokenizer", tokenizer_path, "Path to the tokenizer files")->default_val(tokenizer_path);
     app.add_option("--temperature", temperature, "Sampling temperature")->default_val(temperature);
-    app.add_option("--tokens", tokens_to_generate, "Number of tokens to generate")->default_val(tokens_to_generate);
+    app.add_option("--num_tokens", tokens_to_generate, "Number of tokens to generate")->default_val(tokens_to_generate);
+    app.add_option("-s, --seed", seed, "Random seed for sampling")->default_val(seed);
     CLI11_PARSE(app, argc, argv);
 
     // Set up device and context
-    ttml::autograd::ctx().set_seed(42);
-    // initialize_device({1, 1}, {});
+    ttml::autograd::ctx().set_seed(seed);
 
     ttml::autograd::ctx().open_device(MeshShape{1, 1}, {});
 
@@ -74,6 +72,7 @@ int main(int argc, char **argv) {
     Model model = ttml::models::gpt2::create(config);
 
     model->load_from_safetensors(safetensors_path);
+    model->eval();
 
     // Prepare prompt
     if (prompt.empty()) {
@@ -147,8 +146,7 @@ int main(int argc, char **argv) {
         auto output = run_model(model, prompt_tensor, causal_mask_tensor);
 
         // Sample next token
-        auto next_token_tensor = ttml::ops::sample_op(
-            output, temperature, ttml::autograd::ctx().get_generator()(), logits_padding_mask_autograd);
+        auto next_token_tensor = ttml::ops::sample_op(output, temperature, seed, logits_padding_mask_autograd);
 
         uint32_t predicted_token_idx =
             (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);
