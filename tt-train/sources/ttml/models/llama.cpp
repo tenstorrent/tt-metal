@@ -15,15 +15,6 @@
 
 namespace {
 
-static std::vector<float> transpose_2d_flat(const std::vector<float>& flat, int64_t rows, int64_t cols) {
-    assert(rows * cols == static_cast<int64_t>(flat.size()));
-    std::vector<int> shape_vec = {static_cast<int>(rows), static_cast<int>(cols)};
-    auto src = xt::adapt(flat, shape_vec);
-    xt::xarray<float> t = xt::transpose(src);
-    auto view = ttml::core::xtensor_to_span(t);
-    return std::vector<float>(view.begin(), view.end());
-}
-
 static std::vector<float> pad_and_resize_flat(
     const std::vector<float>& flat, int64_t rows, int64_t cols, int64_t target_rows, int64_t target_cols) {
     // If dimensions match, return as is
@@ -657,8 +648,6 @@ void load_model_from_safetensors(
                 // v_proj.weight — stage (no unpermute)
                 if (info.name == layer_pfx + ".self_attn.v_proj.weight" ||
                     info.name == layers_pfx + ".self_attn.v_proj.weight") {
-                    // v_weights[i] = float_vec;
-                    // v_shapes[i] = {info.shape[0], info.shape[1]};
                     std::vector<float> src = float_vec;
                     v_weights[i] = std::move(src);
                     v_shapes[i] = {info.shape[0], info.shape[1]};

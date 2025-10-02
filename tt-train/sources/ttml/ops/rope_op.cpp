@@ -177,7 +177,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     xt::xarray<float> pair_idx = xt::cast<float>(pair_idx_u);
 
     // exponent = 2 * floor(i/2) / head_dim
-    pair_idx *= 2.0f / static_cast<float>(head_dim);
+    pair_idx *= 2.0F / static_cast<float>(head_dim);
 
     // inv_freq[i] = 1 / (theta ** exponent[i])
     xt::xarray<float> inv_freq = 1.0f / xt::pow(theta, pair_idx);  // [D]
@@ -196,7 +196,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     xt::xarray<float> theta_mat = pos * inv_freq;  // [L,D]
 
     // keep in principal range
-    theta_mat = xt::fmod(theta_mat, 2.0f * std::numbers::pi_v<float>);
+    theta_mat = xt::fmod(theta_mat, 2.0F * std::numbers::pi_v<float>);
 
     // expand to [1,1,L,D]
     xt::xarray<float> theta_4d = theta_mat;                 // copy shape metadata from theta_mat

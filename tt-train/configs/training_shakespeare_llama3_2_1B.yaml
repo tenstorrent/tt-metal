@@ -13,8 +13,7 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  #tokenizer_path:  '/home/ubuntu/git/llama3_tokenizer.json' # using tinyllama tokenizer because the real Meta tokenizer is gated on HF.
-  tokenizer_path: "data/tinyllama-tokenizer.json"
+  tokenizer_path: "data/tinyllama-tokenizer.json" # using tinyllama tokenizer because the real Meta tokenizer is gated on HF.
   tokenizer_type: "bpe"
   transformer_config:
     num_heads: 32
