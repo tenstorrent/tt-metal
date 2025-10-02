@@ -127,7 +127,7 @@ class TtUnet:
             auto_shard=True,
             dtype=ttnn.bfloat8_b,
             output_layout=ttnn.TILE_LAYOUT,
-            activation=None,
+            # activation=,
             reallocate_halo_output=True,
         )
         self.dec1_2 = Conv(
@@ -317,26 +317,25 @@ class TtUnet:
 
         dec1 = ttnn.to_layout(dec1, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         dec1 = self.dec1_1(device, dec1)
-        if dec1.is_sharded:
-            dec1 = ttnn.sharded_to_interleaved(dec1, ttnn.L1_MEMORY_CONFIG)
-        dec1 = ttnn.permute(dec1, (0, 3, 1, 2))
-        dec1 = ttnn.to_layout(dec1, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-        dec1 = ttnn.to_layout(dec1, ttnn.TILE_LAYOUT)
-        dec1 = ttnn.batch_norm(
-            dec1,
-            running_mean=self.bn_parameters.running_mean,
-            running_var=self.bn_parameters.running_var,
-            eps=self.bn_parameters.eps,
-            weight=self.bn_parameters.weight,
-            bias=self.bn_parameters.bias,
-        )
-        dec1 = ttnn.relu(dec1)
-        dec1 = ttnn.permute(dec1, (0, 2, 3, 1))
+        # if dec1.is_sharded:
+        # dec1 = ttnn.sharded_to_interleaved(dec1, ttnn.L1_MEMORY_CONFIG)
+        # dec1 = ttnn.permute(dec1, (0, 3, 1, 2))
+        # dec1 = ttnn.to_layout(dec1, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        # dec1 = ttnn.to_layout(dec1, ttnn.TILE_LAYOUT)
+        # dec1 = ttnn.batch_norm(
+        # dec1,
+        # running_mean=self.bn_parameters.running_mean,
+        # running_var=self.bn_parameters.running_var,
+        # eps=self.bn_parameters.eps,
+        # weight=self.bn_parameters.weight,
+        # bias=self.bn_parameters.bias,
+        # )
+        # dec1 = ttnn.relu(dec1)
+        # dec1 = ttnn.permute(dec1, (0, 2, 3, 1))
         dec1 = self.dec1_2(device, dec1)
         dec1 = ttnn.to_layout(dec1, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
         ttnn_output = self.conv(device, dec1)
         ttnn.deallocate(dec1)
         ttnn_output = ttnn.add(ttnn_output, 0.0, dtype=ttnn.bfloat16)
         ttnn_output = ttnn.sigmoid_accurate(ttnn_output)
-
         return ttnn_output
