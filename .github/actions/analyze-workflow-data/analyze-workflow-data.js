@@ -263,7 +263,7 @@ function renderErrorsTable(errorSnippets) {
     return `<tr><td>${jobEsc}</td><td>${testEsc}</td><td>${ownerEsc}</td><td>${snippetOneLine}</td></tr>`;
   }).join('\n');
   return [
-    '<table>',
+    '<table style="table-layout: fixed; width: 100%;">',
     '<colgroup>',
     '<col style="width: 45%;">',
     '<col style="width: 15%;">',
@@ -298,10 +298,6 @@ function renderCommitsTable(commits) {
   }).join('\n');
   return [
     '<table>',
-    '<colgroup>',
-    '<col style="width: 30%;">',
-    '<col style="width: 70%;">',
-    '</colgroup>',
     '<thead>',
     '<tr><th>SHA</th><th>Author</th></tr>',
     '</thead>',
@@ -845,22 +841,6 @@ async function generateSummaryBox(grouped, github, context) {
   return [
     '## Workflow Summary',
     '<table>',
-    '<colgroup>',
-    '<col style="width: 12%;">',
-    '<col style="width: 8%;">',
-    '<col style="width: 5%;">',
-    '<col style="width: 7%;">',
-    '<col style="width: 6%;">',
-    '<col style="width: 9%;">',
-    '<col style="width: 6%;">',
-    '<col style="width: 5%;">',
-    '<col style="width: 7%;">',
-    '<col style="width: 7%;">',
-    '<col style="width: 6%;">',
-    '<col style="width: 10%;">',
-    '<col style="width: 6%;">',
-    '<col style="width: 6%;">',
-    '</colgroup>',
     '<thead>',
     '<tr><th>Workflow</th><th>Event Type(s)</th><th>Total Runs</th><th>Successful Runs</th><th>Success Rate</th><th>Unique Success Rate</th><th>Retry Rate</th><th>Last Run on <code>main</code></th><th>Last SHA</th><th>Last Run</th><th>Last PR</th><th>PR Title</th><th>Newest Bad SHA</th><th>Newest Good SHA</th></tr>',
     '</thead>',
@@ -907,10 +887,6 @@ async function buildReport(grouped, github, context) {
     '<li>Retry Rate is based only on successful unique runs</li>',
     '</ul>\n',
     '<table>',
-    '<colgroup>',
-    '<col style="width: 20%;">',
-    '<col style="width: 80%;">',
-    '</colgroup>',
     '<thead>',
     '<tr><th>Column</th><th>Description</th></tr>',
     '</thead>',
