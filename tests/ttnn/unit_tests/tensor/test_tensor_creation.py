@@ -590,13 +590,13 @@ def flatten_list(nested_list):
         "uint8_edges",
     ],
 )
-@pytest.mark.parametrize("shape", [(1, 1, 2, 8), (2, 2, 2, 2)])
+@pytest.mark.parametrize("shape", [(2, 8), (2, 2, 2, 2)])
 def test_tensor_creation_from_list(shape, tt_dtype, data, layout, atol, device):
     if tt_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) and layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("{} is only valid for ttnn.TILE_LAYOUT!".format(tt_dtype))
 
     # Adjust data length to match shape
-    total_elements = shape[0] * shape[1] * shape[2] * shape[3]
+    total_elements = int(np.prod(shape))
     test_data = data[:total_elements]
 
     # Test host-only tensor (no device)
@@ -769,8 +769,8 @@ def test_tensor_creation_from_list_block_float(tt_dtype, data, tol, device):
 @pytest.mark.parametrize(
     "shape",
     [
-        (1, 1, 64, 64),
-        (1, 2, 32, 64),
+        (64, 64),
+        (2, 32, 64),
     ],
 )
 @pytest.mark.parametrize(
@@ -783,7 +783,7 @@ def test_tensor_creation_from_list_block_float(tt_dtype, data, tol, device):
 def test_tensor_creation_from_list_with_mem_config(shape, tt_dtype, data_type, memory_config, device):
     """Test creating tensors from Python lists with different memory configs"""
 
-    total_elements = shape[0] * shape[1] * shape[2] * shape[3]
+    total_elements = int(np.prod(shape))
 
     if data_type == float:
         data = [float(i) * 1.5 for i in range(total_elements)]

@@ -626,7 +626,7 @@ void pytensor_module_types(py::module& m_tensor) {
     // https://pybind11.readthedocs.io/en/stable/advanced/functions.html#keep-alive
     auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor", R"doc(
 
-        Class constructor supports tensors of rank 4.
+        Class constructor supports tensors of any rank.
         The constructor takes following arguments:
 
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
@@ -634,7 +634,7 @@ void pytensor_module_types(py::module& m_tensor) {
         +============+========================================================+===========================+====================================+==========+
         | data       | Data to store in TT tensor                             | List[float/int]           |                                    | Yes      |
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
-        | shape      | Shape of TT tensor                                     | List[int[4]]              |                                    | Yes      |
+        | shape      | Shape of TT tensor                                     | List[int]                 |                                    | Yes      |
         +------------+--------------------------------------------------------+---------------------------+------------------------------------+----------+
         | data_type  | Data type of numbers in TT tensor                      | ttnn.DataType             | ttnn.DataType.BFLOAT16             | Yes      |
         |            |                                                        |                           |                                    |          |
@@ -697,7 +697,7 @@ void pytensor_module(py::module& m_tensor) {
         // Constructor 1: Host-only (no device, no mem_config)
         pyTensor.def(
             py::init<>([](std::vector<T>&& data,
-                          const std::array<uint32_t, 4>& shape,
+                          const ttnn::SmallVector<uint32_t>& shape,
                           DataType data_type,
                           Layout layout,
                           const std::optional<Tile>& tile,
@@ -749,7 +749,7 @@ void pytensor_module(py::module& m_tensor) {
         // Constructor 2: With optional device
         pyTensor.def(
             py::init<>([](std::vector<T>&& data,
-                          const std::array<uint32_t, 4>& shape,
+                          const ttnn::SmallVector<uint32_t>& shape,
                           DataType data_type,
                           Layout layout,
                           std::optional<MeshDevice*> device,
@@ -802,7 +802,7 @@ void pytensor_module(py::module& m_tensor) {
         // Constructor 3: With device and mem_config
         pyTensor.def(
             py::init<>([](std::vector<T>&& data,
-                          const std::array<uint32_t, 4>& shape,
+                          const ttnn::SmallVector<uint32_t>& shape,
                           DataType data_type,
                           Layout layout,
                           std::optional<MeshDevice*> device,
@@ -1090,8 +1090,8 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "pad",
             [](const Tensor& self,
-               const std::array<uint32_t, 4>& output_tensor_shape,
-               const std::array<uint32_t, 4>& input_tensor_start,
+               const ttnn::SmallVector<uint32_t>& output_tensor_shape,
+               const ttnn::SmallVector<uint32_t>& input_tensor_start,
                float pad_value) {
                 return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value);
             },
