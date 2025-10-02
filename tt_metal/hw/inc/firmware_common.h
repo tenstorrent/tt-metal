@@ -20,13 +20,17 @@
 #include "dataflow_api.h"
 #endif
 
+constexpr size_t round_up_to_mult_of_4(size_t value) { return ((value + 3) / 4) * 4; }
+
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 
-extern uint8_t logical_col_to_virtual_col[((noc_size_x + 3) / 4) * 4];
-extern uint8_t logical_row_to_virtual_row[((noc_size_y + 3) / 4) * 4];
+// These arrays are used to store the logical to virtual coordinate mapping. Only
+// defined in cores that need this information for NOC transactions (e.g. DM cores).
+extern uint8_t logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];
+extern uint8_t logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)];
 
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
