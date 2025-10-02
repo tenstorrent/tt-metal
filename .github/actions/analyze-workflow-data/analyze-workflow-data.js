@@ -303,29 +303,27 @@ function renderErrorsTable(errorSnippets) {
       if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
-    // Force owner to at most two lines using a smart break; short strings stay single-line
+    // Force exactly two lines: compute a break point (prefer comma, else space near middle), NBSP around words
     let ownerHtml = ownerEsc;
     try {
       const plainO = String(ownerDisplay).replace(/\r?\n/g, ' ').trim();
-      if (plainO.length > 18) {
-        const midO = Math.floor(plainO.length / 2);
-        let breakO = -1;
-        const commaIdx = plainO.indexOf(',');
-        if (commaIdx !== -1) breakO = commaIdx + 1;
-        else {
-          const window = 20;
-          const rightO = plainO.slice(midO, Math.min(plainO.length, midO + window)).search(/[\u00A0\s]/);
-          const leftO = plainO.slice(Math.max(0, midO - window), midO).lastIndexOf(' ');
-          const leftNbspO = plainO.slice(Math.max(0, midO - window), midO).lastIndexOf('\u00A0');
-          const leftBestO = Math.max(leftO, leftNbspO);
-          if (rightO !== -1) breakO = midO + rightO + 1;
-          else if (leftBestO !== -1) breakO = Math.max(1, Math.max(0, midO - window) + leftBestO + 1);
-        }
-        if (breakO <= 0 || breakO >= plainO.length) breakO = Math.max(1, midO);
-        const p1 = plainO.slice(0, breakO).trimEnd();
-        const p2 = plainO.slice(breakO).trimStart();
-        ownerHtml = `${escapeHtml(p1).replace(/\s/g, '\u00A0')}<br/>${escapeHtml(p2).replace(/\s/g, '\u00A0')}`;
+      const lenO = plainO.length;
+      const midO = Math.floor(lenO / 2);
+      let breakO = -1;
+      const commaIdx = plainO.indexOf(',');
+      if (commaIdx !== -1 && commaIdx < lenO - 1) breakO = commaIdx + 1;
+      if (breakO === -1) {
+        const window = 24;
+        const after = plainO.slice(midO, Math.min(lenO, midO + window)).search(/[\u00A0\s]/);
+        const before = plainO.slice(Math.max(0, midO - window), midO).lastIndexOf(' ');
+        const beforeNb = plainO.slice(Math.max(0, midO - window), midO).lastIndexOf('\u00A0');
+        const bestBefore = Math.max(before, beforeNb);
+        if (after !== -1) breakO = midO + after + 1; else if (bestBefore !== -1) breakO = Math.max(1, Math.max(0, midO - window) + bestBefore + 1);
       }
+      if (breakO <= 0 || breakO >= lenO) breakO = Math.max(1, midO);
+      const p1 = plainO.slice(0, breakO).trimEnd();
+      const p2 = plainO.slice(breakO).trimStart();
+      ownerHtml = `${escapeHtml(p1).replace(/\s/g, '\u00A0')}<br/>${escapeHtml(p2).replace(/\s/g, '\u00A0')}`;
     } catch (_) { /* keep fallback ownerEsc */ }
     return `<tr><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;">${jobHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${testEsc}</td><td style="white-space: nowrap; word-break: keep-all; overflow: hidden;"><div style="line-height:1.35; min-height: calc(2 * 1.35em); max-height: calc(2 * 1.35em); overflow: auto; white-space: nowrap;">${ownerHtml}</div></td><td style="white-space: normal; word-break: normal; overflow-wrap: break-word; hyphens: none;">${snippetOneLine}</td></tr>`;
   }).join('\n');
@@ -1428,7 +1426,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['', '• Errors', '', errorsHtml, ''].join('\n');
+            errorsList = [errorsHtml, ''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build a link to the latest (most recent) failing run with timestamp and commit
@@ -1448,12 +1446,7 @@ async function run() {
             // If we found a success in the window, show commits between success and first failure
             let commitsList = '';
             const commitsMd = renderCommitsTable(it.commits_between || []);
-            commitsList = [
-              '',
-              '<p>• Commits between last success and first failure</p>',
-              commitsMd,
-              ''
-            ].join('\n');
+            commitsList = [commitsMd, ''].join('\n');
 
             // Build information about the latest failing run (for normal regressions)
             const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : ''; // timestamp of latest failure
@@ -1493,7 +1486,7 @@ async function run() {
             // Render error snippets from the latest failing run as a Markdown table
             let errorsList = '';
             const errorsHtml2 = renderErrorsTable(it.error_snippets || []);
-            errorsList = ['', '• Errors', '', errorsHtml2, ''].join('\n');
+            errorsList = [errorsHtml2, ''].join('\n');
 
             if (it.no_success_in_window) { // if no successful run was found in the 2-week window
               // Build information about the latest failing run
@@ -1513,12 +1506,7 @@ async function run() {
             // If there is a success boundary in-window, show commits between; otherwise, just show first failure
             let commitsList = '';
             const commitsMd2 = renderCommitsTable(it.commits_between || []);
-            commitsList = [
-              '',
-              '<p>• Commits between last success and first failure</p>',
-              commitsMd2,
-              ''
-            ].join('\n');
+            commitsList = [commitsMd2, ''].join('\n');
 
             // Build information about the latest failing run
             const latestWhenIso = it.created_at ? new Date(it.created_at).toISOString() : ''; // timestamp of latest failure
