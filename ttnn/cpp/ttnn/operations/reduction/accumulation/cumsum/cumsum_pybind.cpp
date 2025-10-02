@@ -71,7 +71,7 @@ void bind_reduction_cumsum_operation(py::module& module) {
                 tensor_output = ttnn.cumsum(tensor_input, dim=0)
 
                 # With preallocated output and dtype
-                preallocated_output = ttnn.from_torch(torch.rand([2, 3, 4]), dtype=ttnn.bfloat16, device=device)
+                preallocated_output = ttnn.rand([2, 3, 4], dtype=ttnn.bfloat16, device=device)
 
                 tensor_output = ttnn.cumsum(tensor_input, dim=0, dtype=ttnn.bfloat16, out=preallocated_output)
 
