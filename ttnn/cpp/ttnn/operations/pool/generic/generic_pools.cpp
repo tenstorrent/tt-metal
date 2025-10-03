@@ -252,11 +252,11 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     if (return_indices) {
         Shape spatial_shape({1, input_h, input_w, 1});
 
-        // Create indices tensor with UINT32 since repeat operation requires it
-        Tensor indices_hw = ttnn::index_all<uint32_t>(
+        // Create the index tensor
+        Tensor indices_hw = ttnn::index_all<uint16_t>(
             spatial_shape,
             spatial_shape,  // No padding needed for spatial-only shape
-            DataType::UINT32);
+            DataType::UINT16);
         Shape repeat_shape({batch_size, 1, 1, channels});
         Tensor index_full = ttnn::repeat(indices_hw.to_device(input_tensor.device()), repeat_shape);
 
@@ -265,21 +265,10 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         Shape flattened_shape({1, 1, nhw, channels});
         Tensor index_full_reshaped = ttnn::reshape(index_full, flattened_shape);
 
-        // Convert to TILE layout for typecast operation
-        Tensor index_full_tiled = ttnn::to_layout(index_full_reshaped, ttnn::TILE_LAYOUT);
-
-        // Convert to UINT16
-        Tensor index_full_uint16 = ttnn::typecast(index_full_tiled, DataType::UINT16);
-
-        // Convert back to ROW_MAJOR layout
-        if (!is_in_tiled) {
-            index_full_uint16 = ttnn::to_layout(index_full_uint16, ttnn::ROW_MAJOR_LAYOUT);
-        }
-
         TT_FATAL(
             input_tensor_sharded.memory_config().is_sharded(), "Input tensor must be sharded to shard indices tensor.");
         index_tensor_sharded =
-            ttnn::to_memory_config(index_full_uint16, input_tensor_sharded.memory_config(), std::nullopt);
+            ttnn::to_memory_config(index_full_reshaped, input_tensor_sharded.memory_config(), std::nullopt);
     }
 
     std::vector<Tensor> haloed_tensors;
