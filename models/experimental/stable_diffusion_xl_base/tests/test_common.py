@@ -19,7 +19,7 @@ import ttnn
 
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 
-SDXL_L1_SMALL_SIZE = 23000
+SDXL_L1_SMALL_SIZE = 27000 + 8000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
 SDXL_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D
@@ -509,6 +509,7 @@ def run_tt_image_gen(
     batch_size,
     persistent_buffer,
     semaphores,
+    output_type="pil",
     output_device=None,
     output_shape=None,
     tid=None,
@@ -587,58 +588,63 @@ def run_tt_image_gen(
 
     vae_on_device = isinstance(vae, TtAutoencoderKL)
 
-    if vae_on_device:
-        profiler.start("vae_decode")
-        if tid_vae is None or capture_trace:
-            tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
-            tt_latents = ttnn.div(tt_latents, scaling_factor)
+    if output_type == "pil":
+        if vae_on_device:
+            profiler.start("vae_decode")
+            if tid_vae is None or capture_trace:
+                tid_vae = ttnn.begin_trace_capture(ttnn_device, cq_id=0) if capture_trace else None
+                tt_latents = ttnn.div(tt_latents, scaling_factor)
 
-            logger.info("Running TT VAE")
-            output_tensor, [C, H, W] = vae.decode(tt_latents, input_shape)
-            ttnn.deallocate(tt_latents)
+                logger.info("Running TT VAE")
+                output_tensor, [C, H, W] = vae.decode(tt_latents, input_shape)
+                ttnn.deallocate(tt_latents)
 
-            if capture_trace:
-                ttnn.end_trace_capture(ttnn_device, tid_vae, cq_id=0)
-            output_device = output_tensor
-            output_shape = [input_shape[0], C, H, W]
+                if capture_trace:
+                    ttnn.end_trace_capture(ttnn_device, tid_vae, cq_id=0)
+                output_device = output_tensor
+                output_shape = [input_shape[0], C, H, W]
+            else:
+                ttnn.execute_trace(ttnn_device, tid_vae, cq_id=0, blocking=False)
+
+            ttnn.synchronize_device(ttnn_device)
+            profiler.end("vae_decode")
+
+            profiler.start("read_output_tensor")
+            output_tensor = ttnn.to_torch(
+                output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)
+            ).float()[:batch_size, ...]
+            ttnn.synchronize_device(ttnn_device)
+            profiler.end("read_output_tensor")
+
+            B, C, H, W = output_shape
+            output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
+            imgs = torch.permute(output_tensor, (0, 3, 1, 2))
         else:
-            ttnn.execute_trace(ttnn_device, tid_vae, cq_id=0, blocking=False)
+            profiler.start("read_output_tensor")
+            latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[
+                :batch_size, ...
+            ]
+            ttnn.synchronize_device(ttnn_device)
+            profiler.end("read_output_tensor")
+            profiler.start("vae_decode")
+            B, C, H, W = input_shape
+            latents = latents.reshape(batch_size * B, H, W, C)
+            latents = torch.permute(latents, (0, 3, 1, 2))
+            latents = latents.to(vae.dtype)
 
-        ttnn.synchronize_device(ttnn_device)
-        profiler.end("vae_decode")
-
-        profiler.start("read_output_tensor")
-        output_tensor = ttnn.to_torch(output_device, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0)).float()[
-            :batch_size, ...
-        ]
-        ttnn.synchronize_device(ttnn_device)
-        profiler.end("read_output_tensor")
-
-        B, C, H, W = output_shape
-        output_tensor = output_tensor.reshape(batch_size * B, H, W, C)
-        imgs = torch.permute(output_tensor, (0, 3, 1, 2))
+            # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
+            latents = latents / vae.config.scaling_factor
+            warmup_run = len(tt_timesteps) == 1
+            if warmup_run == False:
+                # Do not run host VAE if we are on a warmup run
+                imgs = vae.decode(latents, return_dict=False)[0]
+            else:
+                imgs = None
+            del latents
+            gc.collect()
+            profiler.end("vae_decode")
     else:
-        profiler.start("read_output_tensor")
-        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
-        ttnn.synchronize_device(ttnn_device)
-        profiler.end("read_output_tensor")
-        profiler.start("vae_decode")
-        B, C, H, W = input_shape
-        latents = latents.reshape(batch_size * B, H, W, C)
-        latents = torch.permute(latents, (0, 3, 1, 2))
-        latents = latents.to(vae.dtype)
-
-        # VAE upcasting to float32 is happening in the reference SDXL demo if VAE dtype is float16. If it's bfloat16, it will not be upcasted.
-        latents = latents / vae.config.scaling_factor
-        warmup_run = len(tt_timesteps) == 1
-        if warmup_run == False:
-            # Do not run host VAE if we are on a warmup run
-            imgs = vae.decode(latents, return_dict=False)[0]
-        else:
-            imgs = None
-        del latents
-        gc.collect()
-        profiler.end("vae_decode")
+        imgs = tt_latents
     profiler.end("image_gen")
 
     return imgs, tid, output_device, output_shape, tid_vae

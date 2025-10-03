@@ -6,12 +6,15 @@ import os
 import torch
 from dataclasses import dataclass
 
-from diffusers import StableDiffusionXLPipeline
+from diffusers import StableDiffusionXLPipeline, UNet2DConditionModel
 from loguru import logger
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
+from models.experimental.stable_diffusion_xl_refiner.tt.tt_unet import (
+    TtUNet2DConditionModel as TtRefinerUNet2DConditionModel,
+)
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
@@ -35,6 +38,8 @@ class TtSDXLPipelineConfig:
     vae_on_device: bool = True
     encoders_on_device: bool = True
     use_cfg_parallel: bool = False
+    use_refiner: bool = False
+    denoising_end: float = 0.8
 
 
 class TtSDXLPipeline(LightweightModule):
@@ -67,6 +72,10 @@ class TtSDXLPipeline(LightweightModule):
         self.image_processing_compiled = False
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
+
+        # Initialize refiner components as None - will load after TT components
+        self.refiner_pipeline = None
+        self.tt_refiner_unet = None
 
         if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
@@ -378,36 +387,358 @@ class TtSDXLPipeline(LightweightModule):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_input_tensors")
 
-    def generate_images(self):
+    def generate_images(self, prompts=None):
         # SDXL inference run.
         assert self.image_processing_compiled, "Image processing is not compiled"
         assert self.generated_input_tensors, "Input tensors are not re/generated"
 
         logger.info("Generating images...")
-        imgs, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
-            self.ttnn_device,
-            self.tt_unet,
-            self.tt_scheduler,
-            self.tt_latents_device,
-            self.tt_prompt_embeds_device,
-            self.tt_time_ids_device,
-            self.tt_text_embeds_device,
-            self.ttnn_timesteps,
-            self.extra_step_kwargs,
-            self.guidance_scale,
-            self.scaling_factor,
-            self.tt_latents_shape,
-            self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
-            self.batch_size,
-            self.ag_persistent_buffer,
-            self.ag_semaphores,
-            tid=self.tid if hasattr(self, "tid") else None,
-            output_device=self.output_device if hasattr(self, "output_device") else None,
-            output_shape=self.output_shape,
-            tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
-            use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
-        )
+
+        if self.pipeline_config.use_refiner:
+            # When using refiner, we need to run only part of the timesteps for base generation
+            # and pass the remaining timesteps to the refiner
+            logger.info("Using base+refiner mode")
+
+            # Calculate which timesteps to use for base (first 80% by default)
+            total_timesteps = len(self.ttnn_timesteps)
+            base_timestep_count = int(self.pipeline_config.denoising_end * total_timesteps)
+            base_timesteps = self.ttnn_timesteps[:base_timestep_count]
+
+            logger.info(f"Total timesteps: {total_timesteps}")
+            logger.info(
+                f"Base will process {len(base_timesteps)} timesteps ({self.pipeline_config.denoising_end*100:.0f}%)"
+            )
+            logger.info(f"Base timestep range: {base_timesteps[0].item():.1f} to {base_timesteps[-1].item():.1f}")
+
+            # Run base generation with subset of timesteps (returns latents)
+            base_latents, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
+                self.ttnn_device,
+                self.tt_unet,
+                self.tt_scheduler,
+                self.tt_latents_device,
+                self.tt_prompt_embeds_device,
+                self.tt_time_ids_device,
+                self.tt_text_embeds_device,
+                base_timesteps,  # Only run first part of timesteps
+                self.extra_step_kwargs,
+                self.guidance_scale,
+                self.scaling_factor,
+                self.tt_latents_shape,
+                self.tt_vae
+                if self.pipeline_config.vae_on_device
+                else self.torch_pipeline.vae,  # VAE is still needed even with output_type="latent"
+                self.batch_size,
+                self.ag_persistent_buffer,
+                self.ag_semaphores,
+                tid=self.tid if hasattr(self, "tid") else None,
+                output_device=self.output_device if hasattr(self, "output_device") else None,
+                output_shape=self.output_shape,
+                tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
+                output_type="latent",  # Return latents instead of images
+            )
+
+            # Convert ttnn tensor to torch tensor with proper mesh composer
+            logger.info(f"Base latents shape: {base_latents.shape}")
+            logger.info(f"Base latents type: {type(base_latents)}")
+
+            base_latents_torch = ttnn.to_torch(
+                base_latents, mesh_composer=ttnn.ConcatMeshToTensor(self.ttnn_device, dim=0)
+            )
+            logger.info(f"Base latents torch shape: {base_latents_torch.shape}")
+
+            # Ensure we have the right batch size (should be 1, not 2)
+            if base_latents_torch.shape[0] == 2:
+                # Take the first replica if we have duplicates from mesh
+                base_latents_torch = base_latents_torch[0:1]
+                logger.info(f"Corrected base latents torch shape: {base_latents_torch.shape}")
+
+            # Reshape back to standard format if needed
+            logger.info(f"Shape before reshape: {base_latents_torch.shape}")
+
+            # Reshape back to standard format if needed
+            if len(base_latents_torch.shape) == 4 and base_latents_torch.shape[1] == 1:
+                # Reshape from (B, 1, H*W, C) to (B, C, H, W)
+                B, _, HW, C = base_latents_torch.shape
+                H = W = int((HW) ** 0.5)
+                base_latents_torch = base_latents_torch.reshape(B, H, W, C)
+                base_latents_torch = base_latents_torch.permute(0, 3, 1, 2)
+
+            # Run refiner if prompts provided
+            if prompts is not None:
+                logger.info("Running refiner...")
+                refined_latents = self.run_refiner(
+                    base_latents_torch,
+                    prompts[0] if isinstance(prompts, list) else prompts,
+                    "",  # negative prompt
+                    self.pipeline_config.guidance_scale,
+                )
+
+                profiler.start("read_output_tensor")
+                refined_latents_float32 = refined_latents.to(torch.float32)
+                scaled_latents = refined_latents_float32 / self.torch_pipeline.vae.config.scaling_factor
+                profiler.end("read_output_tensor")
+
+                if self.pipeline_config.vae_on_device:
+                    # Use TT VAE
+                    # Convert back to ttnn format for VAE
+                    profiler.start("vae_decode")
+                    tt_refined_latents = ttnn.from_torch(
+                        scaled_latents.permute(0, 2, 3, 1).reshape(1, 1, -1, 4),
+                        dtype=ttnn.bfloat16,
+                        device=self.ttnn_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    imgs = self.tt_vae.decode(tt_refined_latents)
+                    ttnn.synchronize_device(self.ttnn_device)
+                    profiler.end("vae_decode")
+                else:
+                    # Use CPU VAE
+                    profiler.start("vae_decode")
+                    imgs = self.torch_pipeline.vae.decode(scaled_latents).sample
+                    profiler.end("vae_decode")
+            else:
+                # Just return base images
+                # Decode base latents
+                with torch.no_grad():
+                    profiler.start("vae_decode")
+                    base_latents_float32 = base_latents_torch.to(torch.float32)
+                    scaled_latents = base_latents_float32 / self.torch_pipeline.vae.config.scaling_factor
+                    imgs = self.torch_pipeline.vae.decode(scaled_latents).sample
+                    profiler.end("vae_decode")
+
+        else:
+            # Generation without refiner
+            imgs, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
+                self.ttnn_device,
+                self.tt_unet,
+                self.tt_scheduler,
+                self.tt_latents_device,
+                self.tt_prompt_embeds_device,
+                self.tt_time_ids_device,
+                self.tt_text_embeds_device,
+                self.ttnn_timesteps,
+                self.extra_step_kwargs,
+                self.guidance_scale,
+                self.scaling_factor,
+                self.tt_latents_shape,
+                self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
+                self.batch_size,
+                self.ag_persistent_buffer,
+                self.ag_semaphores,
+                tid=self.tid if hasattr(self, "tid") else None,
+                output_device=self.output_device if hasattr(self, "output_device") else None,
+                output_shape=self.output_shape,
+                tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
+                use_cfg_parallel=self.pipeline_config.use_cfg_parallel,
+            )
         return imgs
+
+    def _ensure_refiner_loaded(self):
+        if self.refiner_pipeline is None:
+            from diffusers import StableDiffusionXLImg2ImgPipeline
+
+            self.refiner_pipeline = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                "stabilityai/stable-diffusion-xl-refiner-1.0",
+                torch_dtype=torch.float32,
+                use_safetensors=True,
+            )
+            logger.info("Refiner pipeline loaded")
+
+    def get_refiner_conditioning(self, prompt: str, negative_prompt: str = ""):
+        assert self.pipeline_config.use_refiner, "Refiner is not enabled"
+
+        # Ensure refiner pipeline is loaded
+        self._ensure_refiner_loaded()
+
+        (
+            prompt_embeds,
+            negative_prompt_embeds,
+            pooled_prompt_embeds,
+            negative_pooled_prompt_embeds,
+        ) = self.refiner_pipeline.encode_prompt(
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            do_classifier_free_guidance=True,
+        )
+
+        encoder_hidden_states = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+        text_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
+
+        time_ids = torch.tensor(
+            [
+                [1024.0, 1024.0, 0.0, 0.0, 2.5],
+                [1024.0, 1024.0, 0.0, 0.0, 6.0],
+            ],
+            dtype=torch.float32,
+        )
+
+        return encoder_hidden_states, text_embeds, time_ids
+
+    def run_refiner(self, base_latents, prompt, negative_prompt="", guidance_scale=5.0):
+        assert self.pipeline_config.use_refiner, "Refiner is not enabled"
+        assert self.tt_refiner_unet is not None, "Refiner UNet is not loaded"
+
+        # Ensure refiner pipeline is loaded
+        self._ensure_refiner_loaded()
+
+        logger.info("Running refiner...")
+
+        # Get refiner conditioning
+        encoder_hidden_states, text_embeds, time_ids = self.get_refiner_conditioning(prompt, negative_prompt)
+
+        # Set up scheduler for refiner (using refiner pipeline's scheduler)
+        scheduler = self.refiner_pipeline.scheduler
+        scheduler.set_timesteps(self.pipeline_config.num_inference_steps)
+        denoising_start = self.pipeline_config.denoising_end  # Match the base pipeline's denoising_end
+
+        # Use HuggingFace's exact timestep calculation logic
+        # This is from get_timesteps method in the HF pipeline
+        discrete_timestep_cutoff = int(
+            round(scheduler.config.num_train_timesteps - (denoising_start * scheduler.config.num_train_timesteps))
+        )
+
+        logger.info(f"HF-style timestep calculation:")
+        logger.info(f"  num_train_timesteps: {scheduler.config.num_train_timesteps}")
+        logger.info(f"  denoising_start: {denoising_start}")
+        logger.info(f"  discrete_timestep_cutoff: {discrete_timestep_cutoff}")
+
+        # Count timesteps below cutoff
+        num_refiner_steps = (scheduler.timesteps < discrete_timestep_cutoff).sum().item()
+
+        # Get timesteps starting from the end
+        t_start = len(scheduler.timesteps) - num_refiner_steps
+        timesteps = scheduler.timesteps[t_start:]
+
+        logger.info(f"  t_start: {t_start}")
+        logger.info(f"  num_refiner_steps: {num_refiner_steps}")
+        logger.info(f"  refiner timesteps range: {timesteps[0].item():.1f} to {timesteps[-1].item():.1f}")
+        logger.info(f"  refiner will process {len(timesteps)} timesteps")
+
+        # Start with base latents
+        latents = base_latents
+
+        # Convert embeddings to ttnn tensors
+        ttnn_encoder_hidden_states_uncond = ttnn.from_torch(
+            encoder_hidden_states[0:1],
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_text_embeds_uncond = ttnn.from_torch(
+            text_embeds[0:1],
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_time_ids_uncond = ttnn.from_torch(
+            time_ids[0],
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        ttnn_encoder_hidden_states_cond = ttnn.from_torch(
+            encoder_hidden_states[1:2],
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_text_embeds_cond = ttnn.from_torch(
+            text_embeds[1:2],
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn_time_ids_cond = ttnn.from_torch(
+            time_ids[1],
+            dtype=ttnn.bfloat16,
+            device=self.ttnn_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Run refiner denoising loop
+        for t in timesteps:
+            scaled_latents = scheduler.scale_model_input(latents, t)
+
+            torch_timestep_tensor = torch.tensor([t], dtype=torch.float32)
+            ttnn_timestep_tensor = ttnn.from_torch(
+                torch_timestep_tensor,
+                dtype=ttnn.bfloat16,
+                device=self.ttnn_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Unconditional pass
+            ttnn_latents_uncond = ttnn.from_torch(
+                scaled_latents,
+                dtype=ttnn.bfloat16,
+                device=self.ttnn_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            B, C, H, W = list(ttnn_latents_uncond.shape)
+            ttnn_latents_uncond = ttnn.permute(ttnn_latents_uncond, (0, 2, 3, 1))
+            ttnn_latents_uncond = ttnn.reshape(ttnn_latents_uncond, (B, 1, H * W, C))
+
+            noise_uncond, _ = self.tt_refiner_unet.forward(
+                ttnn_latents_uncond,
+                [B, C, H, W],
+                timestep=ttnn_timestep_tensor,
+                encoder_hidden_states=ttnn_encoder_hidden_states_uncond,
+                time_ids=ttnn_time_ids_uncond,
+                text_embeds=ttnn_text_embeds_uncond,
+            )
+
+            # Conditional pass
+            ttnn_latents_cond = ttnn.from_torch(
+                scaled_latents,
+                dtype=ttnn.bfloat16,
+                device=self.ttnn_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn_latents_cond = ttnn.permute(ttnn_latents_cond, (0, 2, 3, 1))
+            ttnn_latents_cond = ttnn.reshape(ttnn_latents_cond, (B, 1, H * W, C))
+
+            noise_cond, _ = self.tt_refiner_unet.forward(
+                ttnn_latents_cond,
+                [B, C, H, W],
+                timestep=ttnn_timestep_tensor,
+                encoder_hidden_states=ttnn_encoder_hidden_states_cond,
+                time_ids=ttnn_time_ids_cond,
+                text_embeds=ttnn_text_embeds_cond,
+            )
+
+            # Convert back to torch tensors for CFG
+            noise_uncond = ttnn.to_torch(noise_uncond, mesh_composer=ttnn.ConcatMeshToTensor(self.ttnn_device, dim=0))
+            # Handle potential batch duplication from mesh
+            if noise_uncond.shape[0] == 2:
+                noise_uncond = noise_uncond[0:1]
+            noise_uncond = noise_uncond.reshape(B, H, W, C)
+            noise_uncond = torch.permute(noise_uncond, (0, 3, 1, 2))
+
+            noise_cond = ttnn.to_torch(noise_cond, mesh_composer=ttnn.ConcatMeshToTensor(self.ttnn_device, dim=0))
+            # Handle potential batch duplication from mesh
+            if noise_cond.shape[0] == 2:
+                noise_cond = noise_cond[0:1]
+            noise_cond = noise_cond.reshape(B, H, W, C)
+            noise_cond = torch.permute(noise_cond, (0, 3, 1, 2))
+
+            # CFG
+            noise_pred = noise_uncond + guidance_scale * (noise_cond - noise_uncond)
+
+            # Step scheduler
+            latents = scheduler.step(noise_pred, t, latents).prev_sample
+
+        return latents
 
     def __load_tt_components(self, pipeline_config):
         # Method for instantiating TT components based on the torch pipeline.
@@ -461,6 +792,24 @@ class TtSDXLPipeline(LightweightModule):
             )
         else:
             self.tt_text_encoder, self.tt_text_encoder_2 = None, None
+
+        # Load refiner UNet if needed
+        if pipeline_config.use_refiner:
+            logger.info("Loading refiner UNet...")
+            refiner_unet = UNet2DConditionModel.from_pretrained(
+                "stabilityai/stable-diffusion-xl-refiner-1.0",
+                torch_dtype=torch.float32,
+                use_safetensors=True,
+                subfolder="unet",
+            )
+            refiner_unet.eval()
+            refiner_state_dict = refiner_unet.state_dict()
+            self.tt_refiner_unet = TtRefinerUNet2DConditionModel(
+                self.ttnn_device,
+                refiner_state_dict,
+            )
+        else:
+            self.tt_refiner_unet = None
 
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("load_tt_componenets")

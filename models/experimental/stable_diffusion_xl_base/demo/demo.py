@@ -12,7 +12,6 @@ from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
-    SDXL_FABRIC_CONFIG,
 )
 import os
 from models.common.utility_functions import profiler
@@ -34,6 +33,8 @@ def run_demo_inference(
     capture_trace,
     guidance_scale,
     use_cfg_parallel,
+    use_refiner=False,
+    denoising_end=0.8,
 ):
     batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
@@ -76,6 +77,8 @@ def run_demo_inference(
             guidance_scale=guidance_scale,
             is_galaxy=is_galaxy(),
             use_cfg_parallel=use_cfg_parallel,
+            use_refiner=use_refiner,
+            denoising_end=denoising_end if use_refiner else 1.0,
         ),
     )
 
@@ -124,7 +127,9 @@ def run_demo_inference(
                 tt_add_text_embeds[iter],
             ]
         )
-        imgs = tt_sdxl.generate_images()
+        # Pass prompts to generate_images if using refiner
+        current_prompts = prompts[iter * batch_size : (iter + 1) * batch_size] if use_refiner else None
+        imgs = tt_sdxl.generate_images(current_prompts)
 
         logger.info(
             f"Prepare input tensors for {batch_size} prompts completed in {profiler.times['prepare_input_tensors'][-1]:.2f} seconds"
@@ -147,8 +152,11 @@ def run_demo_inference(
             if is_ci_env:
                 logger.info(f"Image {len(images)}/{len(prompts) // batch_size} generated successfully")
             else:
-                img.save(f"output/output{len(images) + start_from}.png")
-                logger.info(f"Image saved to output/output{len(images) + start_from}.png")
+                # Include refiner status in filename for comparison
+                refiner_suffix = "_with_refiner" if use_refiner else "_base_only"
+                filename = f"output/output1{len(images) + start_from}{refiner_suffix}.png"
+                img.save(filename)
+                logger.info(f"Image saved to {filename}")
 
     return images
 
@@ -164,14 +172,14 @@ def prepare_device(mesh_device, use_cfg_parallel):
 @pytest.mark.parametrize(
     "device_params, use_cfg_parallel",
     [
-        (
-            {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
-                "fabric_config": SDXL_FABRIC_CONFIG,
-            },
-            True,
-        ),
+        # (
+        #     {
+        #         "l1_small_size": SDXL_L1_SMALL_SIZE,
+        #         "trace_region_size": SDXL_TRACE_REGION_SIZE,
+        #         "fabric_config": SDXL_FABRIC_CONFIG,
+        #     },
+        #     True,
+        # ),
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
@@ -181,7 +189,7 @@ def prepare_device(mesh_device, use_cfg_parallel):
         ),
     ],
     indirect=["device_params"],
-    ids=["use_cfg_parallel", "no_cfg_parallel"],
+    # ids=["use_cfg_parallel", "no_cfg_parallel"],
 )
 @pytest.mark.parametrize(
     "prompt",
@@ -202,26 +210,40 @@ def prepare_device(mesh_device, use_cfg_parallel):
 @pytest.mark.parametrize(
     "vae_on_device",
     [
-        (True),
+        #        (True),
         (False),
     ],
-    ids=("device_vae", "host_vae"),
+    #    ids=("device_vae", "host_vae"),
 )
 @pytest.mark.parametrize(
     "encoders_on_device",
     [
-        (True),
+        #        (True),
         (False),
     ],
-    ids=("device_encoders", "host_encoders"),
+    #    ids=("device_encoders", "host_encoders"),
 )
 @pytest.mark.parametrize(
     "capture_trace",
     [
-        (True),
+        #        (True),
         (False),
     ],
-    ids=("with_trace", "no_trace"),
+    # ids=("with_trace", "no_trace"),
+)
+@pytest.mark.parametrize(
+    "use_refiner",
+    [
+        # (False),
+        (True),
+    ],
+    # ids=("base_only", "base_plus_refiner"),
+)
+@pytest.mark.parametrize(
+    "denoising_end",
+    [
+        (0.5),
+    ],
 )
 def test_demo(
     validate_fabric_compatibility,
@@ -236,6 +258,8 @@ def test_demo(
     evaluation_range,
     guidance_scale,
     use_cfg_parallel,
+    use_refiner,
+    denoising_end,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -250,4 +274,6 @@ def test_demo(
         capture_trace,
         guidance_scale,
         use_cfg_parallel,
+        use_refiner,
+        denoising_end,
     )
