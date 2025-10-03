@@ -296,29 +296,29 @@ MetalContext::~MetalContext() {
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
 Cluster& MetalContext::get_cluster() {
-    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    TT_FATAL(cluster_, "Trying to get cluster before initializing it.");
     return *cluster_;
 }
 
 const llrt::RunTimeOptions& MetalContext::rtoptions() const { return rtoptions_; }
 
 const Cluster& MetalContext::get_cluster() const {
-    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    TT_FATAL(cluster_, "Trying to get cluster before initializing it.");
     return *cluster_;
 }
 
 const Hal& MetalContext::hal() const {
-    TT_FATAL(hal_, "Trying to get hal before intializing it.");
+    TT_FATAL(hal_, "Trying to get hal before initializing it.");
     return *hal_;
 }
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
-    TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before intializing it.");
+    TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;
 }
 
 DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
-    TT_FATAL(dispatch_query_manager_, "Trying to get dispatch_query_manager before intializing it.");
+    TT_FATAL(dispatch_query_manager_, "Trying to get dispatch_query_manager before initializing it.");
     return *dispatch_query_manager_;
 }
 
@@ -328,7 +328,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
     auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
-    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before intializing it.", core_type);
+    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
     return *mem_map;
 }
 
