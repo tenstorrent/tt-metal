@@ -19,6 +19,7 @@ Device
    ttnn.format_output_tensor
    ttnn.pad_to_tile_shape
 
+
 Memory Config
 *************
 
@@ -28,11 +29,6 @@ Memory Config
    :template: function.rst
 
    ttnn.create_sharded_memory_config
-   ttnn.interleaved_to_sharded
-   ttnn.interleaved_to_sharded_partial
-   ttnn.reshard
-   ttnn.sharded_to_interleaved
-   ttnn.sharded_to_interleaved_partial
 
 
 Operations
@@ -92,6 +88,7 @@ Tensor Creation
    ttnn.complex_tensor
    ttnn.sampling
    ttnn.uniform
+
 
 Matrix Multiplication
 =====================
@@ -322,6 +319,7 @@ Pointwise Unary
    ttnn.alt_complex_rotate90
    ttnn.plus_one
 
+
 Pointwise Binary
 ================
 
@@ -415,6 +413,7 @@ Pointwise Binary
    ttnn.min_bw
    ttnn.max_bw
 
+
 Pointwise Ternary
 =================
 
@@ -433,6 +432,7 @@ Pointwise Ternary
    ttnn.where_bw
    ttnn.lerp_bw
 
+
 Losses
 ======
 
@@ -443,6 +443,7 @@ Losses
 
    ttnn.l1_loss
    ttnn.mse_loss
+
 
 Reduction
 =========
@@ -466,6 +467,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.cumsum
+
 
 Data Movement
 =============
@@ -513,6 +515,7 @@ Data Movement
    ttnn.sort
    ttnn.view
 
+
 Normalization
 =============
 
@@ -534,6 +537,7 @@ Normalization
    ttnn.softmax_in_place
    ttnn.scale_mask_softmax_in_place
    ttnn.scale_causal_mask_hw_dims_softmax_in_place
+
 
 Normalization Program Configs
 =============================
@@ -596,6 +600,7 @@ Moreh Operations
    ttnn.moreh_softmin
    ttnn.moreh_softmin_backward
 
+
 Transformer
 ===========
 
@@ -624,6 +629,7 @@ Transformer
    ttnn.moe
    ttnn.moe_expert_token_remap
 
+
 CCL
 ===
 
@@ -638,6 +644,7 @@ CCL
    ttnn.mesh_partition
    ttnn.point_to_point
 
+
 Embedding
 =========
 
@@ -647,6 +654,7 @@ Embedding
    :template: function.rst
 
    ttnn.embedding
+
 
 Convolution
 ===========
@@ -673,6 +681,7 @@ Convolution
    ttnn.Conv2dConfig
    ttnn.Conv2dSliceConfig
 
+
 Pooling
 =======
 
@@ -687,6 +696,7 @@ Pooling
    ttnn.adaptive_max_pool2d
    ttnn.avg_pool2d
 
+
 Vision
 ========
 
@@ -697,6 +707,7 @@ Vision
 
    ttnn.upsample
    ttnn.grid_sample
+
 
 KV Cache
 ========
