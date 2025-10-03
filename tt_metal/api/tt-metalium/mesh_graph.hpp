@@ -133,6 +133,8 @@ public:
 
     std::vector<MeshId> get_mesh_ids() const;
 
+    std::vector<MeshId> get_adjacent_meshes(MeshId mesh_id) const;
+
     // Get the chip ids for a given mesh_id
     // If host_rank is provided, return the chip ids for the submesh for that host rank
     // Otherwise, return the chip ids for the entire mesh
