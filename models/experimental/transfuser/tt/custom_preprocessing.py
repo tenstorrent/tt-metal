@@ -299,6 +299,7 @@ def custom_preprocessor(
             )
     elif isinstance(model, Bottleneck):
         # Handle standalone Bottleneck model
+        print(model)
 
         # conv1 (1x1 convolution)
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv1.conv, model.conv1.bn)
@@ -333,7 +334,11 @@ def custom_preprocessor(
         )
 
         # Downsample
-        if hasattr(model, "downsample") and model.downsample is not None:
+        if (
+            hasattr(model, "downsample")
+            and model.downsample is not None
+            and model.downsample.__class__.__name__ != "Identity"
+        ):
             weight, bias = fold_batch_norm2d_into_conv2d(model.downsample[0], model.downsample[1])
             parameters["downsample"] = {}
             parameters["downsample"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)

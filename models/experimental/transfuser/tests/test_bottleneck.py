@@ -97,7 +97,7 @@ def preprocess_parameters_for_ttnn(torch_model, device):
     "in_chs, out_chs, stride, input_size",
     [
         (32, 72, 2, (1, 32, 80, 352)),  # stage 1 DS
-        # (72, 72, 1, (1, 72, 40, 176)),  # stage 1 NDS
+        (72, 72, 1, (1, 72, 40, 176)),  # stage 1 NDS
     ],
 )
 def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size):
@@ -125,14 +125,13 @@ def test_regnet_bottleneck_pcc(in_chs, out_chs, stride, input_size):
 
         model_config = {
             "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
-            "WEIGHTS_DTYPE": ttnn.bfloat8_b,
-            "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
+            "WEIGHTS_DTYPE": ttnn.bfloat16,
+            "ACTIVATIONS_DTYPE": ttnn.bfloat16,
         }
-        downsample = False
-        if in_chs == out_chs and stride == 1:
-            downsample = True
-        print(f"downsample block bool check {downsample =}")
         downsample = True
+        if in_chs == out_chs and stride == 1:
+            downsample = False
+        print(f"downsample block bool check {downsample =}")
 
         bottle_ratio = 1.0
         group_size = 24
