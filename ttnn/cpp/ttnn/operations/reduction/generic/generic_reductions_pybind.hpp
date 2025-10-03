@@ -22,18 +22,18 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
         If no dimension is provided, {0} is computed over all dimensions yielding a single value.
 
             Args:
-                input_a (ttnn.Tensor): the input tensor.
-                dim (number): dimension value to reduce over.
-                keepdim (bool, optional): keep original dimension size. Defaults to `False`.
+                - input_a (ttnn.Tensor): the input tensor.
+                - dim (number): dimension value to reduce over.
+                - keepdim (bool, optional): keep original dimension size. Defaults to `False`.
 
             Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                compute_kernel_config (ttnn.ComputeKernelConfig, optional): Compute kernel configuration for the operation. Defaults to `None`.
-                scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
-                correction (bool, optional): Applies only to std - whether to apply Bessel's correction (i.e. N-1). Defaults to `True`.
+                - memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                - compute_kernel_config (ttnn.ComputeKernelConfig, optional): Compute kernel configuration for the operation. Defaults to `None`.
+                - scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
+                - correction (bool, optional): Applies only to std - whether to apply Bessel's correction (i.e. N-1). Defaults to `True`.
 
             Returns:
-                ttnn.Tensor: the output tensor.
+                - ttnn.Tensor: the output tensor.
 
             Note:
                 The input tensor supports the following data types and layouts:
