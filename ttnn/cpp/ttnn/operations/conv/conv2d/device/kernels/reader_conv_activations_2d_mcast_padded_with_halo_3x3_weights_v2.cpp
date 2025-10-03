@@ -127,7 +127,6 @@ void kernel_main() {
 #endif
             if (is_sender_core) {
                 uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_row_major_bfloat16);
-                DPRINT << "READER: CB ADDR " << get_write_ptr(cb_id_act_row_major_bfloat16) << ENDL();
 #ifdef SPLIT_READER_OVERLAPPED
                 noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
                 noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);

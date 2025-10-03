@@ -938,16 +938,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
             const uint32_t act_cb_block_cnt = get_cb_info_by_name(cb_info, Conv2dCb::ACT).num_pages /
                                               (act_block_num_tiles_split + act_block_num_tiles_split_last);
 
-            log_info(tt::LogOp, "split_reader_overlapped: {}", split_reader_overlapped);
-            log_info(tt::LogOp, "act_cb_id_stride: {}", act_cb_id_stride);
-            log_info(tt::LogOp, "act_cb_block_cnt: {}", act_cb_block_cnt);
-            log_info(
-                tt::LogOp, "act_split_reader_sync_first_semaphore_id: {}", act_split_reader_sync_first_semaphore_id);
-            log_info(
-                tt::LogOp, "act_split_reader_sync_second_semaphore_id: {}", act_split_reader_sync_second_semaphore_id);
-            log_info(tt::LogOp, "act_block_num_tiles_split: {}", act_block_num_tiles_split);
-            log_info(tt::LogOp, "act_block_num_tiles_split_last: {}", act_block_num_tiles_split_last);
-            log_info(tt::LogOp, "halo_output_df tile_size: {}", tt::tile_size(halo_output_df));
             split_reader_args.push_back(act_split_reader_sync_first_semaphore_id);
             split_reader_args.push_back(act_split_reader_sync_second_semaphore_id);
             split_reader_args.push_back(act_block_num_tiles_split * tt::tile_size(halo_output_df));
