@@ -16,6 +16,7 @@ from models.demos.yolov11m.reference import yolov11
 import ttnn
 from models.demos.yolov11m.tt import ttnn_yolov11
 from models.demos.yolov11m.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
+from models.demos.yolov11m.tt.common import analyze_tensor_precision
 
 
 def preprocess_image(image_path, target_size=(320, 320)):
@@ -281,6 +282,10 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             input_tensor, original_size = preprocess_image(image_path)
             if input_tensor is None:
                 continue
+                
+            # 🔍 PRECISION TRACKING: Analyze preprocessed image tensor
+            print(f"\n🔍 [IMAGE PREPROCESSING] Analysis:")
+            analyze_tensor_precision(input_tensor, "IMAGE_PREPROCESSING", "AFTER_PIL_TRANSFORMS")
                 
             # Run PyTorch inference
             with torch.no_grad():

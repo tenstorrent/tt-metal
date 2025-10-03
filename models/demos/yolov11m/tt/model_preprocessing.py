@@ -8,7 +8,7 @@ from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_m
 
 import ttnn
 from models.demos.yolov11m.reference.yolov11 import Conv, YoloV11
-from models.demos.yolov11m.tt.common import get_mesh_mappers
+from models.demos.yolov11m.tt.common import get_mesh_mappers, analyze_tensor_precision
 
 
 def create_yolov11_input_tensors(
@@ -19,15 +19,25 @@ def create_yolov11_input_tensors(
     
     # Use provided input tensor or generate random data as fallback
     if input_tensor is not None:
+        # 🔍 PRECISION TRACKING: Analyze original input tensor
+        analyze_tensor_precision(input_tensor, "PREPROCESSING", "ORIGINAL_INPUT")
+        
         torch_input_tensor = input_tensor
         # Ensure the tensor has the right batch size for multi-device
         if torch_input_tensor.shape[0] != batch * device.get_num_devices():
             # Repeat the tensor if needed for multi-device setup
             torch_input_tensor = torch_input_tensor.repeat(device.get_num_devices(), 1, 1, 1)
+            analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "AFTER_REPEAT")
     else:
         torch_input_tensor = torch.randn(batch * device.get_num_devices(), input_channels, input_height, input_width)
+        analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "RANDOM_FALLBACK")
     if is_sub_module:
+        # 🔍 PRECISION TRACKING: Sub-module path (not used in main model)
+        analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "BEFORE_SUB_MODULE_PERMUTE")
+        
         ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
+        analyze_tensor_precision(ttnn_input_tensor, "PREPROCESSING", "AFTER_SUB_MODULE_PERMUTE")
+        
         ttnn_input_tensor = torch.reshape(
             ttnn_input_tensor,
             (
@@ -37,19 +47,36 @@ def create_yolov11_input_tensors(
                 ttnn_input_tensor.shape[-1],
             ),
         )
+        analyze_tensor_precision(ttnn_input_tensor, "PREPROCESSING", "AFTER_SUB_MODULE_RESHAPE")
+        
         ttnn_input_tensor = ttnn.from_torch(
             ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, mesh_mapper=inputs_mesh_mapper
         )
+        # Convert back to torch for analysis
+        ttnn_torch_converted = ttnn.to_torch(ttnn_input_tensor)
+        analyze_tensor_precision(ttnn_torch_converted, "PREPROCESSING", "AFTER_SUB_MODULE_TTNN_CONVERSION_bfloat8_b")
     else:
+        # 🔍 PRECISION TRACKING: Main module path (used by actual model)
+        analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "BEFORE_MAIN_MODULE_PROCESSING")
+        
         n, c, h, w = torch_input_tensor.shape
+        print(f"🔍 [PREPROCESSING] Original tensor shape: {torch_input_tensor.shape}")
+        print(f"🔍 [PREPROCESSING] Original channels: {c}")
+        
         if c == 3:
             c = 16
+            print(f"🔍 [PREPROCESSING] Channels will be padded from 3 to 16 during model processing")
         n = n // num_devices if n // num_devices != 0 else n
+        
+        print(f"🔍 [PREPROCESSING] Memory config shape: [{n}, {c}, {h}, {w}]")
+        print(f"🔍 [PREPROCESSING] Converting to TTNN with dtype=bfloat16")
+        
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
+        
         ttnn_input_tensor = ttnn.from_torch(
             torch_input_tensor,
             dtype=ttnn.bfloat16,
@@ -58,6 +85,10 @@ def create_yolov11_input_tensors(
             memory_config=input_mem_config,
             mesh_mapper=inputs_mesh_mapper,
         )
+        
+        # 🔍 PRECISION TRACKING: Analyze after TTNN conversion
+        ttnn_torch_converted = ttnn.to_torch(ttnn_input_tensor)
+        analyze_tensor_precision(ttnn_torch_converted, "PREPROCESSING", "AFTER_MAIN_MODULE_TTNN_CONVERSION_bfloat16")
     return torch_input_tensor, ttnn_input_tensor
 
 
