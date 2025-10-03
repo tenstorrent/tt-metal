@@ -25,12 +25,17 @@ using namespace tt::tt_fabric;
 //   1: PAGE_SIZE
 //
 // RT args (must match host):
-//   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
-//   1: dst_mesh_id    (u32)  // logical (truncated to u16)
-//   2: dst_dev_id     (u32)  // logical (truncated to u16)
-//   3: rx_noc_x       (u32)  // receiver worker XY (for unicast completion)
-//   4: rx_noc_y       (u32)
-//   5: sem_l1_addr    (u32)  // receiver L1 semaphore address (unicast completion)
+//   0:  dst_base         (u32)
+//   1:  dst1_mesh_id     (u32)  // logical → u16
+//   2:  dst1_dev_id      (u32)  // logical → u16
+//   3:  rx1_noc_x        (u32)
+//   4:  rx1_noc_y        (u32)
+//   5:  sem1_l1_addr     (u32)
+//   6:  dst2_mesh_id     (u32)  // logical → u16
+//   7:  dst2_dev_id      (u32)  // logical → u16
+//   8:  rx2_noc_x        (u32)
+//   9:  rx2_noc_y        (u32)
+//   10: sem2_l1_addr     (u32)
 //   … fabric-connection args … (inserted by append_fabric_connection_rt_args on host)
 //   … then optional Phase-A diagnostics:
 //      e_hops (u32), w_hops (u32), n_hops (u32), s_hops (u32)
@@ -44,11 +49,18 @@ void kernel_main() {
 
     size_t idx = 0;
     const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
-    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint16_t dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
-    const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
-    const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
+    // Receiver #1
+    const uint16_t dst1_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst1_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint32_t rx1_noc_x = get_arg_val<uint32_t>(idx++);
+    const uint32_t rx1_noc_y = get_arg_val<uint32_t>(idx++);
+    const uint32_t sem1_l1_addr = get_arg_val<uint32_t>(idx++);
+    // Receiver #2
+    const uint16_t dst2_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst2_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint32_t rx2_noc_x = get_arg_val<uint32_t>(idx++);
+    const uint32_t rx2_noc_y = get_arg_val<uint32_t>(idx++);
+    const uint32_t sem2_l1_addr = get_arg_val<uint32_t>(idx++);
 
     // Build the fabric connection next (these args were appended by the host
     // right after the fixed 6 args).
@@ -103,16 +115,22 @@ void kernel_main() {
 
     noc_async_writes_flushed();
 
-    // Final signal: bump receiver semaphore so the receiver kernel exits.
-    // In this benchmark we always have a completion semaphore.
-    ASSERT(sem_l1_addr != 0);
+    // Final signals: bump both receiver semaphores so both RX wait kernels exit.
+    ASSERT(sem1_l1_addr != 0);
+    ASSERT(sem2_l1_addr != 0);
 
-    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
+    const uint64_t sem1_noc = safe_get_noc_addr(rx1_noc_x, rx1_noc_y, sem1_l1_addr, /*NOC_INDEX=*/0);
+    const uint64_t sem2_noc = safe_get_noc_addr(rx2_noc_x, rx2_noc_y, sem2_l1_addr, /*NOC_INDEX=*/0);
 
-    // Keep completion as unicast to the single receiver so the RX wait kernel can exit
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
-    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+    // Completion to RX#1
+    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst1_dev_id, /*dst_mesh_id=*/dst1_mesh_id);
+    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem1_noc, /*inc=*/1, /*width_bits=*/32));
+    sender.wait_for_empty_write_slot();
+    sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 
+    // Completion to RX#2
+    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst2_dev_id, /*dst_mesh_id=*/dst2_mesh_id);
+    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem2_noc, /*inc=*/1, /*width_bits=*/32));
     sender.wait_for_empty_write_slot();
     sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 

@@ -100,14 +100,23 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
 
     tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
     tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
+    tt::tt_fabric::FabricNodeId dst2{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip2};
 
     chip_id_t src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
+    chip_id_t dst2_phys = cp.get_physical_chip_id_from_fabric_node_id(dst2);
 
     tt::tt_metal::IDevice* src_dev = nullptr;
     tt::tt_metal::IDevice* dst_dev = nullptr;
+    tt::tt_metal::IDevice* dst2_dev = nullptr;
     if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
         return PerfPoint{};
+    }
+    {
+        tt::tt_metal::IDevice* dummy = nullptr;
+        if (!lookup_devices_or_fail(src_phys, dst2_phys, dummy, dst2_dev)) {
+            return PerfPoint{};
+        }
     }
 
     if (!validate_workload_or_fail(p)) {
@@ -115,6 +124,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     }
 
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+    tt::tt_metal::CoreCoord rx2_xy = dst2_dev->worker_core_from_logical_core(p.receiver_core2);
 
     // --- IO buffers & initialization ---
     namespace Dist = tt::tt_metal::distributed;
@@ -133,6 +143,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     };
     Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
     Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
+    Dist::MeshCoordinate dst_coord2 = coord_of_phys(dst2_phys);
 
     // MeshBuffer-based IO
     Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -151,6 +162,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     auto& mcq = mesh->mesh_command_queue();
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord2, /*blocking=*/true);
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
@@ -182,10 +194,14 @@ Notes:
     // Global semaphore so a remote chip can signal it.
     // Fabric guarantees payload is visible before the bump is seen.
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::Program receiver_prog2 = tt::tt_metal::CreateProgram();
     static std::optional<tt::tt_metal::GlobalSemaphore> gsemA;
     static std::optional<tt::tt_metal::GlobalSemaphore> gsemB;
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsemA2;
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsemB2;
     // Create the semaphore on the MeshDevice at exactly the receiver logical core.
     tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
+    tt::tt_metal::CoreRangeSet rx_core_set2(tt::tt_metal::CoreRange(p.receiver_core2, p.receiver_core2));
     if (!gsemA) {
         gsemA = tt::tt_metal::CreateGlobalSemaphore(
             mesh.get(),
@@ -198,9 +214,23 @@ Notes:
             rx_core_set,
             /*initial_value=*/0);
     }
+    if (!gsemA2) {
+        gsemA2 = tt::tt_metal::CreateGlobalSemaphore(
+            mesh.get(),
+            rx_core_set2,
+            /*initial_value=*/0);
+    }
+    if (!gsemB2) {
+        gsemB2 = tt::tt_metal::CreateGlobalSemaphore(
+            mesh.get(),
+            rx_core_set2,
+            /*initial_value=*/0);
+    }
 
     static uint32_t sem_sel = 0;
     auto& gsem = (sem_sel++ & 1) ? *gsemB : *gsemA;
+    static uint32_t sem_sel2 = 0;
+    auto& gsem2 = (sem_sel2++ & 1) ? *gsemB2 : *gsemA2;
 
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/all_gather/kernels/";
@@ -212,6 +242,15 @@ Notes:
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
+
+    const tt::tt_metal::CoreCoord receiver_core2 = p.receiver_core2;
+    auto rx_wait_k2 = tt::tt_metal::CreateKernel(
+        receiver_prog2,
+        std::string(KDIR) + "all_gather_rx.cpp",
+        receiver_core2,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+    tt::tt_metal::SetRuntimeArgs(receiver_prog2, rx_wait_k2, receiver_core2, {gsem2.address(), 1u});
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
@@ -262,12 +301,17 @@ Notes:
     }
 
     std::vector<uint32_t> writer_rt = {
-        (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
-        (uint32_t)p.mesh_id,           // 1: dst_mesh_id (logical)
-        (uint32_t)p.dst_chip,          // 2: dst_dev_id  (logical)
-        (uint32_t)rx_xy.x,             // 3: receiver_noc_x
-        (uint32_t)rx_xy.y,             // 4: receiver_noc_y
-        (uint32_t)gsem.address()       // 5: receiver L1 semaphore addr
+        (uint32_t)dst_buf->address(),  // 0: dst_base
+        (uint32_t)p.mesh_id,           // 1: dst1_mesh_id (logical)
+        (uint32_t)p.dst_chip,          // 2: dst1_dev_id  (logical)
+        (uint32_t)rx_xy.x,             // 3: rx1_noc_x
+        (uint32_t)rx_xy.y,             // 4: rx1_noc_y
+        (uint32_t)gsem.address(),      // 5: sem1_l1_addr
+        (uint32_t)p.mesh_id,           // 6: dst2_mesh_id (logical)
+        (uint32_t)p.dst_chip2,         // 7: dst2_dev_id  (logical)
+        (uint32_t)rx2_xy.x,            // 8: rx2_noc_x
+        (uint32_t)rx2_xy.y,            // 9: rx2_noc_y
+        (uint32_t)gsem2.address()      // 10: sem2_l1_addr
     };
 
     // Pack the fabric-connection runtime args for the writer kernel.
@@ -278,13 +322,15 @@ Notes:
 
     // -------------------------- end PROGRAM FACTORY --------------------------
 
-    // Phase A: simple E/W hops (single row); N/S = 0.
+    // Phase A: E/W branches to cover both receivers on the same row; N/S = 0.
     uint16_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
-    if (dst_coord[1] > src_coord[1]) {
-        e_hops = static_cast<uint16_t>(dst_coord[1] - src_coord[1]);
-    } else {
-        w_hops = static_cast<uint16_t>(src_coord[1] - dst_coord[1]);
-    }
+    auto col_src = src_coord[1];
+    auto col1 = dst_coord[1];
+    auto col2 = dst_coord2[1];
+    uint16_t max_e = (std::max(col1, col2) > col_src) ? static_cast<uint16_t>(std::max(col1, col2) - col_src) : 0;
+    uint16_t max_w = (std::min(col1, col2) < col_src) ? static_cast<uint16_t>(col_src - std::min(col1, col2)) : 0;
+    e_hops = max_e;
+    w_hops = max_w;
 
     // Append hops AFTER fabric connection args so the kernel’s parsing isn’t disturbed.
     writer_rt.push_back((uint32_t)e_hops);
@@ -297,17 +343,21 @@ Notes:
     // Build two workloads so the RX wait kernel is always running before TX starts.
     auto sender_workload = Dist::MeshWorkload();
     auto receiver_workload = Dist::MeshWorkload();
+    auto receiver_workload2 = Dist::MeshWorkload();
     sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
     receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
+    receiver_workload2.add_program(Dist::MeshCoordinateRange(dst_coord2), std::move(receiver_prog2));
 
     // 1) Warm-up outside capture: launch RX first so it's waiting, then TX
     Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
+    Dist::EnqueueMeshWorkload(mcq, receiver_workload2, /*blocking=*/false);
     Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
     // 2) Capture p.trace_iters enqueues back-to-back
     auto trace_id = Dist::BeginTraceCapture(mesh.get(), mcq.id());
     for (uint32_t i = 0; i < p.trace_iters; ++i) {
         // Maintain RX→TX order inside the capture as well
         Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
+        Dist::EnqueueMeshWorkload(mcq, receiver_workload2, /*blocking=*/false);
         Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);
     }
     Dist::EndTraceCapture(mesh.get(), mcq.id(), trace_id);
@@ -319,9 +369,12 @@ Notes:
     Dist::ReleaseTrace(mesh.get(), trace_id);
 
     // Read back and verify
-    std::vector<uint32_t> rx(n_words, 0u);
-    Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
-    verify_payload_words(rx, tx);
+    std::vector<uint32_t> rx1(n_words, 0u), rx2(n_words, 0u);
+    Dist::ReadShard(mcq, rx1, dst_buf, dst_coord, /*blocking=*/true);
+    Dist::ReadShard(mcq, rx2, dst_buf, dst_coord2, /*blocking=*/true);
+    verify_payload_words(rx1, tx);
+    verify_payload_words(rx2, tx);
+    ;
 
     // Perf point
     const double e2e_sec_total = std::chrono::duration<double>(t1 - t0).count();

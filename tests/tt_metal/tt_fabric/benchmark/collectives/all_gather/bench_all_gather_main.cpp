@@ -52,8 +52,9 @@ static void usage(const char* argv0) {
     const std::string text = fmt::format(
         R"(Usage:
   {bin} --src-dev <mesh:chip|chip> --dst-dev <mesh:chip|chip> --size <bytes>
+         [--dst2-dev <mesh:chip|chip>]
          [--page <bytes>] [--src-type <l1|dram>] [--dst-type <l1|dram>]
-         [--send-core x,y] [--recv-core x,y]
+         [--send-core x,y] [--recv-core x,y] [--recv2-core x,y]
          [--iters N] [--warmup N] [--trace-iters N]
          [--no-trace] [--enable-sync]
          [--csv <path>]
@@ -76,6 +77,13 @@ Examples:
         --send-core 0,0 --recv-core 0,0 \
         --iters 10 --warmup 1 --trace-iters 64 \
         --csv artifacts/all_gather.csv
+
+
+# Multicast to two receivers (chip 1 and chip 0), same recv core:
+  {bin} --src-dev 0:0 --dst-dev 0:1 --dst2-dev 0:0 --size 1048576 --page 4096 \
+        --send-core 0,0 --recv-core 0,0 --recv2-core 0,0 \
+        --iters 10 --warmup 1 --trace-iters 64 \
+        --csv artifacts/all_gather_mcast2.csv
 
 # Sweep multiple sizes via helper script:
   python tests/tt_metal/tt_fabric/benchmark/collectives/all_gather/run_all_gather_sweep.py \
@@ -116,7 +124,13 @@ static bool parse_xy(const std::string& s, int& x, int& y) {
 
 // Fills RunOptions + PerfParams + raw src/dst strings. Returns false on bad args.
 static bool parse_cli_or_usage(
-    int argc, char** argv, RunOptions& run, PerfParams& p, std::string& src_dev_str, std::string& dst_dev_str) {
+    int argc,
+    char** argv,
+    RunOptions& run,
+    PerfParams& p,
+    std::string& src_dev_str,
+    std::string& dst_dev_str,
+    std::string& dst2_dev_str) {
     std::string src_type = "dram";  // reserved
     std::string dst_type = "l1";    // reserved
 
@@ -135,6 +149,8 @@ static bool parse_cli_or_usage(
             src_dev_str = argv[++i];
         } else if (a == "--dst-dev" && need(i, 1)) {
             dst_dev_str = argv[++i];
+        } else if (a == "--dst2-dev" && need(i, 1)) {
+            dst2_dev_str = argv[++i];
         } else if (a == "--size" && need(i, 1)) {
             p.tensor_bytes = static_cast<uint32_t>(std::stoul(argv[++i]));
         } else if (a == "--page" && need(i, 1)) {
@@ -158,6 +174,13 @@ static bool parse_cli_or_usage(
                 return false;
             }
             p.receiver_core = {x, y};
+        } else if (a == "--recv2-core" && need(i, 1)) {
+            int x, y;
+            if (!parse_xy(argv[++i], x, y)) {
+                usage(argv[0]);
+                return false;
+            }
+            p.receiver_core2 = {x, y};
         } else if (a == "--iters" && need(i, 1)) {
             run.iters = std::stoi(argv[++i]);
         } else if (a == "--warmup" && need(i, 1)) {
@@ -181,8 +204,8 @@ static bool parse_cli_or_usage(
         return false;
     }
 
-    uint32_t src_mesh = 0, dst_mesh = 0;
-    int src_chip = 0, dst_chip = 0;
+    uint32_t src_mesh = 0, dst_mesh = 0, dst2_mesh = 0;
+    int src_chip = 0, dst_chip = 0, dst2_chip = 0;
     if (!parse_mesh_chip(src_dev_str, src_mesh, src_chip)) {
         usage(argv[0]);
         return false;
@@ -195,6 +218,20 @@ static bool parse_cli_or_usage(
     p.mesh_id = src_mesh;  // assume same mesh
     p.src_chip = static_cast<chip_id_t>(src_chip);
     p.dst_chip = static_cast<chip_id_t>(dst_chip);
+
+    // dst2: optional; default to self (src) if not provided
+    if (!dst2_dev_str.empty()) {
+        if (!parse_mesh_chip(dst2_dev_str, dst2_mesh, dst2_chip)) {
+            usage(argv[0]);
+            return false;
+        }
+        // You can sanity-check same mesh if desired:
+        // if (dst2_mesh != src_mesh) { usage(argv[0]); return false; }
+        p.dst_chip2 = static_cast<chip_id_t>(dst2_chip);
+    } else {
+        p.dst_chip2 = p.src_chip;
+        p.receiver_core2 = p.receiver_core;
+    }
 
     return true;
 }
@@ -229,24 +266,28 @@ void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const P
 int main(int argc, char** argv) {
     RunOptions run;
     PerfParams p;
-    std::string src_dev_str, dst_dev_str;
+    std::string src_dev_str, dst_dev_str, dst2_dev_str;
 
-    if (!parse_cli_or_usage(argc, argv, run, p, src_dev_str, dst_dev_str)) {
+    if (!parse_cli_or_usage(argc, argv, run, p, src_dev_str, dst_dev_str, dst2_dev_str)) {
         return 2;
     }
 
     log_info(
         tt::LogTest,
-        "Starting all gather bench: src={} dst={} sizeB={} pageB={} send_core=[{},{}] recv_core=[{},{}] iters={} "
+        "Starting all gather bench: src={} dst={} dst2={} sizeB={} pageB={} send_core=[{},{}] "
+        "recv_core=[{},{}] recv2_core=[{},{}] iters={} "
         "warmup={}",
         src_dev_str,
         dst_dev_str,
+        (dst2_dev_str.empty() ? fmt::format("{}:{}", p.mesh_id, (int)p.dst_chip2) : dst2_dev_str),
         p.tensor_bytes,
         p.page_size,
         p.sender_core.x,
         p.sender_core.y,
         p.receiver_core.x,
         p.receiver_core.y,
+        p.receiver_core2.x,
+        p.receiver_core2.y,
         run.iters,
         run.warmup);
 
