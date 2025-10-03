@@ -151,7 +151,7 @@ void ReduceScatterDeviceOperation::ReduceScatterProgram::override_runtime_argume
             coord,
             range.end_coord());
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        return update_runtime_arguments(
+        update_runtime_arguments(
             program,
             shared_variables.program_artifacts.reader_kernel_ids,
             shared_variables.program_artifacts.writer_kernel_ids,
