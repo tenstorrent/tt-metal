@@ -47,7 +47,7 @@ class TtnnYoloV11:
     def __call__(self, input, min_channels=16):
         n, c, h, w = input.shape
         channel_padding_needed = min_channels - c
-        
+
         # Only pad if we need more channels
         if channel_padding_needed > 0:
             # Use list format instead of tuples for ttnn.pad API compatibility
@@ -63,23 +63,12 @@ class TtnnYoloV11:
         x = self.conv2(self.device, x)
         x = self.c3k2_1(self.device, x)
 
-        # Move tensors to DRAM before conv3 for better memory management
-        # Use HEIGHT_SHARDED DRAM config to maintain sharding while using DRAM
-        dram_sharded_config = ttnn.create_sharded_memory_config(
-            x.shape,
-            ttnn.CoreGrid(y=8, x=8),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=False,
-            buffer_type=ttnn.BufferType.DRAM,
-        )
-
-        x = ttnn.to_memory_config(x, dram_sharded_config)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         x = self.conv3(self.device, x)
         x = self.c3k2_2(self.device, x)
-        x4 = ttnn.to_memory_config(x, dram_sharded_config)  # Use consistent sharded DRAM config
-        x = ttnn.to_memory_config(x, dram_sharded_config)   # Use consistent sharded DRAM config
+        x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # Use consistent sharded DRAM config
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # Use consistent sharded DRAM config
 
         # 🔍 DEBUGGING: Analyze conv5 layer properties
         print(f"🔍 [CONV5 LAYER DEBUG] Conv5 layer details:")
@@ -100,19 +89,19 @@ class TtnnYoloV11:
         print(f"    Layout: {x.get_layout()}")
         print(f"    Dtype: {x.get_dtype()}")
         print(f"    Is sharded: {x.is_sharded()}")
-        
+
         # Calculate expected output size for conv5
         batch_size, _, height_width, channels = x.shape
         print(f"    Input elements: {batch_size * height_width * channels}")
         input_memory_mb = (batch_size * height_width * channels * 2) / (1024 * 1024)  # bfloat16 = 2 bytes
         print(f"    Input memory: {input_memory_mb:.2f} MB")
         print(f"    L1 limit: 1.43 MB")
-        
+
         if input_memory_mb > 1.43:
             print(f"    ⚠️  WARNING: Input tensor size ({input_memory_mb:.2f}MB) exceeds L1 limit!")
         else:
             print(f"    ✅ Input tensor size ({input_memory_mb:.2f}MB) fits in L1")
-        
+
         print(f"    🔧 Input should be DRAM + HEIGHT_SHARDED for conv2d compatibility")
 
         x = self.conv5(self.device, x)
