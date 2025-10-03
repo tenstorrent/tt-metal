@@ -96,50 +96,6 @@ static std::vector<float> unpermute_proj_rows(
     return out;
 }
 
-static void validate_weight_distribution(const std::vector<float>& weights, const std::string& weight_name) {
-    if (weights.empty()) {
-        fmt::print("[WARNING] Weight {} is empty\n", weight_name);
-        return;
-    }
-
-    // Calculate basic statistics
-    float min_val = *std::min_element(weights.begin(), weights.end());
-    float max_val = *std::max_element(weights.begin(), weights.end());
-    float sum = std::accumulate(weights.begin(), weights.end(), 0.0f);
-    float mean = sum / weights.size();
-
-    // Calculate standard deviation
-    float sq_sum = std::inner_product(weights.begin(), weights.end(), weights.begin(), 0.0f);
-    float variance = sq_sum / weights.size() - mean * mean;
-    float std_dev = std::sqrt(variance);
-
-    // Count zeros and extreme values
-    int zero_count = std::count(weights.begin(), weights.end(), 0.0f);
-    int extreme_count = std::count_if(weights.begin(), weights.end(), [](float val) { return std::abs(val) > 10.0f; });
-
-    fmt::print(
-        "[WEIGHT_VALIDATION] {}: min={:.6f}, max={:.6f}, mean={:.6f}, std={:.6f}, zeros={}/{}, extreme_vals={}\n",
-        weight_name,
-        min_val,
-        max_val,
-        mean,
-        std_dev,
-        zero_count,
-        weights.size(),
-        extreme_count);
-
-    // Check for potential issues
-    if (zero_count > weights.size() * 0.5) {
-        fmt::print("[WARNING] Weight {} has >50% zeros, this may cause issues\n", weight_name);
-    }
-    if (extreme_count > 0) {
-        fmt::print(
-            "[WARNING] Weight {} has {} extreme values (>10.0), this may cause issues\n", weight_name, extreme_count);
-    }
-    if (std::abs(mean) > 1.0f) {
-        fmt::print("[WARNING] Weight {} has large mean ({:.6f}), this may cause issues\n", weight_name, mean);
-    }
-}
 }  // namespace
 
 namespace ttml::models::llama {
@@ -327,26 +283,6 @@ void Llama::load_from_safetensors(const std::filesystem::path& model_path) {
             load_model_from_safetensors(path, parameters, m_config);
         }
     }
-}
-
-// For LINEAR weights (everything except embeddings and tied-lm_head): require exact shape match.
-static std::vector<float> strict_copy_linear(
-    const std::vector<float>& flat,
-    int64_t rows,
-    int64_t cols,
-    int64_t target_rows,
-    int64_t target_cols,
-    fmt::string_view debug_name) {
-    if (rows != target_rows || cols != target_cols) {
-        throw std::runtime_error(fmt::format(
-            "[{}] Linear weight shape mismatch: src=({}x{}), tgt=({}x{})",
-            debug_name,
-            rows,
-            cols,
-            target_rows,
-            target_cols));
-    }
-    return flat;  // exact fit
 }
 
 void load_model_from_safetensors(
