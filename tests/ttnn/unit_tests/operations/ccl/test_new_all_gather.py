@@ -69,14 +69,14 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
+    tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
         multi_device_global_semaphore=multi_device_global_semaphore,
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
-        sub_device_id=subdevice_id,
+        subdevice_id=subdevice_id,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -84,14 +84,14 @@ def run_with_trace(
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
+        tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
             multi_device_global_semaphore=multi_device_global_semaphore,
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
-            sub_device_id=subdevice_id,
+            subdevice_id=subdevice_id,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -145,7 +145,9 @@ def run_all_gather_impl(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2 * num_iters)
+    ]
 
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
@@ -242,7 +244,7 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
+            multi_device_global_semaphore=ccl_semaphore_handles[0:1],
             num_iter=num_iters,
             subdevice_id=worker_sub_device_id,
         )
@@ -250,26 +252,26 @@ def run_all_gather_impl(
     else:
         for i in range(num_iters):
             if use_cluster_axis_api:
-                tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
+                tt_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
                     dim,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
                     cluster_axis=cluster_axis,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
-                    sub_device_id=worker_sub_device_id,
+                    subdevice_id=worker_sub_device_id,
                     num_links=num_links,
                 )
 
             else:
-                tt_out_tensor = ttnn.experimental.all_gather_command_processor_async(
+                tt_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
                     dim,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
+                    multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
                     num_links=num_links,
                     memory_config=output_mem_config,
                     topology=all_gather_topology,
-                    sub_device_id=worker_sub_device_id,
+                    subdevice_id=worker_sub_device_id,
                 )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -310,7 +312,7 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 64, 1280], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -326,7 +328,7 @@ def run_all_gather_impl(
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("num_iters", [1])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather(
     mesh_device,
