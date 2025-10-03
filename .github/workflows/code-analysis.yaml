@@ -14,11 +14,36 @@ jobs:
           USERS_RESPONSE=$(curl -s -H 'Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}' \
             'https://slack.com/api/users.list')
 
-          # Parse JSON to find user ID for Patrick Roberts
-          USER_ID=$(echo "$USERS_RESPONSE" | jq -r '.members[] | select(.real_name == "Patrick Roberts" or .profile.display_name == "Patrick Roberts" or .name == "Patrick Roberts") | .id' | head -1)
+          # Debug: Check if API call was successful
+          echo "API Response status:"
+          echo "$USERS_RESPONSE" | jq -r '.ok // "API call failed"'
+
+          # Check if the response has an error
+          if echo "$USERS_RESPONSE" | jq -e '.error' > /dev/null; then
+            echo "Slack API Error:"
+            echo "$USERS_RESPONSE" | jq -r '.error'
+            exit 1
+          fi
+
+          # Debug: List some users to see the structure
+          echo "Sample users (first 3):"
+          echo "$USERS_RESPONSE" | jq -r '.members[0:3] | .[] | "\(.name // "no-name") - \(.real_name // "no-real-name") - \(.profile.display_name // "no-display-name")"'
+
+          # Try to find user with more flexible matching
+          USER_ID=$(echo "$USERS_RESPONSE" | jq -r '
+            .members[]? |
+            select(
+              (.real_name // "" | test("Patrick.*Roberts"; "i")) or
+              (.profile.display_name // "" | test("Patrick.*Roberts"; "i")) or
+              (.name // "" | test("patrick"; "i"))
+            ) |
+            .id' | head -1)
 
           if [ -z "$USER_ID" ] || [ "$USER_ID" == "null" ]; then
-            echo "User Patrick Roberts not found"
+            echo "User Patrick Roberts not found. Trying alternative search..."
+            # List all users containing "patrick" (case insensitive)
+            echo "Users containing 'patrick':"
+            echo "$USERS_RESPONSE" | jq -r '.members[]? | select((.real_name // "" | test("patrick"; "i")) or (.profile.display_name // "" | test("patrick"; "i")) or (.name // "" | test("patrick"; "i"))) | "\(.name // "no-name") - \(.real_name // "no-real-name") - \(.profile.display_name // "no-display-name") - \(.id)"'
             exit 1
           fi
 
