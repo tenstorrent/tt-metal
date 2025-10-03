@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 
 import pytest
 import torch
@@ -16,10 +17,13 @@ from models.demos.gemma3.tt.model_config import ModelArgs, determine_device_name
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.ccl import TT_CCL
 
-NR_ITER_E2E = 1
 THRESHOLD_PERCENT = 5
 
 SAVE_NEW_PERF_TARGETS_AND_DEBUG_PRINT = False
+
+
+def strip_trailing_number(s: str) -> str:
+    return re.sub(r"\d+$", "", s)
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -30,17 +34,17 @@ SAVE_NEW_PERF_TARGETS_AND_DEBUG_PRINT = False
     indirect=True,
 )
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("nr_forward_iterations", [15])
-def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iteration):
-    profiler = BenchmarkProfiler(device=mesh_device)
-
-    keys_e2e = ["total_run", "model_load_and_initialization", "postprocessing_and_transfer"]
+@pytest.mark.parametrize("nr_forward_iterations", [2])
+@pytest.mark.parametrize("nr_e2e_iterations", [1])
+def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations, nr_e2e_iterations):
+    profiler = BenchmarkProfiler()
     key_model_forward = "model_forward"
 
     logger.info("Started profiling")
-    for cur_e2e_iteration in range(NR_ITER_E2E):
+    for cur_e2e_iteration in range(nr_e2e_iterations):
         if cur_e2e_iteration == 0:
-            nr_forward_iterations_actual = NR_FORWARD_ITERATIONS
+            # // cache = skontaj gde god se koristi nr_forward_iterations i onaj all caps i svi ti da li je tacno to taj koji treba da se koristi, takodje dodati u parametre ovaj e2e shit
+            nr_forward_iterations_actual = nr_forward_iterations
         else:
             nr_forward_iterations_actual = 1
 
@@ -56,10 +60,16 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iteration):
         profiler.end("total_run" + str(cur_e2e_iteration), iteration=cur_e2e_iteration)
 
     measurements = dict()
-    for key in keys_e2e + [key_model_forward + "_compile"]:
-        measurements[key] = [profiler.get_duration(key + str(i), i) for i in range(NR_ITER_E2E)]
+    keys_without_inference_with_nr = set(
+        [k for _, k in profiler.start_times.keys() if not k.startswith(key_model_forward)]
+    )
+    keys_without_inference = set(strip_trailing_number(k) for k in keys_without_inference_with_nr)
+
+    for key in keys_without_inference:
+        measurements[key] = [profiler.get_duration(key + str(i), i) for i in range(nr_e2e_iterations)]
+
     measurements[key_model_forward + "_inference"] = [
-        profiler.get_duration(key_model_forward + "_inference" + str(i), i) for i in range(NR_FORWARD_ITERATIONS - 1)
+        profiler.get_duration(key_model_forward + "_inference" + str(i), i) for i in range(nr_forward_iterations - 1)
     ]
     logger.info("Ended profiling")
 
@@ -85,7 +95,7 @@ def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iteration):
         helper_write_to_json(determine_device_name(mesh_device), measurements_summarised)
 
     targets = load_targets(
-        "models/demos/gemma3/tests/targets_test_benchmark_vision_cross_attention_transformer.json",
+        "models/demos/gemma3/tests/perf_targets/targets_test_perf_vision_cross_attention_transformer.json",
         device_type=determine_device_name(mesh_device),
     )
 
@@ -147,12 +157,12 @@ def run_model(mesh_device, batch_size, profiler, cur_e2e_iteration, nr_forward_i
             )  # i-1 instead of i because we want to be able to iterate from 0 so its more clean
             index_for_profiler = cur_forward_iteration - 1
 
-        torch.cuda.synchronize()
+        ttnn.synchronize_device(mesh_device)
         profiler.start(str_for_profiler, index_for_profiler)
 
         test_output = model(input_tensor)
 
-        torch.cuda.synchronize()
+        ttnn.synchronize_device(mesh_device)
         profiler.end(str_for_profiler, index_for_profiler)
 
     profiler.start("postprocessing_and_transfer" + str(cur_e2e_iteration), cur_e2e_iteration)
