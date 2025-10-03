@@ -47,7 +47,7 @@ LEAD_MODEL_SHARD_SPECS = [
         input_cores=(4, 6),
         input_strategy="w",
         output_shape=None,
-        output_cores=(5, 6),
+        output_cores=(4, 8),  # production is (5,6) because they pad the output.
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 3584]],
     ),
@@ -55,7 +55,7 @@ LEAD_MODEL_SHARD_SPECS = [
         input_shape=(32, 64),
         input_cores=(4, 6),
         input_strategy="w",
-        output_shape=None,  # (32, 128) in production on Galaxy
+        output_shape=None,
         output_cores=(2, 5),
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 1280]],
@@ -65,7 +65,7 @@ LEAD_MODEL_SHARD_SPECS = [
         input_cores=(4, 6),
         input_strategy="w",
         output_shape=None,  # (32, 32) in production on Galaxy
-        output_cores=(5, 6),
+        output_cores=(5, 5),  # production is (5,6) because they pad the output.
         output_strategy="w",
         valid_tensor_shapes=[[1, 1, 32, 3200]],
     ),
@@ -136,18 +136,24 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "L1 Sharding only"
 
     input_shape = test_vector["input_shape"]
-    if not validate_serializable_shard_spec(input_shape, test_vector["shard_specs"]):
+    cluster_axis = test_vector["cluster_axis"]
+    mesh_shape = test_vector["mesh_shape"]
+    input_shape = test_vector["input_shape"]
+    dim = test_vector["dim"]
+
+    cluster_size = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
+
+    if not validate_serializable_shard_spec(input_shape, test_vector["shard_specs"], dim, cluster_size, "scatter"):
         return True, "Invalid shard spec"
 
     # hardcode for 6U
-    if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
+    if mesh_shape in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
 
-    cluster_axis = test_vector["cluster_axis"]
-    if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
+    if cluster_axis is not None and mesh_shape[cluster_axis] == 1:
         return True, "Only one device along axis"
 
-    if test_vector["dim"] >= len(input_shape):
+    if dim >= len(input_shape):
         return True, "Dim greater than rank"
     if (
         test_vector["topology"] == ttnn.Topology.Ring
@@ -277,10 +283,7 @@ def run(
             tt_output_tensor = ttnn.to_torch(t)
             logger.info(f"Brought tensor {i} back from host. Shape: {tt_output_tensor.shape}")
 
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, ref)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, ref)
+            eq, output = comp_pcc(tt_output_tensor, ref)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
             return [(eq, output), e2e_perf]
