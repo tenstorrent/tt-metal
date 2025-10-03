@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_refiner.tt.components.group_normalization_layer import (
     GroupNormalizationLayer,
 )
@@ -11,7 +13,7 @@ from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_tra
 from .components.weight_loader import WeightLoader
 
 
-class TtTransformer2DModel:
+class TtTransformer2DModel(LightweightModule):
     def __init__(self, device, state_dict, module_path):
         super().__init__()
 

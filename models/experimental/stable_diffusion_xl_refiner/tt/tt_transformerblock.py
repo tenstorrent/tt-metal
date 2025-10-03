@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_refiner.tt.components.tt_components import TransformerBlockLayerNorm
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_feedforward import TtFeedForward
@@ -10,7 +12,7 @@ from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_tra
 from .components.weight_loader import WeightLoader
 
 
-class TtBasicTransformerBlock:
+class TtBasicTransformerBlock(LightweightModule):
     def __init__(
         self,
         device,

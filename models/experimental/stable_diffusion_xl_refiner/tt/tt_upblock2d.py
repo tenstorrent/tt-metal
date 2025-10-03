@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_upblock_config
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_resnetblock2d import TtResnetBlock2D
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_upsample2d import TtUpsample2D
 
 
-class TtUpBlock2D:
+class TtUpBlock2D(LightweightModule):
     def __init__(
         self,
         device,

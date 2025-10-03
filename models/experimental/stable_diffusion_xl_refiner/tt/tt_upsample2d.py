@@ -3,12 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_refiner.tt.components.convolution_layer import ConvolutionLayer
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_config import get_upsample_config
 from .components.weight_loader import WeightLoader
 
 
-class TtUpsample2D:
+class TtUpsample2D(LightweightModule):
     def __init__(
         self,
         device,
