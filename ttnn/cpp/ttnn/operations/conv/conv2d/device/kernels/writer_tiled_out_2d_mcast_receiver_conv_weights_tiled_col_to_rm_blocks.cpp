@@ -113,15 +113,14 @@ void kernel_main() {
             for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
 #ifdef SPLIT_READER
                 reader_idx = start_reader_idx;
-#ifdef SPLIT_READER_OVERLAPPED
-                noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
-                noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
-#else
+#ifndef SPLIT_READER_OVERLAPPED
                 cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 #endif
 
                 if (is_sender_core) {
 #ifdef SPLIT_READER_OVERLAPPED
+                    noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
+                    noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
 #else
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);

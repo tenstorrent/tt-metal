@@ -171,14 +171,13 @@ void kernel_main() {
             for (uint32_t height_block_index = 0; height_block_index < num_blocks_weight_h; height_block_index++) {
 #ifdef SPLIT_READER
                 reader_idx = start_reader_idx;
-#ifdef SPLIT_READER_OVERLAPPED
-                noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
-                noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
-#else
+#ifndef SPLIT_READER_OVERLAPPED
                 cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 #endif
                 if (is_sender_core) {
 #ifdef SPLIT_READER_OVERLAPPED
+                    noc_semaphore_wait(act_split_reader_sync_first_semaphore_addr_ptr, VALID);
+                    noc_semaphore_set(act_split_reader_sync_first_semaphore_addr_ptr, INVALID);
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
 #else
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
@@ -211,10 +210,10 @@ void kernel_main() {
 #ifndef SPLIT_READER_OVERLAPPED
                 cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 #endif
+#endif
                 if (skip_work) {
                     continue;
                 }
-#endif
                 // Compute height block offset once per outer loop iteration
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
@@ -281,10 +280,10 @@ void kernel_main() {
 #ifdef SPLIT_READER
             // Update reader index for next iteration (split reader increment)
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
-#endif
             if (skip_work) {
                 continue;
             }
+#endif
 #ifdef FUSE_BIAS
             if (load_bias) {
                 cb_reserve_back(bias_cb_id, bias_ntiles);
