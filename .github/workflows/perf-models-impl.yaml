@@ -266,14 +266,9 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Merge all the generated reports
         timeout-minutes: 10
-        uses: ./.github/actions/docker-run
-        with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: ${{ env.DOCKER_OPTS }}
-          run_args: |
-            # Merge all the generated reports
-            env python3 models/perf/merge_perf_results.py CHECK
+        run: |
+          # Merge all the generated reports
+          env python3 models/perf/merge_perf_results.py CHECK
         if: ${{ !cancelled() }}
 
       # TODO: Fix the pipeline before enabling notifications.
