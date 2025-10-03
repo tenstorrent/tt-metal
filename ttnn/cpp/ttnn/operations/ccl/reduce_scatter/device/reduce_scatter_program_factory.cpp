@@ -112,7 +112,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         mesh_coordinate,
         forward_coordinate,
         backward_coordinate,
-        tensor_return_value.at(0),
+        tensor_return_value.at(1),
         operation_attributes.dim,
         operation_attributes.num_links,
         target_ring_size,

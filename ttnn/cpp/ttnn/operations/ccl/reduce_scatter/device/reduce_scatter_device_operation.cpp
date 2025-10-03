@@ -27,7 +27,6 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
         "page_size {} must be divisible by alignment {}",
         page_size,
         input_tensor.buffer()->alignment());
-    TT_FATAL(operation_attributes.cluster_axis.has_value(), "cluster_axis must be set");
     TT_FATAL(operation_attributes.dim == 3, "dim must be 3");
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "input_tensor must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "input_tensor must have a buffer");
