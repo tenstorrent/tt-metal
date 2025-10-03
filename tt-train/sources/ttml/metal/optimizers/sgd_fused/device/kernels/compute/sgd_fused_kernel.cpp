@@ -27,10 +27,9 @@ constexpr auto cb_update_idx = tt::CBIndex::c_5;
 
 constexpr auto cb_output_idx = tt::CBIndex::c_16;
 
-constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
+constexpr uint32_t num_tiles_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
-constexpr uint32_t Wt = get_compile_time_arg_val(2);
-constexpr bool nesterov = get_compile_time_arg_val(3) != 0;
+constexpr bool nesterov = get_compile_time_arg_val(2) != 0;
 
 inline void pack_and_push_two_cbs(uint32_t cb_output_1, uint32_t cb_output_2, uint32_t block_size) {
     cb_reserve_back(cb_output_1, block_size);
@@ -57,103 +56,101 @@ void MAIN {
     init_sfpu(cb_grad_idx, cb_grad_idx);
     init_sfpu(cb_momentum_out_idx, cb_momentum_out_idx);
 
-    for (uint32_t row = 0; row < num_rows_per_core; ++row) {
-        for (uint32_t col = 0; col < Wt; col += block_size) {
-            cb_wait_front(cb_grad_idx, block_size);
-            cb_wait_front(cb_param_in_idx, block_size);
-            if (momentum != 0.0f) {
-                cb_wait_front(cb_momentum_in_idx, block_size);
-            }
-            tile_regs_acquire();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile_init(cb_grad_idx);
-                const uint32_t grad_register = block_idx;
-                copy_tile(cb_grad_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
-
-                // g_t <- g_t + weight_decay * theta_{t-1}
-                if (weight_decay != 0.0f) {
-                    copy_tile_init(cb_param_in_idx);
-                    const uint32_t theta_register = block_size + block_idx;
-                    copy_tile(cb_param_in_idx, /* tile_idx */ block_idx, /* register_idx */ theta_register);
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(theta_register, weight_decay);
-                    add_binary_tile_init();
-                    add_binary_tile(grad_register, theta_register, grad_register);
-                }
-
-                // g_t <- g_t * (1 - dampening)
-                if (one_minus_dampening != 1.0f) {
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(grad_register, one_minus_dampening);
-                }
-
-                if (momentum != 0.0f) {
-                    copy_tile_init(cb_momentum_in_idx);
-                    const uint32_t momentum_register = block_size + block_idx;
-                    copy_tile(cb_momentum_in_idx, /* tile_idx */ block_idx, /* register_idx */ momentum_register);
-
-                    // m_{t-1} * momentum
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(momentum_register, momentum);
-
-                    // m_t <- g_t + m_{t-1} * momentum
-                    add_binary_tile_init();
-                    add_binary_tile(grad_register, momentum_register, grad_register);
-                }
-            }
-            tile_regs_commit();
-            if (momentum != 0.0f) {
-                // One is written to cb_momentum_to_dram_idx and written in writer to DRAM
-                // The other is multiplied by learning rate and used to update parameters
-                pack_and_push_two_cbs(cb_momentum_out_idx, cb_momentum_to_dram_idx, block_size);
-                cb_pop_front(cb_momentum_in_idx, block_size);
-            } else {
-                pack_and_push_block(cb_momentum_out_idx, block_size);
-            }
-
-            // m_t in cb_momentum_out_idx
-            // apply learning rate
-            cb_wait_front(cb_momentum_out_idx, block_size);
-            tile_regs_acquire();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile_init(cb_momentum_out_idx);
-                const uint32_t update_register = block_idx;
-                copy_tile(cb_momentum_out_idx, /* tile_idx */ block_idx, /* register_idx */ update_register);
-                // Nesterov
-                if constexpr (nesterov == true) {
-                    // m_t * momentum
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(update_register, momentum);
-
-                    copy_tile_init(cb_grad_idx);
-                    const uint32_t grad_register = block_size + block_idx;
-                    copy_tile(cb_grad_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
-                    // g_t + m_t{t} * momentum
-                    add_binary_tile_init();
-                    add_binary_tile(grad_register, update_register, update_register);
-                }
-
-                // u_t <- learning_rate * (g_t + m_t * momentum) with nesterov OR
-                // u_t <- learning_rate * m_t otherwise
-                binop_with_scalar_tile_init();
-                mul_unary_tile(update_register, lr);
-            }
-            tile_regs_commit();
-            cb_pop_front(cb_grad_idx, block_size);
-            cb_pop_front(cb_momentum_out_idx, block_size);
-            pack_and_push_block(cb_update_idx, block_size);
-
-            cb_wait_front(cb_update_idx, block_size);
-            tile_regs_acquire();
-            sub_tiles_init(cb_param_in_idx, cb_update_idx);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                sub_tiles(cb_param_in_idx, cb_update_idx, block_idx, block_idx, block_idx);
-            }
-            tile_regs_commit();
-            cb_pop_front(cb_param_in_idx, block_size);
-            cb_pop_front(cb_update_idx, block_size);
-            pack_and_push_block(cb_output_idx, block_size);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_core; tile_idx += block_size) {
+        cb_wait_front(cb_grad_idx, block_size);
+        cb_wait_front(cb_param_in_idx, block_size);
+        if (momentum != 0.0f) {
+            cb_wait_front(cb_momentum_in_idx, block_size);
         }
+        tile_regs_acquire();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile_init(cb_grad_idx);
+            const uint32_t grad_register = block_idx;
+            copy_tile(cb_grad_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
+
+            // g_t <- g_t + weight_decay * theta_{t-1}
+            if (weight_decay != 0.0f) {
+                copy_tile_init(cb_param_in_idx);
+                const uint32_t theta_register = block_size + block_idx;
+                copy_tile(cb_param_in_idx, /* tile_idx */ block_idx, /* register_idx */ theta_register);
+                binop_with_scalar_tile_init();
+                mul_unary_tile(theta_register, weight_decay);
+                add_binary_tile_init();
+                add_binary_tile(grad_register, theta_register, grad_register);
+            }
+
+            // g_t <- g_t * (1 - dampening)
+            if (one_minus_dampening != 1.0f) {
+                binop_with_scalar_tile_init();
+                mul_unary_tile(grad_register, one_minus_dampening);
+            }
+
+            if (momentum != 0.0f) {
+                copy_tile_init(cb_momentum_in_idx);
+                const uint32_t momentum_register = block_size + block_idx;
+                copy_tile(cb_momentum_in_idx, /* tile_idx */ block_idx, /* register_idx */ momentum_register);
+
+                // m_{t-1} * momentum
+                binop_with_scalar_tile_init();
+                mul_unary_tile(momentum_register, momentum);
+
+                // m_t <- g_t + m_{t-1} * momentum
+                add_binary_tile_init();
+                add_binary_tile(grad_register, momentum_register, grad_register);
+            }
+        }
+        tile_regs_commit();
+        if (momentum != 0.0f) {
+            // One is written to cb_momentum_to_dram_idx and written in writer to DRAM
+            // The other is multiplied by learning rate and used to update parameters
+            pack_and_push_two_cbs(cb_momentum_out_idx, cb_momentum_to_dram_idx, block_size);
+            cb_pop_front(cb_momentum_in_idx, block_size);
+        } else {
+            pack_and_push_block(cb_momentum_out_idx, block_size);
+        }
+
+        // m_t in cb_momentum_out_idx
+        // apply learning rate
+        cb_wait_front(cb_momentum_out_idx, block_size);
+        tile_regs_acquire();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            copy_tile_init(cb_momentum_out_idx);
+            const uint32_t update_register = block_idx;
+            copy_tile(cb_momentum_out_idx, /* tile_idx */ block_idx, /* register_idx */ update_register);
+            // Nesterov
+            if constexpr (nesterov == true) {
+                // m_t * momentum
+                binop_with_scalar_tile_init();
+                mul_unary_tile(update_register, momentum);
+
+                copy_tile_init(cb_grad_idx);
+                const uint32_t grad_register = block_size + block_idx;
+                copy_tile(cb_grad_idx, /* tile_idx */ block_idx, /* register_idx */ grad_register);
+                // g_t + m_t{t} * momentum
+                add_binary_tile_init();
+                add_binary_tile(grad_register, update_register, update_register);
+            }
+
+            // u_t <- learning_rate * (g_t + m_t * momentum) with nesterov OR
+            // u_t <- learning_rate * m_t otherwise
+            binop_with_scalar_tile_init();
+            mul_unary_tile(update_register, lr);
+        }
+        tile_regs_commit();
+        cb_pop_front(cb_grad_idx, block_size);
+        cb_pop_front(cb_momentum_out_idx, block_size);
+        pack_and_push_block(cb_update_idx, block_size);
+
+        cb_wait_front(cb_update_idx, block_size);
+        tile_regs_acquire();
+        sub_tiles_init(cb_param_in_idx, cb_update_idx);
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            sub_tiles(cb_param_in_idx, cb_update_idx, block_idx, block_idx, block_idx);
+        }
+        tile_regs_commit();
+        cb_pop_front(cb_param_in_idx, block_size);
+        cb_pop_front(cb_update_idx, block_size);
+        pack_and_push_block(cb_output_idx, block_size);
     }
 }
 }  // namespace NAMESPACE

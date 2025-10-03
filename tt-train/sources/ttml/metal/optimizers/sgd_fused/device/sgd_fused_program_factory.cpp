@@ -82,24 +82,24 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* output_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
+    uint32_t num_tiles_per_core_group_1,
+    uint32_t num_tiles_per_core_group_2,
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
+        // Determine how many tiles this core will process
+        uint32_t num_tiles_per_core = 0;
         if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
+            num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
+            num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             TT_THROW("Core {} not in specified core ranges", core);
         }
 
-        // Reader kernel: (param_addr, grad_addr, momentum_buffer_addr, number_of_rows, offset_in_rows)
+        // Reader kernel: (param_addr, grad_addr, momentum_buffer_addr, number_of_tiles, offset_in_tiles)
         SetRuntimeArgs(
             program,
             kernels.reader,
@@ -107,8 +107,8 @@ void assign_per_core_runtime_args(
             {param_buffer->address(),
              grad_buffer->address(),
              momentum_buffer != nullptr ? momentum_buffer->address() : 0,
-             num_rows_per_core,
-             num_rows_written});
+             num_tiles_per_core,
+             num_tiles_written});
 
         // Compute kernel: (learning_rate)
         if (core_group_1.contains(core)) {
@@ -133,17 +133,17 @@ void assign_per_core_runtime_args(
             TT_THROW("Core {} not in specified core ranges", core);
         }
 
-        // Writer kernel: (dst_addr, momentum_buffer_addr, number_of_rows, offset_in_rows)
+        // Writer kernel: (dst_addr, momentum_buffer_addr, number_of_tiles, offset_in_tiles)
         SetRuntimeArgs(
             program,
             kernels.writer,
             core,
             {output_buffer->address(),
              momentum_buffer != nullptr ? momentum_buffer->address() : 0,
-             num_rows_per_core,
-             num_rows_written});
+             num_tiles_per_core,
+             num_tiles_written});
 
-        num_rows_written += num_rows_per_core;
+        num_tiles_written += num_tiles_per_core;
     }
 }
 
@@ -180,9 +180,7 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
 
     uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;  // <- number of tiles in inner dimension
-    uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
-    uint32_t total_rows_to_process = NC * Ht;
+    uint32_t total_tiles_to_process = padded_tensor_volume / tt::constants::TILE_HW;
 
     // get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -191,8 +189,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     // compile arguments
     uint32_t block_size = 4U;
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -254,9 +252,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     // -------------------------------------------------------------------------
     // Group 1 compile-time arguments
     std::vector<uint32_t> compute_group_1_args = {
-        num_rows_per_core_group_1,  // per_core_block_cnt
-        block_size,                 // per_core_block_size
-        Wt,                         // num_inner / TILE_W
+        num_tiles_per_core_group_1,  // per_core_block_cnt
+        block_size,                  // per_core_block_size
         static_cast<uint32_t>(nesterov)};
 
     kernels.compute_group_1 = create_compute_kernel(
@@ -264,9 +261,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
 
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_group_2_args = {
-            num_rows_per_core_group_2,  // per_core_block_cnt
-            block_size,                 // per_core_block_size
-            Wt,                         // num_inner / TILE_W
+            num_tiles_per_core_group_2,  // per_core_block_cnt
+            block_size,                  // per_core_block_size
             static_cast<uint32_t>(nesterov)};
         kernels.compute_group_2 = create_compute_kernel(
             program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/false);
@@ -289,8 +285,8 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
         output_buffer,
         num_cores,
         num_cores_y,
-        num_rows_per_core_group_1,
-        num_rows_per_core_group_2,
+        num_tiles_per_core_group_1,
+        num_tiles_per_core_group_2,
         core_group_1,
         core_group_2);
 
