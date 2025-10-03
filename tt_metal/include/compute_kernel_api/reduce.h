@@ -88,6 +88,11 @@ ALWI void reduce_max_row_init() {
 // clang-format on
 ALWI void reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }
 
+ALWI void reduce_max_row_uninit() {
+    PACK((llk_pack_reduce_mask_clear()));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit()));
+}
+
 // clang-format off
 /**
  * Performs a reduction operation *B = reduce(A)* using reduce_func for dimension reduction on a tile in the CB at a given index and writes the

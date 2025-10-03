@@ -80,11 +80,13 @@ void MAIN {
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {
             reduce_block_max_row_init<Wt>();
+            // asm volatile ("ebreak");
             acquire_dst();
             // Reduce across W dimension (cols) for this row using block-based reduce
             uint32_t row_start_index = nc * Ht * Wt + ht * Wt;  // Starting tile index for this row
             reduce_block_max_row<Wt>(tt::CBIndex::c_0, tt::CBIndex::c_2, row_start_index, reduce_dst_idx);
             // Pack result to output CB (implicit pack_tile behavior like reduce_c)
+            reduce_max_row_uninit();
             pack_tile(reduce_dst_idx, tt::CBIndex::c_16);
             release_dst();
         }
@@ -105,6 +107,5 @@ void MAIN {
 
     // Push all outputs at once
     cb_push_back(tt::CBIndex::c_16, output_tiles);
-    reduce_uninit();
 }
 }  // namespace NAMESPACE
