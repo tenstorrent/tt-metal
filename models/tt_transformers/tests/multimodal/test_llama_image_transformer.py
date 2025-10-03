@@ -75,7 +75,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     # config.vision_config.output_hidden_states = return_intermediate
 
     model = MllamaForConditionalGeneration.from_pretrained(
-        weights_path, device_map="auto", local_files_only=os.getenv("CI") == "true"
+        weights_path, device_map="auto", local_files_only=True
     )  # config=config,
     reference_model = model.model.vision_model.eval()
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
