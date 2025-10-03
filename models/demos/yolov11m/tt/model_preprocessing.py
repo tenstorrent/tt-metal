@@ -115,17 +115,40 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5, mesh_mapper=None)
 def custom_preprocessor(model, name, mesh_mapper=None):
     parameters = {}
     if isinstance(model, nn.Conv2d):
+        # 🔍 PRECISION TRACKING: Analyze original PyTorch weights before TTNN conversion
+        analyze_tensor_precision(model.weight, f"WEIGHT_CONVERSION-{name}", "PYTORCH_WEIGHT")
         parameters["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        # 🔍 PRECISION TRACKING: Analyze converted TTNN weights
+        analyze_tensor_precision(parameters["weight"], f"WEIGHT_CONVERSION-{name}", "TTNN_WEIGHT_float32")
+        
         if model.bias is not None:
+            # 🔍 PRECISION TRACKING: Analyze original PyTorch bias before TTNN conversion
+            analyze_tensor_precision(model.bias, f"BIAS_CONVERSION-{name}", "PYTORCH_BIAS")
             bias = model.bias.reshape((1, 1, 1, -1))
             parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+            # 🔍 PRECISION TRACKING: Analyze converted TTNN bias
+            analyze_tensor_precision(parameters["bias"], f"BIAS_CONVERSION-{name}", "TTNN_BIAS_float32")
 
     if isinstance(model, Conv):
+        # 🔍 PRECISION TRACKING: Analyze original PyTorch weights before batch norm folding
+        analyze_tensor_precision(model.conv.weight, f"CONV_WEIGHT_CONVERSION-{name}", "PYTORCH_CONV_WEIGHT")
+        if model.bn.bias is not None:
+            analyze_tensor_precision(model.bn.bias, f"BN_BIAS_CONVERSION-{name}", "PYTORCH_BN_BIAS")
+        
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv, model.bn)
+        # 🔍 PRECISION TRACKING: Analyze weights after batch norm folding
+        analyze_tensor_precision(weight, f"CONV_WEIGHT_CONVERSION-{name}", "AFTER_BN_FOLDING")
+        analyze_tensor_precision(bias, f"CONV_BIAS_CONVERSION-{name}", "AFTER_BN_FOLDING")
+        
         parameters["conv"] = {}
         parameters["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        # 🔍 PRECISION TRACKING: Analyze converted TTNN weights
+        analyze_tensor_precision(parameters["conv"]["weight"], f"CONV_WEIGHT_CONVERSION-{name}", "TTNN_WEIGHT_float32")
+        
         bias = bias.reshape((1, 1, 1, -1))
         parameters["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
+        # 🔍 PRECISION TRACKING: Analyze converted TTNN bias
+        analyze_tensor_precision(parameters["conv"]["bias"], f"CONV_BIAS_CONVERSION-{name}", "TTNN_BIAS_float32")
 
     return parameters
 

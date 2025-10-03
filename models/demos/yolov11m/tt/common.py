@@ -112,11 +112,15 @@ class Yolov11Conv2D:
 
         if "bias" in conv_pth and conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)
+            # 🔍 PRECISION TRACKING: Analyze loaded bias
+            analyze_tensor_precision(bias, f"WEIGHTS_BIAS-{self.in_channels}→{self.out_channels}", "LOADED_BIAS")
             self.bias = bias
         else:
             self.bias = None
 
         weight = ttnn.from_device(conv_pth.weight)
+        # 🔍 PRECISION TRACKING: Analyze loaded weights
+        analyze_tensor_precision(weight, f"WEIGHTS_BIAS-{self.in_channels}→{self.out_channels}", "LOADED_WEIGHTS")
         self.weight = weight
 
     def __call__(self, x):
@@ -187,8 +191,6 @@ class Yolov11Conv2D:
                 print(f"    🔧 Converted back to DRAM HEIGHT_SHARDED: {x.memory_config()}")
             except Exception as e:
                 print(f"    ⚠️  Failed to convert back to DRAM sharded, keeping interleaved: {e}")
-        else:
-            print(f"    ✅ No reshaping needed")
         
         print(f"🔍 [CONV2D DEBUG] Final output memory config: {x.memory_config()}")
         return x
