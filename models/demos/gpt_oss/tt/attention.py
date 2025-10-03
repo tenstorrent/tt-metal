@@ -62,6 +62,9 @@ class Attention:
         # Clean mesh mapping using MeshConfig
         col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
         row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
+        # if self.mesh_config.ep > 1:
+        #     col_mesh_mapper = self.mesh_config.shard_mapper(mesh_device, mesh_dims=(-2, -1))
+        #     row_mesh_mapper = self.mesh_config.shard_mapper(mesh_device, mesh_dims=(-1, -2))
 
         self.q_proj = ttnn.as_tensor(
             q_proj,
@@ -228,7 +231,6 @@ class Attention:
 
     def __call__(self, x: ttnn.Tensor, mask, rope_stuff, position_idx=None, page_table=None, kv_cache=None):
         batch_size, seq_len, hidden_size = x.shape
-
         tt_q = ttnn.matmul(x, self.q_proj)
         tt_q = ttnn.add(tt_q, self.q_proj_bias, output_tensor=tt_q)
         tt_q = ttnn.reshape(tt_q, [1, seq_len * batch_size, -1, self.head_dim])
@@ -384,7 +386,7 @@ class Attention:
         # Clean tensor parallel communication (with performance padding)
         if self.mesh_config.tp > 1:
             tt_out = ttnn.unsqueeze(tt_out, 0)
-            tt_out = self.mesh_config.allreduce(tt_out, self.ccl_manager, pad_size=192)
+            tt_out = self.mesh_config.allreduce(tt_out, self.ccl_manager, pad_size=192, axis=self.mesh_config.tp_axis)
             tt_out = ttnn.reshape(tt_out, (batch_size, seq_len, self.hidden_size))
 
         return tt_out

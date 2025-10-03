@@ -38,7 +38,7 @@ class TestFactory:
         model_args = ModelArgs(mesh_device=None, dummy_weights=True)
 
         # Setup mesh config using actual mesh shape
-        mesh_config = MeshConfig(mesh_shape, tp=mesh_shape[1])
+        mesh_config = MeshConfig(mesh_shape, tp=mesh_shape[1], ep=mesh_shape[0])
 
         # Setup CCL
         ccl_manager = CCLManager(mesh_device)
@@ -120,7 +120,7 @@ def parametrize_mesh(shapes=["1x8"]):
     return pytest.mark.parametrize("mesh_device", mesh_params, indirect=True)
 
 
-def parametrize_mesh_with_fabric(shapes=["1x8"]):
+def parametrize_mesh_with_fabric():
     """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
     # Always use 4x8 base mesh like original working tests
     mesh_params = [pytest.param((4, 8), id="4x8_base")]

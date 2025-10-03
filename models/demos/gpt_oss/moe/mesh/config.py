@@ -8,7 +8,7 @@ import ttnn
 class MeshConfig:
     """General mesh parallelization for any configuration"""
 
-    def __init__(self, mesh_shape, tp, ep=1, tp_axis=1):
+    def __init__(self, mesh_shape, tp, ep=4, tp_axis=1):
         """
         Args:
             mesh_shape: (rows, cols) - any mesh size
@@ -16,10 +16,14 @@ class MeshConfig:
             ep: Expert parallel size (default: 1)
             tp_axis: Which mesh axis is TP (0=rows, 1=cols, default: 1)
         """
+
         self.mesh_shape = tuple(mesh_shape)
         self.tp = tp
-        self.ep = ep
+        print("tp", tp)
+        self.ep = mesh_shape[0]
+        print("ep", ep)
         self.tp_axis = tp_axis
+        self.ep_axis = 0 if tp_axis == 1 else 1
 
         total_devices = mesh_shape[0] * mesh_shape[1]
         self.dp = total_devices // (tp * ep)
@@ -57,7 +61,7 @@ class MeshConfig:
         """Size per device for tensor parallel sharding"""
         return total_size // self.tp
 
-    def allreduce(self, tensor, ccl_manager, memory_config=None, pad_size=None):
+    def allreduce(self, tensor, ccl_manager, memory_config=None, pad_size=None, axis=0):
         """General tensor parallel allreduce (no hardcoded hacks)"""
         if self.tp <= 1:
             return tensor
@@ -78,7 +82,7 @@ class MeshConfig:
             num_links=1,
             memory_config=memory_config,
             topology=ccl_manager.topology,
-            cluster_axis=self.tp_axis,
+            cluster_axis=axis,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         )
 
@@ -86,7 +90,7 @@ class MeshConfig:
         gathered = ttnn.experimental.all_gather_async(
             scattered,
             dim=3,
-            cluster_axis=self.tp_axis,
+            cluster_axis=axis,
             mesh_device=ccl_manager.mesh_device,
             topology=ccl_manager.topology,
             multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(),
@@ -102,7 +106,7 @@ class MeshConfig:
         return gathered
 
     def __repr__(self):
-        return f"MeshConfig({self.mesh_shape}, TP={self.tp}@axis{self.tp_axis}, DP={self.dp}, EP={self.ep})"
+        return f"MeshConfig({self.mesh_shape}, TP={self.tp}@axis{self.tp_axis}, DP={self.dp}, EP={self.ep}@axis{self.ep_axis})"
 
 
 # Convenience factory functions for common configurations
@@ -111,7 +115,7 @@ def mesh_2x4():
 
 
 def mesh_4x8():
-    return MeshConfig((4, 8), tp=8)  # (4,8) TP=8, DP=4
+    return MeshConfig((4, 8), tp=8, ep=4)  # (4,8) TP=8, DP=4
 
 
 def mesh_4x4():

@@ -99,7 +99,7 @@ def prepare_gpt_oss_generator_args(
 )
 def test_gpt_oss_demo(mesh_device):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    # mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
@@ -117,7 +117,7 @@ def test_gpt_oss_demo(mesh_device):
     max_seq_len = 1024
     max_generated_tokens = 200  # Reasonable limit for testing
     instruct = True
-    enable_trace = True  # Start with trace disabled
+    enable_trace = False  # Start with trace disabled
 
     page_params = {
         "page_block_size": 64,
@@ -167,7 +167,7 @@ def test_gpt_oss_demo(mesh_device):
     profiler.end(f"generator_setup", iteration=batch_idx)
 
     # Prepare input prompts like tt_transformers does
-    input_prompts = ["How many r's in the word 'strawberry'?"]
+    input_prompts = ["What are the prime factors of 1?"]
     if len(input_prompts) == 1:  # Manual input - repeat for global batch size
         input_prompts = input_prompts * global_batch_size
 

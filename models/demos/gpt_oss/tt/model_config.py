@@ -142,9 +142,9 @@ class ModelArgs:
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
 
         if self.instruct:
-            cache_path = cache_dir / f"tensor_cache_instruct_{dtype_str}"
+            cache_path = cache_dir / f"tensor_cache_instruct_{dtype_str}_{self.mesh_device.shape}"
         else:
-            cache_path = cache_dir / f"tensor_cache_{dtype_str}"
+            cache_path = cache_dir / f"tensor_cache_{dtype_str}_{self.mesh_device.shape}"
 
         cache_path.mkdir(parents=True, exist_ok=True)
         return str(cache_path)
