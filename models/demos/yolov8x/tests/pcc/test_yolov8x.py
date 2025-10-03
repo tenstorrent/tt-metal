@@ -148,8 +148,6 @@ def test_c2f(device, input_tensor, reset_seeds, model_location_generator):
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_input = ttnn.permute(ttnn_input, (0, 2, 3, 1))
 
-    ttnn_input = ttnn.from_device(ttnn_input)
-
     state_dict = torch_model.state_dict()
 
     parameters = custom_preprocessor(device, state_dict)
