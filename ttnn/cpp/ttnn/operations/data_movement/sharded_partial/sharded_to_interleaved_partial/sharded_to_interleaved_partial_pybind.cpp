@@ -47,24 +47,27 @@ void py_bind_sharded_to_interleaved_partial(pybind11::module& module) {
     detail::bind_sharded_to_interleaved_partial(
         module,
         ttnn::sharded_to_interleaved_partial,
-        R"doc(sharded_to_interleaved_partial(input_tensor: ttnn.Tensor, cache_tensor: ttnn.Tensor,  num_slices: int, slice_index: int, *, output_dtype: Optional[ttnn.dtype] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
+        Converts a partial tensor from sharded to interleaved memory layout.
 
-        Converts a partial tensor from sharded_to_interleaved memory layout
+        This operation writes a sharded tensor slice into a cache tensor at a specified slice index.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`cache_tensor` (ttnn.Tensor): cache tensor
-            * :attr:`num_slices` (int): Number of slices.
-            * :attr:`slice_index` (int): Slice index.
+            input_tensor (ttnn.Tensor): Input tensor in sharded memory layout.
+            cache_tensor (ttnn.Tensor): Cache tensor to write the slice into.
+            num_slices (int): Number of slices the cache tensor is divided into.
+            slice_index (int): Index of the slice to write (0-indexed).
 
         Keyword Args:
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            memory_config (Optional[ttnn.MemoryConfig]): Memory configuration for the output. Defaults to input memory config.
+            output_dtype (Optional[ttnn.DataType]): Output data type. Defaults to same as input.
+
+        Returns:
+            ttnn.Tensor: Output tensor in interleaved memory layout with the slice updated.
 
         Example:
 
-            >>> interleaved_tensor = ttnn.sharded_to_interleaved(tensor, cache_tensor, 4, 2)
-
+            >>> interleaved_tensor = ttnn.sharded_to_interleaved_partial(tensor, cache_tensor, num_slices=4, slice_index=2)
         )doc");
 }
 

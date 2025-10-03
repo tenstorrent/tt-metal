@@ -49,22 +49,23 @@ void py_bind_sharded_to_interleaved(pybind11::module& module) {
     detail::bind_sharded_to_interleaved(
         module,
         ttnn::sharded_to_interleaved,
-        R"doc(sharded_to_interleaved(input_tensor: ttnn.Tensor,  memory_config: ttnn.MemoryConfig, *) -> ttnn.Tensor
-
-        Converts a tensor from sharded to interleaved memory layout
+        R"doc(
+        Converts a tensor from sharded to interleaved memory layout.
 
         Args:
-            :attr:`input_tensor` (ttnn.Tensor): input tensor
-
-            :attr:`memory_config` (ttnn.MemoryConfig): Memory configuration for the operation, must be Interleaved.
+            input_tensor (ttnn.Tensor): Input tensor in sharded memory layout.
 
         Keyword Args:
-            :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            memory_config (ttnn.MemoryConfig): Memory configuration for the output. Must be interleaved. Defaults to DRAM memory config.
+            output_dtype (Optional[ttnn.DataType]): Output data type. Defaults to same as input.
+            is_l1_aligned (bool): Whether L1 memory is aligned. Defaults to False.
+
+        Returns:
+            ttnn.Tensor: Output tensor in interleaved memory layout.
 
         Example:
 
-            >>> interleaved_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.DRAM_MEMORY_CONFIG)
-
+            >>> interleaved_tensor = ttnn.sharded_to_interleaved(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         )doc");
 }
 

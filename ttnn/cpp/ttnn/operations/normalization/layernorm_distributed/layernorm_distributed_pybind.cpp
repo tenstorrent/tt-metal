@@ -15,13 +15,30 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
     ttnn::bind_registered_operation(
         module,
         ttnn::layer_norm_pre_all_gather,
-        R"doc(layer_norm_pre_all_gather(input_tensor: ttnn.Tensor, dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
-            Compute sum(:attr:`input_tensor`ˆ2) and sum(:attr:`input_tensor`) over the last dimension.
+        R"doc(
+        Computes statistics for distributed layer normalization.
 
-            Note:
-              Supported data types and layouts by tensor ::
+        This operation computes sum(input_tensor^2) and sum(input_tensor) over the last dimension.
+        These statistics are then used in a distributed setting where they are gathered across devices
+        before completing the layer normalization in the post all-gather step.
 
-              .. list-table:: input_tensor
+        Args:
+            input_tensor (ttnn.Tensor): Input tensor to compute statistics for. Must be rank 4 and on-device.
+
+        Keyword Args:
+            dtype (Optional[ttnn.DataType]): Output data type. Defaults to BFLOAT16.
+            residual_input_tensor (Optional[ttnn.Tensor]): Optional residual tensor to add. Defaults to None.
+            compute_kernel_config (Optional): Compute kernel configuration. Defaults to None.
+            program_config (Optional): Program configuration. Defaults to None.
+            memory_config (Optional[ttnn.MemoryConfig]): Memory configuration for the output. Defaults to None.
+
+        Returns:
+            ttnn.Tensor: Statistics tensor containing sum and sum of squares.
+
+        Note:
+            Supported data types and layouts:
+
+            .. list-table:: input_tensor
                 :header-rows: 1
 
                 * - dtype
@@ -29,7 +46,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
                 * - BFLOAT16, FLOAT32, BFLOAT8_B
                   - TILE
 
-              .. list-table:: residual_input_tensor
+            .. list-table:: residual_input_tensor
                 :header-rows: 1
 
                 * - dtype
@@ -37,12 +54,11 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
                 * - BFLOAT16, FLOAT32, BFLOAT8_B
                   - TILE
 
-
-            Limitations:
-              - Input tensors must be on-device and rank 4.
-              - Unsharded runs: :attr:`input_tensor` must be interleaved.
-              - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).
-              - When using :attr:`residual_input_tensor` with sharding, it must match the :attr:`input_tensor` padded shape and sharding.
+        Limitations:
+            - Input tensors must be on-device and rank 4.
+            - Unsharded runs: input_tensor must be interleaved.
+            - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32).
+            - When using residual_input_tensor with sharding, it must match the input_tensor padded shape and sharding.
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),
@@ -58,13 +74,33 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
     ttnn::bind_registered_operation(
         module,
         ttnn::layer_norm_post_all_gather,
-        R"doc(layer_norm_post_all_gather(input_tensor: ttnn.Tensor, stats: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-            Performs the second part of a distributed layernorm operation normalizing the input based on the gathered statistics input.
+        R"doc(
+        Completes distributed layer normalization using gathered statistics.
 
-            Note:
-              Supported data types and layouts:
+        Performs the second part of a distributed layer normalization operation, normalizing the input
+        based on the gathered statistics from all devices. This is typically used after an all-gather
+        operation has combined the statistics from layer_norm_pre_all_gather across devices.
 
-              .. list-table:: input_tensor
+        Args:
+            input_tensor (ttnn.Tensor): Input tensor to normalize. Must be rank 4 and on-device.
+            stats (ttnn.Tensor): Gathered statistics tensor from pre all-gather step.
+
+        Keyword Args:
+            epsilon (float): Small value to prevent division by zero. Defaults to 1e-12.
+            weight (Optional[ttnn.Tensor]): Gamma parameter for affine transformation. Defaults to None.
+            bias (Optional[ttnn.Tensor]): Beta parameter for affine transformation. Defaults to None.
+            memory_config (Optional[ttnn.MemoryConfig]): Memory configuration for the output. Defaults to None.
+            compute_kernel_config (Optional): Compute kernel configuration. Defaults to None.
+            program_config (Optional): Program configuration. Defaults to None.
+            dtype (Optional[ttnn.DataType]): Output data type. Defaults to None (same as input).
+
+        Returns:
+            ttnn.Tensor: Normalized output tensor.
+
+        Note:
+            Supported data types and layouts:
+
+            .. list-table:: input_tensor
                 :header-rows: 1
 
                 * - dtype
@@ -72,7 +108,7 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
                 * - BFLOAT16, BFLOAT8_B
                   - TILE
 
-              .. list-table:: stats
+            .. list-table:: stats
                 :header-rows: 1
 
                 * - dtype
@@ -80,7 +116,7 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
                 * - BFLOAT16, BFLOAT8_B
                   - TILE
 
-              .. list-table:: weight (gamma) and bias (beta)
+            .. list-table:: weight (gamma) and bias (beta)
                 :header-rows: 1
 
                 * - dtype
@@ -88,12 +124,12 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
                 * - BFLOAT16
                   - ROW_MAJOR
 
-            Limitations:
-              - Input tensors must be on-device and rank 4.
-              - The last padded dim of :attr:`stats` must be a multiple of TILE_WIDTH.
-              - The first three padded dims of :attr:`stats` must match :attr:`input_tensor`.
-              - If :attr:`weight` (gamma) is provided, :attr:`bias` (beta) must also be provided with matching layouts with their last padded dim matching TILE_WIDTH.
-              - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32), and :attr:`stats` must be sharded with `num_cores=1` and expected tile columns per device.
+        Limitations:
+            - Input tensors must be on-device and rank 4.
+            - The last padded dim of stats must be a multiple of TILE_WIDTH.
+            - The first three padded dims of stats must match input_tensor.
+            - If weight (gamma) is provided, bias (beta) must also be provided with matching layouts with their last padded dim matching TILE_WIDTH.
+            - Sharded runs: inputs cannot be height-sharded, padded height must equal TILE_HEIGHT (32), and stats must be sharded with num_cores=1 and expected tile columns per device.
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input_tensor"),

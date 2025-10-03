@@ -61,7 +61,7 @@ void bind_gather_tosa_operation(py::module& module) {
             gathered_tensor = ttnn.tosa_gather(input_tensor_ttnn, index_tensor_ttnn)
 
             # Equivalent to PyTorch: gathered_tensor = torch.gather(input_tensor, dim=1, index=indices.unsqueeze(-1).expand(-1, -1, C))
-    )doc";
+        )doc";
 
     using OperationType = decltype(ttnn::tosa::gather);
     bind_registered_operation(

@@ -41,28 +41,29 @@ void py_bind_reshard(pybind11::module& module) {
     detail::bind_reshard(
         module,
         ttnn::reshard,
-        R"doc(reshard(input_tensor: ttnn.Tensor,  output_memory_config: MemoryConfig *, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor
+        R"doc(
+        Converts a tensor from one sharded layout to another sharded layout.
 
-        Converts a tensor from one sharded layout to another sharded layout
+        This operation allows changing the sharding configuration of an already sharded tensor.
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`output_memory_config` (MemoryConfig): Memory config with shard spec of output tensor
+            input_tensor (ttnn.Tensor): Input tensor in sharded memory layout.
+            output_memory_config (ttnn.MemoryConfig): Memory configuration with shard spec for the output tensor.
+
+        Keyword Args:
+            output_tensor (Optional[ttnn.Tensor]): Preallocated output tensor. Defaults to None.
+
+        Returns:
+            ttnn.Tensor: Output tensor with the new sharding configuration.
 
         Example:
-            >>> sharded_memory_config_dict = dict(
-                core_grid=ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)
-                        ),
-                    }
-                ),
-                strategy=ttnn.ShardStrategy.BLOCK,
-            ),
-            >>> shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
-            >>> sharded_tensor = ttnn.reshard(tensor, shard_memory_config)
 
+            >>> shard_memory_config = ttnn.create_sharded_memory_config(
+            ...     shape=input_shape,
+            ...     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            ...     strategy=ttnn.ShardStrategy.BLOCK
+            ... )
+            >>> resharded_tensor = ttnn.reshard(sharded_tensor, shard_memory_config)
         )doc");
 }
 

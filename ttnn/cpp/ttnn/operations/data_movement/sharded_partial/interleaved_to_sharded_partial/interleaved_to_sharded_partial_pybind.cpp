@@ -60,30 +60,29 @@ void py_bind_interleaved_to_sharded_partial(pybind11::module& module) {
     detail::bind_interleaved_to_sharded_partial(
         module,
         ttnn::interleaved_to_sharded_partial,
-        R"doc(interleaved_to_sharded_partial(input_tensor: ttnn.Tensor, grid: ttnn.CoreGrid,  num_slices: int, slice_index: int, shard_scheme: ttl.tensor.TensorMemoryLayout, shard_orientation: ttl.tensor.ShardOrientation,  *, output_dtype: Optional[ttnn.dtype] = None) -> ttnn.Tensor
+        R"doc(
+        Converts a partial tensor from interleaved to sharded memory layout.
 
-        Converts a partial tensor from interleaved to sharded memory layout
+        This operation is useful for sharding only a portion of a tensor across cores.
 
         Args:
-            :attr:`input_tensor` (ttnn.Tensor): input tensor
-
-            :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
-
-            :attr:`num_slices` (int): Number of slices.
-
-            :attr:`slice_index` (int): Slice index.
-
-            :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-
-            :attr:`shard_orienttion` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
+            input_tensor (ttnn.Tensor): Input tensor in interleaved memory layout.
+            grid (ttnn.CoreGrid or ttnn.CoreRangeSet): Grid of cores for sharding.
+            shard_shape (List[int]): Shape of each shard as [height, width].
+            num_slices (int): Number of slices to divide the tensor into.
+            slice_index (int): Index of the slice to shard (0-indexed).
+            shard_scheme (ttnn.TensorMemoryLayout): Sharding scheme (HEIGHT_SHARDED, WIDTH_SHARDED, or BLOCK_SHARDED).
+            shard_orientation (ttnn.ShardOrientation): Shard orientation (ROW_MAJOR or COL_MAJOR).
 
         Keyword Args:
-            :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            output_dtype (Optional[ttnn.DataType]): Output data type. Defaults to same as input.
+
+        Returns:
+            ttnn.Tensor: Output tensor in sharded memory layout containing the specified slice.
 
         Example:
 
-            >>> sharded_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.CoreGrid(3,3), 2, 2, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR)
-
+            >>> sharded_tensor = ttnn.interleaved_to_sharded_partial(tensor, ttnn.CoreGrid(3, 3), [32, 32], num_slices=4, slice_index=2, shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, shard_orientation=ttnn.ShardOrientation.ROW_MAJOR)
         )doc");
 }
 

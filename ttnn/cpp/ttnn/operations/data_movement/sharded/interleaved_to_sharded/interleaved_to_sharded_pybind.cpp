@@ -67,45 +67,35 @@ void py_bind_interleaved_to_sharded(pybind11::module& module) {
     detail::bind_interleaved_to_sharded(
         module,
         ttnn::interleaved_to_sharded,
-        R"doc(interleaved_to_sharded(input_tensor: ttnn.Tensor, grid: ttnn.CoreGrid,  int, shard_shape: List[int[2]], shard_scheme: ttl.tensor.TensorMemoryLayout, shard_orientation: ttl.tensor.ShardOrientation, sharded_memory_config: MemoryConfig *, output_dtype: Optional[ttnn.dtype] = None) -> ttnn.Tensor
-
-        Converts a tensor from interleaved to sharded memory layout
+        R"doc(
+        Converts a tensor from interleaved to sharded memory layout.
 
         Args:
-            :attr:`input_tensor` (ttnn.Tensor): input tensor
-
-            :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
-
-            :attr:`shard_shape` (List(int[2])): Sharding shape.
-
-            :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-
-            :attr:`shard_orientation` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
-
-            :attr:`sharded_memory_config` (MemoryConfig): Instead of shard_shape, shard_scheme and orientation you can provide a single MemoryConfig representing the sharded tensor.
+            input_tensor (ttnn.Tensor): Input tensor in interleaved memory layout.
+            grid (ttnn.CoreGrid or ttnn.CoreRangeSet): Grid of cores for sharding.
+            shard_shape (List[int]): Shape of each shard as [height, width].
+            shard_scheme (ttnn.TensorMemoryLayout): Sharding scheme (HEIGHT_SHARDED, WIDTH_SHARDED, or BLOCK_SHARDED).
+            shard_orientation (ttnn.ShardOrientation): Shard orientation (ROW_MAJOR or COL_MAJOR).
 
         Keyword Args:
-            :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            output_dtype (Optional[ttnn.DataType]): Output data type. Defaults to same as input.
+            keep_l1_aligned (bool): Whether to keep L1 memory aligned. Defaults to False.
 
-        Example 1 (using grid, shape, scheme, orienttion):
+        Returns:
+            ttnn.Tensor: Output tensor in sharded memory layout.
 
-            >>> sharded_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.CoreGrid(3,3), [32,32], ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR)
+        Example:
 
+            >>> # Using grid, shape, scheme, and orientation
+            >>> sharded_tensor = ttnn.interleaved_to_sharded(tensor, ttnn.CoreGrid(3, 3), [32, 32], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.ShardOrientation.ROW_MAJOR)
 
-        Example 2 (using sharded memory config):
-            >>> sharded_memory_config_dict = dict(
-                core_grid=ttnn.CoreRangeSet(
-                    {
-                        ttnn.CoreRange(
-                            ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)
-                        ),
-                    }
-                ),
-                strategy=ttnn.ShardStrategy.BLOCK,
-            ),
-            >>> shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
-            >>> sharded_tensor = ttnn.sharded_to_interleaved(tensor, shard_memory_config)
-
+            >>> # Using sharded memory config
+            >>> shard_memory_config = ttnn.create_sharded_memory_config(
+            ...     shape=(96, 96),
+            ...     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            ...     strategy=ttnn.ShardStrategy.BLOCK
+            ... )
+            >>> sharded_tensor = ttnn.interleaved_to_sharded(tensor, shard_memory_config)
         )doc");
 }
 

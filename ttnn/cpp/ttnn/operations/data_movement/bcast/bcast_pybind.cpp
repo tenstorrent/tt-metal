@@ -13,43 +13,37 @@ namespace py = pybind11;
 
 void py_bind_bcast(py::module& module) {
     auto doc =
-        R"doc(bcast(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, math_op[ADD, SUB, MUL],  dim: Optional[int] = None, memory_config: Optional[MemoryConfig] = std::nullopt, output_tensor: Optional[Tensor]) -> ttnn.Tensor
+        R"doc(
+        Performs a binary elementwise operation between tensors with broadcasting.
 
-            Perform a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``, where values from tensor ``input_b`` are broadcast.
+        Performs a binary elementwise operation ``math_op`` between tensors ``input_a`` and ``input_b``,
+        where values from tensor ``input_b`` are broadcast according to the specified dimension.
 
-            Let tensor ``input_a`` have shape ``[W0, Z0, Y0, X0]`` and tensor ``input_b`` shape ``[W1, Z1, Y1, X1]``. ``dim`` determines the type of broadcast performed.
+        Let tensor ``input_a`` have shape [W0, Z0, Y0, X0] and tensor ``input_b`` shape [W1, Z1, Y1, X1].
+        The ``dim`` parameter determines the type of broadcast performed:
 
-            For ``dim=BcastOpDim::W`` broadcast is performed on dimension ``X``. ``Y0`` and ``Y1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
+        - For ``dim=BcastOpDim::W``: broadcast on dimension X. Y0 and Y1 must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
+        - For ``dim=BcastOpDim::H``: broadcast on dimension Y. X0 and X1 must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
+        - For ``dim=BcastOpDim::HW``: broadcast on dimensions X and Y. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold.
 
-            For ``dim=BcastOpDim::H`` broadcast is performed on dimension  ``Y``. ``X0`` and ``X1`` must be the same and either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1).
+        Args:
+            input_a (ttnn.Tensor): First input tensor with shape [W0, Z0, Y0, X0]. Must have BFLOAT16 data type.
+            input_b (ttnn.Tensor): Second input tensor to broadcast with shape [W1, Z1, Y1, X1]. Must have BFLOAT16 data type.
+            math_op (ttnn.BcastOpMath): Math operation to perform (ADD, SUB, or MUL).
+            dim (ttnn.BcastOpDim): Dimension on which to broadcast (W, H, or HW).
 
-            For ``dim=BcastOpDim::HW`` broadcast is performed on dimensions ``X`` and ``Y``. Either (W1=1 and Z1=1) or (W0=W1 and Z0=Z1) must hold for input shapes.
+        Keyword Args:
+            memory_config (Optional[ttnn.MemoryConfig]): Memory configuration for the output. Defaults to interleaved in DRAM.
+            output_tensor (Optional[ttnn.Tensor]): Preallocated output tensor. Defaults to None.
 
-            Both input tensors must have BFLOAT16 data type.
+        Returns:
+            ttnn.Tensor: Output tensor with BFLOAT16 data type.
 
-            Output tensor will have BFLOAT16 data type.
+        Example:
 
-            .. csv-table::
-
-                :header: "Argument", "Description", "Data type", "Valid range", "Required"
-
-                "input_a", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
-                "input_b", "Input tensor to broadcast", "Tensor", "Tensor of shape [W1, Z1, Y1, X1]", "Yes"
-                "math_op", "Aggregating math operation", " BcastOpMath", "ADD, SUB, MUL", "Yes"
-                "dim", "Dimension on which to broadcast", "BcastOpDim", "W, H, HW", "Yes"
-                "memory_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "Default is interleaved in DRAM", "No"
-                "output_tensor", "Optional preallocated output tensor", "Tensor", "Default is None", "No"
-
-            Args:
-                input_tensor_a: First Input Tensor for bcast.
-                input_tensor_b: Second Input Tensor for bcast.
-                math_op: Operation to be performed during broadcasting.
-                dim: the dimension to reduce. If None, the bcast of the flattened input is returned
-
-            Keyword Args:
-                memory_config: Memory Config of the output tensor
-                output_tensor: Preallocated output tensor
-
+            >>> tensor_a = ttnn.from_torch(torch.ones(1, 1, 32, 64), dtype=ttnn.bfloat16, device=device)
+            >>> tensor_b = ttnn.from_torch(torch.ones(1, 1, 32, 1), dtype=ttnn.bfloat16, device=device)
+            >>> output = ttnn.bcast(tensor_a, tensor_b, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.W)
         )doc";
 
     using OperationType = decltype(ttnn::bcast);

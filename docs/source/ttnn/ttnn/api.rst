@@ -53,7 +53,10 @@ Core
    ttnn.deallocate
    ttnn.reallocate
    ttnn.to_memory_config
+   ttnn.to_dtype
    ttnn.dequantize
+   ttnn.quantize
+   ttnn.requantize
 
 
 Tensor Creation
@@ -318,12 +321,17 @@ Pointwise Binary
    :template: function.rst
 
    ttnn.add
+   ttnn.add_
    ttnn.addalpha
    ttnn.subalpha
    ttnn.multiply
+   ttnn.multiply_
    ttnn.subtract
+   ttnn.subtract_
    ttnn.div
+   ttnn.divide
    ttnn.div_no_nan
+   ttnn.divide_
    ttnn.floor_div
    ttnn.remainder
    ttnn.fmod
@@ -334,7 +342,9 @@ Pointwise Binary
    ttnn.logical_xor_
    ttnn.rpow
    ttnn.rsub
+   ttnn.rsub_
    ttnn.ldexp
+   ttnn.ldexp_
    ttnn.logical_and
    ttnn.logical_or
    ttnn.logical_xor
@@ -342,10 +352,13 @@ Pointwise Binary
    ttnn.bitwise_or
    ttnn.bitwise_xor
    ttnn.logaddexp
+   ttnn.logaddexp_
    ttnn.logaddexp2
+   ttnn.logaddexp2_
    ttnn.hypot
    ttnn.xlogy
    ttnn.squared_difference
+   ttnn.squared_difference_
    ttnn.gt
    ttnn.gt_
    ttnn.lt_
@@ -444,6 +457,7 @@ Reduction
    ttnn.prod
    ttnn.topk
    ttnn.cumsum
+   ttnn.moe
 
 
 Data Movement
@@ -457,6 +471,12 @@ Data Movement
    ttnn.concat
    ttnn.chunk
    ttnn.copy
+   ttnn.interleaved_to_sharded
+   ttnn.interleaved_to_sharded_partial
+   ttnn.sharded_to_interleaved
+   ttnn.sharded_to_interleaved_partial
+   ttnn.reshard
+   ttnn.bcast
    ttnn.expand
    ttnn.fill_implicit_tile_padding
    ttnn.nonzero
@@ -480,6 +500,7 @@ Data Movement
    ttnn.fill_rm
    ttnn.fill_ones_rm
    ttnn.tosa_scatter
+   ttnn.dram_prefetcher
    ttnn.transpose
    ttnn.untilize
    ttnn.untilize_with_unpadding
@@ -501,8 +522,11 @@ Normalization
 
    ttnn.group_norm
    ttnn.layer_norm
+   ttnn.layer_norm_pre_all_gather
    ttnn.layer_norm_post_all_gather
    ttnn.rms_norm
+   ttnn.rms_norm_pre_all_gather
+   ttnn.rms_norm_post_all_gather
    ttnn.batch_norm
    ttnn.softmax
    ttnn.scale_mask_softmax

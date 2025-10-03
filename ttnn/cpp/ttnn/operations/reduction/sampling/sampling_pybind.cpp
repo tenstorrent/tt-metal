@@ -34,17 +34,17 @@ void bind_reduction_sampling_operation(py::module& module) {
             Currently, this operation supports inputs and outputs with specific memory layout and data type constraints.
 
             Equivalent PyTorch code:
-                .. code-block:: python
+            .. code-block:: python
 
-                    return torch.sampling(
-                        input_values_tensor,
-                        input_indices_tensor,
-                        k=k,
-                        p=p,
-                        temp=temp,
-                        seed=seed,
-                        optional_output_tensor=optional_output_tensor,
-                    )
+                return torch.sampling(
+                    input_values_tensor,
+                    input_indices_tensor,
+                    k=k,
+                    p=p,
+                    temp=temp,
+                    seed=seed,
+                    optional_output_tensor=optional_output_tensor,
+                )
 
             Note:
                 This operations only supports inputs and outputs according to the following data types and layout:
