@@ -20,7 +20,18 @@ void bind_convert_to_hwc(py::module& module) {
     const auto doc = R"doc(
     Convert a tensor from CHW channel ordering to HWC channel ordering.
 
-    The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM. The output is a row-major height-sharded tensor.
+    The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM.
+    The output is a row-major height-sharded tensor.
+
+    Args:
+        input (ttnn.Tensor): Input tensor in CHW format, width-sharded in L1 or DRAM.
+        memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration.
+                                                     Required only for DRAM inputs. If omitted for L1 inputs, the output memory_config is automatically inferred.
+        dtype (Optional[ttnn.DataType]): Output data type (defaults to input dtype)
+
+    Returns:
+        ttnn.Tensor: Output tensor in HWC format, height-sharded
+
     )doc";
 
     ttnn::bind_registered_operation(
