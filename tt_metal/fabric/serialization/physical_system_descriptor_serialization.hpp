@@ -23,13 +23,14 @@ class PhysicalSystemDescriptor;
 // Emit PhysicalSystemDescriptor to a text proto file
 void emit_physical_system_descriptor_to_text_proto(
     const PhysicalSystemDescriptor& descriptor, const std::optional<std::string>& file_path);
+
 // Serialize PhysicalSystemDescriptor to protobuf binary format (byte vector)
 std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const PhysicalSystemDescriptor& descriptor);
 
 // Deserialize from protobuf binary format to PhysicalSystemDescriptor (byte vector)
-PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(
-    const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const std::shared_ptr<distributed::multihost::DistributedContext>& distributed_context,
-    const std::vector<uint8_t>& data);
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data);
+
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
+    const std::string& text_proto_file);
 
 }  // namespace tt::tt_metal
