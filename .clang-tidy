@@ -122,7 +122,6 @@ Checks: >
   -misc-no-recursion,
   -misc-non-private-member-variables-in-classes,
   -misc-unused-parameters,
-  -misc-unused-using-decls,
   -misc-use-anonymous-namespace,
   -misc-use-internal-linkage,
   -modernize-avoid-bind,

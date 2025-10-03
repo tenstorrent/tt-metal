@@ -26,17 +26,11 @@
 
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
-namespace tt {
-namespace tt_metal {
-class Tensor;
-}  // namespace tt_metal
-}  // namespace tt
 
 namespace ttnn {
 namespace {
 
 using ::testing::SizeIs;
-using ::tt::tt_metal::Tensor;
 using ::ttnn::experimental::xtensor::chunk;
 using ::ttnn::experimental::xtensor::chunk_ndim;
 using ::ttnn::experimental::xtensor::concat;
