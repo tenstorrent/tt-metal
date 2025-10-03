@@ -291,7 +291,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
     input_grad = input_grad.value_or(ttnn::empty_like(input));
     Tensor tanh_res = ttnn::tanh(input, output_mem_config);
     tanh_res = ttnn::square(tanh_res, output_mem_config);
-    tanh_res = ttnn::rsub(tanh_res, 1.0f, output_mem_config);
+    tanh_res = ttnn::rsub(tanh_res, 1.0f, std::nullopt, output_mem_config);
     ttnn::multiply(grad, tanh_res, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
@@ -453,7 +453,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSigmoid::invoke(
     std::vector<Tensor> grad_tensor;
     bool approximate_mode = false;
     Tensor sig_result = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
-    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, output_mem_config);
+    Tensor rsub_term = ttnn::rsub(sig_result, 1.0f, std::nullopt, output_mem_config);
     Tensor prod_term_1 = ttnn::multiply(sig_result, rsub_term, std::nullopt, output_mem_config);
     Tensor prod_term_2 = ttnn::multiply(prod_term_1, grad, std::nullopt, output_mem_config);
     grad_tensor.emplace_back(prod_term_2);
@@ -663,8 +663,8 @@ std::vector<Tensor> ExecuteUnaryBackwardLogit::invoke(
     std::vector<Tensor> grad_tensor;
     Tensor grad_result = ttnn::multiply(
         grad,
-        ttnn::reciprocal(
-            ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
+        ttnn::reciprocal(ttnn::multiply(
+            input, ttnn::rsub(input, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config)),
         std::nullopt,
         output_mem_config);
     Tensor status = ttnn::logical_and(
@@ -875,7 +875,8 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
     Tensor sigmoid_res = ttnn::sigmoid(input, (int)unary::VecMode::RC, approximate_mode, output_mem_config);
     Tensor grad_sigmoid = ttnn::multiply(grad, sigmoid_res, std::nullopt, output_mem_config);
     Tensor add_sub = ttnn::add(
-        ttnn::multiply(ttnn::rsub(sigmoid_res, 1.0f, output_mem_config), input, std::nullopt, output_mem_config),
+        ttnn::multiply(
+            ttnn::rsub(sigmoid_res, 1.0f, std::nullopt, output_mem_config), input, std::nullopt, output_mem_config),
         1.0f,
         std::nullopt,
         output_mem_config);
@@ -1222,8 +1223,8 @@ std::vector<Tensor> ExecuteUnaryBackwardLogiteps::invoke(
     high = 1.0 - low;
     Tensor grad_result = ttnn::multiply(
         grad,
-        ttnn::reciprocal(
-            ttnn::multiply(input, ttnn::rsub(input, 1.0f, output_mem_config), std::nullopt, output_mem_config)),
+        ttnn::reciprocal(ttnn::multiply(
+            input, ttnn::rsub(input, 1.0f, std::nullopt, output_mem_config), std::nullopt, output_mem_config)),
         std::nullopt,
         output_mem_config);
     Tensor t_eps = ttnn::full_like(input, eps, input.dtype(), input.layout(), std::nullopt, output_mem_config);

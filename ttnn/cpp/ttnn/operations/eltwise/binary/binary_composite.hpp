@@ -341,12 +341,16 @@ struct ExecuteRsub {
         tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
         std::optional<bool> use_legacy = std::nullopt);
 
-    template <typename T>
     static Tensor invoke(
         const Tensor& input_tensor,
-        const T& input_b,
+        float input_b,
+        const std::optional<const DataType>& output_dtype = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+        std::optional<bool> use_legacy = std::nullopt);
 };
 
 struct ExecuteBitwiseAnd {

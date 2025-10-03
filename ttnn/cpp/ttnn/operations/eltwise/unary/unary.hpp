@@ -475,7 +475,7 @@ constexpr auto sigmoid_accurate =
     ttnn::register_operation<"ttnn::sigmoid_accurate", ttnn::operations::unary::Sigmoid_accurate>();
 constexpr auto log_sigmoid = ttnn::register_operation<"ttnn::log_sigmoid", ttnn::operations::unary::LogSigmoid>();
 constexpr auto unary_chain = ttnn::register_operation<"ttnn::unary_chain", ttnn::operations::unary::Unary_chain>();
-
+constexpr auto rsub_sfpu = ttnn::register_operation<"ttnn::rsub_sfpu", ttnn::operations::unary::Rsub>();
 constexpr auto add_sfpu = ttnn::register_operation<
     "ttnn::add_sfpu",
     ttnn::operations::unary::SymmetricBinop<ttnn::operations::unary::UnaryOpType::ADD_UNARY_SFPU>>();
