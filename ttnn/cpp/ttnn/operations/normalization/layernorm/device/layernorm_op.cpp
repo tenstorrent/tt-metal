@@ -247,11 +247,14 @@ void LayerNorm::validate(
                 if (mcast_1d) {
                     TT_FATAL(
                         tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
-                        "block_w ({}) must equal to K / num_cores ({})",
+                        "block_w ({}) must equal to K (in tiles) / num_cores ({})",
                         program_config.block_w,
                         tt::div_up(Kt, shard_spec.num_cores()));
                     TT_FATAL(
-                        Mt == program_config.block_h, "block_h ({}) must equal to M ({})", program_config.block_h, Mt);
+                        Mt == program_config.block_h,
+                        "block_h ({}) must equal to M (in tiles) ({})",
+                        program_config.block_h,
+                        Mt);
                     TT_FATAL(
                         a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
                         "Height sharded memory layout is not supported, got: {}",
@@ -260,23 +263,23 @@ void LayerNorm::validate(
                     if (row_wise) {
                         TT_FATAL(
                             tt::div_up(Kt, (bbox.end_coord.x + 1)) == program_config.block_w,
-                            "block_w ({}) must equal to K / num_cores_c ({})",
+                            "block_w ({}) must equal to K (in tiles) / num_cores_c ({})",
                             program_config.block_w,
                             tt::div_up(Kt, (bbox.end_coord.x + 1)));
                         TT_FATAL(
                             Mt / (bbox.end_coord.y + 1) == program_config.block_h,
-                            "block_h ({}) must equal to M / num_cores_r ({})",
+                            "block_h ({}) must equal to M (in tiles)/ num_cores_r ({})",
                             program_config.block_h,
                             Mt / (bbox.end_coord.y + 1));
                     } else {
                         TT_FATAL(
                             tt::div_up(Kt, (bbox.end_coord.y + 1)) == program_config.block_w,
-                            "block_w ({}) must equal to K / num_cores_r ({})",
+                            "block_w ({}) must equal to K (in tiles) / num_cores_r ({})",
                             program_config.block_w,
                             tt::div_up(Kt, (bbox.end_coord.y + 1)));
                         TT_FATAL(
                             Mt / (bbox.end_coord.x + 1) == program_config.block_h,
-                            "block_h ({}) must equal to M / num_cores_c ({})",
+                            "block_h ({}) must equal to M (in tiles) / num_cores_c ({})",
                             program_config.block_h,
                             Mt / (bbox.end_coord.x + 1));
                     }
