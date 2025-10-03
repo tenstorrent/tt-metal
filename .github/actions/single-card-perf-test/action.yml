@@ -9,20 +9,6 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Debug inputs
-      run: |
-        echo "DEBUG: device_perf_model_name='${{ inputs.device_perf_model_name }}'"
-        echo "DEBUG: device_perf_model_name length=${#device_perf_model_name}"
-        echo "DEBUG: commands='${{ inputs.commands }}'"
-        if [ -z "${{ inputs.device_perf_model_name }}" ]; then
-          echo "DEBUG: device_perf_model_name is empty - will run perf model test"
-        else
-          echo "DEBUG: device_perf_model_name is not empty - will run first step"
-        fi
-        echo "Command to execute: ${{ inputs.commands }}"
-      shell: bash
-      env:
-        device_perf_model_name: ${{ inputs.device_perf_model_name }}
     - run: |
         cd docker-job
         set -x
@@ -40,8 +26,6 @@ runs:
         TRACY_NO_INVARIANT_CHECK: 1
     - run: |
         set -x
-        echo "Running perf model test (device_perf_model_name is empty)"
-        echo "Command to execute: ${{ inputs.commands }}"
 
         ${{ inputs.commands }}
         status=$?
