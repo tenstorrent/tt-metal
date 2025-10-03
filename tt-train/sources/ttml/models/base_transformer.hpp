@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-#include "autograd/module_base.hpp"
+#include "modules/module_base.hpp"
 
 namespace ttml::models {
-class BaseTransformer : public ttml::autograd::ModuleBase {
+class BaseTransformer : public ttml::modules::ModuleBase {
 public:
     virtual ~BaseTransformer() = default;
 

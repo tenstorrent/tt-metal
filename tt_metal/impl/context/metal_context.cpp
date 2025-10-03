@@ -203,6 +203,8 @@ void MetalContext::initialize(
     }
 }
 
+// IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
+// undefined behavior. Do not create threads in this function or any functions it calls.
 void MetalContext::teardown() {
     ZoneScoped;
 
@@ -230,7 +232,6 @@ void MetalContext::teardown() {
     }
 
     if (profiler_state_manager_) {
-        profiler_state_manager_->cleanup_device_profilers();
         profiler_state_manager_.reset();
     }
 
@@ -281,6 +282,11 @@ distributed::multihost::DistributedContext& MetalContext::global_distributed_con
     return *distributed_context_;
 }
 
+std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_distributed_context_ptr() {
+    TT_FATAL(distributed_context_, "Distributed context not initialized.");
+    return distributed_context_;
+}
+
 MetalContext::~MetalContext() {
     distributed_context_.reset();
     cluster_.reset();
@@ -290,29 +296,29 @@ MetalContext::~MetalContext() {
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
 Cluster& MetalContext::get_cluster() {
-    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    TT_FATAL(cluster_, "Trying to get cluster before initializing it.");
     return *cluster_;
 }
 
 const llrt::RunTimeOptions& MetalContext::rtoptions() const { return rtoptions_; }
 
 const Cluster& MetalContext::get_cluster() const {
-    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    TT_FATAL(cluster_, "Trying to get cluster before initializing it.");
     return *cluster_;
 }
 
 const Hal& MetalContext::hal() const {
-    TT_FATAL(hal_, "Trying to get hal before intializing it.");
+    TT_FATAL(hal_, "Trying to get hal before initializing it.");
     return *hal_;
 }
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
-    TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before intializing it.");
+    TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;
 }
 
 DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
-    TT_FATAL(dispatch_query_manager_, "Trying to get dispatch_query_manager before intializing it.");
+    TT_FATAL(dispatch_query_manager_, "Trying to get dispatch_query_manager before initializing it.");
     return *dispatch_query_manager_;
 }
 
@@ -322,7 +328,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
     auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
-    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before intializing it.", core_type);
+    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
     return *mem_map;
 }
 
@@ -658,7 +664,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             CoreCoord worker_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
             if (!storage_only_cores_set.contains(logical_core)) {
-                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
             }
         }
     }
@@ -668,7 +674,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
     for (const auto& logical_core : this->get_control_plane().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
-        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);
+        cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core));
     }
 }
 
@@ -688,7 +694,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
 
             if (!dispatch_cores.contains(worker_core) && !routing_cores.contains(worker_core)) {
                 if (!storage_only_cores_set.contains(logical_core)) {
-                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), tt::umd::RiscType::ALL);
+                    cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core));
                 }
             } else {
                 log_debug(tt::LogMetal, "{} will not be Reset when closing Device {}", worker_core.str(), device_id);
@@ -701,8 +707,10 @@ void MetalContext::assert_cores(chip_id_t device_id) {
         for (const auto& eth_core : this->get_control_plane().get_active_ethernet_cores(device_id)) {
             CoreCoord virtual_eth_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-            // Assert all cores except ERISC0, which is running base firmware.
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL & ~tt::umd::RiscType::ERISC0;
+            TensixSoftResetOptions reset_val =
+                TENSIX_ASSERT_SOFT_RESET &
+                static_cast<TensixSoftResetOptions>(
+                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
         }
     }
@@ -885,10 +893,11 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL;
+            TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
             if (not is_idle_eth) {
-                // On idle eth, don't assert ERISC0, which is running base firmware.
-                reset_val &= ~tt::umd::RiscType::ERISC0;
+                reset_val =
+                    reset_val & static_cast<TensixSoftResetOptions>(
+                                    ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::BRISC));
             }
             if (is_idle_eth or !hal_->get_eth_fw_is_cooperative()) {
                 cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), reset_val);
@@ -942,7 +951,9 @@ void MetalContext::initialize_firmware(
         dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
     for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
         std::copy(
-            launch_msg.data(), launch_msg.data() + launch_msg_size, init_launch_msg_data.data() + i * launch_msg_size);
+            launch_msg.data(),
+            launch_msg.data() + launch_msg_size,
+            init_launch_msg_data.data() + (i * launch_msg_size));
     }
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     cluster_->write_core(
@@ -1222,11 +1233,15 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     cluster_->l1_barrier(device_id);
 
     // Deassert worker cores
+    TensixSoftResetOptions reset_val;
     for (const auto& worker_core : not_done_cores) {
-        tt::umd::RiscType reset_val = tt::umd::RiscType::BRISC;
         if (active_eth_cores.find(worker_core) != active_eth_cores.end()) {
             // bit 12 needs to be deasserted to run second erisc on BH
-            reset_val |= tt::umd::RiscType::ERISC1;
+            reset_val = TENSIX_DEASSERT_SOFT_RESET &
+                        static_cast<TensixSoftResetOptions>(
+                            ~std::underlying_type<TensixSoftResetOptions>::type(TensixSoftResetOptions::TRISC0));
+        } else {
+            reset_val = TENSIX_DEASSERT_SOFT_RESET;
         }
         cluster_->deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }

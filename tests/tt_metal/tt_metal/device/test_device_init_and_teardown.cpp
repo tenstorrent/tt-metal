@@ -67,8 +67,7 @@ bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
 
     CreateKernel(program, "tt_metal/kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
-    distributed::AddProgramToMeshWorkload(
-        mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
     return pass;
 }

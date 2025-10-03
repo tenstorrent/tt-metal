@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
             for (int r = 0; r < num_cores_r; ++r) {
                 for (int c = 0; c < num_cores_c; ++c) {
                     print_vec_of_bfloat16(
-                        tensors[r * num_cores_c + c].get_values(),
+                        tensors[(r * num_cores_c) + c].get_values(),
                         1,
                         std::string("input tensor " + std::to_string(r) + " " + std::to_string(c)));
                 }
@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
         std::vector<std::vector<uint32_t>> packed_tensors;
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
-                auto activations = pack_bfloat16_vec_into_uint32_vec(tensors[r * num_cores_c + c].get_values());
+                auto activations = pack_bfloat16_vec_into_uint32_vec(tensors[(r * num_cores_c) + c].get_values());
                 packed_tensors.push_back(activations);
             }
         }
@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
             for (int c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
                 tt_metal::detail::WriteToDeviceL1(
-                    device->get_devices()[0], core, activations_addr, packed_tensors[r * num_cores_c + c]);
+                    device->get_devices()[0], core, activations_addr, packed_tensors[(r * num_cores_c) + c]);
             }
         }
 
@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
                 tt_metal::detail::ReadFromDeviceL1(
                     device->get_devices()[0], core, activations_addr, total_tiles_size_bytes, result_vec);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
-                if (tensors[r * num_cores_c + c].get_values() != result_bfp16) {
+                if (tensors[(r * num_cores_c) + c].get_values() != result_bfp16) {
                     log_error(LogTest, "{}/{} - value read from l1 is wrong", r, c);
                 }
             }
@@ -228,7 +228,7 @@ int main(int argc, char** argv) {
         auto mesh_workload = tt_metal::distributed::MeshWorkload();
         distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        tt_metal::distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
+        mesh_workload.add_program(device_range, std::move(program));
         log_info(LogTest, "Running {} core test", num_cores_r * num_cores_c);
         auto begin = std::chrono::steady_clock::now();
         tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
@@ -253,7 +253,7 @@ int main(int argc, char** argv) {
                         device->get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
                     auto sliced_tensor =
-                        slice_vec(tensors[r * num_cores_c + c].get_values(), (Nt - cb_tiles) * 1024, Nt * 1024 - 1);
+                        slice_vec(tensors[(r * num_cores_c) + c].get_values(), (Nt - cb_tiles) * 1024, (Nt * 1024) - 1);
 
                     if (print_tensor) {
                         print_vec_of_bfloat16(

@@ -107,7 +107,7 @@ void mask_src_b_for_broadcast(std::vector<bfloat16>& tile, const std::vector<uin
         for (int j = 0; j < num_cols; j++) {
             if (((dim == BroadcastDim::ROW || dim == BroadcastDim::SCALAR) && i != 0) ||
                 ((dim == BroadcastDim::ROW || dim == BroadcastDim::SCALAR) && j != 0)) {
-                tile[i * num_cols + j] = 0.0f;
+                tile[(i * num_cols) + j] = 0.0f;
             }
         }
     }
@@ -173,19 +173,19 @@ std::vector<bfloat16> gold_broadcast(
 
             switch (op) {
                 case EltwiseOp::ADD: {
-                    golden[i * num_cols + j] =
-                        static_cast<float>(src_a[i * num_cols + j]) + static_cast<float>(broadcast_value);
+                    golden[(i * num_cols) + j] =
+                        static_cast<float>(src_a[(i * num_cols) + j]) + static_cast<float>(broadcast_value);
                     break;
                 }
                 case EltwiseOp::SUB: {
-                    golden[i * num_cols + j] =
-                        static_cast<float>(src_a[i * num_cols + j]) - static_cast<float>(broadcast_value);
+                    golden[(i * num_cols) + j] =
+                        static_cast<float>(src_a[(i * num_cols) + j]) - static_cast<float>(broadcast_value);
                     break;
                 }
                 case EltwiseOp::MUL: {
-                    golden[i * num_cols + j] =
-                        static_cast<float>(std::bit_cast<bfloat16>(
-                            static_cast<uint16_t>(std::bit_cast<uint16_t>(src_a[i * num_cols + j]) & srca_fid_mask))) *
+                    golden[(i * num_cols) + j] =
+                        static_cast<float>(std::bit_cast<bfloat16>(static_cast<uint16_t>(
+                            std::bit_cast<uint16_t>(src_a[(i * num_cols) + j]) & srca_fid_mask))) *
                         static_cast<float>(std::bit_cast<bfloat16>(
                             static_cast<uint16_t>(std::bit_cast<uint16_t>(broadcast_value) & srcb_fid_mask)));
                     break;
@@ -358,7 +358,7 @@ void run_single_core_broadcast(
     distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
     distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data;
