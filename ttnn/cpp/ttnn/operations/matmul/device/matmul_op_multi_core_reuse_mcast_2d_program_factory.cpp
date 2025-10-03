@@ -596,8 +596,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
 
     Note: This workaround should only be used for this specific alignment issue case.
     */
+    bool in0_needs_intermediate_cb_read = false;
     bool in1_needs_intermediate_cb_read = false;
     if (device->arch() == tt::ARCH::BLACKHOLE) {
+        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
+        if (in0_needs_intermediate_cb_read) {
+            mm_kernel_in0_sender_interleaved_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
         in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
         if (in1_needs_intermediate_cb_read) {
             mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
@@ -905,14 +910,21 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     }
     // Intermediate CB read
     if (in1_needs_intermediate_cb_read) {
-        uint32_t intermediate_cb_index = tt::CBIndex::c_7;
-        tt_metal::CircularBufferConfig cb_intermediate_config =
-            tt_metal::CircularBufferConfig(in1_single_tile_size, {{intermediate_cb_index, in1_data_format}})
-                .set_page_size(intermediate_cb_index, in1_single_tile_size)
-                .set_tile_dims(intermediate_cb_index, in1_tile);
-        tt_metal::CreateCircularBuffer(program, all_cores, cb_intermediate_config);
+        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
+            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
+                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
+                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
     }
-
+    if (in0_needs_intermediate_cb_read) {
+        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
+            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
+                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
+    }
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;

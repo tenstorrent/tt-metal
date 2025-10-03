@@ -78,9 +78,9 @@ void kernel_main() {
             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
 #ifdef INTERMEDIATE_CB_READ
-            constexpr uint32_t helper_cb_index = tt::CBIndex::c_7;
-            cb_reserve_back(helper_cb_index, one_tile);
-            uint32_t l1_write_addr_helper = get_write_ptr(helper_cb_index);
+            constexpr uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+            cb_reserve_back(in1_intermediate_cb_index, one_tile);
+            uint32_t l1_write_addr_helper = get_write_ptr(in1_intermediate_cb_index);
 #endif  // INTERMEDIATE_CB_READ
 
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);
@@ -109,6 +109,12 @@ void kernel_main() {
             noc_async_read_barrier();
 
             cb_push_back(cb_id_in1, in1_block_num_tiles);
+#ifdef INTERMEDIATE_CB_READ
+            // Clean up helper CB
+            cb_push_back(in1_intermediate_cb_index, one_tile);
+            cb_wait_front(in1_intermediate_cb_index, one_tile);
+            cb_pop_front(in1_intermediate_cb_index, one_tile);
+#endif  // INTERMEDIATE_CB_READ
         }
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;
