@@ -165,13 +165,24 @@ class TTRegNetBottleneck:
 
         # conv3: 1x1 projection
         out, shape_ = self.conv3(device, out, shape_)
-
+        logger.info(f"after conv 1x1{out.shape =}")
+        out = ttnn.reshape(out, shape_)
+        logger.info(f"reshape shape{out.shape =}")
         # Handle downsample
         if self.downsample_layer is not None:
-            identity, shape_ = self.downsample_layer(device, identity, identity.shape)
+            logger.info(f"downsample")
+            logger.info(f"identity shape{identity.shape =}")
+            logger.info(f" shape{shape_ =}")
+            identity, _ = self.downsample_layer(device, identity, identity.shape)
+            identity = ttnn.reshape(identity, shape_)
 
+        logger.info(f"Add")
+        logger.info(f"Add in l shape{out.shape =}")
+        logger.info(f"Add in r shape{identity.shape =}")
         out = ttnn.add(out, identity)
-        out = ttnn.reshape(out, shape_)
+        logger.info(f"Add out shape{out.shape =}")
+        # out = ttnn.reshape(out, shape_)
         out = ttnn.relu(out)  # Final ReLU activation
+        logger.info(f"relu shape{out.shape =}")
 
         return out
