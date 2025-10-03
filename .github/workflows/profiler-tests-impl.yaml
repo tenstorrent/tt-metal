@@ -62,7 +62,7 @@ jobs:
       - name: Run profiler regression tests
         timeout-minutes: 30
         run: |
-          ./tests/scripts/run_profiler_regressions.sh
+          ./tests/scripts/t3000/run_t3000_profiler_tests.sh
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
