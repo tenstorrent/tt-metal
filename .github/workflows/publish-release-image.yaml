@@ -74,6 +74,7 @@ jobs:
           build-args: |
             WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
             UBUNTU_VERSION=${{ steps.generate-tag-name.outputs.UBUNTU_VERSION }}
+            GIT_REF=${{ github.ref_name || 'main' }}
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/Dockerfile
