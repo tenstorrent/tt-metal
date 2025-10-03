@@ -851,10 +851,11 @@ This design achieves the goal of supporting 100+ models by making TTTv2 a stable
 
   #### (finally) double check against the "Library, not Framework" design philosophy
 
+  #### Stress testing
+  Running a model for hours and hours. TTTv2 should provide API for this?
+
   #### Composable Model performance from module performance data
   Based on unit tests of modules, we should be able to use module performance data to compose model performance expectations.
-
-
 
   #### Community Governance - Clear process for accepting new patterns/modules
 
