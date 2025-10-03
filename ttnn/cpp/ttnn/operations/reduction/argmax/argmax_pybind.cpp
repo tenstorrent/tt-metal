@@ -15,6 +15,8 @@ namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(
+            ``ttnn.argmax(input_tensor: ttnn.Tensor, dim: Optional[int] = None, keepdim: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor: Optional[ttnn.Tensor] = None) -> ttnn.Tensor``
+
             Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
             If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
@@ -37,17 +39,17 @@ void bind_reduction_argmax_operation(py::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - FLOAT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
                     * - BFLOAT16
-                        - ROW_MAJOR
+                      - ROW_MAJOR
                     * - UINT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
                     * - INT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
                     * - UINT16
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 The output tensor will be of the following data type and layout:
 
@@ -55,21 +57,28 @@ void bind_reduction_argmax_operation(py::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - UINT32
-                        - ROW_MAJOR
+                      - ROW_MAJOR
+
+            Memory Support:
+                - Interleaved: DRAM and L1
 
             Limitations:
-                Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
+                - All input tensors must be on-device.
+                - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
+                - Sharding is not supported for this operation
 
             Example:
-                input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+              .. code-block:: python
 
-                # Last dim reduction yields shape of [1, 1, 32, 1]
-                output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
+                  input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-                # All dim reduction yields shape of []
-                output_alldim = ttnn.argmax(input_tensor)
+                  # Last dim reduction yields shape of [1, 1, 32, 1]
+                  output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
+
+                  # All dim reduction yields shape of []
+                  output_alldim = ttnn.argmax(input_tensor)
 
         )doc";
 
