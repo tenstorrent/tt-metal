@@ -220,6 +220,9 @@ class Generator:
             use_chunked_prefill = prefill_ids.shape[-1] > self.model_args[model_id].max_prefill_chunk_size
             if use_chunked_prefill:
                 enable_trace = False
+            logger.info(
+                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[model_id].max_prefill_chunk_size}, enable trace: {enable_trace}"
+            )
 
             page_table_user = (
                 self._get_prefill_user_page_table(
