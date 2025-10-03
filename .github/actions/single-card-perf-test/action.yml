@@ -1,6 +1,6 @@
 inputs:
   device_perf_model_name:
-    required: true
+    required: false
     default: ''
     description: "Used to specify the model for a device perf test. E2E perf tests do not set this"
   commands:
