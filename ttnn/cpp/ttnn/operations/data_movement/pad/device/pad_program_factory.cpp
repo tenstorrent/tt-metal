@@ -1562,19 +1562,40 @@ operation::ProgramWithCallbacks pad_tile_multicore(
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     /*
-    As an example, lets say we want to pad a [2, 2, 32, 32] tensor to [2, 3, 64, 64]
+    As an example, lets say we want to pad a [2, 1, 32, 32] tensor to [2, 3, 64, 64]
     The input tensor exists as [2, 2, 1, 1] if we reduce by tile (page) size, and the output as [2, 3, 2, 2]
     we increment through these shapes, and will write a total of 2 * 3 * 2 * 2 = 24 tiles, so we will utilize 24 cores
-    for each core, we calculate if we are within the "input region" of the output. this does a simple check of
+    for each core, we calculate if we are within the "input region" of the output. this does a check of
     if any element in the incremented input_id_per_dim is less than the output_id_per_dim, if so, we are outside
     the input region, and we will write a padding tile, and we will not increment the input_id_per_dim for that tile.
     if we are within the input region, we will write the tile from input to the output, and increment the
     input_id_per_dim. This works because we increment the least-significant dim first, and the input region correctly
     matches the output after the output wraps around. In this example:
-    core 3: in_per_dim: [0,0,1,1] ; out_per_dim: [0,0,1,1], we copy the tile and increment, next ->
-    core 4: in_per_dim: [0,1,0,0] ; out_per_dim: [0,0,1,2], the last 2 output dims are greater than input,
-    so we write the pad tile, and increment only output dim. This continues until the out_per_dim wraps...
-    core 7: in_per_dim: [0,1,0,0] ; out_per_dim: [0,1,0,0], and so on and so forth
+    Core 0: input_id_per_dim: [0,0,0,0] ; output_id_per_dim: [0,0,0,0], we copy the tile and increment both input and
+    output dims, next ->
+    Core 1: input_id_per_dim: [0,1,0,0] ; output_id_per_dim: [0,0,0,1], the last output dim is
+    greater than input, so we write the pad tile, and increment only output dim, next ->
+    Core 2: input_id_per_dim: [0,1,0,0] ; output_id_per_dim: [0,0,1,0], the second last output dim is greater than
+    input, so we write the pad tile, and increment only output dim, next ->
+    Core 3: input_id_per_dim: [0,1,0,0] ; output_id_per_dim: [0,0,1,1], the last 2 output dims is greater than input,
+    so we write the pad tile, and increment only output dim, next ->
+    Core 4: input_id_per_dim: [0,1,0,0] ; output_id_per_dim: [0,1,0,0], we copy the tile and increment, next ->
+    Core 5: input_id_per_dim: [1,0,0,0] ; output_id_per_dim: [0,1,0,1], Some output dims are greater
+    than input, so we write the pad tile, and increment only output dim. next ->
+    Core 6: input_id_per_dim: [1,0,0,0] ; output_id_per_dim: [0,1,1,0],
+    Core 7, 8, 9, 10, 11, we write pad tiles, incrementing only output dim each time, next ->
+    Core 12: input_id_per_dim: [1,0,0,0] ; output_id_per_dim: [1,0,0,0], we copy the tile and increment, next ->
+    Core 13: input_id_per_dim: [1,1,0,0] ; output_id_per_dim: [1,0,0,1], Core 13, 14, 15, we write pad tiles,
+    incrementing only output dim each time, next -> Core 16: input_id_per_dim: [1,1,0,0] ; output_id_per_dim: [1,1,0,0],
+    we copy the tile and increment, next ->
+    From now on, input_id_per_dim wraps around it's most significant dim, resulting in [0,0,0,0].
+    This means for every output_id_per_dim, an element will always be greater than
+    input_id_per_dim, so every core after core 16 will only write pad tiles, which is correct as we have filled all of
+    the input region, and will always be outside of it from now on.
+
+    As you can see, the input_id_per_dim only increments when we are within the input region of the output,
+    and the output_id_per_dim increments every time, this means that when the output wraps around, the input
+    will be correctly positioned for the next set of output tiles.
     */
 
     std::vector<uint32_t> input_id_per_dim, output_id_per_dim;  // input and output id_per_dims
