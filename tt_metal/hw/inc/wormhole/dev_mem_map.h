@@ -73,6 +73,8 @@
 
 #define MEM_BOOT_CODE_BASE 0
 #define MEM_NOC_ATOMIC_RET_VAL_ADDR 4
+// An address that can be written to with no consequences.
+#define MEM_DISPATCH_NOOP 8
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
