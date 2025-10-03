@@ -19,21 +19,18 @@ class TTRegNetBottleneck:
         self.downsample = downsample
         self.groups = groups
         self.model_config = model_config
-        # print(parameters)
 
-        # print(parameters)
         # conv1: 1x1 convolution
         self.conv1 = TTConv2D(
             kernel_size=1,
             stride=1,
             padding=0,
-            # parameters=parameters["conv1"],
-            parameters=parameters["conv1"]["conv"],
+            parameters=parameters["conv1"],
             kernel_fidelity=model_config,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            deallocate_activation=True,
+            deallocate_activation=False,
             reallocate_halo_output=True,
             reshard_if_not_optimal=True,
             enable_act_double_buffer=True,
@@ -47,8 +44,7 @@ class TTRegNetBottleneck:
             kernel_size=3,
             stride=stride,
             padding=1,
-            # parameters=parameters["conv2"],
-            parameters=parameters["conv2"]["conv"],
+            parameters=parameters["conv2"],
             kernel_fidelity=model_config,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             groups=groups,
@@ -61,11 +57,10 @@ class TTRegNetBottleneck:
             enable_act_double_buffer=True,
             enable_weights_double_buffer=True,
             dtype=ttnn.bfloat16,
-            # is_reshape=True,
+            is_reshape=False,
         )
 
         # SE Module
-        print(parameters["se"]["fc1"])
         self.se_fc1 = TTConv2D(
             kernel_size=1,
             stride=1,
@@ -105,8 +100,7 @@ class TTRegNetBottleneck:
             kernel_size=1,
             stride=1,
             padding=0,
-            # parameters=parameters["conv3"],
-            parameters=parameters["conv3"]["conv"],
+            parameters=parameters["conv3"],
             kernel_fidelity=model_config,
             activation=None,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -125,8 +119,7 @@ class TTRegNetBottleneck:
                 kernel_size=1,
                 stride=stride,
                 padding=0,
-                # parameters=parameters["downsample"],
-                parameters=parameters["downsample"][0],
+                parameters=parameters["downsample"],
                 kernel_fidelity=model_config,
                 activation=None,
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -144,12 +137,10 @@ class TTRegNetBottleneck:
     def __call__(self, x, device):
         identity = x
         logger.info(f"conv1- 1x1 convolution")
-        logger.info(f"{x.shape=}")
         # conv1: 1x1 expansion
         out, shape_ = self.conv1(device, x, x.shape)
 
         logger.info(f"conv2- 3x3 grouped convolution")
-        logger.info(f"{out.shape=}")
         # conv2: 3x3 grouped convolution
         out, shape_ = self.conv2(device, out, shape_)
 
@@ -177,15 +168,10 @@ class TTRegNetBottleneck:
 
         # Handle downsample
         if self.downsample_layer is not None:
-            print(f"{identity.shape=}")
             identity, shape_ = self.downsample_layer(device, identity, identity.shape)
 
-        # Residual connection
-        if identity.shape != shape_:
-            identity = ttnn.reshape(identity, shape_)
-        out = ttnn.reshape(out, shape_)
-
         out = ttnn.add(out, identity)
+        out = ttnn.reshape(out, shape_)
         out = ttnn.relu(out)  # Final ReLU activation
 
         return out

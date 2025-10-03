@@ -299,31 +299,27 @@ def custom_preprocessor(
             )
     elif isinstance(model, Bottleneck):
         # Handle standalone Bottleneck model
-        print(f"Processing Bottleneck model: {model}")
 
         # conv1 (1x1 convolution)
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv1.conv, model.conv1.bn)
         parameters["conv1"] = {}
-        parameters["conv1"]["conv"] = {}
-        parameters["conv1"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        parameters["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["conv1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        parameters["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
 
         # conv2 (3x3 grouped convolution)
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv2.conv, model.conv2.bn)
         parameters["conv2"] = {}
-        parameters["conv2"]["conv"] = {}
-        parameters["conv2"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        parameters["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["conv2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        parameters["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
 
         # conv3 (1x1 convolution)
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv3.conv, model.conv3.bn)
         parameters["conv3"] = {}
-        parameters["conv3"]["conv"] = {}
-        parameters["conv3"]["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        parameters["conv3"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["conv3"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+        parameters["conv3"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
 
         # SE module
         parameters["se"] = {}
@@ -339,13 +335,10 @@ def custom_preprocessor(
         # Downsample
         if hasattr(model, "downsample") and model.downsample is not None:
             weight, bias = fold_batch_norm2d_into_conv2d(model.downsample[0], model.downsample[1])
-            parameters["downsample"] = []
-            parameters["downsample"].append({})
-            parameters["downsample"][0]["weight"] = ttnn.from_torch(
-                weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper
-            )
+            parameters["downsample"] = {}
+            parameters["downsample"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
             bias = bias.reshape((1, 1, 1, -1))
-            parameters["downsample"][0]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+            parameters["downsample"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
     return parameters
 
 
