@@ -202,7 +202,7 @@ TEST_F(SGDFusedFullTest, SGDCpuVsFusedVsCompositeTest) {
             std::fabs(cpu - fused));
     }
 
-    constexpr float tol = 1e-3f;
-    EXPECT_NEAR(fusedLosses.back(), cpuLosses.back(), tol);
-    EXPECT_NEAR(fusedLosses.back(), compLosses.back(), tol);
+    constexpr float atol = 1e-3f;
+    EXPECT_NEAR(fusedLosses.back(), cpuLosses.back(), atol);
+    EXPECT_NEAR(fusedLosses.back(), compLosses.back(), atol);
 }
