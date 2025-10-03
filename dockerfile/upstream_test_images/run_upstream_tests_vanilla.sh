@@ -27,7 +27,7 @@ test_suite_bh_umd_unit_tests() {
     # ./build/test/umd/api/api_tests
     ./build/test/umd/blackhole/unit_tests
     # Filter out the test that is failing due to local YAML files, see: https://github.com/tenstorrent/tt-metal/issues/24359
-    ./build/test/umd/api/api_tests --gtest_filter=-ApiClusterTest.DifferentConstructors
+    # ./build/test/umd/api/api_tests --gtest_filter=-ApiClusterTest.DifferentConstructors
 }
 
 # Function to run BH single PCIe small ML model tests
