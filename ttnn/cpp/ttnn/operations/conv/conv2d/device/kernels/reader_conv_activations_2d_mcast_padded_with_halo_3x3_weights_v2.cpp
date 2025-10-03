@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "conv_reader_common.hpp"
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
