@@ -27,10 +27,10 @@ runs:
     - run: |
         cd docker-job
         set -x
-
+        echo "Merging starting test:"
         ${{ inputs.commands }}
         status=$?
         env python3 models/perf/merge_perf_results.py REPORT
         exit $status
 
-      if: ${{ env.PIPELINE == 'model-perf' }}
+      if: ${{ inputs.device_perf_model_name == '' }}
