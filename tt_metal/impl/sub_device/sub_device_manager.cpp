@@ -14,13 +14,13 @@
 #include <utility>
 #include <vector>
 
-#include "allocator_types.hpp"
 #include "core_coord.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/allocator/allocator_types.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"
@@ -310,9 +310,8 @@ void SubDeviceManager::populate_sub_allocators() {
             config.core_type_from_noc_coord_table.insert({noc_coord, AllocCoreType::ComputeAndStore});
         }
 
-        // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
+        // L1BankingAllocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
         // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
-        TT_ASSERT(device_->allocator_scheme_ == MemoryAllocator::L1_BANKING);
         sub_device_allocators_[i] = std::make_unique<L1BankingAllocator>(config);
     }
 }
