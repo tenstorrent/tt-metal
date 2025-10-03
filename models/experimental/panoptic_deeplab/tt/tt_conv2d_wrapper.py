@@ -203,6 +203,7 @@ class TtConv2d:
             enable_kernel_stride_folding=False,
             full_inner_dim=False,
             act_block_h_override=32,
+            config_tensors_in_dram=True,
         )
 
     def _get_compute_kernel_config(self) -> ttnn.WormholeComputeKernelConfig:
@@ -217,10 +218,14 @@ class TtConv2d:
     def _create_spatial_slice_config(self) -> Optional[ttnn.Conv2dSliceConfig]:
         """Create spatial slice configuration based on slice_config"""
         if self._slice_config.mode == SliceMode.HEIGHT:
-            return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceHeight, num_slices=self._slice_config.num_slices)
+            return ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=self._slice_config.num_slices
+            )
         elif self._slice_config.mode == SliceMode.WIDTH:
-            return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceWidth, num_slices=self._slice_config.num_slices)
-        return None
+            return ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=self._slice_config.num_slices
+            )
+        return ttnn.Conv2dL1FullSliceConfig
 
     def _perform_channel_slicing(
         self,
@@ -313,6 +318,7 @@ class TtConv2d:
                 memory_config=memory_config,
                 dtype=ttnn.bfloat8_b,
                 compute_config=self._get_compute_kernel_config(),
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
             output_slice = ttnn.move(output_slice)
             if i == 0:
