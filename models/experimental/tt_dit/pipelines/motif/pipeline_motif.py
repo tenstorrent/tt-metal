@@ -16,10 +16,9 @@ import ttnn
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
 from loguru import logger
-from transformers import CLIPTextModel, CLIPTokenizer, CLIPTokenizerFast, T5EncoderModel, T5Tokenizer, T5TokenizerFast
 
-from ...encoders.clip.model_clip import CLIPConfig, CLIPEncoder
-from ...encoders.t5.model_t5 import T5Config, T5Encoder
+from ...encoders.clip.encoder_pair import CLIPTokenizerEncoderPair
+from ...encoders.t5.encoder_pair import T5TokenizerEncoderPair
 from ...models.transformers.transformer_motif import MotifTransformer, convert_motif_transformer_state
 from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -29,6 +28,8 @@ from ...utils.padding import PaddingConfig
 from ...utils.substate import substate
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from PIL import Image
 
 TILE_SIZE = 32
@@ -227,25 +228,9 @@ class StableDiffusion3Pipeline:
             subfolder="checkpoints",
             revision="update_new_ckpt",
         )
+
         vae_checkpoint = "stabilityai/stable-diffusion-3-medium-diffusers"
-        t5_checkpoint = "google/flan-t5-xxl"
-        clip_l_checkpoint = "openai/clip-vit-large-patch14"
-        clip_g_checkpoint = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
-
-        self._tokenizer_1 = CLIPTokenizerFast.from_pretrained(clip_l_checkpoint)
-        self._tokenizer_2 = CLIPTokenizerFast.from_pretrained(clip_g_checkpoint)
-        self._tokenizer_3 = T5Tokenizer.from_pretrained(t5_checkpoint)  # TODO: T5TokenizerFast?
-        self._text_encoder_1 = CLIPTextModel.from_pretrained(clip_l_checkpoint)
-        self._text_encoder_2 = CLIPTextModel.from_pretrained(clip_g_checkpoint)
-        if enable_t5_text_encoder:
-            torch_text_encoder_3 = T5EncoderModel.from_pretrained(t5_checkpoint)
         self._torch_vae = AutoencoderKL.from_pretrained(vae_checkpoint, subfolder="vae")
-
-        assert isinstance(self._tokenizer_1, CLIPTokenizerFast)
-        assert isinstance(self._tokenizer_2, CLIPTokenizerFast)
-        assert isinstance(self._tokenizer_3, T5Tokenizer)
-        assert isinstance(self._text_encoder_1, CLIPTextModel)
-        assert isinstance(self._text_encoder_2, CLIPTextModel)
         assert isinstance(self._torch_vae, AutoencoderKL)
 
         state_dict = torch.load(checkpoint_path, map_location=torch.device("cpu"), mmap=True)
@@ -325,91 +310,14 @@ class StableDiffusion3Pipeline:
             # HACK: reshape submesh device 0 to 1D
             self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
 
-        logger.info("creating TT-NN CLIP text encoder...")
-
-        # Create CLIP config for encoder 1
-        clip_config_1 = CLIPConfig(
-            vocab_size=self._text_encoder_1.config.vocab_size,
-            embed_dim=self._text_encoder_1.config.hidden_size,
-            ff_dim=self._text_encoder_1.config.intermediate_size,
-            num_heads=self._text_encoder_1.config.num_attention_heads,
-            num_hidden_layers=self._text_encoder_1.config.num_hidden_layers,
-            max_prompt_length=77,
-            layer_norm_eps=self._text_encoder_1.config.layer_norm_eps,
-            attention_dropout=self._text_encoder_1.config.attention_dropout,
-            hidden_act=self._text_encoder_1.config.hidden_act,
-        )
-
-        # Create CLIP config for encoder 2
-        clip_config_2 = CLIPConfig(
-            vocab_size=self._text_encoder_2.config.vocab_size,
-            embed_dim=self._text_encoder_2.config.hidden_size,
-            ff_dim=self._text_encoder_2.config.intermediate_size,
-            num_heads=self._text_encoder_2.config.num_attention_heads,
-            num_hidden_layers=self._text_encoder_2.config.num_hidden_layers,
-            max_prompt_length=77,
-            layer_norm_eps=self._text_encoder_2.config.layer_norm_eps,
-            attention_dropout=self._text_encoder_2.config.attention_dropout,
-            hidden_act=self._text_encoder_2.config.hidden_act,
-        )
-
-        # Store original state dicts before creating new encoders
-        text_encoder_1_state_dict = self._text_encoder_1.state_dict()
-        text_encoder_2_state_dict = self._text_encoder_2.state_dict()
-
-        # Create new CLIP encoders
-        self._text_encoder_1 = CLIPEncoder(
-            config=clip_config_1,
-            mesh_device=encoder_device,
-            ccl_manager=self.ccl_managers[0],  # use CCL manager for submesh 0
+        self._text_encoder = TextEncoder(
+            device=encoder_device,
+            ccl_manager=self.ccl_managers[0],
             parallel_config=encoder_parallel_config,
-            eos_token_id=2,  # default EOS token ID for CLIP
+            enable_t5=enable_t5_text_encoder,
+            use_torch_clip_encoder=False,
+            use_torch_t5_encoder=False,
         )
-
-        self._text_encoder_2 = CLIPEncoder(
-            config=clip_config_2,
-            mesh_device=encoder_device,
-            ccl_manager=self.ccl_managers[0],  # Use CCL manager for submesh 0
-            parallel_config=encoder_parallel_config,
-            eos_token_id=2,  # default EOS token ID for CLIP
-        )
-
-        # Load state dicts into new encoders
-        self._text_encoder_1.load_state_dict(text_encoder_1_state_dict)
-        self._text_encoder_2.load_state_dict(text_encoder_2_state_dict)
-
-        if enable_t5_text_encoder:
-            logger.info("creating TT-NN T5 text encoder...")
-
-            # Create T5 config
-            t5_config = T5Config(
-                vocab_size=torch_text_encoder_3.config.vocab_size,
-                embed_dim=torch_text_encoder_3.config.d_model,
-                ff_dim=torch_text_encoder_3.config.d_ff,
-                kv_dim=torch_text_encoder_3.config.d_kv,
-                num_heads=torch_text_encoder_3.config.num_heads,
-                num_hidden_layers=torch_text_encoder_3.config.num_layers,
-                max_prompt_length=256,  # default T5 max prompt length
-                layer_norm_eps=torch_text_encoder_3.config.layer_norm_epsilon,
-                relative_attention_num_buckets=torch_text_encoder_3.config.relative_attention_num_buckets,
-                relative_attention_max_distance=torch_text_encoder_3.config.relative_attention_max_distance,
-            )
-
-            # Store original state dict before creating new encoder
-            torch_text_encoder_3_state_dict = torch_text_encoder_3.state_dict()
-
-            # Create new T5 encoder
-            self._text_encoder_3 = T5Encoder(
-                config=t5_config,
-                mesh_device=encoder_device,
-                ccl_manager=self.ccl_managers[0],  # use CCL manager for submesh 0
-                parallel_config=encoder_parallel_config,
-            )
-
-            # Load state dict into new encoder
-            self._text_encoder_3.load_state_dict(torch_text_encoder_3_state_dict)
-        else:
-            self._text_encoder_3 = None
 
         self.timing_collector = None  # Set externally when timing is needed
 
@@ -858,244 +766,93 @@ class StableDiffusion3Pipeline:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         timer = self.timing_collector
 
-        tokenizer_max_length = self._tokenizer_1.model_max_length
-
-        with timer.time_section("clip_encoding") if timer else nullcontext():
-            prompt_embed, pooled_prompt_embed = _get_clip_prompt_embeds(
-                prompts=prompt_1,
-                num_images_per_prompt=num_images_per_prompt,
-                tokenizer=self._tokenizer_1,
-                text_encoder=self._text_encoder_1,
-                sequence_length=tokenizer_max_length,
-                mesh_device=self.encoder_device,
-                clip_skip=clip_skip or 0,
-                zero_masking=True,
+        with timer.time_section("text_encoding") if timer else nullcontext():
+            prompt_embeds, pooled_prompt_embeds = self._text_encoder.encode(
+                prompt_1, prompt_2, prompt_3, num_images_per_prompt=num_images_per_prompt
             )
 
-            prompt_2_embed, pooled_prompt_2_embed = _get_clip_prompt_embeds(
-                prompts=prompt_2,
-                num_images_per_prompt=num_images_per_prompt,
-                tokenizer=self._tokenizer_2,
-                text_encoder=self._text_encoder_2,
-                sequence_length=tokenizer_max_length,
-                mesh_device=self.encoder_device,
-                clip_skip=clip_skip or 0,
-                zero_masking=True,
+            negative_prompt_embeds, negative_pooled_prompt_embeds = self._text_encoder.encode(
+                negative_prompt_1, negative_prompt_2, negative_prompt_3, num_images_per_prompt=num_images_per_prompt
             )
-            clip_prompt_embeds = torch.cat([prompt_embed, prompt_2_embed], dim=-1)
-
-        with timer.time_section("t5_encoding") if timer else nullcontext():
-            t5_prompt_embed = _get_t5_prompt_embeds(
-                mesh_device=self.encoder_device,
-                prompts=negative_prompt_3,
-                num_images_per_prompt=num_images_per_prompt,
-                sequence_length=max_t5_sequence_length,
-                tokenizer=self._tokenizer_3,
-                text_encoder=self._text_encoder_3,
-                empty_sequence_length=max_t5_sequence_length,
-                embedding_dim=self._prompt_embedding_dim,
-                zero_masking=True,
-            )
-
-        clip_prompt_embeds = torch.nn.functional.pad(
-            clip_prompt_embeds,
-            (0, t5_prompt_embed.shape[-1] - clip_prompt_embeds.shape[-1]),
-        )
-
-        prompt_embeds = torch.cat([clip_prompt_embeds, t5_prompt_embed], dim=-2)
-        pooled_prompt_embeds = torch.cat([pooled_prompt_embed, pooled_prompt_2_embed], dim=-1)
-
-        if not do_classifier_free_guidance:
-            return prompt_embeds, pooled_prompt_embeds
-
-        with timer.time_section("clip_encoding") if timer else nullcontext():
-            negative_prompt_embed, negative_pooled_prompt_embed = _get_clip_prompt_embeds(
-                prompts=negative_prompt_1,
-                num_images_per_prompt=num_images_per_prompt,
-                tokenizer=self._tokenizer_1,
-                text_encoder=self._text_encoder_1,
-                sequence_length=tokenizer_max_length,
-                mesh_device=self.encoder_device,
-                clip_skip=clip_skip or 0,
-                zero_masking=True,
-            )
-            negative_prompt_2_embed, negative_pooled_prompt_2_embed = _get_clip_prompt_embeds(
-                prompts=negative_prompt_2,
-                num_images_per_prompt=num_images_per_prompt,
-                tokenizer=self._tokenizer_2,
-                text_encoder=self._text_encoder_2,
-                sequence_length=tokenizer_max_length,
-                mesh_device=self.encoder_device,
-                clip_skip=clip_skip or 0,
-                zero_masking=True,
-            )
-            negative_clip_prompt_embeds = torch.cat([negative_prompt_embed, negative_prompt_2_embed], dim=-1)
-
-        with timer.time_section("t5_encoding") if timer else nullcontext():
-            t5_negative_prompt_embed = _get_t5_prompt_embeds(
-                mesh_device=self.encoder_device,
-                prompts=negative_prompt_3,
-                num_images_per_prompt=num_images_per_prompt,
-                sequence_length=max_t5_sequence_length,
-                tokenizer=self._tokenizer_3,
-                text_encoder=self._text_encoder_3,
-                empty_sequence_length=max_t5_sequence_length,
-                embedding_dim=self._prompt_embedding_dim,
-                zero_masking=True,
-            )
-
-        negative_clip_prompt_embeds = torch.nn.functional.pad(
-            negative_clip_prompt_embeds,
-            (
-                0,
-                t5_negative_prompt_embed.shape[-1] - negative_clip_prompt_embeds.shape[-1],
-            ),
-        )
-
-        negative_prompt_embeds = torch.cat([negative_clip_prompt_embeds, t5_negative_prompt_embed], dim=-2)
-        negative_pooled_prompt_embeds = torch.cat(
-            [negative_pooled_prompt_embed, negative_pooled_prompt_2_embed], dim=-1
-        )
 
         prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
         pooled_prompt_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
 
         return prompt_embeds, pooled_prompt_embeds
 
-    def t5_enabled(self):
-        return self._text_encoder_3 is not None
 
+class TextEncoder:
+    def __init__(
+        self,
+        *,
+        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
+        parallel_config: EncoderParallelConfig,
+        enable_t5: bool,
+        use_torch_clip_encoder: bool,
+        use_torch_t5_encoder: bool,
+    ) -> None:
+        self._device = device
+        self._ccl_manager = ccl_manager
+        self._parallel_config = parallel_config
 
-# adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/pipelines/stable_diffusion_3/pipeline_stable_diffusion_3.py
-def _get_clip_prompt_embeds(
-    *,
-    prompts: list[str],
-    text_encoder: CLIPEncoder | CLIPTextModel,
-    tokenizer: CLIPTokenizer,
-    sequence_length: int,
-    num_images_per_prompt: int,
-    clip_skip: int = 0,
-    mesh_device: ttnn.MeshDevice | None = None,
-    zero_masking: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    tokens = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding="max_length",
-        max_length=sequence_length,
-        truncation=True,
-    ).input_ids
-
-    untruncated_tokens = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding="longest",
-    ).input_ids
-
-    if untruncated_tokens.shape[-1] >= tokens.shape[-1] and not torch.equal(tokens, untruncated_tokens):
-        logger.warning("CLIP input text was truncated")
-
-    if isinstance(text_encoder, CLIPEncoder):
-        assert mesh_device is not None
-
-        tt_tokens = ttnn.from_torch(
-            tokens,
-            dtype=ttnn.uint32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        self._clip_l = CLIPTokenizerEncoderPair(
+            "openai/clip-vit-large-patch14",
+            skip_norm=False,
+            true_clip_skip=0,
+            zero_masking=True,
+            sequence_length=None,
+            device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            use_torch=use_torch_clip_encoder,
         )
 
-        tt_prompt_embeds, tt_pooled_prompt_embeds = text_encoder(
-            prompt_tokenized=tt_tokens,
-            mesh_device=mesh_device,
+        self._clip_g = CLIPTokenizerEncoderPair(
+            "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k",
+            skip_norm=False,
+            true_clip_skip=0,
+            zero_masking=True,
+            sequence_length=None,
+            device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            use_torch=use_torch_clip_encoder,
         )
-        tt_prompt_embeds = tt_prompt_embeds[-(clip_skip + 2)]
 
-        prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])
-        pooled_prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_prompt_embeds)[0])
-    else:
-        tokens = tokens.to(device=text_encoder.device)
-        with torch.no_grad():
-            output = text_encoder.forward(tokens, output_hidden_states=True)
-        prompt_embeds = output.hidden_states[-(clip_skip + 2)].to("cpu")
-        pooled_prompt_embeds = output.pooler_output.to("cpu")
-
-    def masking_wo_first_eos(token: torch.Tensor, eos: int) -> torch.Tensor:
-        idx = (token != eos).sum(dim=1)
-        mask = token != eos
-        arange = torch.arange(mask.size(0))
-        mask[arange, idx] = True
-        return mask.unsqueeze(-1)  # B x L x 1
-
-    if zero_masking:
-        prompt_embeds = prompt_embeds * masking_wo_first_eos(tokens, tokenizer.eos_token_id)
-
-    # In diffusers v0.35.1 `pooled_prompt_embeds` is repeated along the wrong dimension in
-    # `StableDiffusion3Pipeline`, effectively mixing up the prompts.
-    pooled_prompt_embeds = pooled_prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
-    prompt_embeds = prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
-
-    return prompt_embeds, pooled_prompt_embeds
-
-
-# adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/pipelines/stable_diffusion_3/pipeline_stable_diffusion_3.py
-def _get_t5_prompt_embeds(
-    *,
-    prompts: list[str],
-    text_encoder: T5Encoder | T5EncoderModel | None,
-    tokenizer: T5TokenizerFast,
-    sequence_length: int,
-    empty_sequence_length: int,
-    num_images_per_prompt: int,
-    mesh_device: ttnn.MeshDevice | None = None,
-    embedding_dim: int,
-    zero_masking: bool = False,
-) -> torch.Tensor:
-    if text_encoder is None:
-        return torch.zeros([len(prompts) * num_images_per_prompt, empty_sequence_length, embedding_dim])
-
-    tokens = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding="max_length",
-        max_length=sequence_length,
-        truncation=True,
-    ).input_ids
-
-    untruncated_tokens = tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding="longest",
-    ).input_ids
-
-    if untruncated_tokens.shape[-1] >= tokens.shape[-1] and not torch.equal(tokens, untruncated_tokens):
-        logger.warning("T5 input text was truncated")
-
-    if isinstance(text_encoder, T5Encoder):
-        assert mesh_device is not None
-
-        tt_tokens = ttnn.from_torch(
-            tokens,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.uint32,
-            device=mesh_device,
-            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(mesh_device),
+        self._t5 = T5TokenizerEncoderPair(
+            "google/flan-t5-xxl",
+            zero_masking=True,
+            sequence_length=256,
+            empty_sequence_length=None,
+            embedding_dim=4096,
+            device=device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            use_torch=use_torch_t5_encoder,
+            enabled=enable_t5,
+            use_attention_mask=True,
         )
-        tt_hidden_states = text_encoder(prompt=tt_tokens, device=mesh_device)
-        tt_prompt_embeds = tt_hidden_states[-1]
 
-        prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(tt_prompt_embeds)[0])
-    else:
-        tokens = tokens.to(device=text_encoder.device)
-        with torch.no_grad():
-            output = text_encoder.forward(tokens)
-        prompt_embeds = output.last_hidden_state.to("cpu")
+    def encode(
+        self,
+        prompts_1: Iterable[str],
+        prompts_2: Iterable[str],
+        prompts_3: Iterable[str],
+        *,
+        num_images_per_prompt: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        clip_l, pooled_clip_l = self._clip_l.encode(prompts=prompts_1, num_images_per_prompt=num_images_per_prompt)
+        clip_g, pooled_clip_g = self._clip_g.encode(prompts=prompts_2, num_images_per_prompt=num_images_per_prompt)
+        t5 = self._t5.encode(prompts=prompts_3, num_images_per_prompt=num_images_per_prompt)
 
-    if zero_masking:
-        prompt_embeds = prompt_embeds * (tokens != tokenizer.pad_token_id).unsqueeze(-1)
+        clip = torch.cat([clip_l, clip_g], dim=-1)
+        clip = torch.nn.functional.pad(clip, (0, t5.shape[-1] - clip.shape[-1]))
 
-    return prompt_embeds.repeat_interleave(num_images_per_prompt, dim=0)
+        embeds = torch.cat([clip, t5], dim=-2)
+        pooled_embeds = torch.cat([pooled_clip_l, pooled_clip_g], dim=-1)
+
+        return embeds, pooled_embeds
 
 
 def _schedule(*, step_count: int, linear_quadratic_emulating_steps: int) -> tuple[torch.Tensor, torch.Tensor]:
