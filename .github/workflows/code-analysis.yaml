@@ -7,9 +7,27 @@ jobs:
   send-message:
     runs-on: ubuntu-latest
     steps:
+      - name: Get Patrick Roberts User ID
+        id: get-user-id
+        run: |
+          # Get user list and find Patrick Roberts
+          USERS_RESPONSE=$(curl -s -H 'Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}' \
+            'https://slack.com/api/users.list')
+
+          # Parse JSON to find user ID for Patrick Roberts
+          USER_ID=$(echo "$USERS_RESPONSE" | jq -r '.members[] | select(.real_name == "Patrick Roberts" or .profile.display_name == "Patrick Roberts" or .name == "Patrick Roberts") | .id' | head -1)
+
+          if [ -z "$USER_ID" ] || [ "$USER_ID" == "null" ]; then
+            echo "User Patrick Roberts not found"
+            exit 1
+          fi
+
+          echo "Found user ID: $USER_ID"
+          echo "user_id=$USER_ID" >> $GITHUB_OUTPUT
+
       - name: Send Slack Message
         run: |
           curl -X POST -H 'Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}' \
             -H 'Content-type: application/json' \
-            --data '{"channel":"C09HT5VSXRB","text":"Hi @Patrick Roberts"}' \
+            --data '{"channel":"C09HT5VSXRB","text":"Hi <@${{ steps.get-user-id.outputs.user_id }}>"}' \
             https://slack.com/api/chat.postMessage
