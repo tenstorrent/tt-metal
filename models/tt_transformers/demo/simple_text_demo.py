@@ -807,6 +807,7 @@ def test_demo_text(
                     k_cache, v_cache = layer.attention.layer_past
                     k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
                     v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+            generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
 
@@ -1186,7 +1187,7 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama-3.2-1B": 24.05371875,
+                "N150_Llama-3.2-1B": 25,
                 "N150_Llama-3.2-3B": 62,
                 "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,

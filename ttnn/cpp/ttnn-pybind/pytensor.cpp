@@ -696,7 +696,7 @@ void pytensor_module(py::module& m_tensor) {
     pyTensor.def(py::init<ttnn::Tensor&>())
         .def(
             py::init<>([](std::vector<float>&& data,
-                          const std::array<uint32_t, 4>& shape,
+                          const std::vector<uint32_t>& shape,
                           DataType data_type,
                           Layout layout,
                           const std::optional<Tile>& tile,
@@ -746,7 +746,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             py::init<>([](std::vector<float>&& data,
-                          const std::array<uint32_t, 4>& shape,
+                          const std::vector<uint32_t>& shape,
                           DataType data_type,
                           Layout layout,
                           std::optional<MeshDevice*> device,
@@ -808,7 +808,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             py::init<>([](std::vector<float>&& data,
-                          const std::array<uint32_t, 4>& shape,
+                          const std::vector<uint32_t>& shape,
                           DataType data_type,
                           Layout layout,
                           std::optional<MeshDevice*> device,
@@ -944,9 +944,7 @@ void pytensor_module(py::module& m_tensor) {
         .def_property_readonly("tile", [](const Tensor& self) { return self.tensor_spec().tile(); })
         .def(
             "deallocate",
-            [](Tensor& self, bool force) {
-                self.deallocate(force);
-            },
+            [](Tensor& self, bool force) { self.deallocate(force); },
             py::arg("force") = false,
             R"doc(
                 Dellocates all data of a tensor. This either deletes all host data or deallocates tensor data from device memory.
@@ -1099,8 +1097,8 @@ void pytensor_module(py::module& m_tensor) {
         .def(
             "pad",
             [](const Tensor& self,
-               const std::array<uint32_t, 4>& output_tensor_shape,
-               const std::array<uint32_t, 4>& input_tensor_start,
+               const std::vector<uint32_t>& output_tensor_shape,
+               const std::vector<uint32_t>& input_tensor_start,
                float pad_value) {
                 return self.pad(ttnn::Shape(output_tensor_shape), ttnn::Shape(input_tensor_start), pad_value);
             },
