@@ -57,18 +57,20 @@ struct ConnectionKeyHash {
     }
 };
 
+// Worker type enum - defines different types of cores that can use fabric connections
+enum class TestWorkerType : uint8_t { SENDER, RECEIVER, SYNC, MUX };
+
 struct Connection {
-    std::set<CoreCoord> sender_cores;           // Dedup built-in
-    std::set<CoreCoord> receiver_cores;         // Dedup built-in
+    std::set<CoreCoord> sender_cores;           // Data senders (full-size channels)
+    std::set<CoreCoord> receiver_cores;         // Credit senders (header-only channels)
+    std::set<CoreCoord> sync_cores;             // Sync senders (header-only channels)
     std::map<CoreCoord, uint32_t> channel_map;  // Core -> channel assignment
-    uint32_t connection_idx = 0;
+    std::map<CoreCoord, TestWorkerType> core_worker_types;  // Core -> worker type mapping
     bool needs_mux = false;
 };
 
 // forward declarations
 struct TestDevice;
-
-enum class TestWorkerType : uint8_t { SENDER, RECEIVER };
 
 // FabricConnectionManager: Centralized connection tracking and management
 // Handles connection registration, mux detection, channel assignment, and argument generation
@@ -77,26 +79,57 @@ class FabricConnectionManager {
 public:
     FabricConnectionManager() = default;
 
+    // Helper: Determine required channel type for a worker type
+    // Mux channel type must be determined from its clients, not directly
+    static FabricMuxChannelType get_required_channel_type(TestWorkerType worker_type) {
+        switch (worker_type) {
+            case TestWorkerType::SENDER: return FabricMuxChannelType::FULL_SIZE_CHANNEL;      // Full payload packets
+            case TestWorkerType::RECEIVER: return FabricMuxChannelType::HEADER_ONLY_CHANNEL;  // Credit return packets
+            case TestWorkerType::SYNC: return FabricMuxChannelType::HEADER_ONLY_CHANNEL;      // Atomic inc sync packets
+            default:
+                TT_FATAL(
+                    false,
+                    "Invalid TestWorkerType for channel type determination: {}. "
+                    "MUX channel type must be determined from its clients, not directly.",
+                    static_cast<int>(worker_type));
+        }
+    }
+
     // Registration: Call from add_sender/receiver_traffic_config if enable_flow_control
-    void register_client(const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, bool is_sender) {
+    void register_client(
+        const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type) {
         ConnectionKey key = {direction, link_idx};
         auto& conn = connections_[key];  // Auto-creates if new
 
         log_info(
             tt::LogTest,
-            "FabricConnectionManager::register_client: core={} direction={} link_idx={} is_sender={}",
+            "FabricConnectionManager::register_client: core={} direction={} link_idx={} worker_type={}",
             core,
             static_cast<int>(direction),
             link_idx,
-            is_sender);
+            static_cast<int>(worker_type));
 
-        // Add to appropriate set (dedup happens automatically with std::set)
-        if (is_sender) {
-            conn.sender_cores.insert(core);
-            sender_core_to_keys_[core].insert(key);
-        } else {
-            conn.receiver_cores.insert(core);
-            receiver_core_to_keys_[core].insert(key);
+        // Store worker type for this core (for channel assignment later)
+        conn.core_worker_types[core] = worker_type;
+
+        // Add to appropriate set based on worker type
+        // Each worker type has its own set for proper tracking
+        switch (worker_type) {
+            case TestWorkerType::SENDER:
+                conn.sender_cores.insert(core);
+                sender_core_to_keys_[core].insert(key);
+                break;
+            case TestWorkerType::RECEIVER:
+                conn.receiver_cores.insert(core);
+                receiver_core_to_keys_[core].insert(key);
+                break;
+            case TestWorkerType::SYNC:
+                conn.sync_cores.insert(core);
+                sync_core_to_keys_[core].insert(key);
+                break;
+            case TestWorkerType::MUX:
+                TT_FATAL(false, "MUX should not be registered as a client via register_client()");
+                break;
         }
     }
 
@@ -106,20 +139,21 @@ public:
     void process(
         const std::unordered_map<RoutingDirection, CoreCoord>& mux_cores,
         std::shared_ptr<IDeviceInfoProvider> device_info_provider) {
-        uint32_t connection_idx = 0;
-
         for (auto& [key, conn] : connections_) {
-            conn.connection_idx = connection_idx++;
-            // Mux is needed if more than 1 client (sender or receiver) uses this link
-            conn.needs_mux = (conn.sender_cores.size() + conn.receiver_cores.size()) > 1;
+            // Mux is needed if more than 1 client (any type) uses this link
+            size_t total_clients = conn.sender_cores.size() + conn.receiver_cores.size() + conn.sync_cores.size();
+            conn.needs_mux = total_clients > 1;
 
             log_info(
                 tt::LogTest,
-                "FabricConnectionManager::process: direction={} link_idx={} senders={} receivers={} needs_mux={}",
+                "FabricConnectionManager::process: direction={} link_idx={} senders={} receivers={} sync={} total={} "
+                "needs_mux={}",
                 static_cast<int>(key.direction),
                 key.link_idx,
                 conn.sender_cores.size(),
                 conn.receiver_cores.size(),
+                conn.sync_cores.size(),
+                total_clients,
                 conn.needs_mux);
 
             if (conn.needs_mux) {
@@ -141,8 +175,16 @@ public:
                     mux_core);
 
                 // Create and store mux config for this connection key
-                const uint8_t num_full_size_channels = conn.sender_cores.size();
-                const uint8_t num_header_only_channels = conn.receiver_cores.size();
+                // Count channels by type using worker types
+                uint8_t num_full_size_channels = 0;
+                uint8_t num_header_only_channels = 0;
+                for (const auto& [core, worker_type] : conn.core_worker_types) {
+                    if (get_required_channel_type(worker_type) == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
+                        num_full_size_channels++;
+                    } else {
+                        num_header_only_channels++;
+                    }
+                }
                 const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
                 const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
                 const size_t buffer_size_bytes_full_size_channel =
@@ -189,10 +231,21 @@ public:
     }
 
     // Get all connection keys for a specific core (fast lookup via reverse map)
-    std::vector<ConnectionKey> get_connection_keys_for_core(const CoreCoord& core, bool is_sender) const {
-        const auto& map = is_sender ? sender_core_to_keys_ : receiver_core_to_keys_;
-        auto it = map.find(core);
-        if (it != map.end()) {
+    std::vector<ConnectionKey> get_connection_keys_for_core(const CoreCoord& core, TestWorkerType worker_type) const {
+        const auto* map = [&]() -> const std::unordered_map<CoreCoord, std::set<ConnectionKey>>* {
+            switch (worker_type) {
+                case TestWorkerType::SENDER: return &sender_core_to_keys_;
+                case TestWorkerType::RECEIVER: return &receiver_core_to_keys_;
+                case TestWorkerType::SYNC: return &sync_core_to_keys_;
+                case TestWorkerType::MUX:
+                    TT_FATAL(false, "MUX should not query connection keys via this method");
+                    return nullptr;
+            }
+            return nullptr;
+        }();
+
+        auto it = map->find(core);
+        if (it != map->end()) {
             return std::vector<ConnectionKey>(it->second.begin(), it->second.end());
         }
         return {};
@@ -215,15 +268,15 @@ public:
     }
 
     // Get number of fabric connections for a specific core
-    size_t get_connection_count_for_core(const CoreCoord& core, bool is_sender) const {
-        const auto& map = is_sender ? sender_core_to_keys_ : receiver_core_to_keys_;
-        auto it = map.find(core);
-        return (it != map.end()) ? it->second.size() : 0;
+    size_t get_connection_count_for_core(const CoreCoord& core, TestWorkerType worker_type) const {
+        auto keys = get_connection_keys_for_core(core, worker_type);
+        return keys.size();
     }
 
     // Get the array index for a connection key in the core's connection list
-    uint32_t get_connection_array_index_for_key(const CoreCoord& core, bool is_sender, const ConnectionKey& key) const {
-        auto keys = get_connection_keys_for_core(core, is_sender);
+    uint32_t get_connection_array_index_for_key(
+        const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key) const {
+        auto keys = get_connection_keys_for_core(core, worker_type);
 
         for (size_t i = 0; i < keys.size(); i++) {
             if (keys[i] == key) {
@@ -291,14 +344,14 @@ public:
     // Parameters are passed in from TestDevice since it has all the context
     std::vector<uint32_t> generate_connection_args_for_core(
         const CoreCoord& core,
-        bool is_sender,
+        TestWorkerType worker_type,
         std::shared_ptr<IDeviceInfoProvider> device_info_provider,
         std::shared_ptr<IRouteManager> route_manager,
         const FabricNodeId& fabric_node_id,
         tt::tt_metal::Program& program_handle) const {
         std::vector<uint32_t> rt_args;
 
-        auto keys = get_connection_keys_for_core(core, is_sender);
+        auto keys = get_connection_keys_for_core(core, worker_type);
 
         for (const auto& key : keys) {
             auto conn_it = connections_.find(key);
@@ -345,8 +398,7 @@ public:
                 // Convert mux core (logical) to virtual coordinates for NOC addressing
                 const auto mux_virtual_core = device_info_provider->get_virtual_core_from_logical_core(mux_core);
                 const auto& mux_config = mux_config_it->second;
-                const auto channel_type = is_sender ? tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL
-                                                    : tt::tt_fabric::FabricMuxChannelType::HEADER_ONLY_CHANNEL;
+                const auto channel_type = get_required_channel_type(worker_type);
 
                 // kernel will allocate 3 local semaphores
                 std::vector<uint32_t> mux_rt_args = {
@@ -385,6 +437,7 @@ private:
     std::unordered_map<ConnectionKey, Connection, ConnectionKeyHash> connections_;
     std::unordered_map<CoreCoord, std::set<ConnectionKey>> sender_core_to_keys_;
     std::unordered_map<CoreCoord, std::set<ConnectionKey>> receiver_core_to_keys_;
+    std::unordered_map<CoreCoord, std::set<ConnectionKey>> sync_core_to_keys_;
 
     // Mux state (populated during process())
     // One mux per connection key (each fabric link has its own mux)
@@ -399,24 +452,27 @@ private:
     static constexpr uint32_t MAX_HEADER_ONLY_CHANNELS = 16;  // Based on mux L1 limits
     static constexpr uint32_t BUFFERS_PER_CHANNEL = 8;
 
+    // Helper method to assign and validate mux channels for a connection
     void assign_and_validate_channels(Connection& conn, const ConnectionKey& key) {
         uint32_t next_full_size = 0;
         uint32_t next_header_only = 0;
 
-        // Assign full-size channels to senders
-        for (const auto& core : conn.sender_cores) {
-            conn.channel_map[core] = next_full_size++;
+        // Assign channels based on worker type using get_required_channel_type()
+        // Process all cores and assign channels according to their channel type requirement
+        for (const auto& [core, worker_type] : conn.core_worker_types) {
+            FabricMuxChannelType channel_type = get_required_channel_type(worker_type);
+
+            if (channel_type == FabricMuxChannelType::FULL_SIZE_CHANNEL) {
+                conn.channel_map[core] = next_full_size++;
+            } else {  // HEADER_ONLY_CHANNEL
+                conn.channel_map[core] = next_header_only++;
+            }
         }
 
-        // Assign header-only channels to receivers
-        for (const auto& core : conn.receiver_cores) {
-            conn.channel_map[core] = next_header_only++;
-        }
-
-        // Validate inline
+        // Validate channel limits
         TT_FATAL(
             next_full_size <= MAX_FULL_SIZE_CHANNELS,
-            "Exceeded full-size channel limit: {} senders for connection direction={} link={} (max={})",
+            "Exceeded full-size channel limit: {} for connection direction={} link={} (max={})",
             next_full_size,
             static_cast<int>(key.direction),
             key.link_idx,
@@ -424,7 +480,7 @@ private:
 
         TT_FATAL(
             next_header_only <= MAX_HEADER_ONLY_CHANNELS,
-            "Exceeded header-only channel limit: {} receivers for connection direction={} link={} (max={})",
+            "Exceeded header-only channel limit: {} for connection direction={} link={} (max={})",
             next_header_only,
             static_cast<int>(key.direction),
             key.link_idx,
@@ -574,7 +630,7 @@ private:
         CoreCoord logical_core,
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_id,
-        bool is_sender,
+        TestWorkerType worker_type,
         FabricConnectionManager& connection_mgr,
         std::optional<RoutingDirection> outgoing_direction = std::nullopt);
 
@@ -746,7 +802,7 @@ inline std::optional<ConnectionKey> TestDevice::register_fabric_connection(
     CoreCoord logical_core,
     const FabricNodeId& src_node_id,
     const FabricNodeId& dst_node_id,
-    bool is_sender,
+    TestWorkerType worker_type,
     FabricConnectionManager& connection_mgr,
     std::optional<RoutingDirection> outgoing_direction) {
     // Determine the direction: use provided direction if available, otherwise query from node IDs
@@ -773,7 +829,7 @@ inline std::optional<ConnectionKey> TestDevice::register_fabric_connection(
     std::optional<ConnectionKey> fabric_connection_key;
 
     // Check if this core already has a connection for any of the candidate links
-    auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, is_sender);
+    auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, worker_type);
 
     for (const auto& link_idx : outgoing_link_indices) {
         ConnectionKey candidate_key{outgoing_direction.value(), link_idx};
@@ -799,12 +855,12 @@ inline std::optional<ConnectionKey> TestDevice::register_fabric_connection(
         fabric_connection_key = ConnectionKey{outgoing_direction.value(), new_link_idx.value()};
 
         // Register the new connection with the connection manager
-        connection_mgr.register_client(logical_core, outgoing_direction.value(), new_link_idx.value(), is_sender);
+        connection_mgr.register_client(logical_core, outgoing_direction.value(), new_link_idx.value(), worker_type);
 
         log_debug(
             tt::LogTest,
-            "{} core {} registered with connection_manager: direction={}, link_idx={}",
-            is_sender ? "Sender" : "Receiver",
+            "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}",
+            static_cast<int>(worker_type),
             logical_core,
             static_cast<int>(outgoing_direction.value()),
             new_link_idx.value());
@@ -846,7 +902,7 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
         this->logical_core_,
         src_node_id,
         dst_node_id,
-        true,  // is_sender=true
+        TestWorkerType::SENDER,
         this->test_device_ptr_->connection_manager_,
         outgoing_direction);  // Pass explicit direction if we have it
 
@@ -880,7 +936,7 @@ inline void TestSender::add_sync_config(TestTrafficSenderConfig sync_config) {
 
     // Check if this core already has a sync connection for any of the candidate links
     auto registered_keys = this->test_device_ptr_->sync_connection_manager_.get_connection_keys_for_core(
-        this->logical_core_, true);  // is_sender=true
+        this->logical_core_, TestWorkerType::SYNC);
 
     for (const auto& link_idx : outgoing_link_indices) {
         ConnectionKey candidate_key{outgoing_direction.value(), link_idx};
@@ -909,7 +965,7 @@ inline void TestSender::add_sync_config(TestTrafficSenderConfig sync_config) {
 
         // Register the new sync connection with sync_connection_manager_
         this->test_device_ptr_->sync_connection_manager_.register_client(
-            this->logical_core_, outgoing_direction.value(), new_link_idx.value(), true);  // is_sender=true
+            this->logical_core_, outgoing_direction.value(), new_link_idx.value(), TestWorkerType::SYNC);
     }
 
     this->global_sync_configs_.emplace_back(std::move(sync_config), fabric_connection_key.value());
@@ -965,11 +1021,12 @@ inline void TestReceiver::add_config(TestTrafficReceiverConfig config) {
         const auto dst_node_id = credit_info.sender_node_id;             // Original sender is destination for credits
 
         // Use common helper to register fabric connection for credit return
+        // NOTE: Use TestWorkerType::RECEIVER because receiver sends credit packets back to sender
         credit_connection_key = this->test_device_ptr_->register_fabric_connection(
             this->logical_core_,
             src_node_id,
             dst_node_id,
-            false,  // is_sender=false
+            TestWorkerType::RECEIVER,
             this->test_device_ptr_->connection_manager_);
 
         // Note: credit_connection_key may be nullopt for local communication (same chip)
@@ -1161,7 +1218,7 @@ inline void TestDevice::create_sync_kernel() {
 
     // Get sync connection count from sync_connection_manager_
     size_t num_sync_connections =
-        sync_connection_manager_.get_connection_count_for_core(sync_core, true);  // is_sender=true
+        sync_connection_manager_.get_connection_count_for_core(sync_core, TestWorkerType::SYNC);
     log_info(tt::LogTest, "sync core: {}, num sync connections: {}", sync_core, num_sync_connections);
 
     // Compile-time args
@@ -1178,12 +1235,7 @@ inline void TestDevice::create_sync_kernel() {
 
     // Add sync fabric connection args via sync_connection_manager_
     auto sync_connection_args = sync_connection_manager_.generate_connection_args_for_core(
-        sync_core,
-        true,  // is_sender=true
-        device_info_provider_,
-        route_manager_,
-        fabric_node_id_,
-        program_handle_);
+        sync_core, TestWorkerType::SYNC, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
     rt_args.insert(rt_args.end(), sync_connection_args.begin(), sync_connection_args.end());
 
     // Local args (all the rest go to local args buffer)
@@ -1195,8 +1247,8 @@ inline void TestDevice::create_sync_kernel() {
     // Add sync config to fabric connection mapping (same pattern as sender traffic configs)
     // This mapping tells each LineSyncConfig which fabric connection index to use
     for (const auto& [sync_config, connection_key] : sync_sender.global_sync_configs_) {
-        uint32_t array_idx =
-            sync_connection_manager_.get_connection_array_index_for_key(sync_core, true, connection_key);
+        uint32_t array_idx = sync_connection_manager_.get_connection_array_index_for_key(
+            sync_core, TestWorkerType::SYNC, connection_key);
         TT_FATAL(
             array_idx != UINT32_MAX, "Failed to find connection array index for sync config on core {}", sync_core);
         local_args.push_back(array_idx);
@@ -1253,7 +1305,7 @@ inline void TestDevice::create_sender_kernels() {
         }
 
         // Get connection count and generate all connection args via FabricConnectionManager
-        size_t num_connections = connection_manager_.get_connection_count_for_core(core, true);  // is_sender=true
+        size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::SENDER);
 
         // Check if this core has mux connections
         bool has_mux_connections = connection_manager_.is_mux_client(core);
@@ -1278,12 +1330,7 @@ inline void TestDevice::create_sender_kernels() {
 
         // Add all connection args via FabricConnectionManager
         auto connection_args = connection_manager_.generate_connection_args_for_core(
-            core,
-            true,  // is_sender=true
-            device_info_provider_,
-            route_manager_,
-            fabric_node_id_,
-            program_handle_);
+            core, TestWorkerType::SENDER, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
         rt_args.insert(rt_args.end(), connection_args.begin(), connection_args.end());
 
         // Local args for traffic configs (existing logic)
@@ -1312,7 +1359,7 @@ inline void TestDevice::create_sender_kernels() {
         // Query the array index for each traffic config's connection key
         for (const auto& [config, connection_key] : sender.configs_) {
             uint32_t array_idx =
-                connection_manager_.get_connection_array_index_for_key(core, true, connection_key);  // is_sender=true
+                connection_manager_.get_connection_array_index_for_key(core, TestWorkerType::SENDER, connection_key);
             TT_FATAL(
                 array_idx != UINT32_MAX, "Failed to find connection array index for traffic config on core {}", core);
             local_args.push_back(array_idx);
@@ -1366,7 +1413,7 @@ inline void TestDevice::create_receiver_kernels() {
         }
 
         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
-        size_t num_connections = connection_manager_.get_connection_count_for_core(core, false);  // is_sender=false
+        size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
 
         // Check if this core has mux connections
         bool has_mux_connections = connection_manager_.is_mux_client(core);
@@ -1392,12 +1439,7 @@ inline void TestDevice::create_receiver_kernels() {
 
         // Add all connection args via FabricConnectionManager (for credit return)
         auto connection_args = connection_manager_.generate_connection_args_for_core(
-            core,
-            false,  // is_sender=false
-            device_info_provider_,
-            route_manager_,
-            fabric_node_id_,
-            program_handle_);
+            core, TestWorkerType::RECEIVER, device_info_provider_, route_manager_, fabric_node_id_, program_handle_);
         rt_args.insert(rt_args.end(), connection_args.begin(), connection_args.end());
 
         // Build traffic config to credit connection mapping (same as sender side)
@@ -1407,7 +1449,7 @@ inline void TestDevice::create_receiver_kernels() {
 
             if (credit_connection_key.has_value()) {
                 uint32_t array_idx = connection_manager_.get_connection_array_index_for_key(
-                    core, false, credit_connection_key.value());  // is_sender=false
+                    core, TestWorkerType::RECEIVER, credit_connection_key.value());
 
                 if (array_idx != UINT32_MAX) {
                     connection_idx = static_cast<uint8_t>(array_idx);
