@@ -197,7 +197,11 @@ def gather_single_test_perf(device, test_passed):
         return None
 
     # Read profiler data from device
+    logger.info("Reading profiler data from device")
+    import ttnn
+
     ttnn.ReadDeviceProfiler(device)
+    logger.info("Reading profiler data from device done")
     try:
         opPerfData = get_device_data_generate_report(
             PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
@@ -828,12 +832,14 @@ def enable_profiler():
     logger.info("Enabling Device Profiler")
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     os.environ["ENABLE_TRACY"] = "1"
+    os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
 
 
 def disable_profiler():
     logger.info("Disabling Device Profiler")
     os.environ.pop("TT_METAL_DEVICE_PROFILER")
     os.environ.pop("ENABLE_TRACY")
+    os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP")
 
 
 if __name__ == "__main__":
