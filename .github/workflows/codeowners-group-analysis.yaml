@@ -990,90 +990,68 @@ jobs:
             SELECTED_OWNERS=""
           fi
 
-            # Check if we have any owners to ping
-            if [ -n "$SELECTED_OWNERS" ]; then
-              # Get full names for selected owners and build ping message
-              PING_MESSAGE="Hi"
-              IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
-              OWNER_COUNT=${#SELECTED_ARRAY[@]}
-              for i in "${!SELECTED_ARRAY[@]}"; do
-                owner="${SELECTED_ARRAY[$i]}"
-                if [ -n "$owner" ]; then
-                  # Get user info
-                  USER_API="https://api.github.com/users/$owner"
-                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                 -H "Accept: application/vnd.github.v3+json" \
-                                 "$USER_API" 2>/dev/null)
-                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                  if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
-                    PING_MESSAGE="$PING_MESSAGE $USER_NAME [@$owner]"
-                  else
-                    PING_MESSAGE="$PING_MESSAGE [@$owner]"
-                  fi
-
-                  # Add comma if not the last owner
-                  if [ $((i + 1)) -lt $OWNER_COUNT ]; then
-                    PING_MESSAGE="$PING_MESSAGE,"
-                  fi
+          # Check if we have any owners to ping
+          if [ -n "$SELECTED_OWNERS" ]; then
+            # Get full names for selected owners and build ping message
+            PING_MESSAGE="Hi"
+            IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
+            OWNER_COUNT=${#SELECTED_ARRAY[@]}
+            for i in "${!SELECTED_ARRAY[@]}"; do
+              owner="${SELECTED_ARRAY[$i]}"
+              if [ -n "$owner" ]; then
+                # Get user info
+                USER_API="https://api.github.com/users/$owner"
+                USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$USER_API" 2>/dev/null)
+                USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                if [ -n "$USER_NAME" ] && [ "$USER_NAME" != "null" ]; then
+                  PING_MESSAGE="$PING_MESSAGE $USER_NAME [@$owner]"
+                else
+                  PING_MESSAGE="$PING_MESSAGE [@$owner]"
                 fi
-              done
 
-              # Get full name for PR author
-              PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"  # Default to what we got from PR API
-              if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
-                # Try to fetch full name from GitHub API
-                AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
-                AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
-                                       -H "Accept: application/vnd.github.v3+json" \
-                                       "$AUTHOR_USER_API" 2>/dev/null)
-                AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
-                if [ -n "$AUTHOR_FULL_NAME" ] && [ "$AUTHOR_FULL_NAME" != "null" ]; then
-                  PR_AUTHOR_FULL_NAME="$AUTHOR_FULL_NAME"
+                # Add comma if not the last owner
+                if [ $((i + 1)) -lt $OWNER_COUNT ]; then
+                  PING_MESSAGE="$PING_MESSAGE,"
                 fi
               fi
+            done
 
-              PING_MESSAGE="$PING_MESSAGE, this PR **[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
+            # Get full name for PR author
+            PR_AUTHOR_FULL_NAME="$PR_AUTHOR_NAME"  # Default to what we got from PR API
+            if [ "$PR_AUTHOR_FULL_NAME" = "$PR_AUTHOR_LOGIN" ] || [ -z "$PR_AUTHOR_FULL_NAME" ] || [ "$PR_AUTHOR_FULL_NAME" = "null" ]; then
+              # Try to fetch full name from GitHub API
+              AUTHOR_USER_API="https://api.github.com/users/$PR_AUTHOR_LOGIN"
+              AUTHOR_USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                     -H "Accept: application/vnd.github.v3+json" \
+                                     "$AUTHOR_USER_API" 2>/dev/null)
+              AUTHOR_FULL_NAME=$(echo "$AUTHOR_USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+              if [ -n "$AUTHOR_FULL_NAME" ] && [ "$AUTHOR_FULL_NAME" != "null" ]; then
+                PR_AUTHOR_FULL_NAME="$AUTHOR_FULL_NAME"
+              fi
+            fi
 
-              if [ "$PING_OWNERS" = "true" ]; then
-                # Create new ping comment
-                echo "Creating ping comment..."
+            PING_MESSAGE="$PING_MESSAGE, this PR **[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
 
-                # Create temporary file to avoid shell interpretation of JSON
-                TEMP_JSON_FILE=$(mktemp)
-                if jq -n --arg body "$PING_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"; then
-                  echo "JSON file created successfully"
-                else
-                  echo "Failed to create JSON file"
-                  exit 1
-                fi
-                RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
-                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                  -H "Accept: application/vnd.github.v3+json" \
-                  -H "Content-Type: application/json" \
-                  --data-binary @"$TEMP_JSON_FILE" \
-                  "$COMMENTS_API")
+            if [ "$PING_OWNERS" = "true" ]; then
+              # Create new ping comment
+              echo "Creating ping comment..."
 
-                # Clean up temp file
-                rm -f "$TEMP_JSON_FILE"
-
-                # Extract HTTP status code
-                HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://' | sed 's/;//')
-                RESPONSE_BODY=$(echo "$RESPONSE" | sed -e 's/HTTPSTATUS:.*//')
-
-                if [ "$HTTP_STATUS" = "201" ]; then
-                  echo "✅ Ping comment created successfully for PR #$PR_NUMBER"
-                else
-                  echo "❌ ERROR: Failed to create ping comment (HTTP $HTTP_STATUS)"
-                  echo "Response body: $RESPONSE_BODY"
-                  echo "Full response: $RESPONSE"
-                  exit 1
-                fi
+              # Create temporary file to avoid shell interpretation of JSON
+              TEMP_JSON_FILE=$(mktemp)
+              if jq -n --arg body "$PING_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"; then
+                echo "JSON file created successfully"
               else
-                # Just output the ping message to workflow logs
-                echo "Ping message (not sent):"
-                echo "$PING_MESSAGE"
+                echo "Failed to create JSON file"
+                exit 1
               fi
-
+              RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
+                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                -H "Content-Type: application/json" \
+                --data-binary @"$TEMP_JSON_FILE" \
+                "$COMMENTS_API")
             # Send Slack notification if requested
             # TODO: Slack integration temporarily disabled
             # if [ "$SEND_SLACK" = "true" ]; then
@@ -1133,6 +1111,26 @@ jobs:
             #
             #   rm -f "$SLACK_TEMP_FILE"
             # fi
+              # Clean up temp file
+              rm -f "$TEMP_JSON_FILE"
+
+              # Extract HTTP status code
+              HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://' | sed 's/;//')
+              RESPONSE_BODY=$(echo "$RESPONSE" | sed -e 's/HTTPSTATUS:.*//')
+
+              if [ "$HTTP_STATUS" = "201" ]; then
+                echo "✅ Ping comment created successfully for PR #$PR_NUMBER"
+              else
+                echo "❌ ERROR: Failed to create ping comment (HTTP $HTTP_STATUS)"
+                echo "Response body: $RESPONSE_BODY"
+                echo "Full response: $RESPONSE"
+                exit 1
+              fi
+            else
+              # Just output the ping message to workflow logs
+              echo "Ping message (not sent):"
+              echo "$PING_MESSAGE"
+            fi
           else
             echo "No pending owners to ping"
           fi
