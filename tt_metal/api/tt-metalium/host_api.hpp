@@ -18,6 +18,7 @@
 #include <tt-metalium/lightmetal_binary.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/universal_kernel.hpp>
 
 /** @file */
 
@@ -160,7 +161,7 @@ void CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const UniversalConfig& config);
+    const UniversalKernelConfig& config);
 
 // clang-format off
 /**

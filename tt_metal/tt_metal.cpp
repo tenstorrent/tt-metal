@@ -1126,23 +1126,16 @@ void CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const UniversalConfig& config) {
-    ReaderDataMovementConfig reader_config(config.compile_args, config.defines, config.named_compile_args);
-    WriterDataMovementConfig writer_config(config.compile_args, config.defines, config.named_compile_args);
-    ComputeConfig compute_config{
-        .math_fidelity = config.math_fidelity,
-        .fp32_dest_acc_en = config.fp32_dest_acc_en,
-        .dst_full_sync_en = config.dst_full_sync_en,
-        .unpack_to_dest_mode = config.unpack_to_dest_mode,
-        .bfp8_pack_precise = config.bfp8_pack_precise,
-        .math_approx_mode = config.math_approx_mode,
-        .compile_args = config.compile_args,
-        .defines = config.defines,
-        .named_compile_args = config.named_compile_args,
-    };
-    CreateKernel(program, file_name, core_spec, reader_config);
-    CreateKernel(program, file_name, core_spec, writer_config);
-    CreateKernel(program, file_name, core_spec, compute_config);
+    const UniversalKernelConfig& config) {
+    auto reader_kernel = CreateKernel(program, file_name, core_spec, config.reader_config);
+    auto writer_kernel = CreateKernel(program, file_name, core_spec, config.writer_config);
+    auto compute_kernel = CreateKernel(program, file_name, core_spec, config.compute_config);
+    SetRuntimeArgs(program, reader_kernel, core_spec, config.runtime_args);
+    SetRuntimeArgs(program, writer_kernel, core_spec, config.runtime_args);
+    SetRuntimeArgs(program, compute_kernel, core_spec, config.runtime_args);
+    SetCommonRuntimeArgs(program, reader_kernel, config.common_runtime_args);
+    SetCommonRuntimeArgs(program, writer_kernel, config.common_runtime_args);
+    SetCommonRuntimeArgs(program, compute_kernel, config.common_runtime_args);
 }
 
 KernelHandle CreateKernelFromString(

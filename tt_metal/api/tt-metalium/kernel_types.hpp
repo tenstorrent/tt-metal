@@ -118,18 +118,6 @@ struct EthernetConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
-struct UniversalConfig {
-    std::vector<uint32_t> compile_args;
-    std::map<std::string, std::string> defines;
-    std::unordered_map<std::string, uint32_t> named_compile_args;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
-    bool fp32_dest_acc_en = false;
-    bool dst_full_sync_en = false;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode;
-    bool bfp8_pack_precise = false;
-    bool math_approx_mode = false;
-};
-
 // These are only used in op_profiler, are unstable and have not been designed for general use.
 namespace detail {
 
