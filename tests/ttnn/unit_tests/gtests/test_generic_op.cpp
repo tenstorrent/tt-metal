@@ -779,7 +779,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
 //
 // 2. Call the function ComputeKernelOriginalPathHash to get the hash of the original kernel file.
 // This can either be done externally or internally in the program.
-// 
+//
 // 3. Setup the KernelDescriptor to include:
 //    a. kernel_source = <kernel_name>
 //    b. binary_hash = <hash from step 1>
