@@ -13,22 +13,23 @@
 KERNEL_MAIN {
     INIT_ARGUMENTS
 
-    binary_op_init_common(cb_in, cb_in, cb_out);
-    add_tiles_init(cb_in, cb_in);
+    binary_op_init_common(in0_cb, in1_cb, out_cb);
+    add_tiles_init(in0_cb, in1_cb);
 
     for (uint32_t i = 0; i < n_tiles; i++) {
-        read_tile(i, in0, in0_page_size_bytes);
-        read_tile(i, in1, in1_page_size_bytes);
+        read_tile(in0_cb, i, in0, in0_page_size_bytes);
+        read_tile(in1_cb, i, in1, in1_page_size_bytes);
 
         tile_regs_acquire();
-        add_tiles(cb_in, cb_in, 0, 1, 0);
+        add_tiles(in0_cb, in1_cb, 0, 0, 0);
         tile_regs_commit();
         tile_regs_wait();
 
-        write_packed_tile(0, i, out, out_page_size_bytes);
+        write_packed_tile(0, out_cb, i, out, out_page_size_bytes);
 
-        release_write_tiles(1);
-        release_read_tiles(2);
+        release_write_tiles(out_cb, 1);
+        release_read_tiles(in0_cb, 1);
+        release_read_tiles(in1_cb, 1);
         tile_regs_release();
     }
 }

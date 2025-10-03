@@ -161,7 +161,7 @@ void CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const UniversalKernelConfig& config);
+    const UniversalKernelConfigBuilder& config_builder);
 
 // clang-format off
 /**

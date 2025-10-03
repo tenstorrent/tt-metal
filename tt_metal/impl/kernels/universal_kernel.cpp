@@ -5,43 +5,37 @@
 
 namespace tt::tt_metal {
 
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(std::string name, const Buffer& buffer) {
-    tensor_data_.emplace_back(
-        std::move(name), TensorData{TensorAccessorArgs(buffer), buffer.address(), buffer.page_size()});
-    return *this;
+UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+    std::string name, const Buffer& buffer, tt::DataFormat data_format) {
+    return add_buffer(std::move(name), &buffer, data_format);
 }
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(std::string name, const Buffer* buffer) {
+UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+    std::string name, const Buffer* buffer, tt::DataFormat data_format) {
     tensor_data_.emplace_back(
         std::move(name),
-        TensorData{TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0});
+        TensorData{
+            TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0, data_format});
     return *this;
 }
 UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
-    std::string name, const std::shared_ptr<Buffer>& buffer) {
+    std::string name, const std::shared_ptr<Buffer>& buffer, tt::DataFormat data_format) {
+    return add_buffer(std::move(name), buffer.get(), data_format);
+}
+UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+    std::string name, const distributed::MeshBuffer& buffer, tt::DataFormat data_format) {
+    return add_buffer(std::move(name), &buffer, data_format);
+}
+UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+    std::string name, const distributed::MeshBuffer* buffer, tt::DataFormat data_format) {
     tensor_data_.emplace_back(
         std::move(name),
-        TensorData{TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0});
+        TensorData{
+            TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0, data_format});
     return *this;
 }
 UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
-    std::string name, const distributed::MeshBuffer& buffer) {
-    tensor_data_.emplace_back(
-        std::move(name), TensorData{TensorAccessorArgs(buffer), buffer.address(), buffer.page_size()});
-    return *this;
-}
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
-    std::string name, const distributed::MeshBuffer* buffer) {
-    tensor_data_.emplace_back(
-        std::move(name),
-        TensorData{TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0});
-    return *this;
-}
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
-    std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer) {
-    tensor_data_.emplace_back(
-        std::move(name),
-        TensorData{TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0});
-    return *this;
+    std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer, tt::DataFormat data_format) {
+    return add_buffer(std::move(name), buffer.get(), data_format);
 }
 
 UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
@@ -77,6 +71,7 @@ UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
         tensor_data.accessor_args.append_to(compile_time_args);
         runtime_args.push_back(tensor_data.buffer_address);
 
+        init_define_ss << "constexpr auto " << name << "_cb = " << tensor_idx << "; ";
         init_define_ss << "const uint32_t " << name << "_addr = get_arg_val<uint32_t>(" << runtime_args.size() - 1
                        << "); ";
         init_define_ss << "constexpr auto " << name << "_args = TensorAccessorArgs<" << cta_offset << ">(); ";
@@ -86,6 +81,7 @@ UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
     }
 
     defines["INIT_ARGUMENTS"] = init_define_ss.str();
+    defines["TOTAL_NUM_CIRCULAR_BUFFERS"] = std::to_string(tensor_data_.size());
 
     ReaderDataMovementConfig reader_config(compile_time_args, defines);
     WriterDataMovementConfig writer_config(compile_time_args, defines);
@@ -106,6 +102,18 @@ UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
         .runtime_args = std::move(runtime_args),
         .common_runtime_args = std::move(common_runtime_args),
     };
+}
+
+std::vector<CircularBufferConfig> UniversalKernelConfigBuilder::compute_circular_buffers() const {
+    std::vector<CircularBufferConfig> circular_buffers;
+    circular_buffers.reserve(tensor_data_.size());
+    for (size_t tensor_idx = 0; tensor_idx < tensor_data_.size(); ++tensor_idx) {
+        const auto& tensor_data = tensor_data_[tensor_idx].second;
+        circular_buffers.push_back(
+            CircularBufferConfig(2 * tensor_data.page_size_bytes, {{tensor_idx, tensor_data.data_format}})
+                .set_page_size(tensor_idx, tensor_data.page_size_bytes));
+    }
+    return circular_buffers;
 }
 
 }  // namespace tt::tt_metal

@@ -21,52 +21,57 @@
 constexpr auto cb_in = tt::CBIndex::c_0;
 constexpr auto cb_out = tt::CBIndex::c_1;
 
-uint32_t offset_pages = 0;
+uint32_t offset_pages[TOTAL_NUM_CIRCULAR_BUFFERS];
 
 template <typename Accessor>
-FORCE_INLINE void read_tile(const uint32_t id, const Accessor& addrgen, const uint32_t tile_size_bytes) {
+FORCE_INLINE void read_tile(
+    const uint32_t cb_id, const uint32_t id, const Accessor& addrgen, const uint32_t tile_size_bytes) {
 #ifdef COMPILE_FOR_TRISC
-    cb_wait_front(cb_in, 1);
+    cb_wait_front(cb_id, 1);
 #endif
 #ifdef COMPILE_FOR_BRISC
-    cb_reserve_back(cb_in, 1);
-    noc_async_read_tile(id, addrgen, get_write_ptr(cb_in) + tile_size_bytes * offset_pages);
-    offset_pages += 1;
+    cb_reserve_back(cb_id, 1);
+    noc_async_read_tile(id, addrgen, get_write_ptr(cb_id) + tile_size_bytes * offset_pages[cb_id]);
+    offset_pages[cb_id] += 1;
 #endif
 }
 
-FORCE_INLINE void release_read_tiles(uint32_t num_tiles) {
+FORCE_INLINE void release_read_tiles(uint32_t cb_id, uint32_t num_tiles) {
 #ifdef COMPILE_FOR_TRISC
-    cb_pop_front(cb_in, num_tiles);
+    cb_pop_front(cb_id, num_tiles);
 #endif
 #ifdef COMPILE_FOR_BRISC
     noc_async_read_barrier();
-    cb_push_back(cb_in, num_tiles);
-    offset_pages -= num_tiles;
+    cb_push_back(cb_id, num_tiles);
+    offset_pages[cb_id] -= num_tiles;
 #endif
 }
 
 template <typename Accessor>
 FORCE_INLINE void write_packed_tile(
-    const uint32_t from_dst_idx, const uint32_t into_page_id, const Accessor& addrgen, const uint32_t tile_size_bytes) {
+    const uint32_t from_dst_idx,
+    const uint32_t cb_id,
+    const uint32_t into_page_id,
+    const Accessor& addrgen,
+    const uint32_t tile_size_bytes) {
 #ifdef COMPILE_FOR_TRISC
-    cb_reserve_back(cb_out, 1);
-    pack_tile(from_dst_idx, cb_out);
+    cb_reserve_back(cb_id, 1);
+    pack_tile(from_dst_idx, cb_id);
 #endif
 #ifdef COMPILE_FOR_NCRISC
-    cb_wait_front(cb_out, 1);
-    noc_async_write_tile(into_page_id, addrgen, get_read_ptr(cb_out) + tile_size_bytes * offset_pages);
-    offset_pages += 1;
+    cb_wait_front(cb_id, 1);
+    noc_async_write_tile(into_page_id, addrgen, get_read_ptr(cb_id) + tile_size_bytes * offset_pages[cb_id]);
+    offset_pages[cb_id] += 1;
 #endif
 }
 
-FORCE_INLINE void release_write_tiles(uint32_t num_tiles) {
+FORCE_INLINE void release_write_tiles(const uint32_t cb_id, const uint32_t num_tiles) {
 #ifdef COMPILE_FOR_TRISC
-    cb_push_back(cb_out, num_tiles);
+    cb_push_back(cb_id, num_tiles);
 #endif
 #ifdef COMPILE_FOR_NCRISC
     noc_async_write_barrier();
-    cb_pop_front(cb_out, num_tiles);
-    offset_pages -= num_tiles;
+    cb_pop_front(cb_id, num_tiles);
+    offset_pages[cb_id] -= num_tiles;
 #endif
 }

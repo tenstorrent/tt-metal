@@ -80,42 +80,11 @@ int main(int argc, char** argv) {
         distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
         distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
 
-        // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
-        // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
-        // kernel. Each circular buffer is made up of 2 tiles. Thus when one tile is pushed and being used by the receiving end, the
-        // sending end can get the next piece of data ready to be pushed. Overlapping the operations. Leading to better performance.
-        // However there is a trade off, The more tiles in a circular buffer, the more memory is used. And Circular buffers are
-        // backed by L1(SRAM) memory and L1 is a precious resource.
-        // The hardware supports up to 32 circular buffers and they all act the same.
-        tt::CBIndex src_cb_index = tt::CBIndex::c_0;
-        CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/4 * tile_size_bytes,                    // The total size of the circular buffer in bytes
-            /*data_format_spec=*/{{src_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
-            .set_page_size(src_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
-                                                                              // the page size to the tile size (and thus
-                                                                              // total_size / page_size = tiles_per is the number of
-                                                                              // entries in the circular buffer)
-        tt::CBIndex dst_cb_index = tt::CBIndex::c_1;
-        CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/2 * tile_size_bytes,
-            /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(dst_cb_index, tile_size_bytes));
-
-        // Create the reader, writer and compute kernels. The kernels do the following:
-        // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
-        // * Compute: Waits for data to be available in the circular buffer, pops it, adds the two inputs together and pushes the result
-        //   into the output circular buffer.
-        // * Writer: Waits for data to be available in the output circular buffer, pops it and writes it back into DRAM.
-        // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them available in the
-        // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
-        // back to DRAM.
-
         auto universal_config = UniversalKernelConfigBuilder({.math_fidelity = MathFidelity::HiFi4})
             .add_runtime_arg("n_tiles", n_tiles)
-            .add_buffer("in0", src0_dram_buffer)
-            .add_buffer("in1", src1_dram_buffer)
-            .add_buffer("out", dst_dram_buffer)
-            .build();
+            .add_buffer("in0", src0_dram_buffer, tt::DataFormat::Float16_b)
+            .add_buffer("in1", src1_dram_buffer, tt::DataFormat::Float16_b)
+            .add_buffer("out", dst_dram_buffer, tt::DataFormat::Float16_b);
 
         CreateKernel(
             program,

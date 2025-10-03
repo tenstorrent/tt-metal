@@ -1126,7 +1126,13 @@ void CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const UniversalKernelConfig& config) {
+    const UniversalKernelConfigBuilder& config_builder) {
+    auto circular_buffers = config_builder.compute_circular_buffers();
+    for (const auto& circular_buffer : circular_buffers) {
+        CreateCircularBuffer(program, core_spec, circular_buffer);
+    }
+
+    auto config = config_builder.build();
     auto reader_kernel = CreateKernel(program, file_name, core_spec, config.reader_config);
     auto writer_kernel = CreateKernel(program, file_name, core_spec, config.writer_config);
     auto compute_kernel = CreateKernel(program, file_name, core_spec, config.compute_config);

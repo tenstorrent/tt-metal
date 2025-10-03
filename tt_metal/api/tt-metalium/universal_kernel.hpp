@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 
 namespace tt::tt_metal {
 
@@ -75,20 +76,26 @@ public:
         return *this;
     }
 
-    UniversalKernelConfigBuilder& add_buffer(std::string name, const Buffer& buffer);
-    UniversalKernelConfigBuilder& add_buffer(std::string name, const Buffer* buffer);
-    UniversalKernelConfigBuilder& add_buffer(std::string name, const std::shared_ptr<Buffer>& buffer);
-    UniversalKernelConfigBuilder& add_buffer(std::string name, const distributed::MeshBuffer& buffer);
-    UniversalKernelConfigBuilder& add_buffer(std::string name, const distributed::MeshBuffer* buffer);
-    UniversalKernelConfigBuilder& add_buffer(std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer);
+    UniversalKernelConfigBuilder& add_buffer(std::string name, const Buffer& buffer, tt::DataFormat data_format);
+    UniversalKernelConfigBuilder& add_buffer(std::string name, const Buffer* buffer, tt::DataFormat data_format);
+    UniversalKernelConfigBuilder& add_buffer(
+        std::string name, const std::shared_ptr<Buffer>& buffer, tt::DataFormat data_format);
+    UniversalKernelConfigBuilder& add_buffer(
+        std::string name, const distributed::MeshBuffer& buffer, tt::DataFormat data_format);
+    UniversalKernelConfigBuilder& add_buffer(
+        std::string name, const distributed::MeshBuffer* buffer, tt::DataFormat data_format);
+    UniversalKernelConfigBuilder& add_buffer(
+        std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer, tt::DataFormat data_format);
 
     UniversalKernelConfig build() const;
+    std::vector<CircularBufferConfig> compute_circular_buffers() const;
 
 private:
     struct TensorData {
         TensorAccessorArgs accessor_args;
-        uint32_t buffer_address;
-        uint32_t page_size_bytes;
+        uint32_t buffer_address = 0;
+        uint32_t page_size_bytes = 0;
+        tt::DataFormat data_format = tt::DataFormat::Float32;
     };
 
     std::vector<std::pair<std::string, uint32_t>> compile_time_args_;
