@@ -111,8 +111,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     # hardcode for 6U
     if test_vector["mesh_shape"] in [(16, 2), (2, 16)]:
         return True, "Invalid mesh shape for 6U"
-
     cluster_axis = test_vector["cluster_axis"]
+
     if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
         return True, "Only one device along axis"
 

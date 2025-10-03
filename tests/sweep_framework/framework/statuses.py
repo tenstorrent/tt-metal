@@ -15,6 +15,7 @@ class TestStatus(Enum):
     FAIL_UNSUPPORTED_DEVICE_PERF = 6
 
 
+
 class VectorValidity(str, Enum):
     VALID = "VALID"
     INVALID = "INVALID"

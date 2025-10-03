@@ -26,7 +26,6 @@ TIMEOUT = 45
 # Get the number of available devices to dynamically generate mesh shapes
 NUM_DEVICES = ttnn.get_num_devices()
 
-
 # parameters from:
 # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
 TRAINING_SHAPES = [
