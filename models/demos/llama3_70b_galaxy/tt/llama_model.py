@@ -570,6 +570,7 @@ class TtTransformer(LightweightModule):
             sub_core_grids=self.args.sub_core_grids
             if is_cur_pos_sharded
             else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+            skip_negative_entries=True,
         )
         ttnn.plus_one(
             rot_mat_idxs,

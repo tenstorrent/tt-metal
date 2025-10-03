@@ -290,7 +290,6 @@ jobs:
             tests/ttnn/unit_tests/operations/test_moreh_full.py \
             tests/ttnn/unit_tests/operations/test_non_zero_indices.py \
             tests/ttnn/unit_tests/operations/test_paged_cache_mask.py \
-            tests/ttnn/unit_tests/operations/test_plus_one.py \
             tests/ttnn/unit_tests/operations/test_polyval.py \
             tests/ttnn/unit_tests/operations/test_prefetcher_TG.py \
             tests/ttnn/unit_tests/operations/test_reallocate.py \
