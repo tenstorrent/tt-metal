@@ -1052,6 +1052,23 @@ jobs:
                 -H "Content-Type: application/json" \
                 --data-binary @"$TEMP_JSON_FILE" \
                 "$COMMENTS_API")
+
+              # Clean up temp file
+              rm -f "$TEMP_JSON_FILE"
+
+              # Extract HTTP status code
+              HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://' | sed 's/;//')
+              RESPONSE_BODY=$(echo "$RESPONSE" | sed -e 's/HTTPSTATUS:.*//')
+
+              if [ "$HTTP_STATUS" = "201" ]; then
+                echo "✅ Ping comment created successfully for PR #$PR_NUMBER"
+              else
+                echo "❌ ERROR: Failed to create ping comment (HTTP $HTTP_STATUS)"
+                echo "Response body: $RESPONSE_BODY"
+                echo "Full response: $RESPONSE"
+                exit 1
+              fi
+
             # Send Slack notification if requested
             # TODO: Slack integration temporarily disabled
             # if [ "$SEND_SLACK" = "true" ]; then
@@ -1111,21 +1128,6 @@ jobs:
             #
             #   rm -f "$SLACK_TEMP_FILE"
             # fi
-              # Clean up temp file
-              rm -f "$TEMP_JSON_FILE"
-
-              # Extract HTTP status code
-              HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://' | sed 's/;//')
-              RESPONSE_BODY=$(echo "$RESPONSE" | sed -e 's/HTTPSTATUS:.*//')
-
-              if [ "$HTTP_STATUS" = "201" ]; then
-                echo "✅ Ping comment created successfully for PR #$PR_NUMBER"
-              else
-                echo "❌ ERROR: Failed to create ping comment (HTTP $HTTP_STATUS)"
-                echo "Response body: $RESPONSE_BODY"
-                echo "Full response: $RESPONSE"
-                exit 1
-              fi
             else
               # Just output the ping message to workflow logs
               echo "Ping message (not sent):"
