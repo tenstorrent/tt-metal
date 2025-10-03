@@ -100,18 +100,20 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
 template <typename update_cache_operation_t>
 void bind_update_cache(pybind11::module& module, const update_cache_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc(update_cache(cache: ttnn.Tensor, input: ttnn.Tensor, update_idx: int, batch_offset: int, *, compute_kernel_config : Optional[DeviceComputeKernelConfig] = None, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
+        R"doc(
         Updates the cache tensor in place with the values from input at the specified update_idx. When cache has batch less than 32, input is assumed to have batch padded to 32 and [batch_offset:batch_offset+batch] from dim[-2] of input is used to update the cache.
 
         Args:
-            * :attr:`cache` (ttnn.Tensor): The cache tensor to be written to.
-            * :attr:`input` (ttnn.Tensor): The token tensor to be written to the cache.
-            * :attr:`update_index` (int): The index into the cache tensor.
-            * :attr:`batch_offset` (int): The batch_offset into the cache tensor. Default = 0 .
+            cache (ttnn.Tensor): The cache tensor to be written to.
+
+            input (ttnn.Tensor): The token tensor to be written to the cache.
+
+            update_index (int): The index into the cache tensor.
+
+            batch_offset (int): The batch_offset into the cache tensor. Default = 0 .
 
         Keyword Args:
-            * :attr:`compute_kernel_config` Optional[DeviceComputeKernelConfig]
+            compute_kernel_config (DeviceComputeKernelConfig, optional): Optional[DeviceComputeKernelConfig]
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
@@ -146,14 +148,16 @@ void bind_update_cache(pybind11::module& module, const update_cache_operation_t&
 template <typename update_cache_operation_t>
 void bind_fill_cache(pybind11::module& module, const update_cache_operation_t& operation) {
     auto doc = fmt::format(
-        R"doc(fill_cache(cache_tensor: ttnn.Tensor, input_tensor: ttnn.Tensor, batch_idx: int, *, memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
+        R"doc(
 
         Fills the cache tensor in place with the values from input at the specified batch_idx.
 
         Args:
-            * :attr:`cache_tensor` (ttnn.Tensor): The cache tensor to be written to.
-            * :attr:`input_tensor` (ttnn.Tensor): The token tensor to be written to the cache.
-            * :attr:`batch_idx` (int): The index into the cache tensor.
+            cache_tensor (ttnn.Tensor): The cache tensor to be written to.
+
+            input_tensor (ttnn.Tensor): The token tensor to be written to the cache.
+
+            batch_idx (int): The index into the cache tensor.
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)

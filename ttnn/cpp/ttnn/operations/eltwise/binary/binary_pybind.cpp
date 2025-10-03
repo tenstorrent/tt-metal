@@ -1691,11 +1691,15 @@ void bind_binary_inplace_operation(
             {2}
 
             Args:
-                * :attr:`input_a` (ttnn.Tensor)
-                * :attr:`input_b` (ttnn.Tensor or Number)
+                :attr:`input_a` (ttnn.Tensor)
+
+                :attr:`input_b` (ttnn.Tensor or Number)
+
             Keyword args:
-            * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
+                :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
+
             Example::
+
                 >>> tensor = ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16), device=device)
                 >>> output = {1}(tensor1, tensor2)
         )doc",

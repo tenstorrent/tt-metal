@@ -72,15 +72,20 @@ void py_bind_interleaved_to_sharded(pybind11::module& module) {
         Converts a tensor from interleaved to sharded memory layout
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
-            * :attr:`shard_shape` (List(int[2])): Sharding shape.
-            * :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-            * :attr:`shard_orientation` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
-            * :attr:`sharded_memory_config` (MemoryConfig): Instead of shard_shape, shard_scheme and orientation you can provide a single MemoryConfig representing the sharded tensor.
+            :attr:`input_tensor` (ttnn.Tensor): input tensor
+
+            :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
+
+            :attr:`shard_shape` (List(int[2])): Sharding shape.
+
+            :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
+
+            :attr:`shard_orientation` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
+
+            :attr:`sharded_memory_config` (MemoryConfig): Instead of shard_shape, shard_scheme and orientation you can provide a single MemoryConfig representing the sharded tensor.
 
         Keyword Args:
-            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
 
         Example 1 (using grid, shape, scheme, orienttion):
 

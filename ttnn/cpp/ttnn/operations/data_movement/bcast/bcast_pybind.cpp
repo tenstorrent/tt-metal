@@ -40,14 +40,14 @@ void py_bind_bcast(py::module& module) {
                 "output_tensor", "Optional preallocated output tensor", "Tensor", "Default is None", "No"
 
             Args:
-                * :attr:`input_tensor_a`: First Input Tensor for bcast.
-                * :attr:`input_tensor_b`: Second Input Tensor for bcast.
-                * :attr:`math_op`: Operation to be performed during broadcasting.
-                * :attr:`dim`: the dimension to reduce. If None, the bcast of the flattened input is returned
+                input_tensor_a: First Input Tensor for bcast.
+                input_tensor_b: Second Input Tensor for bcast.
+                math_op: Operation to be performed during broadcasting.
+                dim: the dimension to reduce. If None, the bcast of the flattened input is returned
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
-                * :attr:`output_tensor`: Preallocated output tensor
+                memory_config: Memory Config of the output tensor
+                output_tensor: Preallocated output tensor
 
         )doc";
 

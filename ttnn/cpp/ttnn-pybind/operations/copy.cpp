@@ -23,12 +23,14 @@ void bind_global_typecast(py::module& module) {
 Applies {0} to :attr:`input_tensor`.
 
 Args:
-    * :attr:`input_tensor` (ttnn.Tensor): input tensors must be on device, in ROW MAJOR or TILE layout
-    * :attr:`dtype` (Optional[ttnn.DataType]): data type must be one of the following types BFLOAT16,BFLOAT8_B,BFLOAT4_B,UINT32,INT32 and UINT16.
-    *
+    :attr:`input_tensor` (ttnn.Tensor): input tensors must be on device, in ROW MAJOR or TILE layout
+
+    :attr:`dtype` (Optional[ttnn.DataType]): data type must be one of the following types BFLOAT16,BFLOAT8_B,BFLOAT4_B,UINT32,INT32 and UINT16.
+
 Keyword Args:
-    * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
-    * :attr:`output_tensor` (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
+    :attr:`memory_config` (Optional[ttnn.MemoryConfig]): Memory configuration for the operation.
+
+    :attr:`output_tensor` (Optional[ttnn.Tensor]): Preallocated tensor to store the output.
 
 Returns:
     ttnn.Tensor: The tensor with the updated data type. Output tensor will be on device, in same layout, and have the given data type.

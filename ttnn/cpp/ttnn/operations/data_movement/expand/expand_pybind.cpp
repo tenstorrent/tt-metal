@@ -38,20 +38,22 @@ void py_bind_expand(py::module& module, const data_movement_operation_t& operati
 
 void py_bind_expand(py::module& module) {
     auto doc =
-        R"doc(expand(input: ttnn.Tensor, output_shape: List[int], memory_config: Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-        Returns a new tensor where singleton dimensions are expanded to a larger side.
+        R"doc(Returns a new tensor where singleton dimensions are expanded to a larger side.
         Unlike :func:`torch.expand`, this function is not zero-cost and perform a memory copy to create the expanded tensor. This is due to `ttnn.Tensor`'s lack of strided tensor support.
 
         Args:
-            * :attr:`input`: The tensor to be expanded.
-            * :attr:`output_shape`: The desired output shape.
-            * :attr:`memory_config`: The memory configuration for the expanded tensor.
+            input (ttnn.Tensor): The tensor to be expanded.
+            output_shape (list[int]): The desired output shape.
+            memory_config (ttnn.MemoryConfig, optional): The memory configuration for the expanded tensor.
 
         Requirements:
             like torch.expand:
                 only size 1 dimensions can be expanded in the output shape
                 -1 or the original shape size can be used to indicate that dimension should not have an expansion
                 The output shape must have the same or higher dimensions than the input shape
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         )doc";
 

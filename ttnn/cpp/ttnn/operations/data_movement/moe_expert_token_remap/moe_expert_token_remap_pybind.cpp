@@ -35,8 +35,10 @@ Keyword Args:
 
 Returns:
     Tuple:
+
     ttnn.Tensor: Tensor that maps batch tokens to local experts, `[devices/devices, batch, seq, experts_per_device]`
-    ttnn.Tensor: Bool Tensor that reduces the mapping tensor by chunks of `reduction_size`, `[devices/devices, batch*seq/reduction_size, experts_per_device]`
+
+    ttnn.Tensor: Bool Tensor that reduces the mapping tensor by chunks of `reduction_size`, `[devices/devices, batch x seq / reduction_size, experts_per_device]`
 
     )doc";
 

@@ -34,13 +34,15 @@ void py_bind_stack(pybind11::module& module) {
     detail::bind_stack(
         module,
         ttnn::stack,
-        R"doc(stack(input_tensors: List[ttnn.Tensor], dim: int) -> ttnn.Tensor
-
+        R"doc(
         Stacks tensors along a new dimension.
 
         Args:
-            * :attr:`input_tensors`: List of tensors to stack.
-            * :attr:`dim`: Dimension along which to stack.
+            input_tensors (list[ttnn.Tensor]): List of tensors to stack.
+            dim (int): Dimension along which to stack.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
 
         Example:
            >>> input_tensor = ttnn.from_torch(torch.randn((2, 2), dtype=torch.bfloat16), device=device)

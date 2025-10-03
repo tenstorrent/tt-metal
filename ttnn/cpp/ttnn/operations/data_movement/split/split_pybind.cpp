@@ -17,8 +17,6 @@ namespace py = pybind11;
 void bind_split(py::module& module) {
     auto doc =
         R"doc(
-            split(input_tensor: ttnn.Tensor, num_splits: int, dim: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
             Returns a tensor that is in num_splits ways on dim.
 
             Equivalent pytorch code:
@@ -28,12 +26,15 @@ void bind_split(py::module& module) {
                 output_tensor = torch.split(input_tensor, 2, 1)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`split_size` (Union[int, list[int]]): Single chunk size or list of chunk sizes. Output may be smaller if dim not evenly divisible.
-                * :attr:`dim2`: Dim to split. Defaults to 0.
+                input_tensor (ttnn.Tensor): Input Tensor.
+                split_size (Union[int, list[int]]): Single chunk size or list of chunk sizes. Output may be smaller if dim not evenly divisible.
+                dim (int): Dim to split. Defaults to 0.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
+                memory_config (ttnn.MemoryConfig, optional): Memory Config of the output tensor
+
+            Returns:
+                ttnn.Tensor: the output tensor.
         )doc";
 
     using OperationType = decltype(ttnn::split);

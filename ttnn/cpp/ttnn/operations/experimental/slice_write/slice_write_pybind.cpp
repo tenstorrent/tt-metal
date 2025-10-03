@@ -35,7 +35,7 @@ void bind_slice_write(py::module& module) {
                 output_tensor: Output Tensor.
                 slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
                 slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
+                slice_step: (Optional[List[int[tensor rank]]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
 
             Keyword Args:
                 memory_config Memory Config of the output tensor

@@ -37,14 +37,16 @@ void py_bind_chunk(pybind11::module& module) {
     detail::bind_chunk(
         module,
         ttnn::chunk,
-        R"doc(chunk(input_tensor: ttnn.Tensor, chunks: int, dim: int) -> List[ttnn.Tensor]
-
+        R"doc(
         Splits a tensor into multiple chunks along a specified dimension.
 
         Args:
-            * :attr:`input_tensor`: The tensor to split.
-            * :attr:`chunks`: Number of chunks to divide the tensor into.
-            * :attr:`dim`: Dimension along which to split.
+            input_tensor (ttnn.Tensor): The tensor to split.
+            chunks (int): Number of chunks to divide the tensor into.
+            dim (int): Dimension along which to split.
+
+        Returns:
+            List[ttnn.Tensor]: the output tensor.
 
         )doc");
 }

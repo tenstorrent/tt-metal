@@ -35,23 +35,22 @@ void py_bind_unsqueeze(pybind11::module& module) {
     detail::bind_unsqueeze(
         module,
         ttnn::unsqueeze,
-        R"doc(unsqueeze(input_tensor: ttnn.Tensor,  dim: int) -> ttnn.Tensor
-
+        R"doc(
         Returns a tensor unsqueezed at the specified dimension
 
         Equivalent pytorch code:
 
         .. code-block:: python
+
             input_tensor = torch.rand((1,1,256), dtype=torch.bfloat16)
             output_tensor = torch.unsqueeze(input_tensor, 2) # tensor of shape (1,1,1,256), where at dimension 2 we added a new dim of size 1
 
-
-
         Args:
-            * :attr:`input_tensor`: Input Tensor.
-            * :attr:`dim`: Dim where we want to unsqueeze (add a new dimension of size 1)
+            input_tensor (ttnn.Tensor): Input Tensor.
+            dim (int): Dim where we want to unsqueeze (add a new dimension of size 1)
 
-
+        Returns:
+            ttnn.Tensor: the output tensor.
         )doc");
 }
 

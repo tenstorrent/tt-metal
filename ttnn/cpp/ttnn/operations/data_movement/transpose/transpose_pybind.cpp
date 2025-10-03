@@ -17,8 +17,6 @@ namespace py = pybind11;
 void bind_transpose(py::module& module) {
     auto doc =
         R"doc(
-            transpose(input_tensor: ttnn.Tensor, dim1: int, dim2: int, *, Optional[ttnn.MemoryConfig] = None) -> ttnn.Tensor
-
             Returns a tensor that is transposed along dims dim1 and dim2
 
             Equivalent pytorch code:
@@ -28,13 +26,16 @@ void bind_transpose(py::module& module) {
                 output_tensor = torch.transpose(input_tensor, 0, 1)
 
             Args:
-                * :attr:`input_tensor`: Input Tensor.
-                * :attr:`dim1`: First dim of transpose.
-                * :attr:`dim2`: Second dim of transpose.
-                * :attr:`pad_value` (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be random garbage values.
+                input_tensor (ttnn.Tensor): Input Tensor.
+                dim1 (int): First dim of transpose.
+                dim2 (int): Second dim of transpose.
+                pad_value (Optional[float]): padding value for when tiles are broken in a transpose. Defaults to `0.0`. If set to None, it will be random garbage values.
 
             Keyword Args:
-                * :attr:`memory_config`: Memory Config of the output tensor
+                memory_config (ttnn.MemoryConfig, optional): Memory Config of the output tensor
+
+            Returns:
+                ttnn.Tensor: the output tensor.
         )doc";
 
     using OperationType = decltype(ttnn::transpose);

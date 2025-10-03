@@ -53,17 +53,7 @@ Core
    ttnn.deallocate
    ttnn.reallocate
    ttnn.to_memory_config
-   ttnn.allocate_tensor_on_device
-   ttnn.allocate_tensor_on_host
-   ttnn.copy_device_to_host_tensor
-   ttnn.copy_host_to_device_tensor
    ttnn.dequantize
-   ttnn.from_buffer
-   ttnn.move
-   ttnn.quantize
-   ttnn.requantize
-   ttnn.to_dtype
-   ttnn.typecast
 
 
 Tensor Creation
@@ -86,7 +76,6 @@ Tensor Creation
    ttnn.rand
    ttnn.bernoulli
    ttnn.complex_tensor
-   ttnn.sampling
    ttnn.uniform
 
 
@@ -329,17 +318,11 @@ Pointwise Binary
    :template: function.rst
 
    ttnn.add
-   ttnn.add_
    ttnn.addalpha
-   ttnn.assign
    ttnn.subalpha
    ttnn.multiply
-   ttnn.multiply_
    ttnn.subtract
-   ttnn.subtract_
    ttnn.div
-   ttnn.divide
-   ttnn.divide_
    ttnn.div_no_nan
    ttnn.floor_div
    ttnn.remainder
@@ -351,24 +334,18 @@ Pointwise Binary
    ttnn.logical_xor_
    ttnn.rpow
    ttnn.rsub
-   ttnn.rsub_
    ttnn.ldexp
-   ttnn.ldexp_
    ttnn.logical_and
    ttnn.logical_or
    ttnn.logical_xor
    ttnn.bitwise_and
    ttnn.bitwise_or
    ttnn.bitwise_xor
-   ttnn.bcast
    ttnn.logaddexp
-   ttnn.logaddexp_
    ttnn.logaddexp2
-   ttnn.logaddexp2_
    ttnn.hypot
    ttnn.xlogy
    ttnn.squared_difference
-   ttnn.squared_difference_
    ttnn.gt
    ttnn.gt_
    ttnn.lt_
@@ -482,7 +459,6 @@ Data Movement
    ttnn.copy
    ttnn.expand
    ttnn.fill_implicit_tile_padding
-   ttnn.fold
    ttnn.nonzero
    ttnn.pad
    ttnn.padded_slice
@@ -502,13 +478,11 @@ Data Movement
    ttnn.tilize_with_zero_padding
    ttnn.fill_rm
    ttnn.fill_ones_rm
-   ttnn.tosa_gather
    ttnn.tosa_scatter
    ttnn.transpose
    ttnn.untilize
    ttnn.untilize_with_unpadding
    ttnn.unsqueeze
-   ttnn.unsqueeze_to_4D
    ttnn.indexed_fill
    ttnn.index_fill
    ttnn.gather
@@ -527,10 +501,7 @@ Normalization
    ttnn.group_norm
    ttnn.layer_norm
    ttnn.layer_norm_post_all_gather
-   ttnn.layer_norm_pre_all_gather
    ttnn.rms_norm
-   ttnn.rms_norm_post_all_gather
-   ttnn.rms_norm_pre_all_gather
    ttnn.batch_norm
    ttnn.softmax
    ttnn.scale_mask_softmax
@@ -564,7 +535,6 @@ Moreh Operations
    ttnn.moreh_sum_backward
    ttnn.moreh_abs_pow
    ttnn.moreh_adam
-   ttnn.moreh_adamw
    ttnn.moreh_arange
    ttnn.moreh_bmm
    ttnn.moreh_bmm_backward
@@ -626,7 +596,6 @@ Transformer
    ttnn.transformer.ring_distributed_scaled_dot_product_attention
    ttnn.transformer.ring_joint_scaled_dot_product_attention
    ttnn.transformer.windowed_scaled_dot_product_attention
-   ttnn.moe
    ttnn.moe_expert_token_remap
 
 
@@ -706,7 +675,6 @@ Vision
    :template: function.rst
 
    ttnn.upsample
-   ttnn.grid_sample
 
 
 KV Cache

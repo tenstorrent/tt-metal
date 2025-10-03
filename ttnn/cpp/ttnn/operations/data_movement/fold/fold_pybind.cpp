@@ -21,12 +21,13 @@ void bind_fold_operation(py::module& module) {
             Fold TT Tensor.
             Input tensor must be on TT accelerator device, in ROW_MAJOR.
             Output tensor will be on TT accelerator device, in ROW_MAJOR.
+
             .. csv-table::
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
                 "input", "Input tensor", "Tensor", "Tensor of shape [N, H, W, C]", "Yes"
                 "stride_h", "Stride along the H-dimension", "int", "", "Yes"
                 "stride_w", "Stride along the W-dimension", "int", "", "Yes"
-        )doc",
+            )doc",
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::fold)& op,
                const ttnn::Tensor& input,

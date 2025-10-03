@@ -54,11 +54,12 @@ void py_bind_sharded_to_interleaved(pybind11::module& module) {
         Converts a tensor from sharded to interleaved memory layout
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`memory_config` (ttnn.MemoryConfig): Memory configuration for the operation, must be Interleaved.
+            :attr:`input_tensor` (ttnn.Tensor): input tensor
+
+            :attr:`memory_config` (ttnn.MemoryConfig): Memory configuration for the operation, must be Interleaved.
 
         Keyword Args:
-            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
 
         Example:
 

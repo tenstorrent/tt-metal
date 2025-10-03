@@ -46,13 +46,15 @@ void py_bind_view(pybind11::module& module) {
         This is a 0 cost view operation that returns the same tensor that was passed to it but with a new shape
 
         Note: The following conditions must be met:
-            * the memory is stored on the device
-            * the last dimension must not change
-            * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+
+        - the memory is stored on the device
+        - the last dimension must not change
+        - In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
 
         Args:
-            * input_tensor: Input Tensor.
-            * new_shape: New shape of tensor.
+            input_tensor: Input Tensor.
+
+            new_shape: New shape of tensor.
 
         Returns:
             ttnn.Tensor: a reference to the input tensor but with the new shape.

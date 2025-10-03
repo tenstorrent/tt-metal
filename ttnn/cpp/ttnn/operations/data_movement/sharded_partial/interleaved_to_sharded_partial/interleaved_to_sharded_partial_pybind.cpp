@@ -65,15 +65,20 @@ void py_bind_interleaved_to_sharded_partial(pybind11::module& module) {
         Converts a partial tensor from interleaved to sharded memory layout
 
         Args:
-            * :attr:`input_tensor` (ttnn.Tensor): input tensor
-            * :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
-            * :attr:`num_slices` (int): Number of slices.
-            * :attr:`slice_index` (int): Slice index.
-            * :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-            * :attr:`shard_orienttion` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
+            :attr:`input_tensor` (ttnn.Tensor): input tensor
+
+            :attr:`grid` (ttnn.CoreGrid): Grid of sharded tensor
+
+            :attr:`num_slices` (int): Number of slices.
+
+            :attr:`slice_index` (int): Slice index.
+
+            :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
+
+            :attr:`shard_orienttion` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
 
         Keyword Args:
-            * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
+            :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
 
         Example:
 
