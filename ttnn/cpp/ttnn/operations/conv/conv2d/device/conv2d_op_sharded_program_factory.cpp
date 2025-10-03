@@ -328,10 +328,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_conv2d_sharded(
     const bool split_reader_overlapped = overlap_act_cb && enable_split_reader;
     log_debug(
         tt::LogOp,
-        "force_split_reader: {}, enable_split_reader: {}, num_blocks_act_h: {}, per_core_out_matrix_height_ntiles: {}, "
-        "act_block_h_ntiles: {}",
+        "force_split_reader: {}, enable_split_reader: {}, split_reader_overlapped: {}, num_blocks_act_h: {}, "
+        "per_core_out_matrix_height_ntiles: {}, act_block_h_ntiles: {}",
         force_split_reader,
         enable_split_reader,
+        split_reader_overlapped,
         per_core_out_matrix_height_ntiles / block_config.act_block_h_ntiles,
         per_core_out_matrix_height_ntiles,
         block_config.act_block_h_ntiles);
