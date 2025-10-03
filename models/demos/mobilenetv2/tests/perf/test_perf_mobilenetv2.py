@@ -6,7 +6,7 @@
 import pytest
 from loguru import logger
 
-from models.demos.mobilenetv2.tests.pcc.test_mobilenetv2 import MOBILENETV2_BATCH_SIZE
+from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
 
@@ -14,7 +14,7 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [MOBILENETV2_BATCH_SIZE, 3436],
+        [MOBILENETV2_BATCH_SIZE, 3445],
     ],
 )
 def test_perf_device_mobilenetv2(batch_size, expected_perf):

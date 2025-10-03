@@ -8,7 +8,6 @@ from loguru import logger
 import ttnn
 import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from models.utility_functions import skip_for_grayskull
 
 
 def run_all_reduce_test(
@@ -125,7 +124,6 @@ def run_all_reduce_test(
     assert not mismatch, f"{i} FAILED: {output}"
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -162,6 +160,7 @@ def run_all_reduce_test(
     [
         ttnn.bfloat16,
         ttnn.bfloat8_b,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
@@ -199,7 +198,68 @@ def test_ring_all_reduce_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "num_devices, num_links",
+    [
+        (8, 1),
+    ],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape",
+    [
+        ([1, 8, 256, 1024]),
+        ([1, 8, 33, 65]),
+        ([1, 8, 224, 224]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.float32,
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_failing_all_reduce_shapes(
+    t3k_mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    mem_config,
+    function_level_defaults,
+    num_iters=2,
+):
+    run_all_reduce_test(
+        t3k_mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        mem_config,
+        function_level_defaults,
+        num_iters=num_iters,
+    )
+
+
 @pytest.mark.timeout(120)
 @pytest.mark.parametrize(
     "num_devices, num_links",
@@ -224,6 +284,7 @@ def test_ring_all_reduce_post_commit(
     "input_dtype",
     [
         ttnn.bfloat16,
+        ttnn.float32,
     ],
 )
 @pytest.mark.parametrize(
@@ -365,7 +426,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
     mismatch = False
     for i, t in enumerate(tt_out_tensors):
         tt_output_tensor = ttnn.to_torch(t)
-
         eq, output = comp_pcc(tt_output_tensor, golden_canonical_out_tensor)
         mismatch = mismatch or not eq
         if not eq:
@@ -386,7 +446,6 @@ def run_all_reduce_with_mesh_tensor_along_row(
 
 
 # Enumerate the post-commit cases explicitly
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
@@ -447,7 +506,6 @@ def test_line_all_reduce_on_TG_rows_post_commit(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
@@ -499,4 +557,142 @@ def test_line_all_reduce_on_TG_cols_post_commit(
         num_iters=num_iters,
         num_all_reduce_instances=replication_factor,
         cluster_axis=0,
+    )
+
+
+@pytest.mark.parametrize(
+    "num_devices, num_links, per_chip_output_shape, layout",
+    [
+        (32, 3, [1, 1, 4096, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 2048, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 4096], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 2048], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 50304, 1024], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 128000, 4096], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 4096, 128000], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 1024, 50304], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 33, 66], ttnn.TILE_LAYOUT),
+        (32, 3, [1, 1, 4094, 50300], ttnn.TILE_LAYOUT),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "buffer_type",
+    [
+        ttnn.BufferType.DRAM,
+    ],
+)
+@pytest.mark.parametrize("replication_factor", [1])
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 32), id="1x32_grid")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+def test_line_all_reduce_training(
+    mesh_device,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    buffer_type,
+    function_level_defaults,
+    replication_factor,
+    num_iters=1,
+):
+    if mesh_device.get_num_devices() != 32:
+        pytest.skip("Not TG!")
+
+    run_all_reduce_with_mesh_tensor_along_row(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        buffer_type,
+        function_level_defaults,
+        num_iters=num_iters,
+        num_all_reduce_instances=replication_factor,
+        cluster_axis=1,
+    )
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize(
+    "num_devices",
+    [
+        2,
+    ],
+)
+@pytest.mark.parametrize(
+    "num_links",
+    [1],
+)
+@pytest.mark.parametrize(
+    "per_chip_output_shape",
+    [
+        ([1, 1, 32, 1280]),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    [
+        ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 4))}),
+                [32, 64],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("math_op", [ttnn.ReduceType.Sum])
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_all_reduce_sharded(
+    mesh_device,
+    mesh_shape,
+    memory_config,
+    num_devices,
+    per_chip_output_shape,
+    num_links,
+    math_op,
+    input_dtype,
+    layout,
+    function_level_defaults,
+    num_iters=2,
+):
+    run_all_reduce_test(
+        mesh_device,
+        num_devices,
+        per_chip_output_shape,
+        num_links,
+        math_op,
+        input_dtype,
+        layout,
+        memory_config,
+        function_level_defaults,
+        num_iters=num_iters,
     )

@@ -12,7 +12,6 @@ from models.demos.t3000.falcon40b.tt.falcon_ccl import TT_CCL
 from models.demos.t3000.falcon40b.tt.falcon_decoder import TtFalconDecoderLayer
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
 from models.demos.t3000.falcon40b.tt.model_utils import generate_layernorm_persistent_tensors
-from models.utility_functions import skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from ttnn import ConcatMeshToTensor, ShardTensorToMesh
 
@@ -314,7 +313,6 @@ def run_test_FalconDecoder_inference(
         assert does_pass
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",

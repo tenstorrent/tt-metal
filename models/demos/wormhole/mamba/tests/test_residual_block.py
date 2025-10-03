@@ -12,7 +12,6 @@ from models.demos.wormhole.mamba.reference.prefill_decode_model import Mamba, Ma
 from models.demos.wormhole.mamba.tt import model_config
 from models.demos.wormhole.mamba.tt.mamba_model import TtTensorLoader
 from models.demos.wormhole.mamba.tt.residual_block import TtResidualBlock
-from models.utility_functions import skip_for_grayskull
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
 
@@ -27,7 +26,6 @@ class PytorchResidualBlock(torch.nn.Module):
         return result
 
 
-@skip_for_grayskull("Grayskull not supported")
 @pytest.mark.parametrize("layer", [0])
 @pytest.mark.parametrize(
     "use_pretrained_weights",

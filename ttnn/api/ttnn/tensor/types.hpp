@@ -43,7 +43,7 @@ enum class DataType {
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
 
 template <typename T>
-consteval inline DataType convert_to_data_type() {
+consteval DataType convert_to_data_type() {
     if constexpr (std::is_same_v<T, uint8_t>) {
         return DataType::UINT8;
     } else if constexpr (std::is_same_v<T, uint16_t>) {
@@ -72,6 +72,7 @@ enum class StorageType {
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
+tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
 
 static constexpr std::size_t MAX_NUM_DIMENSIONS = 8;
 

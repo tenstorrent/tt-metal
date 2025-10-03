@@ -16,9 +16,9 @@ namespace ttnn::operations::data_movement {
 uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
     auto device = tensor.device();
     uint32_t max_l1_size =
-        device->l1_size_per_core() / 2 - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        (device->l1_size_per_core() / 2) - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(input_cb_data_format);
     // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
     uint32_t max_tiles_per_cb = max_l1_size / (2 * single_tile_size);
 

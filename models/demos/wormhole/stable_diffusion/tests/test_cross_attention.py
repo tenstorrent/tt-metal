@@ -15,11 +15,9 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attention i
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("has_encoder_hidden_states", (True, False))

@@ -8,7 +8,7 @@ from loguru import logger
 
 from models.experimental.deit.tt.deit_config import DeiTConfig
 from models.experimental.deit.tt.deit_embeddings import DeiTEmbeddings
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose_and_pcc,
 )

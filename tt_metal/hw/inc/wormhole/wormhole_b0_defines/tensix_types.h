@@ -245,32 +245,30 @@ struct io_queue_pointers_t {
     std::uint32_t data_size_16B;
     std::uint32_t buffer_size_16B;
 
-    inline void init_input_queue(
-        std::uint32_t buffer_start, std::uint32_t buffer_end, std::uint32_t data_size) volatile {
+    void init_input_queue(std::uint32_t buffer_start, std::uint32_t buffer_end, std::uint32_t data_size) volatile {
         base_addr = buffer_start;
         rdptr = buffer_start;
         data_size_16B = data_size >> 4;
         buffer_size_16B = (buffer_end - buffer_start) >> 4;
     }
 
-    inline void init_output_queue(
-        std::uint32_t buffer_start, std::uint32_t buffer_end, std::uint32_t data_size) volatile {
+    void init_output_queue(std::uint32_t buffer_start, std::uint32_t buffer_end, std::uint32_t data_size) volatile {
         base_addr = buffer_start;
         wrptr = buffer_start;
         data_size_16B = data_size >> 4;
         buffer_size_16B = (buffer_end - buffer_start) >> 4;
     }
 
-    inline void reset() volatile {
+    void reset() volatile {
         rdptr = INVALID_IO_QUEUE_POINTER;
         wrptr = INVALID_IO_QUEUE_POINTER;
     }
 
-    inline bool valid() volatile { return (rdptr != INVALID_IO_QUEUE_POINTER); }
+    bool valid() volatile { return (rdptr != INVALID_IO_QUEUE_POINTER); }
 
-    inline std::uint32_t get_buffer_end() const volatile { return base_addr + (buffer_size_16B << 4); }
+    std::uint32_t get_buffer_end() const volatile { return base_addr + (buffer_size_16B << 4); }
 
-    inline void increment_rd_pointer() volatile {
+    void increment_rd_pointer() volatile {
         if (!valid()) {
             return;
         }
@@ -285,9 +283,9 @@ struct io_queue_pointers_t {
         rdptr = new_rdptr;
     }
 
-    inline bool wrap_bit(std::uint32_t ptr) volatile { return (ptr & WRAP_MASK) != 0; }
+    bool wrap_bit(std::uint32_t ptr) volatile { return (ptr & WRAP_MASK) != 0; }
 
-    inline void increment_wr_pointer() volatile {
+    void increment_wr_pointer() volatile {
         if (wrptr == INVALID_IO_QUEUE_POINTER) {
             return;
         }
@@ -302,22 +300,22 @@ struct io_queue_pointers_t {
         wrptr = new_wrptr;
     }
 
-    inline void set_wr_pointer(std::uint32_t value) volatile { wrptr = value; }
+    void set_wr_pointer(std::uint32_t value) volatile { wrptr = value; }
 
-    inline void set_rd_pointer(std::uint32_t value) volatile { rdptr = value; }
+    void set_rd_pointer(std::uint32_t value) volatile { rdptr = value; }
 
-    inline bool empty() volatile { return rdptr == wrptr; }
+    bool empty() volatile { return rdptr == wrptr; }
 
-    inline bool full() volatile {
+    bool full() volatile {
         auto wrapped_rdptr = rdptr ^ WRAP_MASK;
         return wrapped_rdptr == wrptr;
     }
 
-    inline bool has_data() volatile {
+    bool has_data() volatile {
         return (rdptr != INVALID_IO_QUEUE_POINTER) and (wrptr != INVALID_IO_QUEUE_POINTER) and (not empty());
     }
 
-    inline std::uint32_t unwrap_ptr(std::uint32_t value) const volatile {
+    std::uint32_t unwrap_ptr(std::uint32_t value) const volatile {
         if (value == INVALID_IO_QUEUE_POINTER) {
             return value;
         }

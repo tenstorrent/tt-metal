@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -26,19 +25,19 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
     Program program{};
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
+    const uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
 
     const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
+    const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
 
     const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
-    const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
+    const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
 
     const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
+    const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const uint32_t batch = input.padded_shape()[0];
     const uint32_t n_heads = input.padded_shape()[1];
@@ -237,7 +236,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
-            uint32_t core_idx = batch_parallel * seq_parallel_factor + seq_parallel;
+            uint32_t core_idx = (batch_parallel * seq_parallel_factor) + seq_parallel;
             uint32_t start_batch = batch_parallel * batch_per_core;
             uint32_t end_batch = std::min(start_batch + batch_per_core, batch);
             uint32_t start_seq = seq_parallel * seq_per_core;
@@ -333,19 +332,19 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core_sharded(
     Program program{};
 
     const tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     const tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    const uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
+    const uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
 
     const tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    const uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
+    const uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
 
     const tt::DataFormat trans_mat_cb_data_format = tt_metal::datatype_to_dataformat_converter(trans_mat.dtype());
-    const uint32_t trans_mat_single_tile_size = tt_metal::detail::TileSize(trans_mat_cb_data_format);
+    const uint32_t trans_mat_single_tile_size = tt::tile_size(trans_mat_cb_data_format);
 
     const tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
+    const uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     bool in_sharded = input.shard_spec().has_value();
     std::optional<ShardSpec> shard_spec = in_sharded ? input.shard_spec() : output.shard_spec();

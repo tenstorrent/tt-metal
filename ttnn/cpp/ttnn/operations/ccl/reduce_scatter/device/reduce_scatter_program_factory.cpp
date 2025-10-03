@@ -71,26 +71,28 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
 
     // Get mesh and axis related information
     auto mesh_device = tensor_args.input_tensor.device();
-    const auto& mesh_view = mesh_device->get_view();
-    const auto& mesh_shape = mesh_device->shape();
-    auto boundary_mode = operation_attributes.topology == ttnn::ccl::Topology::Ring
-                             ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
-                             : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
-    uint32_t reduction_devices =
-        operation_attributes.cluster_axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
+    uint32_t target_ring_size =
+        ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
 
-    auto forward_coordinate =
-        mesh_coordinate.get_neighbor(mesh_shape, 1, operation_attributes.cluster_axis.value(), boundary_mode);
-    auto backward_coordinate =
-        mesh_coordinate.get_neighbor(mesh_shape, -1, operation_attributes.cluster_axis.value(), boundary_mode);
+    log_debug(tt::LogOp, "Getting forward neighbor for {}", mesh_coordinate);
+    const std::optional<MeshCoordinate> forward_coordinate = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, 1, operation_attributes.topology, operation_attributes.cluster_axis);
 
-    std::optional<IDevice*> forward_device =
-        forward_coordinate.has_value() ? std::make_optional(mesh_device->get_device(forward_coordinate.value()))
-                                       : std::nullopt;
+    log_debug(tt::LogOp, "Getting backward neighbor for {}", mesh_coordinate);
+    const std::optional<MeshCoordinate> backward_coordinate = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor,
+        mesh_coordinate,
+        -1,
+        operation_attributes.topology,
+        operation_attributes.cluster_axis);
+    TT_FATAL(
+        forward_coordinate.has_value() || backward_coordinate.has_value(),
+        "DEBUG: forward_coord or backward_coord is null");
 
-    std::optional<IDevice*> backward_device =
-        backward_coordinate.has_value() ? std::make_optional(mesh_device->get_device(backward_coordinate.value()))
-                                        : std::nullopt;
+    log_debug(tt::LogOp, "Getting device index for {}", mesh_coordinate);
+    uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
+    log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
     // Get core and subdevice related information
     auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -107,14 +109,14 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         program,
         tensor_args.input_tensor,
         tensor_return_value.at(0),
-        mesh_device->get_device(mesh_coordinate),
-        forward_device,
-        backward_device,
+        mesh_coordinate,
+        forward_coordinate,
+        backward_coordinate,
         tensor_return_value.at(0),
         operation_attributes.dim,
         operation_attributes.num_links,
-        reduction_devices,
-        mesh_coordinate[operation_attributes.cluster_axis.value()],
+        target_ring_size,
+        device_index,
         operation_attributes.topology,
         multidevice_semaphores,
         barrier_semaphore,

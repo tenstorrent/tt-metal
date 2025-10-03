@@ -8,6 +8,7 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -20,6 +21,8 @@
 
 namespace ttnn {
 namespace decorators {
+
+// NOLINTBEGIN(performance-unnecessary-value-param)
 
 namespace py = pybind11;
 
@@ -47,8 +50,8 @@ constexpr auto resolve_primitive_operation_call_method(F) {
     using traits = function_traits<F>;
 
     return []<typename TSelf, typename... TArgs>(arg_traits<TSelf, TArgs...>) {
-        return [](TSelf self, TArgs... args, QueueId queue_id) ->
-               typename traits::return_t { return self(queue_id, static_cast<decltype(args)&&>(args)...); };
+        return [](TSelf self, TArgs... args) ->
+               typename traits::return_t { return self(static_cast<decltype(args)&&>(args)...); };
     }(typename traits::arg_tuple{});
 }
 
@@ -86,11 +89,7 @@ template <
 void def_call_operator(py_operation_t& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
         [&py_operation, &overload](auto... args) {
-            py_operation.def(
-                "__call__",
-                resolve_primitive_operation_call_method(overload.function),
-                args...,
-                py::arg("queue_id") = DefaultQueueId);
+            py_operation.def("__call__", resolve_primitive_operation_call_method(overload.function), args...);
         },
         overload.args.value);
 }
@@ -105,16 +104,6 @@ template <
 void def_call_operator(py_operation_t& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
         [&py_operation, &overload](auto... args) { py_operation.def("__call__", overload.function, args...); },
-        overload.args.value);
-}
-
-template <typename py_operation_t, typename function_t, typename... py_args_t>
-void def_primitive_operation_method(
-    py_operation_t& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload, auto name, auto method) {
-    std::apply(
-        [&py_operation, &overload, &name, &method](auto... args) {
-            py_operation.def(name, resolve_primitive_operation_method(overload.function, method), args...);
-        },
         overload.args.value);
 }
 
@@ -150,14 +139,17 @@ auto bind_registered_operation(
 
     (
         [&py_operation](auto&& overload) {
-            def_call_operator<registered_operation_t, operation_t>(py_operation, overload);
-        }(overloads),
+            def_call_operator<registered_operation_t, operation_t>(
+                py_operation, std::forward<decltype(overload)>(overload));
+        }(std::forward<overload_t>(overloads)),
         ...);
 
     module.attr(operation.base_name().c_str()) = operation;  // Bind an instance of the operation to the module
 
     return py_operation;
 }
+
+// NOLINTEND(performance-unnecessary-value-param)
 
 }  // namespace decorators
 

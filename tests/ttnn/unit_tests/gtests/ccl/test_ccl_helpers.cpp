@@ -13,8 +13,8 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "umd/device/tt_xy_pair.h"
-#include "umd/device/types/arch.h"
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/arch.hpp>
 
 TEST(CclHelpers, CreateEriscDatamoverBuilder_Chan4_PageSize2048_RRBufferSharingMode) {
     std::size_t num_channels = 4;

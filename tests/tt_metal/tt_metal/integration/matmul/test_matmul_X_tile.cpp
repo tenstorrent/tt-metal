@@ -20,7 +20,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -37,8 +37,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -119,7 +118,7 @@ void set_math_fid_masks(uint16_t& math_fid_mask, MathFidelity math_fidelity = Ma
 
 void matmul_tile(
     tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const MatmulTileConfig& cfg,
     vector<uint32_t> activations,
     vector<uint32_t> weights,
@@ -128,7 +127,7 @@ void matmul_tile(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     CoreCoord core = {0, 0};
 
@@ -336,9 +335,10 @@ void matmul_tile(
     uint16_t math_fid_mask = 0xFFFF;
     set_math_fid_masks(math_fid_mask, cfg.math_fidelity);
     for (auto i = 0; i < golden_tilized.size(); i++) {
-        golden_tilized_single[i] = bfloat16(golden_tilized_single[i].to_uint16() & math_fid_mask);
+        golden_tilized_single[i] = std::bit_cast<bfloat16>(
+            static_cast<uint16_t>(std::bit_cast<uint16_t>(golden_tilized_single[i]) & math_fid_mask));
         if (cfg.fp32_dest_acc_en) {
-            golden_packed[i] = std::bit_cast<uint32_t>(golden_tilized_single[i].to_float());
+            golden_packed[i] = std::bit_cast<uint32_t>(static_cast<float>(golden_tilized_single[i]));
         }
     }
     if (!cfg.fp32_dest_acc_en) {

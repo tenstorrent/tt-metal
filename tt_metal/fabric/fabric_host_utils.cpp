@@ -8,8 +8,8 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <tt_stl/assert.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
 #include "erisc_datamover_builder.hpp"
@@ -115,7 +115,6 @@ FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const bool is_2d_fabric = control_plane.get_fabric_context().is_2D_routing_enabled();
 
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
@@ -193,11 +192,10 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
     set_routing_mode(mode);
 }
 
-
 IntraMeshAdjacencyMap build_mesh_adjacency_map(
     const std::set<chip_id_t>& user_chip_ids,
     const tt::tt_metal::distributed::MeshShape& mesh_shape,
-    std::function<std::vector<chip_id_t>(chip_id_t)> get_adjacent_chips_func,
+    const std::function<std::vector<chip_id_t>(chip_id_t)>& get_adjacent_chips_func,
     std::optional<chip_id_t> start_chip_id /* = std::nullopt */) {
     constexpr size_t CORNER_1D_ADJACENT_CHIPS = 1;
     constexpr size_t CORNER_ADJACENT_CHIPS = 2;
@@ -361,7 +359,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
     const IntraMeshAdjacencyMap& topology_info, std::optional<chip_id_t> nw_corner_chip_id) {
     // Check number of corners for 2D meshes
     TT_FATAL(
-        topology_info.corners.size() == 4, "Expected 4 corners for 2D mesh, got {}.", topology_info.corners.size());
+        topology_info.corners.size() == 4, "Error during physical chip discovery: missing connections in 2D mesh. Please check ethernet connection status");
 
     // Determine the northwest corner
     chip_id_t nw_corner;
@@ -457,7 +455,7 @@ std::vector<chip_id_t> convert_2d_mesh_adjacency_to_row_major_vector(
         TT_FATAL(row >= 0 && row < mesh_rows, "Row {} out of bounds.", row);
         TT_FATAL(col >= 0 && col < mesh_cols, "Col {} out of bounds.", col);
 
-        size_t idx = static_cast<size_t>(row) * static_cast<size_t>(mesh_cols) + static_cast<size_t>(col);
+        size_t idx = (static_cast<size_t>(row) * static_cast<size_t>(mesh_cols)) + static_cast<size_t>(col);
         TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}.", idx);
         physical_chip_ids[idx] = chip;
     }

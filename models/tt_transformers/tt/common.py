@@ -640,6 +640,28 @@ def get_base_model_name(model_name: str) -> str:
     return match.group(1) if match else model_name
 
 
+def get_hf_model_name(model_path: str) -> str:
+    # HF model name
+    if model_path.count("/") == 1:
+        return model_path
+
+    # HF cache path
+    pattern = r".*/?models--(?P<model_provider>[^/]+?)--(?P<model_name>[^/]+)/?"
+    match = pattern.search(pattern, model_path)
+    if match:
+        model_provider = match.group("model_provider")
+        model_name = match.group("model_name")
+        return f"{model_provider}/{model_name}"
+    raise ValueError(
+        f"Unsupported '{model_path}', please use HF model name or follow HF format with 'models--<model_provider>--<model_name>'"
+    )
+
+
+def get_hf_tt_cache_path(model_path: str) -> str:
+    model_name = get_hf_model_name(model_path)
+    return f"/mnt/MLPerf/huggingface/tt_cache/{model_name}"
+
+
 def create_tt_model(
     mesh_device,
     instruct,
@@ -723,3 +745,30 @@ def hf_multimodal_encode(messages, processor):
             mask=None,
         ),
     )
+
+
+def get_decode_mask(args, mesh_device, paged_attention_config=None):
+    """Function to create a decoding mask for the attention mechanism."""
+    if paged_attention_config is not None:
+        max_seq_len = (paged_attention_config.max_num_blocks * paged_attention_config.block_size) // args.max_batch_size
+    else:
+        max_seq_len = args.max_seq_len
+    mask = torch.triu(
+        torch.full(
+            (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
+            -float("inf"),
+            dtype=torch.bfloat16,
+        ),
+        diagonal=1,
+    )
+    if args.sliding_window > 0:
+        mask += torch.tril(
+            torch.full(
+                (args.max_batch_size, args.n_heads // mesh_device.shape[1], max_seq_len, max_seq_len),
+                -float("inf"),
+                dtype=torch.bfloat16,
+            ),
+            diagonal=-args.sliding_window,
+        )
+
+    return mask

@@ -7,11 +7,11 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include "erisc_datamover_builder.hpp"
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+#include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "impl/context/metal_context.hpp"
@@ -304,7 +304,7 @@ chan_id_t FabricContext::get_fabric_master_router_chan(chip_id_t chip_id) const 
 }
 
 std::vector<size_t> FabricContext::get_fabric_router_addresses_to_clear() const {
-    return {this->router_config_->edm_local_sync_address};
+    return {this->router_config_->edm_local_sync_address, this->router_config_->edm_local_tensix_sync_address};
 }
 
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_sync_address_and_status() const {

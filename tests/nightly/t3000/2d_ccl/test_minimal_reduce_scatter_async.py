@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -93,9 +93,6 @@ def test_reduce_scatter_async_training_shapes(
     num_iters,
     ones_tensor,
 ):
-    if enable_trace:
-        pytest.skip("We've seen ND PCC when running the composite-RS with trace")
-
     run_reduce_scatter_impl(
         mesh_device,
         mesh_device.get_num_devices(),

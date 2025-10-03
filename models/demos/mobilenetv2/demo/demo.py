@@ -9,9 +9,9 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
-from models.demos.mobilenetv2.common import load_torch_model
+from models.common.utility_functions import profiler, run_for_wormhole_b0
+from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE, load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_input_tensors,
@@ -23,7 +23,6 @@ from models.tt_cnn.tt.pipeline import (
     create_pipeline_from_config,
     get_memory_config_for_persistent_dram_tensor,
 )
-from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 

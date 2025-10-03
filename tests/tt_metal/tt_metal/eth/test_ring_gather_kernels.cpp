@@ -37,7 +37,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
+#include <umd/device/types/xy_pair.hpp>
 
 using std::vector;
 using namespace tt;
@@ -287,7 +287,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
             inputs[i],
-            src_eth_l1_byte_address + i * byte_size_per_device);
+            src_eth_l1_byte_address + (i * byte_size_per_device));
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
@@ -341,10 +341,8 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     ths.reserve(sender_receivers.size());
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        distributed::AddProgramToMeshWorkload(
-            workloads[device->get_devices()[0]->id()],
-            std::move(programs[device->get_devices()[0]->id()]),
-            device_range);
+        workloads[device->get_devices()[0]->id()].add_program(
+            device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
             distributed::EnqueueMeshWorkload(
                 device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], false);
@@ -401,7 +399,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         inputs.emplace_back(tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-            -1.0f, 1.0f, cfg.size_bytes / bfloat16::SIZEOF, i));
+            -1.0f, 1.0f, cfg.size_bytes / sizeof(bfloat16), i));
         full_input.insert(full_input.begin() + i * numel, inputs[i].begin(), inputs[i].end());
 
         const auto& device = std::get<0>(sender_receivers[i]);
@@ -500,10 +498,8 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     ths.reserve(sender_receivers.size());
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        distributed::AddProgramToMeshWorkload(
-            workloads[device->get_devices()[0]->id()],
-            std::move(programs[device->get_devices()[0]->id()]),
-            device_range);
+        workloads[device->get_devices()[0]->id()].add_program(
+            device_range, std::move(programs[device->get_devices()[0]->id()]));
         ths.emplace_back([&] {
             distributed::EnqueueMeshWorkload(
                 device->mesh_command_queue(), workloads[device->get_devices()[0]->id()], false);

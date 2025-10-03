@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -51,12 +51,6 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
     if (file_size < header_size) {
         throw std::runtime_error("file too small for safetensors");
     }
-
-    auto mmap_deleter = [file_size](void* addr) {
-        if (addr != MAP_FAILED) {
-            munmap(addr, file_size);
-        }
-    };
 
     auto map = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
     if (map == MAP_FAILED) {

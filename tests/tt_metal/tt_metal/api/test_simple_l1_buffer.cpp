@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "buffer_test_utils.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -38,7 +38,8 @@ using namespace tt::test::buffer::detail;
 using namespace tt::tt_metal;
 
 namespace tt::test::buffer::detail {
-bool SimpleL1Loopback(std::shared_ptr<distributed::MeshDevice> mesh_device, size_t local_address, size_t byte_size) {
+bool SimpleL1Loopback(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, size_t local_address, size_t byte_size) {
     std::vector<uint8_t> inputs = generate_uniform_random_vector<uint8_t>(0, UINT8_MAX, byte_size);
     std::vector<uint8_t> outputs(byte_size);
     CoreCoord bank0_logical_core = mesh_device->allocator()->get_logical_core_from_bank_id(0);
@@ -52,7 +53,7 @@ bool SimpleL1Loopback(std::shared_ptr<distributed::MeshDevice> mesh_device, size
 }
 // input_l1_buffer -->  Reader reads from this location --> CB --> Writer --> output_l1_buffer
 bool SimpleTiledL1WriteCBRead(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     CoreCoord core,
     size_t input_local_address,
     size_t output_local_address,
@@ -72,7 +73,7 @@ bool SimpleTiledL1WriteCBRead(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     const uint32_t cb_index = 0;

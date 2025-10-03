@@ -17,6 +17,7 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     const std::optional<ttnn::Tensor>& input_mask,
     const std::optional<ttnn::Tensor>& weight,
     const std::optional<ttnn::Tensor>& bias,
+    const std::optional<ttnn::Tensor>& reciprocals,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::DataType> dtype,
     std::optional<CoreGrid> core_grid,
@@ -24,7 +25,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     std::optional<ttnn::Layout> output_layout,
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<ttnn::Tensor>& negative_mask) {
+    const std::optional<ttnn::Tensor>& negative_mask,
+    bool use_welford) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -89,19 +91,11 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         "Invalid input tensor storage type: Input tensor must be on device. (storage type={})",
         input_tensor.storage_type());
     const auto arch = input_tensor.device()->arch();
-    const auto default_math_fidelity = MathFidelity::HiFi4;
-    const auto default_approx_mode = true;
-    const auto default_fp32_acc = false;
-    const auto default_l1_acc = false;
-    const auto default_dst_full_sync_en = false;
-    auto kernel_config_val = init_device_compute_kernel_config(
-        arch,
-        compute_kernel_config,
-        default_math_fidelity,
-        default_approx_mode,
-        default_fp32_acc,
-        default_l1_acc,
-        default_dst_full_sync_en);
+    const auto math_fidelity = MathFidelity::HiFi4;
+    const auto approx_mode = true;
+    const auto fp32_acc = use_welford;
+    auto kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
     if (input_tensor.is_sharded()) {
         const ttnn::operations::normalization::GroupNormShardedMultiCoreProgramConfig& program_config = {
@@ -110,15 +104,16 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             .out_data_format = DataType::BFLOAT16,
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    GroupNorm{
                        .eps = epsilon,
                        .num_groups = static_cast<uint32_t>(num_groups),
                        .output_mem_config = output_mem_config,
                        .program_config = program_config,
-                       .compute_kernel_config = kernel_config_val},
+                       .compute_kernel_config = kernel_config_val,
+                       .use_welford = use_welford},
                    {input_tensor},
-                   {gamma, beta, input_mask, negative_mask})
+                   {gamma, beta, input_mask, negative_mask, reciprocals})
             .at(0);
     } else {
         const ttnn::operations::normalization::GroupNormMultiCoreProgramConfig& program_config = {
@@ -128,15 +123,16 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout()),
             .num_out_blocks = num_out_blocks.value_or(1)};
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    GroupNorm{
                        .eps = epsilon,
                        .num_groups = static_cast<uint32_t>(num_groups),
                        .output_mem_config = output_mem_config,
                        .program_config = program_config,
-                       .compute_kernel_config = kernel_config_val},
+                       .compute_kernel_config = kernel_config_val,
+                       .use_welford = use_welford},
                    {input_tensor},
-                   {gamma, beta, input_mask, negative_mask})
+                   {gamma, beta, input_mask, negative_mask, reciprocals})
             .at(0);
     }
 }

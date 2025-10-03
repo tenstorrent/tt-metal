@@ -131,6 +131,7 @@ class TtTransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
@@ -161,6 +162,7 @@ class TtTransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
+            batch_size=batch_size,
         )
         if mode == "prefill":
             h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)

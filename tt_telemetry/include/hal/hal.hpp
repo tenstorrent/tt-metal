@@ -10,7 +10,7 @@
  * Thin wrapper around TT-Metal's HAL, without requiring a Metal context.
  */
 
-#include <third_party/umd/device/api/umd/device/cluster.h>
+#include <third_party/umd/device/api/umd/device/cluster.hpp>
 #include <llrt/hal.hpp>
 #include <llrt/rtoptions.hpp>
 

@@ -76,12 +76,10 @@ void py_bind_rs_matmul(pybind11::module& module) {
                const std::optional<const std::string>& activation,                                  // mm7 set false
                const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
                std::optional<Tensor>& optional_output_tensor,                                       // mm11 std::nullopt
-               bool use_noc1_only,
-               QueueId queue_id  // rs 9 default DefaultQueueId
+               bool use_noc1_only
 
                ) -> std::vector<ttnn::Tensor> {
                 return self(
-                    queue_id,
                     input_tensor,
                     weight_tensor,
                     intermediate_packet_buffer,
@@ -133,8 +131,6 @@ void py_bind_rs_matmul(pybind11::module& module) {
             py::arg("activation") = std::nullopt,
             py::arg("output_tile") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
-            py::arg("use_noc1_only") = false,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("use_noc1_only") = false});
 }
-
 }  // namespace ttnn::operations::experimental::ccl
