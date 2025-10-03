@@ -25,6 +25,7 @@
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 namespace tt {
 
@@ -209,6 +210,9 @@ class RunTimeOptions {
 
     // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
     bool use_mesh_graph_descriptor_2_0 = false;
+
+    // Reliability mode override parsed from environment (RELIABILITY_MODE)
+    std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
 public:
     RunTimeOptions();
@@ -495,6 +499,9 @@ public:
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+
+    // Reliability mode override accessor
+    std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
     // Mock cluster accessors
     bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
