@@ -606,7 +606,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
 }
 
-void DevicePool::wait_for_fabric_router_sync(const uint32_t timeout_ms) const {
+void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
