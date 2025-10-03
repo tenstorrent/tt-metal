@@ -49,12 +49,12 @@ struct AllocatorConfig;
 class Allocator {
 public:
     // AllocatorConfig is not in the API directory, thus Allocator currently cannot be constructed publicly,
-    // this is because we are in the middle of moving Allocator into implementaiton details.
-    // This iniative is established from our analysis that Allocator is only used to query memory profiles
+    // this is because we are in the middle of moving Allocator into implementation details.
+    // This initiative is established from our analysis that Allocator is only used to query memory profiles
     // (e.g. how much memory is left in L1?)
     // but not for allocator-specific operations (managing allocations).
     //
-    // While in the middle of this refactory,
+    // While in the middle of this refactor,
     // runtime (river) splits moving AllocatorConfig out of public API,
     // coming up with a memory profile access interface to replace current Allocator API into two (or more) PRs.
     //
@@ -91,7 +91,7 @@ public:
     uint32_t get_alignment(BufferType buffer_type) const;
 
     // This a proxy of get_config().worker_l1_size,
-    // this helper function is made for reports.cpp in TTNN and act as a tranistent member function
+    // this helper function is made for reports.cpp in TTNN and act as a transient member function
     // before we figure out a good memory profile accessor.
     size_t get_worker_l1_size() const;
 
