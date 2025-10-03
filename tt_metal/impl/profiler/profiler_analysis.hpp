@@ -12,6 +12,7 @@
 
 #include <common/TracyTTDeviceData.hpp>
 #include <tt_stl/assert.hpp>
+#include "thread_pool.hpp"
 
 namespace tt {
 
@@ -38,84 +39,95 @@ struct AnalysisResultsConfig {
     std::optional<std::string> start_timestamp_header = std::nullopt;
     std::optional<std::string> end_timestamp_header = std::nullopt;
 };
-struct AnalysisResults {
-    struct RuntimeIdMetaData {
-        chip_id_t device_id;
-        ARCH device_arch;
-        std::string op_name;
-        uint32_t num_fw_cores;
-        uint32_t num_available_worker_cores;
-    };
 
-    AnalysisResultsConfig results_config;
+struct OpId {
+    uint64_t runtime_id;
+    uint64_t trace_id;
+    uint64_t trace_id_counter;
 
-    virtual ~AnalysisResults() = default;
-
-    virtual std::string getStringifiedResultsForRuntimeId(uint64_t runtime_id) const = 0;
-
-    std::unordered_set<uint64_t> getRuntimeIds() const { return runtime_ids; }
-
-    RuntimeIdMetaData getMetaDataForRuntimeId(uint64_t runtime_id) const {
-        TT_ASSERT(runtime_id_to_meta_data.find(runtime_id) != runtime_id_to_meta_data.end());
-        return runtime_id_to_meta_data.at(runtime_id);
+    bool operator==(const OpId& other) const {
+        return runtime_id == other.runtime_id && trace_id == other.trace_id &&
+               trace_id_counter == other.trace_id_counter;
     }
 
-    void addMetaDataForRuntimeId(uint64_t runtime_id, const RuntimeIdMetaData& meta_data) {
-        runtime_id_to_meta_data.emplace(runtime_id, meta_data);
-    }
-
-    std::string getStringifiedHeaders() const {
-        std::string headers;
-        if (results_config.display_start_and_end_timestamps) {
-            TT_FATAL(results_config.start_timestamp_header.has_value(), "Start timestamp header is not set");
-            TT_FATAL(results_config.end_timestamp_header.has_value(), "End timestamp header is not set");
-            headers +=
-                results_config.start_timestamp_header.value() + "," + results_config.end_timestamp_header.value() + ",";
+    bool operator<(const OpId& other) const {
+        if (runtime_id != other.runtime_id) {
+            return runtime_id < other.runtime_id;
         }
-        headers += results_config.analysis_name;
-        return headers;
+        if (trace_id != other.trace_id) {
+            return trace_id < other.trace_id;
+        }
+        return trace_id_counter < other.trace_id_counter;
     }
-
-protected:
-    std::unordered_set<uint64_t> runtime_ids;
-
-private:
-    std::unordered_map<uint64_t, RuntimeIdMetaData> runtime_id_to_meta_data;
 };
 
-struct DurationAnalysisResults : public AnalysisResults {
+struct OpIdHasher {
+    std::size_t operator()(const OpId& id) const {
+        return std::hash<uint64_t>{}(id.runtime_id) ^ (std::hash<uint64_t>{}(id.trace_id) << 1) ^
+               (std::hash<uint64_t>{}(id.trace_id_counter) << 2);
+    }
+};
+
+struct AnalysisResults {
     struct SingleResult {
         tracy::TTDeviceMarker start_marker;
         tracy::TTDeviceMarker end_marker;
         uint64_t start_timestamp = UINT64_MAX;
         uint64_t end_timestamp = 0;
         uint64_t duration = 0;
-        bool done_searching_for_end_timestamp = false;
+
+        bool operator==(const SingleResult& other) const {
+            return start_timestamp == other.start_timestamp && end_timestamp == other.end_timestamp &&
+                   duration == other.duration && start_marker == other.start_marker && end_marker == other.end_marker;
+        }
+
+        bool operator!=(const SingleResult& other) const { return !(*this == other); }
     };
 
-    std::string getStringifiedResultsForRuntimeId(uint64_t runtime_id) const override {
-        std::string results;
-        if (results_per_runtime_id.find(runtime_id) != results_per_runtime_id.end()) {
-            if (results_config.display_start_and_end_timestamps) {
-                results += std::to_string(results_per_runtime_id.at(runtime_id).start_timestamp) + "," +
-                           std::to_string(results_per_runtime_id.at(runtime_id).end_timestamp) + ",";
-            }
-            results += std::to_string(results_per_runtime_id.at(runtime_id).duration);
-        } else {
-            if (results_config.display_start_and_end_timestamps) {
-                results += ",,";
-            }
-        }
-        return results;
-    }
+    static inline const SingleResult INVALID_SINGLE_RESULT = {
+        .start_marker = tracy::TTDeviceMarker(),
+        .end_marker = tracy::TTDeviceMarker(),
+        .start_timestamp = UINT64_MAX,
+        .end_timestamp = 0,
+        .duration = 0,
+    };
 
-    void addResultsForRuntimeId(uint64_t runtime_id, const SingleResult& result) {
-        results_per_runtime_id.emplace(runtime_id, result);
-        runtime_ids.insert(runtime_id);
-    }
+    AnalysisResultsConfig results_config;
+    std::unordered_map<OpId, SingleResult, OpIdHasher> results_per_op_id;
 
-private:
-    std::unordered_map<uint64_t, SingleResult> results_per_runtime_id;
+    // virtual ~AnalysisResults() = default;
+
+    // virtual std::string getStringifiedResultsForRuntimeId(uint64_t runtime_id) const = 0;
+
+    // std::string getStringifiedHeaders() const {
+    //     std::string headers;
+    //     if (results_config.display_start_and_end_timestamps) {
+    //         TT_FATAL(results_config.start_timestamp_header.has_value(), "Start timestamp header is not set");
+    //         TT_FATAL(results_config.end_timestamp_header.has_value(), "End timestamp header is not set");
+    //         headers +=
+    //             results_config.start_timestamp_header.value() + "," + results_config.end_timestamp_header.value() +
+    //             ",";
+    //     }
+    //     headers += results_config.analysis_name;
+    //     return headers;
+    // }
+};
+
+struct OpsPerfResults {
+    struct SingleOpPerfResults {
+        struct OpMetaData {
+            chip_id_t device_id;
+            ARCH device_arch;
+            std::string op_name;
+            uint32_t num_fw_cores;
+            uint32_t num_available_worker_cores;
+        };
+        OpMetaData op_meta_data;
+        std::vector<AnalysisResults::SingleResult> analysis_results;
+    };
+
+    std::vector<AnalysisResultsConfig> analysis_results_configs;
+    std::map<OpId, SingleOpPerfResults> op_id_to_perf_results;
 };
 
 struct AnalysisStartEndConfig {
@@ -132,13 +144,16 @@ struct AnalysisConfig {
     AnalysisStartEndConfig end_config{};
 };
 
-std::unique_ptr<AnalysisResults> generateAnalysisForDeviceMarkers(
-    const AnalysisConfig& analysis_config,
-    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers);
+// AnalysisResults generateAnalysisForDeviceMarkers(
+//     const AnalysisConfig& analysis_config,
+//     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers);
 
-void writeAnalysisResultsToCSV(
-    const std::vector<std::unique_ptr<const AnalysisResults>>& analysis_results,
-    const std::filesystem::path& report_path);
+OpsPerfResults generatePerfResultsForOps(
+    const std::vector<AnalysisConfig>& analysis_configs,
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
+    ThreadPool& thread_pool);
+
+void writeOpsPerfResultsToCSV(const OpsPerfResults& ops_perf_results, const std::filesystem::path& report_path);
 
 std::vector<AnalysisConfig> loadAnalysisConfigsFromJSON(const std::filesystem::path& json_path);
 }  // namespace tt_metal
