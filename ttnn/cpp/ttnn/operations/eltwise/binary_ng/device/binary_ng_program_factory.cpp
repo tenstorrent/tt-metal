@@ -133,6 +133,7 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 
 class ShardShapeGenerator {
     CoreCoord end_core;
+    CoreCoord last_data_core;  // Last core that actually contains data
     bool row_major{};
     TensorMemoryLayout memory_layout{TensorMemoryLayout::INTERLEAVED};
     std::array<uint32_t, 2> shard_shape{};
@@ -165,25 +166,46 @@ public:
             shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
         };
+
+        // For BLOCK_SHARDED, calculate the last core that actually contains data
+        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            auto grid_start = shard_spec.grid.ranges().begin()->start_coord;
+            uint32_t num_shards_height = tt::div_up(unrolled_Ht, shard_shape[0]);
+            uint32_t num_shards_width = tt::div_up(Wt, shard_shape[1]);
+            last_data_core = row_major
+                                 ? CoreCoord(grid_start.x + num_shards_width - 1, grid_start.y + num_shards_height - 1)
+                                 : CoreCoord(grid_start.x + num_shards_height - 1, grid_start.y + num_shards_width - 1);
+        } else {
+            last_data_core = end_core;
+        }
     }
     std::array<uint32_t, 2> operator()(CoreCoord core) const {
         const unsigned majorDim = row_major ? 1 : 0;
         const unsigned minorDim = row_major ? 0 : 1;
 
         auto current_shape = shard_shape;
-        // for uneven shard, HEIGHT, WIDTH, and BLOCK handling order should be all different in kernel
-        // only HEIGHT sharding works naturally
-        if (core == end_core) {
-            if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            if (core == end_core) {
                 current_shape[majorDim] = last_shard_shape[majorDim];
                 current_shape[minorDim] = last_shard_shape[minorDim];
-            } else if (memory_layout != TensorMemoryLayout::INTERLEAVED) {
-                // TODO: think more about uneven shard size support later
-                TT_FATAL(
-                    current_shape[majorDim] == last_shard_shape[majorDim] and
-                        current_shape[minorDim] == last_shard_shape[minorDim],
-                    "no un-even shard size support memory layout {}",
-                    memory_layout);
+            }
+        } else if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+            // For BLOCK_SHARDED, edges can have uneven shards, not just the end_core
+            // Use last_data_core instead of end_core to avoid considering empty cores
+            if (row_major) {
+                if (core.x == last_data_core.x) {
+                    current_shape[1] = last_shard_shape[1];  // width
+                }
+                if (core.y == last_data_core.y) {
+                    current_shape[0] = last_shard_shape[0];  // height
+                }
+            } else {  // col_major
+                if (core.y == last_data_core.y) {
+                    current_shape[1] = last_shard_shape[1];  // width
+                }
+                if (core.x == last_data_core.x) {
+                    current_shape[0] = last_shard_shape[0];  // height
+                }
             }
         }
         return current_shape;
