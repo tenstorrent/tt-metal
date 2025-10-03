@@ -54,6 +54,7 @@ public:
     void clear_mock_routes() { mock_routes_.clear(); }
 
     // Mock implementation of detect_inter_mesh_cycles - matches real ControlPlane implementation exactly
+    // IMPORTANT: Keep this in sync with control_plane.cpp::detect_inter_mesh_cycles
     bool detect_inter_mesh_cycles(
         const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs, const std::string& test_name) const {
         // Type aliases for cycle detection
@@ -67,25 +68,7 @@ public:
 
         // Note: In real implementation this would log_debug, but we skip logging in mock
 
-        // Enhanced: Track which flows use which edges to distinguish bidirectional traffic from true cycles
-        struct DirectedEdge {
-            FabricNodeId from;
-            FabricNodeId to;
-            bool operator==(const DirectedEdge& other) const { return from == other.from && to == other.to; }
-        };
-
-        struct EdgeHash {
-            std::size_t operator()(const DirectedEdge& edge) const {
-                auto h1 = std::hash<uint32_t>{}(*edge.from.mesh_id);
-                auto h2 = std::hash<uint32_t>{}(edge.from.chip_id);
-                auto h3 = std::hash<uint32_t>{}(*edge.to.mesh_id);
-                auto h4 = std::hash<uint32_t>{}(edge.to.chip_id);
-                return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
-            }
-        };
-
-        // Track which flows use which edges for accurate cycle detection
-        std::unordered_map<DirectedEdge, std::vector<std::pair<FabricNodeId, FabricNodeId>>, EdgeHash> edge_to_flows;
+        // Build routing graph from traffic pairs
         NodeGraph routing_graph;
 
         for (const auto& [src, dest] : traffic_pairs) {
@@ -99,7 +82,7 @@ public:
                     path.push_back(node);
                 }
 
-                // Add edges to routing graph AND track which flow uses each edge
+                // Add edges to routing graph
                 for (size_t i = 0; i < path.size() - 1; ++i) {
                     FabricNodeId current_node = path[i];
                     FabricNodeId next_node = path[i + 1];
@@ -108,10 +91,6 @@ public:
                     if (current_node == next_node) {
                         continue;
                     }
-
-                    // Track which flow uses this edge
-                    DirectedEdge edge{current_node, next_node};
-                    edge_to_flows[edge].push_back({src, dest});
 
                     // Avoid duplicate edges in routing graph
                     auto& neighbors = routing_graph[current_node];
@@ -145,10 +124,10 @@ public:
                                 std::vector<FabricNodeId>& path,
                                 std::vector<CyclePath>& cycles) -> bool {
             if (state[node] == DFSState::VISITING) {
-                // Found a back edge - extract the cycle
+                // Found a back edge - extract the full path including pre-cycle nodes
                 auto cycle_start = std::find(path.begin(), path.end(), node);
                 if (cycle_start != path.end()) {
-                    CyclePath cycle(cycle_start, path.end());
+                    CyclePath cycle(path.begin(), path.end());  // Include full path, not just cycle portion
                     cycle.push_back(node);  // Close the cycle
                     cycles.push_back(cycle);
                     return true;
@@ -198,73 +177,44 @@ public:
             }
         }
 
-        // Filter out false positive cycles
-        std::vector<CyclePath> true_cycles;
+        // Filter out cycles where the actual cycle loop (not the pre-cycle path) is entirely within one mesh
+        // We only care about cycles where the loop portion crosses mesh boundaries
+        std::vector<CyclePath> inter_mesh_cycles;
         for (const auto& cycle : cycles) {
-            bool is_false_positive = false;
+            if (cycle.empty()) {
+                continue;
+            }
 
-            // FILTER 1: Intra-mesh cycles (all hops within the same mesh)
-            // We only care about inter-mesh cycles since intra-mesh uses dimension-ordered routing (cycle-free)
-            bool is_intra_mesh_cycle = true;
-            if (!cycle.empty()) {
-                MeshId first_mesh_id = cycle[0].mesh_id;
-                for (const auto& node : cycle) {
-                    if (node.mesh_id != first_mesh_id) {
-                        is_intra_mesh_cycle = false;
+            // Find where the cycle actually starts (where the last node appears earlier in the path)
+            size_t cycle_start_idx = cycle.size() - 1;
+            for (size_t i = 0; i < cycle.size() - 1; ++i) {
+                if (cycle[i] == cycle[cycle.size() - 1]) {
+                    cycle_start_idx = i;
+                    break;
+                }
+            }
+
+            // Check if the actual cycle loop crosses mesh boundaries
+            bool cycle_loop_crosses_meshes = false;
+            if (cycle_start_idx < cycle.size() - 1) {
+                MeshId cycle_loop_mesh_id = cycle[cycle_start_idx].mesh_id;
+                for (size_t i = cycle_start_idx; i < cycle.size(); ++i) {
+                    if (cycle[i].mesh_id != cycle_loop_mesh_id) {
+                        cycle_loop_crosses_meshes = true;
                         break;
                     }
                 }
             }
 
-            if (is_intra_mesh_cycle) {
-                is_false_positive = true;
-                // Note: In real implementation this would log_debug, but we skip logging in mock
+            if (cycle_loop_crosses_meshes) {
+                // This cycle loop crosses mesh boundaries - keep it
+                inter_mesh_cycles.push_back(cycle);
             }
-
-            // FILTER 2: Simple 2-node bidirectional cycle (A->B->A)
-            // If different flows use opposite directions, it's NOT a deadlock - they have independent paths
-            if (!is_false_positive && cycle.size() == 3 && cycle[0] == cycle[2]) {
-                const FabricNodeId& node_a = cycle[0];
-                const FabricNodeId& node_b = cycle[1];
-
-                DirectedEdge forward{node_a, node_b};
-                DirectedEdge reverse{node_b, node_a};
-
-                // Check if these node edges are used by different flows
-                auto forward_it = edge_to_flows.find(forward);
-                auto reverse_it = edge_to_flows.find(reverse);
-
-                if (forward_it != edge_to_flows.end() && reverse_it != edge_to_flows.end()) {
-                    // Check if any flow uses BOTH node edges (that would be a real cycle)
-                    bool same_flow_uses_both = false;
-                    for (const auto& forward_flow : forward_it->second) {
-                        for (const auto& reverse_flow : reverse_it->second) {
-                            if (forward_flow == reverse_flow) {
-                                same_flow_uses_both = true;
-                                break;
-                            }
-                        }
-                        if (same_flow_uses_both) {
-                            break;
-                        }
-                    }
-
-                    // If different flows use opposite directions, it's safe bidirectional traffic
-                    // Hardware has flow control and these flows don't block each other
-                    if (!same_flow_uses_both) {
-                        is_false_positive = true;
-                        // Note: In real implementation this would log_debug, but we skip logging in mock
-                    }
-                }
-            }
-
-            if (!is_false_positive) {
-                true_cycles.push_back(cycle);
-            }
+            // Note: In real implementation this would log_debug for filtered cycles, but we skip logging in mock
         }
 
-        // Use filtered cycles instead of all detected cycles
-        cycles = true_cycles;
+        // Use filtered cycles
+        cycles = inter_mesh_cycles;
 
         bool has_cycles = !cycles.empty();
 

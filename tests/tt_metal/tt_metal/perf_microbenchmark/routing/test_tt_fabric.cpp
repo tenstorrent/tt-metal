@@ -167,6 +167,14 @@ int main(int argc, char** argv) {
                 test_context.process_traffic_config(built_test);
                 log_info(tt::LogTest, "Traffic config processed");
 
+                // Check if this is cycle detection only mode
+                if (built_test.cycle_detection_only) {
+                    log_info(tt::LogTest, "Cycle detection only mode enabled - skipping traffic execution");
+                    log_info(tt::LogTest, "Test {} Finished (cycle detection only).", built_test.parametrized_name);
+                    test_context.reset_devices();
+                    continue;  // Skip to next test
+                }
+
                 // Initialize sync memory if line sync is enabled
                 test_context.initialize_sync_memory();
 
