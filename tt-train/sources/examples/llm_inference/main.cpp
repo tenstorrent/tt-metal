@@ -44,25 +44,9 @@ struct TrainingConfig {
     std::string project_name;
     std::string model_type;  // one of "gpt2", "llama"
     uint32_t seed = 5489U;
-    uint32_t model_save_interval = 500;
-    uint32_t batch_size = 64;
-    uint32_t num_epochs = 1;
-    uint32_t max_steps = 5000;
-    float learning_rate = 3e-4F;
-    float weight_decay = 1e-2F;
-    bool use_no_op = false;
-    bool use_moreh_adamw = false;
-    // works only for AdamW
-    bool use_kahan_summation = false;
-    // accumulate batches for gradient update
-    uint32_t gradient_accumulation_steps = 1;
-    std::string model_path;
-    std::string data_path;
+
     std::string tokenizer_type = "char";
-    std::string scheduler_type = "identity";
     std::string tokenizer_path = "data/gpt2-tokenizer.json";
-    bool use_clip_grad_norm = false;
-    float clip_grad_norm_max_norm = 1.0F;
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
@@ -72,25 +56,8 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.model_type = training_config["model_type"].as<std::string>();
     config.seed = training_config["seed"].as<uint32_t>();
-    config.model_save_interval = training_config["model_save_interval"].as<uint32_t>();
-    config.batch_size = training_config["batch_size"].as<uint32_t>();
-    config.num_epochs = training_config["num_epochs"].as<uint32_t>();
-    config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.learning_rate = training_config["learning_rate"].as<float>();
-    config.weight_decay = training_config["weight_decay"].as<float>();
-    config.use_no_op = training_config["use_no_op"].as<bool>(config.use_no_op);
-    config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
-    config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
-    config.gradient_accumulation_steps =
-        training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
-    config.model_path = training_config["model_path"].as<std::string>("");
-    config.data_path = training_config["data_path"].as<std::string>("data/shakespeare.txt");
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
-    config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
     config.tokenizer_path = training_config["tokenizer_path"].as<std::string>(config.tokenizer_path);
-    config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
-    config.clip_grad_norm_max_norm =
-        training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
     config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
 
@@ -102,7 +69,6 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string model_path = "configs/training_shakespeare_gpt2s";
-    std::string tokenizer_path = "";
     std::string prompt = "";
     std::string safetensors_path = "";
     float temperature = 0.0F;
@@ -110,32 +76,27 @@ int main(int argc, char **argv) {
     uint32_t seed = ttml::autograd::ctx().get_generator()();
 
     app.add_option("-c,--config", model_path, "Path to the LLM config")->default_val(model_path);
-    app.add_option("-p,--prompt", prompt, "Prompt for text generation")->default_val(prompt);
     app.add_option("--safetensors", safetensors_path, "Path to the model safetensors file")
         ->default_val(safetensors_path);
-    app.add_option("--tokenizer", tokenizer_path, "Path to the tokenizer files")->default_val(tokenizer_path);
     app.add_option("--temperature", temperature, "Sampling temperature")->default_val(temperature);
     app.add_option("--num_tokens", tokens_to_generate, "Number of tokens to generate")->default_val(tokens_to_generate);
-    app.add_option("-s, --seed", seed, "Random seed for sampling")->default_val(seed);
     CLI11_PARSE(app, argc, argv);
 
     // Set up device and context
-    ttml::autograd::ctx().set_seed(seed);
-
-    fmt::print("Setting random seed to: {}\n", seed);
-
     ttml::autograd::ctx().open_device(MeshShape{1, 1}, {});
-
     auto *device = &ttml::autograd::ctx().get_device();
-
-    // Load tokenizer
-    auto tokenizer = std::make_shared<ttml::tokenizers::BPETokenizer>(tokenizer_path);
 
     // Load model
     auto yaml_config = YAML::LoadFile(model_path + ".yaml");
     auto training_config = parse_config(yaml_config);
     auto eval_config = parse_eval_config(yaml_config);
     auto transformer_config = training_config.transformer_config;
+
+    // Load tokenizer
+    auto tokenizer = std::make_shared<ttml::tokenizers::BPETokenizer>(training_config.tokenizer_path);
+
+    ttml::autograd::ctx().set_seed(training_config.seed);
+    fmt::print("Setting random seed to: {}\n", training_config.seed);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
     // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
@@ -151,36 +112,14 @@ int main(int argc, char **argv) {
     model->load_from_safetensors(safetensors_path);
     model->eval();
 
-    // Prepare prompt
-    if (prompt.empty()) {
-        std::cout << "Enter a prompt: ";
-        std::getline(std::cin, prompt);
-        if (prompt.empty())
-            prompt = "\n";
-    }
-    auto prompt_tokens = tokenizer->encode(prompt);
-
-    // Pad prompt tokens
-    std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, 0);
-    uint32_t start_idx = prompt_tokens.size() > max_sequence_length ? prompt_tokens.size() - max_sequence_length : 0;
-    for (uint32_t i = start_idx; i < prompt_tokens.size(); ++i) {
-        prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
-    }
-
-    // Create input tensor
-    auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-        prompt_tokens_padded, ttnn::Shape({1U, 1U, 1U, max_sequence_length}), device, ttnn::Layout::ROW_MAJOR));
-
-    // Generate tokens
-    std::cout << "Generated text:\n";
-    std::cout << "*******************\n";
-    std::cout << prompt;
-
     // Build mask (causal) for attention
-    std::vector<float> mask(max_sequence_length * max_sequence_length, 0.0F);
+
+    std::vector<float> mask;
+    mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length));
     for (uint32_t i = 0; i < max_sequence_length; ++i) {
-        auto start = mask.begin() + static_cast<size_t>(i * max_sequence_length);
-        std::fill(start + i, start + (max_sequence_length - i), 1.0F);
+        for (uint32_t j = 0; j < max_sequence_length; ++j) {
+            mask.push_back(i >= j ? 1.0F : 0.0F);
+        }
     }
 
     auto causal_mask_tensor = ttml::autograd::create_tensor(
@@ -202,42 +141,70 @@ int main(int argc, char **argv) {
         logits_padding_mask_autograd = ttml::autograd::create_tensor(logits_padding_mask);
     }
 
-    for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
-        uint32_t start_idx = 0;
-        if (prompt_tokens.size() > max_sequence_length) {
-            start_idx = static_cast<uint32_t>(prompt_tokens.size() - max_sequence_length);
+    while (true) {
+        // Prepare prompt
+        std::cout << "Enter a prompt: ";
+        std::getline(std::cin, prompt);
+        if (prompt.empty())
+            prompt = "\n";
+        auto prompt_tokens = tokenizer->encode(prompt);
+
+        // Pad prompt tokens
+        std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, 0);
+        uint32_t start_idx =
+            prompt_tokens.size() > max_sequence_length ? prompt_tokens.size() - max_sequence_length : 0;
+        for (uint32_t i = start_idx; i < prompt_tokens.size(); ++i) {
+            prompt_tokens_padded[i - start_idx] = prompt_tokens[i];
         }
-        // Fill padded array
-        std::fill(prompt_tokens_padded.begin(), prompt_tokens_padded.end(), 0);
-        std::copy(prompt_tokens.begin() + start_idx, prompt_tokens.end(), prompt_tokens_padded.begin());
 
-        auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
+        // Create input tensor
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            prompt_tokens_padded,
-            ttnn::Shape({1U, 1U, 1U, prompt_tokens_padded_size}),
-            device,
-            ttnn::Layout::ROW_MAJOR));
+            prompt_tokens_padded, ttnn::Shape({1U, 1U, 1U, max_sequence_length}), device, ttnn::Layout::ROW_MAJOR));
 
-        // Forward pass
-        auto output = (*model)(prompt_tensor, causal_mask_tensor);
+        // Generate tokens
+        std::cout << "Generated text:\n";
+        std::cout << "*******************\n";
+        std::cout << prompt;
 
-        // Sample next token
-        auto next_token_tensor = ttml::ops::sample_op(output, temperature, seed, logits_padding_mask_autograd);
+        for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
+            uint32_t start_idx = 0;
+            if (prompt_tokens.size() > max_sequence_length) {
+                start_idx = static_cast<uint32_t>(prompt_tokens.size() - max_sequence_length);
+            }
+            // Fill padded array
+            std::fill(prompt_tokens_padded.begin(), prompt_tokens_padded.end(), 0);
+            std::copy(prompt_tokens.begin() + start_idx, prompt_tokens.end(), prompt_tokens_padded.begin());
 
-        uint32_t predicted_token_idx =
-            (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);
+            auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
+            auto prompt_tensor =
+                ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                    prompt_tokens_padded,
+                    ttnn::Shape({1U, 1U, 1U, prompt_tokens_padded_size}),
+                    device,
+                    ttnn::Layout::ROW_MAJOR));
 
-        auto next_token_vector = ttml::core::to_vector<uint32_t>(next_token_tensor->get_value());
-        uint32_t next_token_id = next_token_vector[predicted_token_idx];
+            // Forward pass
+            auto output = (*model)(prompt_tensor, causal_mask_tensor);
 
-        // Append and print
-        prompt_tokens.push_back(next_token_id);
-        fmt::print("{}", tokenizer->decode({next_token_id}));
-        std::cout.flush();
+            // Sample next token
+            auto next_token_tensor = ttml::ops::sample_op(output, temperature, seed, logits_padding_mask_autograd);
 
-        ttml::autograd::ctx().reset_graph();
+            uint32_t predicted_token_idx =
+                (prompt_tokens.size() > max_sequence_length) ? (max_sequence_length - 1U) : (prompt_tokens.size() - 1U);
+
+            auto next_token_vector = ttml::core::to_vector<uint32_t>(next_token_tensor->get_value());
+            uint32_t next_token_id = next_token_vector[predicted_token_idx];
+
+            // Append and print
+            prompt_tokens.push_back(next_token_id);
+            fmt::print("{}", tokenizer->decode({next_token_id}));
+            std::cout.flush();
+
+            ttml::autograd::ctx().reset_graph();
+        }
+
+        std::cout << "\n*******************\n";
     }
 
-    std::cout << "\n*******************\n";
     return 0;
 }
