@@ -92,7 +92,10 @@ std::string get_default_root_path() {
 JitBuildEnv::JitBuildEnv() = default;
 
 void JitBuildEnv::init(
-    uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
+    uint32_t build_key,
+    uint32_t fw_compile_hash,
+    tt::ARCH arch,
+    const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     this->root_ = rtoptions.get_root_dir();
@@ -117,8 +120,9 @@ void JitBuildEnv::init(
 
     this->out_root_ = this->out_root_  + git_hash + "/";
 #endif
-
-    this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
+    // Firmware build path is a combination of build_key and fw_compile_hash
+    // If either change, the firmware build path will change and FW will be rebuilt
+    this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/" + to_string(fw_compile_hash) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
     // Tools
