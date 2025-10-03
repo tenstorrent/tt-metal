@@ -26,7 +26,7 @@ public:
     const TensorSpec& get_tensor_spec() const;
     const TensorTopology& get_tensor_topology() const;
 
-    TensorAttributes with_tensor_topology(const TensorTopology& tensor_topology) const;
+    TensorAttributes with_tensor_topology(TensorTopology tensor_topology) const;
 
 private:
     Storage storage_;

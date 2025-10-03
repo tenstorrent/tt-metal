@@ -18,7 +18,7 @@ Storage& TensorAttributes::get_storage() { return storage_; }
 const TensorSpec& TensorAttributes::get_tensor_spec() const { return tensor_spec_; }
 const TensorTopology& TensorAttributes::get_tensor_topology() const { return tensor_topology_; }
 
-TensorAttributes TensorAttributes::with_tensor_topology(const TensorTopology& tensor_topology) const {
+TensorAttributes TensorAttributes::with_tensor_topology(TensorTopology tensor_topology) const {
     TensorAttributes result = *this;
     result.tensor_topology_ = std::move(tensor_topology);
     return result;
