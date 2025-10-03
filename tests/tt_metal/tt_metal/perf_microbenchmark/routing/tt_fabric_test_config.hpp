@@ -421,7 +421,7 @@ private:
             // Determine current platform identifiers
             auto arch_name = tt::tt_metal::hal::get_arch_name();
             auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-            std::string cluster_name = enchantum::to_string(cluster_type).data();
+            std::string cluster_name = std::string(enchantum::to_string(cluster_type));
             for (const auto& token : test_config.skip.value()) {
                 if (token == arch_name || token == cluster_name) {
                     log_info(LogTest, "Skipping test '{}' on architecture or platform '{}'", test_config.name, token);
