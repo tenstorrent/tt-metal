@@ -3,13 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/trigonometry.h"
-#include "compute_kernel_api/bcast.h"
 
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/binary_bitwise_sfpu.h"
+#include "compute_kernel_api/binary_shift.h"
+#include "compute_kernel_api/add_int_sfpu.h"
+#include "compute_kernel_api/sub_int_sfpu.h"
+#include "compute_kernel_api/mul_int_sfpu.h"
+#include "compute_kernel_api/mul_int32_sfpu.h"
+#include "compute_kernel_api/quantization.h"
+#include "compute_kernel_api/binary_max_min.h"
+#include "compute_kernel_api/gcd.h"
+#include "compute_kernel_api/lcm.h"
+#include "compute_kernel_api/xlogy.h"
+#include "compute_kernel_api/binary_comp.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
-#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
+#include "compute_kernel_api/bcast.h"
 
 namespace NAMESPACE {
 
@@ -42,7 +55,7 @@ ALWI void process_tile(
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
-    binary_op_init_common(cb_left, cb_right, cb_out);
+    unary_op_init_common(cb_left, cb_out);
     PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, num_tiles_per_cycle);
     cb_wait_front(CB_POST_BCAST, num_tiles_per_cycle);
 
@@ -62,19 +75,31 @@ ALWI void process_tile(
         tile_regs_release();
 
         cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
         cb_wait_front(cb_llk_post, num_tiles_per_cycle);
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
+        BINARY_SFPU_INIT
+#endif
         tile_regs_acquire();
-        BINARY_OP(cb_left, cb_right, 0, 0, 0);
-        PROCESS_POST_ACTIVATIONS(0);
+        copy_tile_to_dst_init_short_with_dt(cb_right, cb_left);
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            copy_tile(cb_left, i, i * 2);
+        }
+        copy_tile_to_dst_init_short_with_dt(cb_left, cb_right);
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            copy_tile(cb_right, i, i * 2 + 1);
+
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+            PROCESS_POST_ACTIVATIONS(i * 2);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_out);
+        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            pack_tile(i * 2, cb_out);
+        }
         tile_regs_release();
-
         cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(cb_llk_post, num_tiles_per_cycle);
     }
@@ -101,6 +126,10 @@ void MAIN {
 
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+#endif
+
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
+    BINARY_SFPU_INIT
 #endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
