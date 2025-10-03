@@ -838,8 +838,6 @@ jobs:
 
       - name: Send notifications
         run: |
-          set -euo pipefail
-
           PR_NUMBER="${{ steps.generate-comment.outputs.pr-number }}"
           TEAM_MEMBERS="${{ steps.generate-comment.outputs.team-members }}"
           TEAMS="${{ needs.analyze-codeowners.outputs.codeowners-teams }}"
@@ -1036,8 +1034,8 @@ jobs:
 
             PING_MESSAGE="$PING_MESSAGE, this PR **[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
 
-            # Send ping comment if enabled
             if [ "$PING_OWNERS" = "true" ]; then
+              # Create new ping comment
               echo "Creating ping comment..."
 
               # Create temporary file to avoid shell interpretation of JSON
@@ -1048,7 +1046,6 @@ jobs:
                 echo "Failed to create JSON file"
                 exit 1
               fi
-
               RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
                 -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
                 -H "Accept: application/vnd.github.v3+json" \
@@ -1072,11 +1069,10 @@ jobs:
                 exit 1
               fi
             else
+              # Just output the ping message to workflow logs
               echo "Ping message (not sent):"
               echo "$PING_MESSAGE"
             fi
           else
             echo "No pending owners to ping"
           fi
-
-          echo "Notification step completed successfully"
