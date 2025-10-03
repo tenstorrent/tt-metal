@@ -17,16 +17,12 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_isfinite() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        v_if(
-            v == std::numeric_limits<float>::infinity() || v == -std::numeric_limits<float>::infinity() ||
-            v == std::numeric_limits<float>::quiet_NaN() || v == std::numeric_limits<float>::signaling_NaN()) {
-            v = 0.0f;
-        }
-        v_else { v = 1.0f; }
+        vFloat in = dst_reg[0];
+        sfpi::vInt exp = sfpi::exexp(in);
+        vFloat out = sfpi::vConst1;
+        v_if(exp == 128) { out = sfpi::vConst0; }
         v_endif;
-
-        dst_reg[0] = v;
+        dst_reg[0] = out;
         dst_reg++;
     }
 }
