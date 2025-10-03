@@ -62,6 +62,7 @@ void MAIN {
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(26);
     constexpr bool use_half_tile = get_compile_time_arg_val(27);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
+    constexpr uint32_t sliding_window = get_compile_time_arg_val(29);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -73,6 +74,7 @@ void MAIN {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
     constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
@@ -107,6 +109,11 @@ void MAIN {
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
+
+    // For sliding window, we need to determine if this core processes the first chunk
+    // The first chunk is processed by the core with the highest core_num_in_reduce
+    // (due to reverse chunk distribution)
+    const bool apply_sliding_window_mask = (sliding_window > 0) && (core_num_in_reduce == num_cores_per_head - 1);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
     // Idle core
@@ -144,7 +151,7 @@ void MAIN {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Get the sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned] =
         get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
@@ -270,13 +277,22 @@ void MAIN {
 
                 // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
-                bool add_mask_fusion =
-                    is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk || use_attention_mask;
+                bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
+                bool add_sliding_window_mask_fusion = k_chunk == k_chunk_start && apply_sliding_window_mask;
+                bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
+                bool add_causal_mask_fusion = false;
+                bool add_sliding_window_mask_fusion = false;
 #endif
 
                 /* QK = Q_CHUNK @ K_CHUNK */
+                // Determine which mask buffer to use for fusion
+                uint32_t mask_cb_to_use = cb_mask_in;  // Default to causal mask buffer
+                if (add_sliding_window_mask_fusion) {
+                    mask_cb_to_use = cb_sliding_window_mask_in;  // Use sliding window mask buffer
+                }
+
                 cb_matmul_blocks(
                     cb_q_in,
                     cb_k_in,
@@ -292,7 +308,7 @@ void MAIN {
                     qk_subblock_w_dynamic,
                     true,
                     add_mask_fusion,
-                    cb_mask_in,
+                    mask_cb_to_use,
                     cb_zero_in);
 
                 /* QK += MASK */
@@ -308,6 +324,12 @@ void MAIN {
                             reconfig_data_format(cb_qk_im, cb_mask_in);
                             add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
                         }
+                    }
+
+                    // Apply sliding window mask to the first chunk (only on the core that processes it)
+                    if (k_chunk == k_chunk_start && apply_sliding_window_mask) {
+                        reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
+                        add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
                 }
 
