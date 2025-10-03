@@ -42,7 +42,7 @@ constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
-        this->is_root_dir_env_var_set = true;
+        this->is_root_dir_set = true;
         this->root_dir = std::string(root_dir_str) + "/";
     }
 
@@ -263,9 +263,16 @@ RunTimeOptions::RunTimeOptions() {
     this->timeout_duration_for_operations = std::chrono::duration<float>(timeout_duration_for_operations);
 }
 
+void RunTimeOptions::set_root_dir(const std::string& root_dir) {
+    std::filesystem::path p(root_dir);
+    p /= "";  // ensures trailing slash, never duplicates
+    this->root_dir = p.string();
+    this->is_root_dir_set = true;
+}
+
 const std::string& RunTimeOptions::get_root_dir() const {
     if (!this->is_root_dir_specified()) {
-        TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
+        TT_THROW("Root Directory is unspecified.");
     }
 
     return root_dir;

@@ -12,14 +12,6 @@ from types import ModuleType
 
 from loguru import logger
 
-# Sets env and updates shared libs rpath
-# This is a tweak required for a proper wheel functioning
-import ttnn.library_tweaks
-
-library_tweaks.setup_ttnn_so()
-
-import ttnn._ttnn
-
 
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
@@ -253,6 +245,7 @@ from ttnn.device import (
     SubDeviceId,
     SubDeviceManagerId,
     init_device_compute_kernel_config,
+    SetRootDir,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
@@ -411,3 +404,8 @@ from ttnn._ttnn.device import get_arch_name as _get_arch_name
 
 def get_arch_name():
     return _get_arch_name()
+
+
+if "TT_METAL_HOME" not in os.environ:
+    this_dir = os.path.dirname(__file__)
+    SetRootDir(os.path.abspath(this_dir))
