@@ -130,9 +130,9 @@ void bind_max_pool2d_operation(py::module& module) {
 
                 // Return single tensor or tuple based on vector size
                 if (result.size() == 1) {
-                    return py::cast(result[0]);
+                    return py::cast(std::move(result[0]));
                 } else {
-                    return py::cast(result);
+                    return py::cast(std::move(result));
                 }
             },
             py::arg("input_tensor"),
