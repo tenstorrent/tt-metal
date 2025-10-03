@@ -25,7 +25,7 @@ training_config:
     max_sequence_length: 2048
     runner_type: memory_efficient
     theta: 10000.0
-
+    weight_tying: "disabled"
 eval_config:
   repetition_penalty: 1.0
   temperature: 0.7
