@@ -11,6 +11,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
 
 constexpr bool flush = false;
 void kernel_main() {
@@ -143,7 +144,8 @@ void kernel_main() {
                     curr_packet_size_bytes);
 
                 fabric_conn.wait_for_empty_write_slot();
-
+                
+                RECORD_FABRIC_HEADER(unicast_packet_header);
                 fabric_conn.send_payload_without_header_non_blocking_from_address(
                     sender_l1_addr, curr_packet_size_bytes);
 

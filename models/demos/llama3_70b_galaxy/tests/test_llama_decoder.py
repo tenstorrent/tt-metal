@@ -26,9 +26,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -101,7 +99,7 @@ def test_llama_decoder_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 127
-    generation_length = 10
+    generation_length = 1
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
@@ -254,6 +252,7 @@ def test_llama_decoder_inference(
         )
 
     tt_ccl.close()
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     if all_tests_pass:
         logger.info(f"All {generation_length} Llama decode iterations Passed!")

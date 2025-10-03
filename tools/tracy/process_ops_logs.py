@@ -15,6 +15,7 @@ import yaml
 from datetime import datetime
 import copy
 from collections import deque
+import pandas as pd
 
 import click
 from loguru import logger
@@ -100,6 +101,11 @@ OPS_CSV_HEADER = [
     "NOC UTIL (%)",
     "DRAM BW UTIL (%)",
     "NPE CONG IMPACT (%)",
+    "Packet Size Min",
+    "Packet Size Q1",
+    "Packet Size Median",
+    "Packet Size Q3",
+    "Packet Size Max", 
 ]
 
 
@@ -429,6 +435,7 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
     # if enabled, analyze noc trace files present in log folder and add
     # relevant statistics to 'ops' dict
     if analyze_noc_traces:
+        os.system(f"rm -rf {logFolder}/../histograms; mkdir -p {logFolder}/../histograms")
         npe_stats = analyzeNoCTraces(logFolder)
         if npe_stats is not None:
             ops_found = 0
@@ -439,6 +446,31 @@ def append_device_data(ops, traceReplays, logFolder, analyze_noc_traces, device_
                     ops[op_id]["NOC UTIL (%)"] = round(op_npe_stats.result.overall_avg_link_util, 1)
                     ops[op_id]["DRAM BW UTIL (%)"] = round(op_npe_stats.result.dram_bw_util, 1)
                     ops[op_id]["NPE CONG IMPACT (%)"] = round(op_npe_stats.result.getCongestionImpact(), 2)
+
+                    packet_size_series = pd.Series(op_npe_stats.result.packet_sizes)
+                    ops[op_id]["Packet Size Min"] = round(packet_size_series.min(), 2)
+                    ops[op_id]["Packet Size Q1"] = round(packet_size_series.quantile(0.25), 2)
+                    ops[op_id]["Packet Size Median"] = round(packet_size_series.quantile(0.5), 2)
+                    ops[op_id]["Packet Size Q3"] = round(packet_size_series.quantile(0.75), 2)
+                    ops[op_id]["Packet Size Max"] = round(packet_size_series.max(), 2)
+                else:
+                    packet_size_series = pd.Series([])
+            
+                import matplotlib.pyplot as plt
+                binwidth=100
+                if op_npe_stats is not None and len(op_npe_stats.result.packet_sizes) > 0:
+                    low_bound = min(packet_size_series) - min(packet_size_series) % binwidth
+                    high_bound = max(packet_size_series) + binwidth - max(packet_size_series) % binwidth
+                    bins=range(low_bound, high_bound + binwidth, binwidth)
+                    plt.hist(packet_size_series, bins=bins)
+                    plt.xticks(bins, fontsize=7, rotation=45)
+                else:
+                    plt.hist(packet_size_series)
+                plt.xlabel("Packet Size")
+                plt.ylabel("Frequency")
+                plt.title("Histogram of Packet Sizes for OP ID: " + str(op_id))
+                plt.savefig(f"{logFolder}/../histograms/packet_size_hist_{op_id}.png")
+                plt.cla()
             logger.info(f"Analyzed {ops_found} operations with tt-npe trace data.")
 
     return devicesOps, traceOps
@@ -799,6 +831,18 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                 if "NPE CONG IMPACT (%)" in opData:
                     rowDict["NPE CONG IMPACT (%)"] = opData.get("NPE CONG IMPACT (%)")
 
+                if "Packet Size Min" in opData:
+                    rowDict["Packet Size Min"] = opData.get("Packet Size Min")
+                if "Packet Size Q1" in opData:
+                    rowDict["Packet Size Q1"] = opData.get("Packet Size Q1")
+                if "Packet Size Median" in opData:
+                    rowDict["Packet Size Median"] = opData.get("Packet Size Median")
+                if "Packet Size Q3" in opData:
+                    rowDict["Packet Size Q3"] = opData.get("Packet Size Q3")
+                if "Packet Size Max" in opData:
+                    rowDict["Packet Size Max"] = opData.get("Packet Size Max")
+
+
                 if "kernel_info" in opData:
                     rowDict["COMPUTE KERNEL SOURCE"] = []
                     rowDict["COMPUTE KERNEL HASH"] = []
@@ -920,7 +964,7 @@ def analyzeNoCTraces(logFolder):
         return analyze_noc_traces_in_dir(
             noc_trace_dir=logFolder,
             emit_viz_timeline_files=True,
-            quiet=True,
+            quiet=False,
             compress_timeline_files=True,
         )
     except ImportError:

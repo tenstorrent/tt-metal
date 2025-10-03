@@ -8,6 +8,7 @@
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "../common.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
 
 using tt::data_movement::common::tt_memmove;
 
@@ -53,6 +54,7 @@ void kernel_main() {
         tt::point_to_point::common::connection_direction_collection(sender_is_forward, fabric_connection);
 
     connection_direction.wait_for_empty_write_slot();
+    RECORD_FABRIC_HEADER(sem_header_ptr);
     connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
