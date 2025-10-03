@@ -27,6 +27,7 @@ struct Host {
     uint32_t rack = 0;
     uint32_t shelf_u = 0;
     std::string motherboard;
+    std::string node_type;
 };
 
 struct LogicalChannelEndpoint {

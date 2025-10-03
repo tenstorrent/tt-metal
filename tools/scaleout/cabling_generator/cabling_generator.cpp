@@ -307,7 +307,8 @@ void populate_deployment_hosts(
             .aisle = proto_host.aisle(),
             .rack = proto_host.rack(),
             .shelf_u = proto_host.shelf_u(),
-            .motherboard = node_templates.at(proto_host.node_type()).motherboard});
+            .motherboard = node_templates.at(proto_host.node_type()).motherboard,
+            .node_type = proto_host.node_type()});
     }
 }
 
@@ -453,11 +454,11 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
     CablingGenerator::get_all_connections_of_type(root_instance_, {PortType::QSFP_DD}, conn_list);
     output_file.fill('0');
     if (loc_info) {
-        output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type" << std::endl;
-        output_file << "Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,," << std::endl;
+        output_file << "Source,,,,,,,,Destination,,,,,,,,Cable Length,Cable Type" << std::endl;
+        output_file << "Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,Hall,Aisle,Rack,Shelf U,Tray,Port,Label,Node Type,," << std::endl;
     } else {
-        output_file << "Source,,,Destination,," << std::endl;
-        output_file << "Hostname,Tray,Port,Hostname,Tray,Port" << std::endl;
+        output_file << "Source,,,,Destination,,," << std::endl;
+        output_file << "Hostname,Tray,Port,Node Type,Hostname,Tray,Port,Node Type" << std::endl;
     }
     for (const auto& [start, end] : conn_list) {
         auto host_id1 = std::get<0>(start).get();
@@ -482,19 +483,19 @@ void CablingGenerator::emit_cabling_guide_csv(const std::string& output_path, bo
                         << host1.shelf_u << "," << tray_id1 << "," << port_id1 << ",";
 
             output_file << host1.hall << host1.aisle << std::setw(2) << host1.rack << "U" << std::setw(2)
-                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << ",";
+                        << host1.shelf_u << "-" << tray_id1 << "-" << port_id1 << "," << host1.node_type << ",";
 
             output_file << host2.hall << "," << host2.aisle << "," << std::setw(2) << host2.rack << ",U" << std::setw(2)
                         << host2.shelf_u << "," << tray_id2 << "," << port_id2 << ",";
             output_file << host2.hall << host2.aisle << std::setw(2) << host2.rack << "U" << std::setw(2)
-                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << ",";
+                        << host2.shelf_u << "-" << tray_id2 << "-" << port_id2 << "," << host2.node_type << ",";
 
             output_file << cable_length_str.at(cable_l) << ",";
             output_file << speed_str.at(arch) << "_" << ((cable_l == CableLength::UNKNOWN) ? "Optical" : "AEC")
                         << std::endl;
         } else {
-            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << ",";
-            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << std::endl;
+            output_file << host1.hostname << "," << tray_id1 << "," << port_id1 << "," << host1.node_type << ",";
+            output_file << host2.hostname << "," << tray_id2 << "," << port_id2 << "," << host2.node_type << std::endl;
         }
     }
 
