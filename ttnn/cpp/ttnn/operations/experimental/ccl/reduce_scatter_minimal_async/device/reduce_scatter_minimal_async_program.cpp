@@ -870,7 +870,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             const auto& intermed = output_tensors[0];
             auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
             auto semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
-            return ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+            ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 program,
                 reader_kernel_ids,
                 writer_kernel_ids,
@@ -1523,7 +1523,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& barrier_semaphore =
                 static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
             const auto& semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
-            return line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
+            line_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 program,
                 reader_kernel_ids,
                 writer_kernel_ids,
