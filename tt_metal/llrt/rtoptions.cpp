@@ -373,8 +373,10 @@ void RunTimeOptions::ParseInspectorEnv() {
     const char* inspector_log_path_str = getenv("TT_METAL_INSPECTOR_LOG_PATH");
     if (inspector_log_path_str != nullptr) {
         inspector_settings.log_path = std::filesystem::path(inspector_log_path_str);
-    } else {
+    } else if (this->is_root_dir_specified()) {
         inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
+    } else {
+        inspector_settings.log_path = std::filesystem::temp_directory_path() / "generated/inspector";
     }
 
     const char* inspector_initialization_is_important_str = getenv("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT");
