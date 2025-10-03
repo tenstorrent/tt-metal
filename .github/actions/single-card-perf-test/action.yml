@@ -7,7 +7,6 @@ inputs:
     required: true
     description: "Shell commands to run the test"
 runs:
-  using: "composite"
   steps:
     - run: |
         cd docker-job
