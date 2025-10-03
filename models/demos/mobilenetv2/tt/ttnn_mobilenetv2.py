@@ -233,6 +233,7 @@ class TtMobileNetV2:
         self,
         x,
     ):
+        x = ttnn.to_device(x, self.device)
         output_tensor, h, w = self.conv1(x)
         output_tensor, h, w = self.conv2(output_tensor)
         output_tensor, h, w = self.conv3(output_tensor)

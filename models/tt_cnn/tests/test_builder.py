@@ -35,12 +35,14 @@ BATCH_SIZES = [1, 2]
 KERNEL_CONFIGS = [{"kernel_size": 3, "padding": 1}, {"kernel_size": 5, "padding": 2}]
 
 
-def create_conv2d_input_tensor(configuration: Conv2dConfiguration):
+def create_conv2d_input_tensor(configuration: Conv2dConfiguration, device=None):
     shape = (configuration.batch_size, configuration.in_channels, configuration.input_height, configuration.input_width)
     nchw = torch.randn(shape, dtype=torch.bfloat16).float()
 
     nhwc = torch.permute(nchw, (0, 2, 3, 1))
     nhwc = ttnn.from_torch(nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    if device is not None:
+        nhwc = ttnn.to_device(nhwc, device)
 
     return nchw, nhwc
 
@@ -108,7 +110,7 @@ def test_conv2d(input_size, channel_config, batch_size, kernel_config, sharding_
     )
 
     weight, bias = configuration.weight, configuration.bias
-    torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configuration)
+    torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configuration, device)
 
     layer = TtConv2d(configuration, device)
 
@@ -297,6 +299,7 @@ def test_conv2d_configuration_from_torch_layer(input_size, channel_config, batch
 
     torch_input = torch.randn(batch_size, in_channels, input_height, input_width)
     ttnn_input = ttnn.from_torch(torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn.to_device(ttnn_input, device)
 
     ttnn_output = tt_layer(ttnn_input)
     torch_output = torch_layer(torch_input)
@@ -375,6 +378,7 @@ def test_conv2d_configuration_from_model_args(input_size, channel_config, batch_
 
     torch_input = torch.randn(batch_size, in_channels, input_height, input_width)
     ttnn_input = ttnn.from_torch(torch_input.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn.to_device(ttnn_input, device)
 
     torch_layer = torch.nn.Conv2d(in_channels=in_channels, out_channels=out_channels, **torch_layer_config)
 

@@ -110,6 +110,7 @@ class TtOpenPDNMnist:
         self.pool3 = nn.MaxPool2d(3, 3)
 
     def __call__(self, input):
+        input = ttnn.to_device(input, self.device)
         conv1_out = self.conv1(input)
 
         maxpool1_out = ttnn.max_pool2d(
