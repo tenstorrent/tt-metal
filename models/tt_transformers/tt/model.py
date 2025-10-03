@@ -371,17 +371,7 @@ class Transformer(LightweightModule):
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
-        # ttnn.ne currently requires the input to be in TILE_LAYOUT
-        current_pos_tiled = ttnn.to_layout(current_pos, layout=ttnn.TILE_LAYOUT)
-        # Update only active positions (current_pos != -1)
-        predicate = ttnn.ne(current_pos_tiled, -1)
-        result = ttnn.where(
-            predicate,
-            ttnn.add(current_pos_tiled, 1),
-            current_pos_tiled,
-        )
-        ttnn.copy(ttnn.to_layout(result, layout=ttnn.ROW_MAJOR_LAYOUT), current_pos)
-
+        ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
     def update_attention_masks(self, current_pos):
