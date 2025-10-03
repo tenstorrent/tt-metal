@@ -4,7 +4,7 @@
 
 #pragma once
 
-#if defined(PROFILE_NOC_EVENTS) && (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
+#if defined(PROFILE_NOC_EVENTS) && not defined(PROFILE_NOC_EVENTS_OVERRIDE) && (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
 
 #include <utility>
 #include <tuple>

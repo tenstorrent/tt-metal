@@ -176,6 +176,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     // Configs to enable for performance mode
     reader_ct_args.push_back((uint32_t)enable_performance_mode /* skip_ptr_update */);
 
+    std::map<std::string, std::string> reader_defines;
+    reader_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
+
     auto reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/reader_dram.cpp",
@@ -184,7 +187,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = reader_ct_args});
+            .compile_args = reader_ct_args,
+            .defines = reader_defines});
 
     // Writer kernel
     std::vector<uint32_t> writer_ct_args = {
@@ -201,6 +205,9 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
     // Configs to enable for performance mode
     writer_ct_args.push_back((uint32_t)enable_performance_mode /* skip_ptr_update */);
 
+    std::map<std::string, std::string> writer_defines;
+    writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
+
     auto writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/prefetcher/prefetcher/device/kernels/writer_l1.cpp",
@@ -209,7 +216,8 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
-            .compile_args = writer_ct_args});
+            .compile_args = writer_ct_args,
+            .defines = writer_defines});
 
     /* Runtime args */
     std::vector<uint32_t> page_sizes;
