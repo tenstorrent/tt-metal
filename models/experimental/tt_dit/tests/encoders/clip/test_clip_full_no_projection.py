@@ -114,7 +114,9 @@ def test_clip_encoder(
 
     # times TT model inference only
     tt_start_time = time.time()
-    tt_sequence_output, tt_pooled_output = tt_clip(tt_prompt, encoder_submesh)
+    tt_sequence_output, tt_pooled_output, tt_normalized_output = tt_clip(
+        tt_prompt, encoder_submesh, return_normalized_state=True
+    )
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
@@ -127,20 +129,24 @@ def test_clip_encoder(
 
     hf_sequence_output = hf_output.hidden_states[-1]
     hf_pooled_output = hf_output.pooler_output
+    hf_normalized_output = hf_output.last_hidden_state
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
     tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-1])[0])
     tt_pooled_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output)[0])
+    tt_normalized_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_normalized_output)[0])
 
     logger.info(f"TT model execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF model execution time: {hf_execution_time:.4f} seconds")
 
     assert hf_sequence_output.shape == tt_sequence_output_torch.shape
     assert hf_pooled_output.shape == tt_pooled_output_torch.shape
+    assert hf_normalized_output.shape == tt_normalized_output_torch.shape
 
     assert_quality(hf_sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
     assert_quality(hf_pooled_output, tt_pooled_output_torch, pcc=expected_pcc)
+    assert_quality(hf_normalized_output, tt_normalized_output_torch, pcc=expected_pcc)
 
 
 if __name__ == "__main__":
