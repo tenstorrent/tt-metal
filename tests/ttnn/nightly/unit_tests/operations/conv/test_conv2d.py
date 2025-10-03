@@ -3350,34 +3350,34 @@ def test_conv2d_sdxl(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, split_input_channels_factor, split_output_channels_factor, act_db, w_db",
     (
         # UNet
-        # kernel 3x3
-        (1, 1152, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 2, 1, False, False),
-        (1, 1152, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 2, 1, False, False),
-        (1, 1536, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 1536, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 1536, 1536, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 1536, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 2304, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 2304, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 3072, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 3072, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 384, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 384, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 768, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 768, 768, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 768, 1536, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 768, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        # # kernel 3x3
+        (1, 1152, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1152, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 32, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 1536, 64, 64, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 2304, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 2304, 768, 64, 64,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 3072, 1536, 16, 16, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 32, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 3072, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 384, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 1024, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 384, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 768, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 256, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 1536, 32, 32,  ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 512, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
 
         # stride 2x2
-        (1, 1536, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 384, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
-        (1, 768, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 1536, 1536, 32, 32, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 32, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 384, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 512, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 768, 768, 64, 64,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (2, 2), (1, 1), (1, 1), BS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
 
         # output_channels 4
-        (1, 384, 4, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 384, 4, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
 
         # input_channels 4
-        (1, 4, 384, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
+        (1, 4, 384, 128, 128,   ttnn.bfloat16, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), HS, 128, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
 
         # kernel 1x1
         (1, 1152, 384, 128, 128, ttnn.bfloat16, ttnn.bfloat16, 1, (1, 1), (1, 1), (0, 0), (1, 1), None, 0, 1, False, ttnn.MathFidelity.HiFi2, False, False, 1, 1, False, False),
