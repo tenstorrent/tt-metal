@@ -18,10 +18,9 @@
 #define KERNEL_MAIN void kernel_main()
 #endif
 
-constexpr auto cb_in = tt::CBIndex::c_0;
-constexpr auto cb_out = tt::CBIndex::c_1;
-
+namespace universal_kernel::detail {
 uint32_t offset_pages[TOTAL_NUM_CIRCULAR_BUFFERS];
+}
 
 template <typename Accessor>
 FORCE_INLINE void read_tile(
@@ -31,8 +30,9 @@ FORCE_INLINE void read_tile(
 #endif
 #ifdef COMPILE_FOR_BRISC
     cb_reserve_back(cb_id, 1);
-    noc_async_read_tile(id, addrgen, get_write_ptr(cb_id) + tile_size_bytes * offset_pages[cb_id]);
-    offset_pages[cb_id] += 1;
+    noc_async_read_tile(
+        id, addrgen, get_write_ptr(cb_id) + tile_size_bytes * universal_kernel::detail::offset_pages[cb_id]);
+    universal_kernel::detail::offset_pages[cb_id] += 1;
 #endif
 }
 
@@ -43,7 +43,7 @@ FORCE_INLINE void release_read_tiles(uint32_t cb_id, uint32_t num_tiles) {
 #ifdef COMPILE_FOR_BRISC
     noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
-    offset_pages[cb_id] -= num_tiles;
+    universal_kernel::detail::offset_pages[cb_id] -= num_tiles;
 #endif
 }
 
@@ -60,8 +60,9 @@ FORCE_INLINE void write_packed_tile(
 #endif
 #ifdef COMPILE_FOR_NCRISC
     cb_wait_front(cb_id, 1);
-    noc_async_write_tile(into_page_id, addrgen, get_read_ptr(cb_id) + tile_size_bytes * offset_pages[cb_id]);
-    offset_pages[cb_id] += 1;
+    noc_async_write_tile(
+        into_page_id, addrgen, get_read_ptr(cb_id) + tile_size_bytes * universal_kernel::detail::offset_pages[cb_id]);
+    universal_kernel::detail::offset_pages[cb_id] += 1;
 #endif
 }
 
@@ -72,6 +73,6 @@ FORCE_INLINE void release_write_tiles(const uint32_t cb_id, const uint32_t num_t
 #ifdef COMPILE_FOR_NCRISC
     noc_async_write_barrier();
     cb_pop_front(cb_id, num_tiles);
-    offset_pages[cb_id] -= num_tiles;
+    universal_kernel::detail::offset_pages[cb_id] -= num_tiles;
 #endif
 }

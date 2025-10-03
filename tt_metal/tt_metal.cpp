@@ -1302,15 +1302,6 @@ void SetRuntimeArgs(
 
 void SetRuntimeArgs(
     const Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    stl::Span<const uint32_t> runtime_args) {
-    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
-        SetRuntimeArgs(program, kernel_id, core_spec, runtime_args);
-    }
-}
-
-void SetRuntimeArgs(
-    const Program& program,
     KernelHandle kernel_id,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     std::initializer_list<uint32_t> runtime_args) {
@@ -1318,15 +1309,6 @@ void SetRuntimeArgs(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
     ZoneScoped;
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
-}
-
-void SetRuntimeArgs(
-    const Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::initializer_list<uint32_t> runtime_args) {
-    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
-        SetRuntimeArgs(program, kernel_id, core_spec, runtime_args);
-    }
 }
 
 void SetRuntimeArgs(
@@ -1345,15 +1327,6 @@ void SetRuntimeArgs(
     auto k = program.impl().get_kernel(kernel);
     for (size_t i = 0; i < core_spec.size(); i++) {
         k->set_runtime_args(core_spec[i], runtime_args[i]);
-    }
-}
-
-void SetRuntimeArgs(
-    const Program& program,
-    const std::vector<CoreCoord>& core_spec,
-    const std::vector<std::vector<uint32_t>>& runtime_args) {
-    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
-        SetRuntimeArgs(program, kernel_id, core_spec, runtime_args);
     }
 }
 

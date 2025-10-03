@@ -477,11 +477,6 @@ void SetRuntimeArgs(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     stl::Span<const uint32_t> runtime_args);
 
-void SetRuntimeArgs(
-    const Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    stl::Span<const uint32_t> runtime_args);
-
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
@@ -503,11 +498,6 @@ void SetRuntimeArgs(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     std::initializer_list<uint32_t> runtime_args);
 
-void SetRuntimeArgs(
-    const Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::initializer_list<uint32_t> runtime_args);
-
 // clang-format off
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
@@ -526,11 +516,6 @@ void SetRuntimeArgs(
 void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel,
-    const std::vector<CoreCoord>& core_spec,
-    const std::vector<std::vector<uint32_t>>& runtime_args);
-
-void SetRuntimeArgs(
-    const Program& program,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args);
 
