@@ -102,6 +102,9 @@ public:
     CommandQueueIdStack& get_command_queue_id_stack_for_thread();
     const CommandQueueIdStack& get_command_queue_id_stack_for_thread() const;
 
+    // Utilities
+    bool is_coord_in_range(CoreCoord coord, CoreType core_type);
+
 private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
