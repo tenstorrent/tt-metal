@@ -2,12 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// TODO next: verify that the correct connections are being monitored
+// TODO next: do we need to validate any aggregated information against complete FSD?
 /*
  * main.cpp
  * tt-telemetry main server app.
+ *
+ * MPI Run Instructions
+ * --------------------
+ * 1. Create a hosts.txt on e.g. metal-wh-13 containing:
+ *
+ *  metal-wh-13 slots=1
+ *  metal-wh-14 slots=1
+ *
+ * 2. Make sure binaries are in the same place on both machines.
+ * 3. Use mpirun:
+ *
+ *  mpirun -x TT_METAL_HOME -hostfile hosts.txt \
+ *  /home/btrzynadlowski/tt-metal/build/tt_telemetry/tt_telemetry_server \
+ *  --fsd=/home/btrzynadlowski/factory_system_descriptor_16_n300_lb.textproto
  */
 
- #include <algorithm>
+#include <algorithm>
 #include <fmt/format.h>
 #include <iostream>
 #include <optional>
@@ -15,8 +31,10 @@
 
 #include <boost/functional/hash.hpp>
 #include <cxxopts.hpp>
+#include <google/protobuf/text_format.h>
 
 #include <tt-logger/tt-logger.hpp>
+#include "protobuf/factory_system_descriptor.pb.h"
 
 #include <hal/hal.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
@@ -27,26 +45,8 @@
 #include <utils/hex.hpp>
 
 /**************************************************************************************************
- FSD Test
-
- 1. Create a hosts.txt on e.g. metal-wh-13 containing:
-
-    metal-wh-13 slots=1
-    metal-wh-14 slots=1
-
- 2. Make sure binaries are in the same place on both machines.
- 3. Use mpirun:
-
-    mpirun -x TT_METAL_HOME -hostfile hosts.txt \
-    /home/btrzynadlowski/tt-metal/build/tt_telemetry/tt_telemetry_server \
-    --fsd=/home/btrzynadlowski/factory_system_descriptor_16_n300_lb.textproto
+ Utility Functions
 **************************************************************************************************/
-
-#include <google/protobuf/text_format.h>
-#include "protobuf/factory_system_descriptor.pb.h"
-
-#include <tt-metalium/distributed_context.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_fsd(const std::string& fsd_filename) {
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
@@ -64,160 +64,6 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_fsd(const st
 
     return fsd;
 }
-
-template <typename Key, typename Value>
-static std::unordered_map<Value, Key> invert_map(const std::unordered_map<Key, Value>& map) {
-    std::unordered_map<Value, Key> inverse_map;
-    for (const auto& [key, value] : map) {
-        inverse_map.insert({value, key});
-    }
-    return inverse_map;
-}
-
-// Hash function for std::pair<uint32_t, uint32_t>
-struct Uint32Uint32Hash {
-    std::size_t operator()(const std::pair<uint32_t, uint32_t>& p) const {
-        auto h1 = std::hash<uint32_t>{}(p.first);
-        auto h2 = std::hash<uint32_t>{}(p.second);
-        constexpr std::size_t hash_combine_prime = 0x9e3779b9;
-        return h1 ^ (h2 + hash_combine_prime + (h1 << 6) + (h1 >> 2));
-    }
-};
-
-static std::unordered_map<std::pair<uint32_t, uint32_t>, chip_id_t, Uint32Uint32Hash>
-get_local_asic_location_and_tray_id_to_chip_id_mapping(
-    const std::unique_ptr<tt::umd::Cluster>& cluster, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
-    // Get mapping of chip ID <-> ASIC unique ID. This is only valid for the local host!
-    const std::unordered_map<chip_id_t, uint64_t>& chip_id_to_unique_id =
-        cluster->get_cluster_description()->get_chip_unique_ids();
-    std::unordered_map<uint64_t, chip_id_t> unique_id_to_chip_id = invert_map(chip_id_to_unique_id);
-
-    // Produce (asic_location,tray_id) -> chip ID mapping (only valid for local host)
-    std::unordered_map<std::pair<uint32_t, uint32_t>, chip_id_t, Uint32Uint32Hash> asic_location_and_tray_id_to_chip_id;
-    for (auto [unique_id, asic_descriptor] : psd.get_asic_descriptors()) {
-        auto it = unique_id_to_chip_id.find(*unique_id);
-        if (it == unique_id_to_chip_id.end()) {
-            continue;
-        }
-        chip_id_t chip_id = it->second;
-
-        std::pair<uint32_t, uint32_t> key = {*asic_descriptor.asic_location, *asic_descriptor.tray_id};
-        TT_FATAL(
-            asic_location_and_tray_id_to_chip_id.count(key) == 0,
-            "Duplicate key (asic_location={}, tray_id={}) found in mapping",
-            *asic_descriptor.asic_location,
-            *asic_descriptor.tray_id);
-
-        asic_location_and_tray_id_to_chip_id.insert({key, chip_id});
-    }
-    return asic_location_and_tray_id_to_chip_id;
-}
-
-static std::string get_ethernet_metric_name(
-    const std::string& host_name, const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor_EndPoint& endpoint) {
-    return host_name + "/tray_" + std::to_string(endpoint.tray_id()) + "/chip_" +
-           std::to_string(endpoint.asic_location()) + "/channel_" + std::to_string(endpoint.chan_id());
-}
-
-static void process_fsd(const std::string& fsd_filename) {
-    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(fsd_filename);
-
-    // std::cout << "Hosts:" << std::endl;
-    // std::cout << "------" << std::endl;
-    // for (const auto& host : fsd.hosts()) {
-    //     std::cout << "  " << host.hostname() << ": hall=" << host.hall() << ", aisle=" << host.aisle()
-    //               << ", rack=" << host.rack() << ", shelf_u=" << host.shelf_u()
-    //               << ", motherboard=" << host.motherboard() << std::endl;
-    // }
-
-    // std::cout << std::endl;
-    // std::cout << "Board Types:" << std::endl;
-    // std::cout << "------------" << std::endl;
-    // for (const auto& location_type : fsd.board_types().board_locations()) {
-    //     std::cout << "  host_id=" << location_type.host_id() << ", tray_id=" << location_type.tray_id()
-    //               << ", board_type=" << location_type.board_type() << std::endl;
-    // }
-
-    // std::cout << std::endl;
-    // std::cout << "Ethernet Connections:" << std::endl;
-    // std::cout << "---------------------" << std::endl;
-    // for (const auto& connection : fsd.eth_connections().connection()) {
-    //     const auto& a = connection.endpoint_a();
-    //     const auto& b = connection.endpoint_b();
-    //     std::cout << "      [host_id=" << a.host_id() << ", tray_id=" << a.tray_id()
-    //               << ", asic_location=" << a.asic_location() << ", chan_id=" << a.chan_id() << "]" << std::endl
-    //               << "  --> [host_id=" << b.host_id() << ", tray_id=" << b.tray_id()
-    //               << ", asic_location=" << b.asic_location() << ", chan_id=" << b.chan_id() << "]" << std::endl;
-    // }
-
-    std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
-    auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto psd = tt::tt_metal::PhysicalSystemDescriptor(cluster, distributed_context, rtoptions);
-    std::string my_host_name = psd.my_host_name();
-
-    std::cout << std::endl;
-    std::cout << "ASIC Descriptors:" << std::endl;
-    std::cout << "-----------------" << std::endl;
-    for (auto [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
-        std::cout << hex(*asic_id) << ": unique_id=" << hex(*asic_descriptor.unique_id)
-                  << ", asic_location=" << *asic_descriptor.asic_location << ", tray_id=" << asic_descriptor.tray_id
-                  << std::endl;
-    }
-
-    auto asic_location_and_tray_id_to_chip_id = get_local_asic_location_and_tray_id_to_chip_id_mapping(cluster, psd);
-    std::cout << std::endl;
-    std::cout << "Local ASICs:" << std::endl;
-    std::cout << "------------" << std::endl;
-    for (auto [asic_id, asic_descriptor] : psd.get_asic_descriptors()) {
-        if (my_host_name != asic_descriptor.host_name) {
-            // Only looking at local ASICs
-            continue;
-        }
-        auto asic_location = *asic_descriptor.asic_location;
-        auto tray_id = *asic_descriptor.tray_id;
-        auto key = std::pair(asic_location, tray_id);
-        auto it = asic_location_and_tray_id_to_chip_id.find(key);
-        if (it == asic_location_and_tray_id_to_chip_id.end()) {
-            continue;
-        }
-        chip_id_t chip_id = it->second;
-        std::cout << "  " << psd.my_host_name() << " chip " << chip_id << ": asic_location=" << asic_location
-                  << ", tray_id=" << tray_id << std::endl;
-    }
-
-    std::cout << std::endl;
-    std::cout << "Ethernet Links:" << std::endl;
-    std::cout << "---------------" << std::endl;
-    std::vector<tt::scaleout_tools::fsd::proto::FactorySystemDescriptor_EndPoint> endpoints;
-    for (const auto& connection : fsd.eth_connections().connection()) {
-        // a and b are each unique (that is, nothing listed as b will ever appear as a)
-        endpoints.push_back(connection.endpoint_a());
-        endpoints.push_back(connection.endpoint_b());
-    }
-    std::set<std::string> conns_a, conns_b;
-    for (const auto& connection : fsd.eth_connections().connection()) {
-        const auto& a = connection.endpoint_a();
-        const auto& b = connection.endpoint_b();
-        const auto& host_a = fsd.hosts()[a.host_id()];
-        const auto& host_b = fsd.hosts()[b.host_id()];
-        std::string connection_a = get_ethernet_metric_name(host_a.hostname(), a);
-        std::string connection_b = get_ethernet_metric_name(host_b.hostname(), b);
-        std::cout << "  " << connection_a << " -> " << connection_b << std::endl;
-
-        conns_a.insert(connection_a);
-        conns_b.insert(connection_b);
-    }
-    std::vector<std::string> common;
-    std::set_intersection(conns_a.begin(), conns_a.end(), conns_b.begin(), conns_b.end(), std::back_inserter(common));
-    std::cout << std::endl;
-    std::cout << common.size() << " common endpoints, " << conns_a.size() << " in A, " << conns_b.size() << " in B"
-              << std::endl;
-}
-
-/**************************************************************************************************
- Utility Functions
-**************************************************************************************************/
 
 /**
  * Split a comma-separated string into a vector of trimmed strings.
@@ -246,23 +92,23 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
  Main
 **************************************************************************************************/
 
-// static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipIdentifier chip_id) {
-//     const std::unordered_map<chip_id_t, uint64_t>& chip_to_unique_id =
-//         cluster->get_cluster_description()->get_chip_unique_ids();
-//     try {
-//         return chip_to_unique_id.at(chip_id.id);
-//     } catch (const std::out_of_range& e) {
-//         log_error(tt::LogAlways, "No unique ASIC ID for chip {}", chip_id);
-//     }
-//     return 0;
-// }
+static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip_id) {
+    const std::unordered_map<chip_id_t, uint64_t>& chip_to_unique_id =
+        cluster->get_cluster_description()->get_chip_unique_ids();
+    try {
+        return chip_to_unique_id.at(chip_id);
+    } catch (const std::out_of_range& e) {
+        log_error(tt::LogAlways, "No unique ASIC ID for chip {}", chip_id);
+    }
+    return 0;
+}
 
 static void test_print_link_health() {
     std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
     std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
-    // uint32_t link_up_addr = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
-    // tt::tt_metal::HalL1MemAddrType::LINK_UP);
+    uint32_t link_up_addr =
+        hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
 
     std::cout << "Internal Connections" << std::endl << "--------------------" << std::endl;
 
@@ -271,45 +117,28 @@ static void test_print_link_health() {
         std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
         ethernet_connections = get_ordered_ethernet_connections(cluster);
 
-    // for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
-    //     // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
-    //     const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+    for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
+        // This chip...
+        std::cout << "Chip " << chip_id << std::endl;
 
-    //     // This chip...
-    //     tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
-    //     ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
-    //     std::cout << chip << std::endl;
+        // Iterate each channel and its remote endpoints
+        for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
+            // Remote chip...
+            tt::umd::chip_id_t remote_chip_id;
+            tt::umd::ethernet_channel_t remote_channel;
+            std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
 
-    //     // Iterate each channel and its remote endpoints
-    //     for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
-    //         // Remote chip...
-    //         tt::umd::chip_id_t remote_chip_id;
-    //         tt::umd::ethernet_channel_t remote_channel;
-    //         std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
-    //         tt::umd::TTDevice* remote_device = cluster->get_tt_device(remote_chip_id);
-    //         const tt_SocDescriptor& remote_soc_desc = cluster->get_soc_descriptor(remote_chip_id);
-    //         ChipIdentifier remote_chip = get_chip_identifier_from_umd_chip_id(remote_device, remote_chip_id);
-
-    //         // Local EthernetEndpoint
-    //         tt::umd::CoreCoord ethernet_core =
-    //             soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
-    //         EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
-
-    //         // Remote EthernetEndpoint
-    //         tt::umd::CoreCoord remote_ethernet_core =
-    //             remote_soc_desc.get_eth_core_for_channel(remote_channel, tt::umd::CoordSystem::LOGICAL);
-    //         EthernetEndpoint remote_endpoint{
-    //             .chip = remote_chip, .ethernet_core = remote_ethernet_core, .channel = remote_channel};
-
-    //         // Print
-    //         std::cout << "  Channel " << channel << " -> [" << remote_chip << "], Channel " << remote_channel
-    //                   << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" :
-    //                   "DOWN")
-    //                   << '/' << (is_ethernet_endpoint_up(cluster, remote_endpoint, link_up_addr) ? "UP" : "DOWN") <<
-    //                   ')'
-    //                   << std::endl;
-    //     }
-    // }
+            // Print
+            std::cout << "  Channel " << channel << " -> Chip " << remote_chip_id << ", Channel " << remote_channel
+                      << " (Link Status: "
+                      << (is_ethernet_endpoint_up(cluster, chip_id, channel, link_up_addr, false) ? "UP" : "DOWN")
+                      << '/'
+                      << (is_ethernet_endpoint_up(cluster, remote_chip_id, remote_channel, link_up_addr, false)
+                              ? "UP"
+                              : "DOWN")
+                      << ')' << std::endl;
+        }
+    }
 
     // Remote off-cluster links
     std::cout << std::endl << "External Connections" << std::endl << "--------------------" << std::endl;
@@ -319,35 +148,26 @@ static void test_print_link_health() {
         std::map<tt::umd::ethernet_channel_t, std::tuple<uint64_t, tt::umd::ethernet_channel_t>>>
         remote_ethernet_connections = get_ordered_ethernet_connections_to_remote_devices(cluster);
 
-    // for (const auto& [chip_id, remote_chip_and_channel_by_channel] : remote_ethernet_connections) {
-    //     const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+    for (const auto& [chip_id, remote_chip_and_channel_by_channel] : remote_ethernet_connections) {
+        // This chip...
+        std::cout << "Chip " << chip_id
+                  << " [unique_id=" << fmt::format("0x{:016x}", get_unique_chip_id(cluster, chip_id)) << ']'
+                  << std::endl;
 
-    //     // This chip...
-    //     tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
-    //     ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
-    //     std::cout << chip << " [id=" << fmt::format("0x{:016x}", get_unique_chip_id(cluster, chip)) << ']' <<
-    //     std::endl;
+        // Iterate each channel and its remote endpoints
+        for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
+            // Remote chip...
+            uint64_t remote_chip_unique_id;
+            tt::umd::ethernet_channel_t remote_channel;
+            std::tie(remote_chip_unique_id, remote_channel) = remote_chip_and_channel;
 
-    //     // Iterate each channel and its remote endpoints
-    //     for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
-    //         // Remote chip...
-    //         uint64_t remote_chip_unique_id;
-    //         tt::umd::ethernet_channel_t remote_channel;
-    //         std::tie(remote_chip_unique_id, remote_channel) = remote_chip_and_channel;
-
-    //         // Local EthernetEndpoint
-    //         tt::umd::CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel,
-    //         tt::umd::CoordSystem::LOGICAL); EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core,
-    //         .channel = channel};
-
-    //         // Print
-    //         std::cout << "  Channel " << channel << " -> [id=" << fmt::format("0x{:016x}", remote_chip_unique_id)
-    //                   << "], Channel " << remote_channel
-    //                   << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" :
-    //                   "DOWN")
-    //                   << ')' << std::endl;
-    //     }
-    // }
+            // Print
+            std::cout << "  Channel " << channel << " -> [unique_id=" << fmt::format("0x{:016x}", remote_chip_unique_id)
+                      << "], Channel " << remote_channel << " (Link Status: "
+                      << (is_ethernet_endpoint_up(cluster, chip_id, channel, link_up_addr, false) ? "UP" : "DOWN")
+                      << ')' << std::endl;
+        }
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -383,14 +203,6 @@ int main(int argc, char* argv[]) {
     if (result.count("help")) {
         std::cout << options.help() << std::endl;
         return 0;
-    }
-
-    // TODO: just for now, parse FSD
-    if (result.count("fsd")) {
-        // TODO next: verify that the correct connections are being monitored
-        // TODO next: do we need to validate any aggregated information against complete FSD?
-        process_fsd(result["fsd"].as<std::string>());
-        // return 0;
     }
 
     bool use_mock_telemetry = result["mock-telemetry"].as<bool>();
