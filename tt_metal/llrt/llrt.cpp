@@ -44,7 +44,7 @@ void print_aerisc_training_status(chip_id_t device_id, const CoreCoord& virtual_
         device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
     log_critical(
         tt::LogMetal,
-        "Device {}: Virtual core {},Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
         device_id,
         virtual_core.str(),
         port_status,
@@ -202,8 +202,7 @@ bool test_load_write_read_risc_binary(
     // Depending on the arch, active ethernet may be shared local memory with the base firmware
     // Primary risc is shared
     // TODO: Move this query into the HAL
-    bool local_mem_offset = processor_class_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-
+    bool local_mem_offset = processor_type_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr =
@@ -399,11 +398,12 @@ void send_msg_to_eth_mailbox(
     const uint32_t msg = call | msg_val;
     log_debug(
         tt::LogLLRuntime,
-        "Device {}: Eth {} Mailbox {:#x} Command {:#x}",
+        "Device {}: Eth {} Mailbox {:#x} Command {:#x}, {}",
         device_id,
         virtual_core.str(),
         mailbox_addr,
-        msg);
+        msg,
+        fmt::join(args, ", "));
     tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
         std::vector<uint32_t>{msg}.data(), tt_cxy_pair(device_id, virtual_core), mailbox_addr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
