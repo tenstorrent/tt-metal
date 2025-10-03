@@ -11,6 +11,7 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "lltt.h"
 
 using namespace ckernel;
 
@@ -404,4 +405,117 @@ inline void _llk_math_eltwise_binary_init_(const std::uint32_t num_faces, [[mayb
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+/*************************************************************************
+ * LLK eltwise_bcast_row_tile math implementation for SDPA
+
+ These LLKs are meant to be used with unpacker that does unpack broadcast row
+ on srcA register _llk_unpack_bcastA_B_. Using them with other unpack LLKs will lead to hangs
+ since toggling of dvalid signal is different in both cases.
+
+ *************************************************************************/
+inline void eltwise_binary_configure_mop(uint srca_reuse_count = 4)
+{
+    /*
+
+        MOP configuration is following. In innerloop single tile is processed via TT_OP_REPLAY.
+        After all innerloop iterations are finished dvalid for SrcA is cleared signaling
+        the unpacker to load new tile in SrcA.
+
+    */
+
+    uint32_t innerloop           = srca_reuse_count;
+    constexpr uint32_t outerloop = 1;
+
+    ckernel_template tmp(outerloop, innerloop, TT_OP_REPLAY(0, 10, 0, 0));
+    tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB)); // Clearing src A dvalid
+    tmp.program();
+}
+
+inline void eltwise_binary_configure_addrmod()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 8},
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_0);
+
+    addr_mod_t {
+        .srca = {.incr = 8},
+        .srcb = {.incr = 8},
+        .dest = {.incr = 8},
+    }
+        .set(ADDR_MOD_1);
+}
+
+template <EltwiseBinaryType eltwise_binary_type, int NUM_FIDELITY_PHASES = 0>
+inline void _llk_math_eltwise_binary_init_(uint32_t srca_reuse_count = 4)
+{
+    eltwise_binary_configure_addrmod();
+
+    /*
+        Loading of instructions into replay buffer. First 4 operate on F0 and F1,
+        and second 4 operate on F2 and F3. Each pair of instructions operates on 8 rows
+        of the tile. The last instruction clears B dvalid which means unpacker
+        will load following B tile while still keeping same A tile in srcA.
+        After F0 and F1 A counter is cleared which allows it to reuse
+        boradcasted data.
+    */
+
+    auto eltwise_op = [](uint8_t addr_mod)
+    {
+        if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWSUB)
+        {
+            TTI_ELWSUB(0, 0, 0, addr_mod, 0);
+        }
+        else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
+        {
+            TTI_ELWADD(0, 0, 0, addr_mod, 0);
+        }
+        else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
+        {
+            TTI_ELWMUL(0, 0, 0, addr_mod, 0);
+        }
+    };
+
+    // Setup eltwise operation for one tile
+    // TTI_REPLAY(0, 10, 0, 1);
+    lltt::record<lltt::NoExec>(0, 10);
+
+    // Dest address is always incremented by 8 in address mode
+    eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
+    eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
+
+    eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
+    eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
+
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_A);
+
+    eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
+    eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
+
+    eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8
+    eltwise_op(ADDR_MOD_1); // srca_increment -> 8 | srcb_increment -> 8
+
+    TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_AB); // Clearing B dvalid
+
+    eltwise_binary_configure_mop(srca_reuse_count);
+
+    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
+inline void _llk_math_eltwise_binary_(uint32_t dst_index)
+{
+    math::set_dst_write_addr<DstTileLayout::Default, DstTileShape::Tile32x32>(dst_index);
+
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB);
+
+    // Run the MOP
+    ckernel_template::run();
+
+    math::clear_dst_reg_addr();
 }
