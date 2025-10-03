@@ -257,6 +257,7 @@ void MAIN {
             fill_tile(mean_acc_dst, 0.f);
             fill_tile(m2_acc_dst, 0.f);
 
+            uint32_t acc_n = 0;
             for (uint32_t b = 0; b < num_blocks_reduce; b++) {
                 // Wait for 1 mean tile and 1 var tile
                 cb_wait_front(cb_ex_external, 2);
@@ -270,7 +271,7 @@ void MAIN {
                 // will be the result of reducing a set that is num_blocks_first_stage wide * tile_width
                 // (adjusted for potential padding at the end of the first stage blocks)
                 // Make all these CTAs to avoid computing it here
-                const float n_a = b * tile_width;
+                const float n_a = acc_n;
                 // TODO RM: This should use a runtime arg where
                 // only the last core in each row has a reduced width
                 // const float n_b = b == num_blocks_reduce - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
@@ -283,6 +284,7 @@ void MAIN {
                     block_w,
                     last_tile_W);
 
+                DPRINT << "n_a: " << n_a << ENDL();
                 DPRINT << "n_b: " << n_b << ENDL();
                 // tt::compute::common::print_full_tile(cb_ex_external, 0, true);
 
@@ -339,13 +341,13 @@ void MAIN {
                 add_binary_tile_init();
                 add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
 
+                acc_n += n_b;
                 cb_pop_front(cb_ex_external, 2);
             }
 
             // Convert final M2 to var
-            DPRINT << "combine_W: " << combine_W << ENDL();
             binop_with_scalar_tile_init();
-            mul_unary_tile(m2_acc_dst, bit_cast<uint32_t>(1.f / combine_W));
+            mul_unary_tile(m2_acc_dst, bit_cast<uint32_t>(1.f / acc_n));
 
             // Compute 1/sqrt(Var[x] + eps).
             // This is what gets written and mcasted as var
@@ -393,9 +395,6 @@ void MAIN {
         }
         cb_push_back(cb_ex, 2 * num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, 2 * num_tiles_per_allgather_worker);
-        DPRINT << "Combined" << ENDL();
-        tt::compute::common::print_full_tile(cb_ex, 0, true);
-        tt::compute::common::print_full_tile(cb_ex, 1, true);
     }
 
     // Transpose mean and 1/sqrt(Var + eps) to columns
