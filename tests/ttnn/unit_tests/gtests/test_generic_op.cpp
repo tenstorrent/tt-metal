@@ -772,50 +772,23 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, TestGenericOpLoadBinary) {
-    const std::string original_kernel_file = "tests/tt_metal/tt_metal/test_kernels/compute/simple_add.cpp";
-    const std::string binary_kernel_path = "tests/tt_metal/tt_metal/api/simple_add_binaries";
-    const CoreCoord core_coord(1, 1);
-    const CoreRangeSet binary_core = std::set<CoreRange>({core_coord, core_coord});
-    auto device = this->device_;
-
-    auto binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash(original_kernel_file);
-
-    const uint32_t table_address = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    uint32_t input_a = 3;
-    uint32_t input_b = 4;
-
-    tt::tt_metal::experimental::SetKernelBinaryPathPrefix(device, binary_kernel_path);
-
-    KernelDescriptor simple_add_kernel_descriptor = {
-        .kernel_source = "simple_add",
-        .binary_hash = binary_hash,
-        .core_ranges = binary_core,
-        .compile_time_args = {},
-        .defines = {},
-        .runtime_args = {{{table_address, input_a, input_b}}},
-        .common_runtime_args = {},
-        .config = tt::tt_metal::ComputeConfigDescriptor{},
-    };
-
-    ProgramDescriptor program_descriptor = {
-        .kernels = {simple_add_kernel_descriptor},
-        .semaphores = {},
-        .cbs = {},
-    };
-
-    log_info(tt::LogTest, "Running generic_op unary exp");
-    Tensor device_output = ttnn::generic_op(std::vector<Tensor>{}, program_descriptor);
-
-    std::vector<uint32_t> result;
-    tt::tt_metal::detail::ReadFromDeviceL1(device, core_coord, table_address, sizeof(uint32_t), result);
-    EXPECT_EQ(result[0], input_a + input_b);
-
-}
-
+// Testing experimental CreateKernelFromBinary function.
+// Steps:
+//
+// 1. Set the binary path prefix for the device.
+//
+// 2. Call the function ComputeKernelOriginalPathHash to get the hash of the original kernel file.
+// This can either be done externally or internally in the program.
+// 
+// 3. Setup the KernelDescriptor to include:
+//    a. kernel_source = <kernel_name>
+//    b. binary_hash = <hash from step 1>
+//    c. source_type = tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH
 TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
     const std::string binary_kernel_path = "tests/ttnn/unit_tests/matmul_binaries";
     auto device = this->device_;
+
+    // 1. Set the binary path prefix for the device.
     tt::tt_metal::experimental::SetKernelBinaryPathPrefix(device, binary_kernel_path);
 
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::umd::BoardType::P150) {
@@ -999,7 +972,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
         num_tiles_written += num_output_tiles_per_core;
     }
 
+    // 2. Compute the hash of the original kernel file.
     auto binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash("ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp");
+
+    // 3. Setup the KernelDescriptor to read the binary. Repeat step 2 & 3 for the other kernels.
     tt::tt_metal::KernelDescriptor reader_kernel_descriptor = {
         .kernel_source = "reader_bmm_8bank_output_tiles_partitioned",
         .source_type = tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH,
