@@ -357,7 +357,10 @@ tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> get
         [&result](const Tensor& tensor) {
             const auto& tensor_placements = tensor.tensor_topology().placements();
             for (size_t i = 0; i < tensor_placements.size(); i++) {
-                if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i])) {
+                if (i >= result.size()) {
+                    result.push_back(tensor_placements[i]);
+                } else if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
+                               tensor_placements[i])) {
                     result[i] = tensor_placements[i];
                 }
             }
