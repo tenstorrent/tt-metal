@@ -6,6 +6,7 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <string>
+#include <fmt/format.h>
 
 #include "api/tt-metalium/data_types.hpp"
 #include "api/tt-metalium/kernel_types.hpp"
@@ -21,19 +22,27 @@
 
 namespace tt::tt_metal {
 
+class KernelImpl;  // Forward declaration
+
 struct KernelSource {
-    enum SourceType { FILE_PATH, SOURCE_CODE };
+    enum SourceType { FILE_PATH, SOURCE_CODE, BINARY_PATH };
 
     std::string source_;
     SourceType source_type_;
+    std::variant<std::string, size_t> original_path_or_hash_; // If user wants to hide the original path, they can provide a hash instead
     // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
-    std::filesystem::path path_;
+    // if source_type_ is BINARY_PATH, path_ points to the precompiled binary file/directory
+    std::filesystem::path path_;  // .cpp if source_type_=FILE_PATH OR or directory with binaries if source_type_=BINARY_PATH
 
-    KernelSource(const std::string& source, const SourceType& source_type);
+    // Unified constructor with explicit SourceType
+    explicit KernelSource(SourceType source_type, const std::string& source);
+
+    // Constructor for BINARY_PATH kernels (needs additional parameter)
+    explicit KernelSource(SourceType source_type, const std::string& kernel_name, const std::variant<std::string, size_t>& original_path_or_hash);
 
     std::string name() const {
         std::string name;
-        if (this->source_type_ == SourceType::FILE_PATH) {
+        if (this->source_type_ == SourceType::FILE_PATH || this->source_type_ == SourceType::BINARY_PATH) {
             const std::size_t start_pos_of_name = this->source_.rfind("/") + 1;
             const std::size_t pos_of_dot = this->source_.rfind(".");
             name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
@@ -42,6 +51,19 @@ struct KernelSource {
         }
         return name;
     }
+
+    // Get the original path hash for BINARY_PATH kernels
+    // Uses the same hash computation as the public API
+    size_t get_original_path_hash() const;
+
+    // Generate ELF path for a specific processor configuration
+    // For BINARY_PATH: constructs path as device_prefix/kernel_name/kernel_hash/processor_dir/processor_dir.elf
+    // For other types: uses JIT build system to get target path
+    std::string generate_elf_path(
+        const IDevice* device,
+        const KernelImpl* kernel,
+        int processor_index,
+        const std::string& jit_target_path = "") const;
 };
 
 
