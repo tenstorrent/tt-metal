@@ -4,7 +4,7 @@
 
 #include "llrt/hal.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <cstdint>
 #include <enchantum/iostream.hpp>
@@ -37,7 +37,8 @@ Hal::Hal(tt::ARCH arch, bool is_base_routing_fw_enabled) : arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0: initialize_wh(is_base_routing_fw_enabled); break;
 
-        case tt::ARCH::QUASAR:  // TODO create quasar hal
+        case tt::ARCH::QUASAR: initialize_qa(); break;
+
         case tt::ARCH::BLACKHOLE: initialize_bh(); break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;
@@ -70,7 +71,7 @@ uint32_t Hal::get_total_num_risc_processors() const {
 
 uint32_t HalCoreInfoType::get_processor_index(
     HalProcessorClassType processor_class, uint32_t processor_type_idx) const {
-    uint32_t processor_class_idx = utils::underlying_type<HalProcessorClassType>(processor_class);
+    uint32_t processor_class_idx = ttsl::as_underlying_type<HalProcessorClassType>(processor_class);
     uint32_t processor_index = 0;
     for (uint32_t i = 0; i < processor_class_idx; i++) {
         processor_index += this->get_processor_types_count(i);

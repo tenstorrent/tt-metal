@@ -154,7 +154,6 @@ target_link_libraries(
     INTERFACE
         dl
         pthread
-        atomic
         hwloc
         numa
 )
@@ -171,7 +170,6 @@ add_compile_options(
     # Vars that are used only in Asserts will appear as dead stores in builds
     # where the preprocessor has stripped away the assert.
     -Wno-unused-but-set-variable
-    -Wno-unused-function
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-c++11-narrowing>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-deprecated-volatile>"
     "$<$<CXX_COMPILER_ID:Clang>:-Wno-logical-op-parentheses>"

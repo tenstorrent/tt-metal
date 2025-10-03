@@ -24,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
                         // add something not too large but different between tiles
                         auto val = std::bit_cast<uint16_t>(bfloat16(bcast_1value + (j % 7)));
                         ref_bcast_values[j] = val;
-                        ref_bcast_values_with_tile_padding[j % W + (j / W) * TILE_HEIGHT * W] = val;
+                        ref_bcast_values_with_tile_padding[(j % W) + ((j / W) * TILE_HEIGHT * W)] = val;
                     }
                     tiled_bcast_values = convert_layout<uint16_t>(
                         ref_bcast_values_with_tile_padding,

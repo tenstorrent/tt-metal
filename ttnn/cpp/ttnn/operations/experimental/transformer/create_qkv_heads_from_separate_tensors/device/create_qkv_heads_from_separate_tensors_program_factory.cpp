@@ -5,7 +5,6 @@
 #include "create_qkv_heads_from_separate_tensors_device_operation.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 

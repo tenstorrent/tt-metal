@@ -10,7 +10,6 @@
 #include "rotary_embedding_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -30,19 +29,19 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     Program program{};
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     tt::DataFormat cos_cb_data_format = tt_metal::datatype_to_dataformat_converter(cos.dtype());
-    uint32_t cos_single_tile_size = tt_metal::detail::TileSize(cos_cb_data_format);
+    uint32_t cos_single_tile_size = tt::tile_size(cos_cb_data_format);
 
     tt::DataFormat sin_cb_data_format = tt_metal::datatype_to_dataformat_converter(sin.dtype());
-    uint32_t sin_single_tile_size = tt_metal::detail::TileSize(sin_cb_data_format);
+    uint32_t sin_single_tile_size = tt::tile_size(sin_cb_data_format);
 
     tt::DataFormat scalar_cb_data_format = DataFormat::Float16_b;
-    uint32_t scalar_single_tile_size = tt_metal::detail::TileSize(scalar_cb_data_format);
+    uint32_t scalar_single_tile_size = tt::tile_size(scalar_cb_data_format);
 
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
+    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;

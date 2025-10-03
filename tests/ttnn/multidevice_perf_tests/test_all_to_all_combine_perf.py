@@ -13,13 +13,11 @@ from models.perf.device_perf_utils import run_device_perf_detailed
     "warmup_iters, arch_type, stage, perf_target_max_us, perf_target_min_us",
     [
         (5, "6U", "decode", 36, 27),
-        (5, "TG", "decode", 87, 75),
         (5, "T3K", "decode", 105, 92),  # huge variance among machines for T3K
         (1, "6U", "prefill", 1370, 1300),
-        (1, "TG", "prefill", 6200, 5800),
         (1, "T3K", "prefill", 10700, 9800),
     ],
-    ids=["6U_decode", "TG_decode", "T3K_decode", "6U_prefill", "TG_prefill", "T3K_prefill"],
+    ids=["6U_decode", "T3K_decode", "6U_prefill", "T3K_prefill"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_all_to_all_combine_perf(
@@ -36,8 +34,6 @@ def test_all_to_all_combine_perf(
     subdir = "moe_perf"
     if arch_type == "6U":
         file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py"
-    elif arch_type == "TG":
-        file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_TG.py"
     elif arch_type == "T3K":
         file = f"pytest tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py"
     else:

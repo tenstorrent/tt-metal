@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,6 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
     const CircularBufferConfig& config, flatbuffers::FlatBufferBuilder& builder);
 
 flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation);
-flatbuffer::ShardMode to_flatbuffer(ShardMode shard_mode);
 flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
     const ShardSpec& spec, flatbuffers::FlatBufferBuilder& builder);
 flatbuffers::Offset<flatbuffer::BufferDistributionSpec> to_flatbuffer(

@@ -213,7 +213,7 @@ bool single_tile_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_dev
         .device = device, .size = byte_size, .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     auto input0_dram_buffer = CreateBuffer(dram_config);
@@ -361,7 +361,7 @@ bool single_block_matmul(
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     auto input0_dram_buffer = CreateBuffer(dram_config_0);
@@ -523,7 +523,7 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
 
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     auto input0_dram_buffer = CreateBuffer(dram_config_0);

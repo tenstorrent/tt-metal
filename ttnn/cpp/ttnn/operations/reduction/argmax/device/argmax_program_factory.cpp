@@ -7,7 +7,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -117,7 +116,7 @@ operation::ProgramWithCallbacks argmax_single_core(
 
     // Create input CB to read reduction dim worth of data at once
     const uint32_t src_cb_idx = tt::CBIndex::c_0;
-    const uint32_t src_page_size = round_up_to_mul32(red_dim_units * input_unit_size);
+    const uint32_t src_page_size = red_dim_units * input_unit_size;
     tt::tt_metal::CircularBufferConfig src_cb_config =
         tt::tt_metal::CircularBufferConfig(src_page_size, {{src_cb_idx, input_cb_data_format}})
             .set_page_size(src_cb_idx, src_page_size);
@@ -125,7 +124,7 @@ operation::ProgramWithCallbacks argmax_single_core(
 
     // Create output CB based on the output shape's last dimension
     const uint32_t dst_cb_idx = tt::CBIndex::c_1;
-    const uint32_t dst_page_size = round_up_to_mul32(output_last_dim * output_unit_size);
+    const uint32_t dst_page_size = output_last_dim * output_unit_size;
     const tt::tt_metal::CircularBufferConfig dst_db_config =
         tt::tt_metal::CircularBufferConfig(dst_page_size, {{dst_cb_idx, output_cb_data_format}})
             .set_page_size(dst_cb_idx, dst_page_size);
@@ -376,7 +375,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
 
     // If red_dim_units is not a multiple of min_red_dim_units_per_core, then the last core will read a smaller amount
     // of data We calculate that number here
-    const int ideal_red_dim_units = num_cores0 * red_dim_units0 + num_cores1 * red_dim_units1;
+    const int ideal_red_dim_units = (num_cores0 * red_dim_units0) + (num_cores1 * red_dim_units1);
 
     uint32_t red_dim_units_last0, red_dim_units_last1;
     if (num_cores1 > 0) {
@@ -483,8 +482,8 @@ operation::ProgramWithCallbacks argmax_multi_core(
             {src_buffer->address(),
              dst_buffer->address(),
              static_cast<uint32_t>(num_cores0 + i),
-             src_offset1 + i * src_read_size1,
-             red_dim_offset1 + i * red_dim_units1,
+             src_offset1 + (i * src_read_size1),
+             red_dim_offset1 + (i * red_dim_units1),
              (i == num_cores1 - 1) ? src_read_size_last1 : src_read_size1,
              (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
     }

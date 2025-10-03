@@ -128,7 +128,7 @@ In this program, we have a second source tensor. We will be adding this to the f
 Enqueue the program as a mesh workload. Use non-blocking enqueue and explicitly wait with `Finish(cq)` before reading results.
 
 ```cpp
-distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::Finish(cq);
 ```

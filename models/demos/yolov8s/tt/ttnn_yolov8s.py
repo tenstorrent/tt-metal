@@ -9,13 +9,6 @@ import ttnn
 from models.demos.yolov8s.tt.tt_yolov8s_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
 with open("models/demos/yolov8s/tt/configs.json", "r") as file:
     configs = json.load(file)
 
@@ -26,9 +19,6 @@ detect_config = configs["detect_config"]
 
 
 def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
-    if use_signpost:
-        signpost(header="sharded_concat_sppf")
-
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
 
     input_sharded_memory_configs = []
@@ -63,9 +53,6 @@ def sharded_concat_sppf(input_tensors, num_cores=64, dim=3):  # expected input t
 def sharded_concat(
     input_tensors, num_cores=64, dim=3, skip_s2i=False
 ):  # expected input tensors to be in fp16, RM, same (h*w)
-    if use_signpost:
-        signpost(header="sharded_concat")
-
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
 
     input_sharded_memory_configs = []
@@ -219,6 +206,7 @@ class TtConv:
             return_weights_and_bias=True,
             return_output_dim=True,
             dtype=self.output_dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         if self.is_detect_cv2:
@@ -270,9 +258,6 @@ class TtBottleneck:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="BottleNeck")
-
         cv1, out_h, out_w = self.cv1(x)
         cv2, out_h, out_w = self.cv2(cv1)  # pass cv1
         ttnn.deallocate(cv1)
@@ -365,9 +350,6 @@ class TtC2f:
             )
 
     def __call__(self, x, reshard_bottleneck_input=False):
-        if use_signpost:
-            signpost(header="C2F")
-
         cv1_a, out_h_a, out_w_a = self.cv1_a(x)
         cv1_b, out_h_b, out_w_b = self.cv1_b(x)
 
@@ -432,9 +414,6 @@ class TtSppf:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="SPPF")
-
         cv1, out_h, out_w = self.cv1(x)
         cv1 = ttnn.to_memory_config(cv1, ttnn.L1_MEMORY_CONFIG)
         cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
@@ -487,8 +466,6 @@ class TtDetectCv2:
         )
 
     def __call__(self, x):
-        if use_signpost:
-            signpost(header="DetectCv2")
         x, out_h, out_w = self.conv0(x)
         x, out_h, out_w = self.conv1(x)
         x, out_h, out_w = self.conv2(x)
@@ -504,8 +481,6 @@ class TtDFL:
         self.conv = TtConv(device, parameters, path, input_params, bfloat8=True, is_fused=False, change_shard=False)
 
     def __call__(self, x, c1=16):
-        if use_signpost:
-            signpost(header="DFL")
         b, _, a = x.shape
         x = ttnn.reshape(x, (b, 4, c1, a), memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.softmax(x, dim=2)
@@ -547,8 +522,6 @@ class TtDetect:
         )
 
     def __call__(self, x, nc=80, ch=(), reg_max=16):
-        if use_signpost:
-            signpost(header="Detect")
         nc = self.nc
         ch = self.ch
         nl = len(ch)
@@ -557,8 +530,6 @@ class TtDetect:
         for i in range(nl):
             a, _, _ = self.detect_cv2_modules[i](x[i])
             b, _, _ = self.detect_cv3_modules[i](x[i])
-            if use_signpost:
-                signpost(header="Detect - concat")
             x[i] = ttnn.concat((a, b), dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         shape = x[0].shape
@@ -577,8 +548,6 @@ class TtDetect:
         dfl = self.dfl_module(box)
 
         anchors = ttnn.to_memory_config(anchors, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
-        if use_signpost:
-            signpost(header="ttnn_decode_bboxes")
         dbox = ttnn_decode_bboxes(self.device, dfl, anchors)
         # dbox = ttnn.to_dtype(dbox, dtype=ttnn.bfloat8_b)
         strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
@@ -728,24 +697,15 @@ class TtDetectionModel:
         conv_1, out_h, out_w = self.conv_1(conv_0)
         ttnn.deallocate(conv_0)
 
-        if use_signpost:
-            signpost(header="start c2f_2")
-
         c2f_2, out_h, out_w = self.c2f_2(conv_1)
         ttnn.deallocate(conv_1)
         conv_3, out_h, out_w = self.conv_3(c2f_2)
         ttnn.deallocate(c2f_2)
 
-        if use_signpost:
-            signpost(header="start c2f_4")
-
         c2f_4, out_h, out_w = self.c2f_4(conv_3)
         ttnn.deallocate(conv_3)
 
         conv_5, out_h, out_w = self.conv_5(c2f_4)
-
-        if use_signpost:
-            signpost(header="start c2f_6")
 
         c2f_6, out_h, out_w = self.c2f_6(conv_5)
         ttnn.deallocate(conv_5)
@@ -753,14 +713,8 @@ class TtDetectionModel:
         c2f_6 = ttnn.sharded_to_interleaved(c2f_6, ttnn.L1_MEMORY_CONFIG)
         conv_7, out_h, out_w = self.conv_7(c2f_6)
 
-        if use_signpost:
-            signpost(header="start c2f_8")
-
         c2f_8, out_h, out_w = self.c2f_8(conv_7, reshard_bottleneck_input=True)
         ttnn.deallocate(conv_7)
-
-        if use_signpost:
-            signpost(header="start sppf_9")
 
         nine, out_h, out_w = self.sppf_9(c2f_8)
         ttnn.deallocate(c2f_8)
@@ -789,15 +743,9 @@ class TtDetectionModel:
 
         ttnn.deallocate(c2f_6)
 
-        if use_signpost:
-            signpost(header="start c2f_12")
-
         c2f_12, out_h, out_w = self.c2f_12(x)
         ttnn.deallocate(x)
         ttnn.deallocate(sppf_9)
-
-        if use_signpost:
-            signpost(header="start c2f_12 post-processing")
 
         c2f_12 = ttnn.sharded_to_interleaved(c2f_12, ttnn.L1_MEMORY_CONFIG)
         c2f_12 = ttnn.to_layout(c2f_12, ttnn.ROW_MAJOR_LAYOUT)
@@ -824,9 +772,6 @@ class TtDetectionModel:
         ttnn.deallocate(c2f_4)
         ttnn.deallocate(c2f_12)
 
-        if use_signpost:
-            signpost(header="start c2f_15")
-
         c2f_15, out_h, out_w = self.c2f_15(x)
         ttnn.deallocate(x)
 
@@ -840,9 +785,6 @@ class TtDetectionModel:
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(twelve)
         ttnn.deallocate(conv_16)
-
-        if use_signpost:
-            signpost(header="start c2f_18")
 
         c2f_18, out_h, out_w = self.c2f_18(x)
         ttnn.deallocate(x)
@@ -859,16 +801,10 @@ class TtDetectionModel:
         ttnn.deallocate(nine)
         ttnn.deallocate(conv_19)
 
-        if use_signpost:
-            signpost(header="start c2f_21")
-
         c2f_21, out_h, out_w = self.c2f_21(x, reshard_bottleneck_input=True)
         c2f_21 = ttnn.sharded_to_interleaved(c2f_21, ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x)
         x = [fifteen, eighteen, c2f_21]
-
-        if use_signpost:
-            signpost(header="start DETECT")
 
         x = self.detect_22(x, nc=80, ch=(320, 640, 640), reg_max=self.reg_max)
         return x

@@ -1,11 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import ttnn
 
-from models.common.utility_functions import skip_for_grayskull
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (

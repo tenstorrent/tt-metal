@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 template <bool APPROXIMATE, int binop_mode>
 inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
     uint dst_index, uint32_t scalar, int vector_mode = VectorMode::RC) {

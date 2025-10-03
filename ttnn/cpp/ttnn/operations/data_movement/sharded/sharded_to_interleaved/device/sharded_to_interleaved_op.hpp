@@ -12,7 +12,7 @@ namespace ttnn::operations::data_movement {
 
 struct ShardedToInterleavedDeviceOperation {
     const tt::tt_metal::MemoryConfig output_mem_config;
-    const tt::tt_metal::DataType output_dtype;
+    const tt::tt_metal::DataType output_dtype{};
     const bool is_l1_aligned = false;
 
     void validate_with_output_tensors(

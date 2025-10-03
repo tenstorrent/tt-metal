@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,25 +7,25 @@
 #include <cstdint>
 #include <optional>
 
-#include "autograd/module_base.hpp"
+#include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
 
 namespace ttml::modules::distributed {
 
-class DistributedLlamaMLP : public autograd::ModuleBase {
+class DistributedLlamaMLP : public ModuleBase {
 public:
     DistributedLlamaMLP(
         uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim = std::nullopt);
     autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 
 private:
-    std::shared_ptr<autograd::ModuleBase> m_w1;
-    std::shared_ptr<autograd::ModuleBase> m_w3;
-    std::shared_ptr<autograd::ModuleBase> m_w2;
-    std::shared_ptr<autograd::ModuleBase> m_dropout;
+    std::shared_ptr<ModuleBase> m_w1;
+    std::shared_ptr<ModuleBase> m_w3;
+    std::shared_ptr<ModuleBase> m_w2;
+    std::shared_ptr<ModuleBase> m_dropout;
 };
 
-class DistributedLlamaBlock : public autograd::ModuleBase {
+class DistributedLlamaBlock : public ModuleBase {
 public:
     explicit DistributedLlamaBlock(
         uint32_t embedding_size,
@@ -38,10 +38,10 @@ public:
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
 
 private:
-    std::shared_ptr<autograd::ModuleBase> m_mlp;
-    std::shared_ptr<autograd::ModuleBase> m_attention_norm;
-    std::shared_ptr<autograd::ModuleBase> m_mlp_norm;
-    std::shared_ptr<autograd::ModuleBase> m_attention;
+    std::shared_ptr<ModuleBase> m_mlp;
+    std::shared_ptr<ModuleBase> m_attention_norm;
+    std::shared_ptr<ModuleBase> m_mlp_norm;
+    std::shared_ptr<ModuleBase> m_attention;
 };
 
 }  // namespace ttml::modules::distributed

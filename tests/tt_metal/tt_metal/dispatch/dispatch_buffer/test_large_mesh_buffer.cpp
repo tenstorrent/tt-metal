@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 #include <random>
 #include <tuple>
 #include <vector>
+#include <iomanip>
+#include <sstream>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -26,12 +28,88 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/util.hpp>
 #include "tt_metal/api/tt-metalium/math.hpp"
 #include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal::distributed::test {
 namespace {
+
+// Helper function to detect and print mismatch ranges with formatted output
+template <typename T>
+void print_mismatch_ranges(
+    const std::vector<T>& src_vec, const std::vector<T>& dst_vec, const std::string& context = "") {
+    if (src_vec.size() != dst_vec.size()) {
+        log_info(
+            tt::LogTest,
+            "{} Size mismatch: src_vec.size()={}, dst_vec.size()={}",
+            context,
+            src_vec.size(),
+            dst_vec.size());
+        return;
+    }
+
+    std::vector<std::pair<size_t, size_t>> mismatch_ranges;
+    bool in_mismatch = false;
+    size_t range_start = 0;
+
+    // Find all mismatch ranges
+    for (size_t i = 0; i < src_vec.size(); ++i) {
+        if (src_vec[i] != dst_vec[i]) {
+            if (!in_mismatch) {
+                range_start = i;
+                in_mismatch = true;
+            }
+        } else {
+            if (in_mismatch) {
+                mismatch_ranges.emplace_back(range_start, i - 1);
+                in_mismatch = false;
+            }
+        }
+    }
+    // Handle case where mismatch extends to end
+    if (in_mismatch) {
+        mismatch_ranges.emplace_back(range_start, src_vec.size() - 1);
+    }
+
+    if (mismatch_ranges.empty()) {
+        log_info(tt::LogTest, "{} Data matches perfectly!", context);
+        return;
+    }
+
+    log_info(tt::LogTest, "{} Found {} mismatch range(s):", context, mismatch_ranges.size());
+
+    for (const auto& [start, end] : mismatch_ranges) {
+        log_info(tt::LogTest, "  Mismatch range: [{}, {}] (length: {})", start, end, end - start + 1);
+
+        // Print first 128 mismatched values in this range
+        size_t print_count = std::min(size_t(128), end - start + 1);
+        log_info(tt::LogTest, "  First {} mismatched values:", print_count);
+
+        std::stringstream ss;
+        for (size_t i = 0; i < print_count; ++i) {
+            if (i % 8 == 0) {
+                if (i > 0) {
+                    log_info(tt::LogTest, "{}", ss.str());
+                    ss.str("");
+                    ss.clear();
+                }
+                ss << "    ";
+            }
+
+            // Format as 8-character wide hex values, aligned columns
+            ss << std::setw(8) << std::setfill('0') << std::hex << static_cast<uint64_t>(src_vec[start + i]) << ":"
+               << std::setw(8) << std::setfill('0') << std::hex << static_cast<uint64_t>(dst_vec[start + i]);
+
+            if ((i + 1) % 8 != 0 && i + 1 < print_count) {
+                ss << "  ";
+            }
+        }
+
+        if (!ss.str().empty()) {
+            log_info(tt::LogTest, "{}", ss.str());
+        }
+    }
+}
 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
@@ -108,7 +186,9 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
 
     // Create test data - use uint16_t for easy verification
     auto num_elements = tensor_size / ElementSize;
-    ASSERT_TRUE(num_elements <= max_num_elements_);
+    if (num_elements > max_num_elements_) {
+        TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
+    }
     std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -131,6 +211,9 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
 
     for (auto& dst : dst_vec) {
+        std::string context =
+            "Device coord (" + std::to_string(dst.first[0]) + "," + std::to_string(dst.first[1]) + ")";
+        print_mismatch_ranges(src_vec, dst.second, context);
         EXPECT_EQ(dst.second, src_vec);
     }
 }
@@ -340,10 +423,10 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto mesh_buffer = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device_.get());
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
 
-    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
     if (num_elements > max_num_elements_) {
         TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
     }
+    std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);
@@ -363,6 +446,9 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
 
     for (auto& dst : dst_vec) {
+        std::string context =
+            "Device coord (" + std::to_string(dst.first[0]) + "," + std::to_string(dst.first[1]) + ")";
+        print_mismatch_ranges(src_vec, dst.second, context);
         EXPECT_EQ(dst.second, src_vec);
     }
 }

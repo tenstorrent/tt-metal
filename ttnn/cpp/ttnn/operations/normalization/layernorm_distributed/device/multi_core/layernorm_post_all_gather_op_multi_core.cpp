@@ -13,7 +13,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -24,12 +23,6 @@ namespace ttnn::operations::normalization {
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-inline bool is_dram(const Tensor& input_tensor) {
-    return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
-}
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
@@ -122,13 +115,13 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t stats_single_tile_size = tt::tt_metal::detail::TileSize(stats_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t bfloat16_tile_size = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    uint32_t gamma_single_tile_size = tt::tt_metal::detail::TileSize(gamma_cb_data_format);
-    uint32_t beta_single_tile_size = tt::tt_metal::detail::TileSize(beta_cb_data_format);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t stats_single_tile_size = tt::tile_size(stats_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t bfloat16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t gamma_single_tile_size = tt::tile_size(gamma_cb_data_format);
+    uint32_t beta_single_tile_size = tt::tile_size(beta_cb_data_format);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
@@ -501,7 +494,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
             for (uint32_t y = 0; y < cores_y; ++y) {
                 CoreCoord core = {x, y};
 
-                uint32_t tile_offset = x * Wt + y * tiles_per_core_y;
+                uint32_t tile_offset = (x * Wt) + (y * tiles_per_core_y);
                 uint32_t stats_offset = x * stats_tiles_cols;
 
                 log_debug(

@@ -15,10 +15,9 @@ from models.demos.wormhole.bert_tiny.tt.bert_tiny import (
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import skip_for_grayskull, is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_bert_attention_inference(
     model_location_generator,
@@ -75,7 +74,6 @@ def test_bert_attention_inference(
     assert_with_pcc(pytorch_out, tt_output, 0.99)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_bert_intermediate_inference(
     model_location_generator,
@@ -121,7 +119,6 @@ def test_bert_intermediate_inference(
     assert_with_pcc(pytorch_out.squeeze(1), tt_output, 0.99)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_bert_output_inference(
     model_location_generator,
@@ -178,7 +175,6 @@ def test_bert_output_inference(
     assert_with_pcc(pytorch_out.squeeze(1), tt_output, 0.99)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_bert_layer_inference(
     model_location_generator,
@@ -227,7 +223,6 @@ def test_bert_layer_inference(
     assert_with_pcc(pytorch_out.squeeze(1), tt_output, 0.99)
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("model_name", ["mrm8488/bert-tiny-finetuned-squadv2"])
 @pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("num_hidden_layers", [1])

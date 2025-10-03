@@ -77,8 +77,6 @@ void validate_inputs(
 
 bool is_i32(const DataType& dt) { return (dt == DataType::UINT32) || (dt == DataType::INT32); }
 
-bool is_last_dim(const Shape& shape, const uint32_t& dim) { return (dim == shape.rank() - 1) || (dim == -1); }
-
 void check_support(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& source_tensor, const int32_t& dim) {
     const auto& input_dtype = input_tensor.dtype();

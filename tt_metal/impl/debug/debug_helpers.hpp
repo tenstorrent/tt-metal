@@ -27,7 +27,7 @@ struct CoreDescriptorComparator {
 using CoreDescriptorSet = std::set<CoreDescriptor, CoreDescriptorComparator>;
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
-static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
+inline static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
     CoreCoord logical_grid_size =
@@ -51,7 +51,7 @@ static CoreDescriptorSet GetAllCores(chip_id_t device_id) {
 
 // Helper function to get CoreDescriptors for all cores that are used for dispatch. Should be a subset of
 // GetAllCores().
-static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
+[[maybe_unused]] static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
     CoreDescriptorSet dispatch_cores;
     unsigned num_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
     const auto& dispatch_core_config =
@@ -65,9 +65,9 @@ static CoreDescriptorSet GetDispatchCores(chip_id_t device_id) {
 }
 
 inline uint64_t GetDprintBufAddr(chip_id_t device_id, const CoreCoord& virtual_core, int risc_id) {
-    auto* buf = tt::tt_metal::MetalContext::instance().hal().get_dev_addr<DebugPrintMemLayout*>(
+    uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
-    return reinterpret_cast<uint64_t>(&buf[risc_id]);
+    return addr + (sizeof(DebugPrintMemLayout) * risc_id);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {

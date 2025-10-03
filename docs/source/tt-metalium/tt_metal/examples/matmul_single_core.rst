@@ -9,13 +9,13 @@ This example introduces the concept of using separate data movement and compute 
 
 We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/matmul/matmul_single_core/`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/metal_example_programming_examples`` directory. For example:
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/matmul_single_core
+    ./build/programming_examples/metal_example_matmul_single_core
 
 .. _mm_single_core_device_initialization:
 
@@ -340,9 +340,9 @@ Kernel execution and result verification
 On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
 The overall execution flow is managed by enqueuing commands:
 
-1.  ``EnqueueWriteBuffer``: Transfers input matrices A and B from host memory to their respective DRAM buffers on the device.
-2.  ``EnqueueProgram``: Launches the compiled program (reader, compute, and writer kernels) on the designated core.
-3.  ``EnqueueReadBuffer``: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
+1.  ``EnqueueWriteMeshBuffer``: Transfers input matrices A and B from host memory to their respective DRAM buffers on the Mesh Device (a 1x1 Mesh Device in this example).
+2.  ``EnqueueMeshWorkload``: Launches the compiled workload (reader, compute, and writer kernels) on the designated core on the Unit Mesh Device.
+3.  ``EnqueueReadMeshBuffer``: Transfers the resulting matrix C from its DRAM buffer on the device back to host memory.
 
 .. code-block:: cpp
 
@@ -362,7 +362,7 @@ The overall execution flow is managed by enqueuing commands:
     // execute program, and read results
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::EnqueueReadMeshBuffer(cq, output.data(), dst_dram_buffer, true);
 

@@ -2,6 +2,7 @@
 set(ARCHS
     wormhole
     blackhole
+    quasar
 )
 set(PROCS
     brisc
@@ -12,6 +13,9 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
+    main_aerisc
+    subordinate_aerisc
+    dm=0
 )
 set(TYPES
     firmware
@@ -133,9 +137,9 @@ foreach(ARCH IN LISTS ARCHS)
 endforeach()
 
 if(TT_USE_SYSTEM_SFPI)
-    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++")
+    set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-g++")
 else()
-    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++")
+    set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv-tt-elf-g++")
 endif()
 
 if(NOT EXISTS "${GPP_CMD}")
@@ -185,7 +189,6 @@ foreach(ARCH IN LISTS ARCHS)
         "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
         "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
-        "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c"
     )
     set(ARCH_ALIAS ${ARCH})
 
@@ -197,6 +200,12 @@ foreach(ARCH IN LISTS ARCHS)
             "wh-iram-start.o:tt_metal/hw/toolchain/wh-iram-start.S"
             "wh-iram-trampoline.o:tt_metal/hw/toolchain/wh-iram-trampoline.S"
         )
+    endif()
+
+    if(ARCH STREQUAL "quasar")
+        list(APPEND HW_OBJ_SRC_PAIRS "noc.o:tt_metal/hw/firmware/src/tt-2xx/noc.c")
+    else()
+        list(APPEND HW_OBJ_SRC_PAIRS "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c")
     endif()
 
     # Set GPP_FLAGS based on ARCH
@@ -220,6 +229,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-2xx
     )
 
     # Architecture specific include paths
@@ -310,6 +320,7 @@ target_sources(
             inc/blackhole/cfg_defines.h
             inc/blackhole/core_config.h
             inc/blackhole/dev_mem_map.h
+            inc/blackhole/eth_fw_api.h
             inc/blackhole/eth_chan_noc_mapping.h
             inc/blackhole/eth_fw_api.h
             inc/blackhole/eth_l1_address_map.h

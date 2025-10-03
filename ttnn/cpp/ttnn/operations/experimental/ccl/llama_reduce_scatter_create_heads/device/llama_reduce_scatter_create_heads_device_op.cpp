@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -84,7 +84,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_specs(
     k_shard_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(next_core_coord, batch, sub_core_grid, true);
 
     CoreRangeSet q_two_batch_grid =
-        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, 2 * batch + 1, sub_core_grid, true);
+        tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(start_core_coord, (2 * batch) + 1, sub_core_grid, true);
     if (!q_two_batch_grid.ranges().empty()) {
         next_core_coord = q_two_batch_grid.ranges().back().end_coord;
     }

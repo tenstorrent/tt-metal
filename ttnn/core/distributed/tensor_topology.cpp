@@ -6,6 +6,40 @@
 
 namespace tt::tt_metal {
 
+TensorTopology TensorTopology::create_fully_replicated_tensor_topology(
+    const tt::tt_metal::distributed::MeshShape& mesh_shape) {
+    tt::tt_metal::distributed::MeshShape distribution_shape =
+        tt::tt_metal::distributed::MeshShape(mesh_shape.mesh_size());
+    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements = {
+        tt::tt_metal::distributed::MeshMapperConfig::Replicate{}};
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
+    mesh_coords.reserve(mesh_shape.mesh_size());
+    tt::tt_metal::distributed::MeshShape physical_mesh_shape =
+        mesh_shape.dims() == 1 ? tt::tt_metal::distributed::MeshShape(1, mesh_shape[0]) : mesh_shape;
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(physical_mesh_shape)) {
+        mesh_coords.push_back(coord);
+    }
+
+    return tt::tt_metal::TensorTopology(distribution_shape, placements, mesh_coords);
+}
+
+TensorTopology TensorTopology::create_sharded_tensor_topology(
+    const tt::tt_metal::distributed::MeshShape& mesh_shape, int shard_dim) {
+    tt::tt_metal::distributed::MeshShape distribution_shape =
+        tt::tt_metal::distributed::MeshShape(mesh_shape.mesh_size());
+    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements = {
+        tt::tt_metal::distributed::MeshMapperConfig::Shard{shard_dim}};
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords;
+    mesh_coords.reserve(mesh_shape.mesh_size());
+    tt::tt_metal::distributed::MeshShape physical_mesh_shape =
+        mesh_shape.dims() == 1 ? tt::tt_metal::distributed::MeshShape(1, mesh_shape[0]) : mesh_shape;
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(physical_mesh_shape)) {
+        mesh_coords.push_back(coord);
+    }
+
+    return tt::tt_metal::TensorTopology(distribution_shape, placements, mesh_coords);
+}
+
 tt::tt_metal::distributed::MeshCoordinate TensorTopology::get_neighbor(
     const tt::tt_metal::distributed::MeshCoordinate& tensor_coord, int32_t offset, int32_t dim) const {
     const auto neighbor_coord = tensor_coord.get_neighbor(
@@ -49,6 +83,12 @@ tt::tt_metal::distributed::MeshCoordinate TensorTopology::get_device_coord(
     }
 
     // Return the mesh coordinate at the flattened position
+    TT_FATAL(
+        flattened_index < mesh_coords_.size(),
+        "Flattened index {} is out of bounds of mesh_coordinates {} in tensor topology with distribution shape {}",
+        flattened_index,
+        mesh_coords_.size(),
+        distribution_shape_);
     return mesh_coords_[flattened_index];
 }
 
@@ -77,6 +117,29 @@ std::optional<tt::tt_metal::distributed::MeshCoordinate> TensorTopology::get_ten
 
     // No match found
     return std::nullopt;
+}
+
+bool operator==(const TensorTopology& lhs, const TensorTopology& rhs) {
+    return lhs.distribution_shape() == rhs.distribution_shape() && lhs.placements() == rhs.placements() &&
+           lhs.mesh_coords() == rhs.mesh_coords();
+}
+
+bool operator!=(const TensorTopology& lhs, const TensorTopology& rhs) { return !(lhs == rhs); }
+
+std::ostream& operator<<(std::ostream& os, const TensorTopology& tensor_topology) {
+    os << "TensorTopology(";
+    os << "distribution_shape=" << tensor_topology.distribution_shape();
+    os << ", placements=" << tensor_topology.placements();
+    os << ", mesh_coords=";
+    for (size_t i = 0; i < tensor_topology.mesh_coords().size(); i++) {
+        const auto& coord = tensor_topology.mesh_coords()[i];
+        if (i > 0) {
+            os << ", ";
+        }
+        os << coord;
+    }
+    os << ")";
+    return os;
 }
 
 }  // namespace tt::tt_metal

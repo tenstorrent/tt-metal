@@ -131,19 +131,6 @@ struct TYPED_U32_ARRAY : public U32_ARRAY {
     }
 } ATTR_PACK;
 
-// These primitives are intended for ordering debug prints
-// A possible use here is to synchronize debug print order between cores/harts
-// It could be implemented, for instance as code = linearize({x,y})*5 + hart_id
-// With another core/hart waiting on that index
-struct RAISE {
-    uint32_t code;
-    RAISE(uint32_t val) : code(val) {}
-} ATTR_PACK;  // raise a condition with specified code
-struct WAIT {
-    uint32_t code;
-    WAIT(uint32_t val) : code(val) {}
-} ATTR_PACK;  // wait for a condition with specified code
-
 // didn't want to include string.h
 inline uint32_t DebugPrintStrLen(const char* val) {
     const char* end = val;
@@ -241,14 +228,6 @@ uint8_t DebugPrintTypeToId<float>() {
 template <>
 uint8_t DebugPrintTypeToId<char>() {
     return DPrintCHAR;
-}
-template <>
-uint8_t DebugPrintTypeToId<RAISE>() {
-    return DPrintRAISE;
-}
-template <>
-uint8_t DebugPrintTypeToId<WAIT>() {
-    return DPrintWAIT;
 }
 template <>
 uint8_t DebugPrintTypeToId<BF16>() {
@@ -457,8 +436,6 @@ template DebugPrinter operator<< <int32_t>(DebugPrinter, int32_t val);
 template DebugPrinter operator<< <int64_t>(DebugPrinter, int64_t val);
 template DebugPrinter operator<< <float>(DebugPrinter, float val);
 template DebugPrinter operator<< <char>(DebugPrinter, char val);
-template DebugPrinter operator<< <RAISE>(DebugPrinter, RAISE val);
-template DebugPrinter operator<< <WAIT>(DebugPrinter, WAIT val);
 template DebugPrinter operator<< <FIXED>(DebugPrinter, FIXED val);
 template DebugPrinter operator<< <DEFAULTFLOAT>(DebugPrinter, DEFAULTFLOAT val);
 template DebugPrinter operator<< <HEX>(DebugPrinter, HEX val);

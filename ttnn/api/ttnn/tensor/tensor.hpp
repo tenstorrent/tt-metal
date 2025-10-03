@@ -278,28 +278,18 @@ Tensor create_device_tensor(
 
 // The set of memcpy functions below are used to copy data between host buffers/tensors and single-device tensors
 void memcpy(
-    CommandQueue& queue,
-    void* dst,
-    const Tensor& src,
-    const std::optional<BufferRegion>& region = std::nullopt,
-    bool blocking = true);
-void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
     const std::optional<BufferRegion>& region = std::nullopt,
     bool blocking = true);
 
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,
     const void* src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
-void memcpy(
-    CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 void memcpy(
     distributed::MeshCommandQueue& queue,
     Tensor& dst,

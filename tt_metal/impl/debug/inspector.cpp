@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,13 +17,15 @@
 
 namespace tt::tt_metal {
 
-static inspector::Data* get_inspector_data() {
+namespace {
+inspector::Data* get_inspector_data() {
     auto* data = tt::tt_metal::MetalContext::instance().get_inspector_data();
     if (!data) {
         throw std::runtime_error("Inspector data is not initialized.");
     }
     return data;
 }
+}  // namespace
 
 bool Inspector::is_enabled() {
     return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled();

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -94,18 +94,18 @@ template <typename ADDRgen, typename ADDRgenInfo>
 void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
     uint32_t random_width_offsets[4] = {0, 1, 5, 7};
     uint32_t random_height_offsets[4] = {0, 1, 5, 7};
-    uint32_t cores_per_block_row = (constants.pages_per_tensor_row - 1) / constants.pages_per_shard_width + 1;
+    uint32_t cores_per_block_row = ((constants.pages_per_tensor_row - 1) / constants.pages_per_shard_width) + 1;
     uint32_t cores_height = constants.number_of_cores / cores_per_block_row;
     for (int i = 0; i < std::size(random_width_offsets); i++) {
         for (int j = 0; j < std::size(random_height_offsets); j++) {
-            uint64_t outer_page = random_width_offsets[i] + random_height_offsets[j] * constants.pages_per_tensor_row;
+            uint64_t outer_page = random_width_offsets[i] + (random_height_offsets[j] * constants.pages_per_tensor_row);
             uint64_t l1_address =
                 (random_width_offsets[i] + random_height_offsets[j] * constants.pages_per_shard_width) *
                 constants.page_size_jump;
             for (int h = 0; h < cores_height; h++) {
                 uint64_t page = outer_page;
                 for (int w = 0; w < cores_per_block_row; w++) {
-                    uint32_t core_number = w + h * cores_per_block_row;
+                    uint32_t core_number = w + (h * cores_per_block_row);
                     uint64_t calculated_address =
                         bank_base_address +
                         NOC_XY_ADDR(

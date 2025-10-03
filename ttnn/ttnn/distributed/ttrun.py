@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications."""
@@ -40,6 +40,9 @@ class TTRunConfig(BaseModel):
     rank_bindings: List[RankBinding] = Field(..., min_length=1, description="Rank to fabric bindings")
     global_env: Dict[str, str] = Field(default_factory=dict, description="Global environment variables for all ranks")
     mesh_graph_desc_path: str = Field(..., description="Path to mesh graph descriptor")
+    mock_cluster_rank_binding: Dict[int, Path] = Field(
+        default_factory=dict, description="Mock cluster rank binding configuration"
+    )
 
     @field_validator("rank_bindings")
     def validate_ranks(cls, bindings: List[RankBinding]) -> List[RankBinding]:
@@ -64,7 +67,7 @@ class TTRunConfig(BaseModel):
         return str(mesh_path)
 
 
-def parse_binding_config(yaml_path: Path) -> TTRunConfig:
+def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Path] = None) -> TTRunConfig:
     """Parse YAML configuration file with schema validation."""
     if not yaml_path.exists():
         raise ValueError(f"Configuration file not found: {yaml_path}")
@@ -73,9 +76,23 @@ def parse_binding_config(yaml_path: Path) -> TTRunConfig:
         data = yaml.safe_load(f)
 
     try:
-        return TTRunConfig(**data)
+        config = TTRunConfig(**data)
     except ValidationError as e:
         raise ValueError(f"Invalid configuration: {e}")
+
+    # Parse mock cluster rank binding configuration
+    if mock_cluster_rank_binding:
+        with open(mock_cluster_rank_binding, "r") as f:
+            mock_data = yaml.safe_load(f)
+
+        # Validate mock cluster rank binding configuration
+        for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
+            if not Path(path).expanduser().resolve().is_file():
+                raise ValueError(f"Mock cluster rank binding configuration file not found: {path}")
+
+        config.mock_cluster_rank_binding = mock_data["rank_to_cluster_mock_cluster_desc"]
+
+    return config
 
 
 def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str, str]:
@@ -104,6 +121,9 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # Add TT_MESH_HOST_RANK only if mesh_host_rank is set
     if binding.mesh_host_rank is not None:
         env["TT_MESH_HOST_RANK"] = str(binding.mesh_host_rank)
+
+    if config.mock_cluster_rank_binding:
+        env["TT_METAL_MOCK_CLUSTER_DESC_PATH"] = config.mock_cluster_rank_binding[binding.rank]
 
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
@@ -143,6 +163,18 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
 
     cmd = [mpi_launcher]
 
+    # Check if --bind-to is already specified in mpi_args
+    bind_to_already_specified = False
+    if mpi_args:
+        for i, arg in enumerate(mpi_args):
+            if arg == "--bind-to":
+                bind_to_already_specified = True
+                break
+
+    # Add --bind-to none only if not already specified
+    if not bind_to_already_specified:
+        cmd.extend(["--bind-to", "none"])
+
     if mpi_args:
         cmd.extend(mpi_args)
 
@@ -175,7 +207,8 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
         if current_part:
             parts.append(" ".join(current_part))
 
-        logger.info(" \\\n    ".join(parts))
+        logger.info(f"{prefix} Command: " + " ".join(parts))
+
     else:
         logger.info(f"{prefix} Command: " + " ".join(cmd))
 
@@ -199,8 +232,21 @@ def print_command(cmd: List[str], prefix: str = TT_RUN_PREFIX) -> None:
     callback=lambda ctx, param, value: shlex.split(value) if value else None,
     help="Additional MPI arguments (quoted)",
 )
+@click.option(
+    "--mock-cluster-rank-binding",
+    required=False,
+    type=click.Path(exists=True, path_type=Path),
+    help="Mock cluster rank binding configuration file (YAML)",
+)
 @click.pass_context
-def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, mpi_args: Optional[List[str]]) -> None:
+def main(
+    ctx: click.Context,
+    rank_binding: Path,
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: Optional[List[str]],
+    mock_cluster_rank_binding: Optional[Path],
+) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
     tt-run is a lightweight wrapper around `mpirun` that simplifies launching
@@ -262,11 +308,25 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
         - PYTHONPATH: User's home directory
         - LD_LIBRARY_PATH: `<USER_HOME>/build/lib`
 
+    \b
+    Mock testing:
+
+    For Control plane internal testing, we can use a mock cluster descriptor to initialize control plane without
+    any hardware dependencies. To enable mock cluster, use the --mock-cluster-rank-binding flag to specify the mock cluster descriptor mapping file.
+    The mock cluster descriptor mapping file is a YAML file that maps each rank to a mock cluster descriptor file.
+
+    Mock Cluster Rank Binding YAML Example:
+        rank_to_cluster_mock_cluster_desc:
+          - rank: 0
+            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_0.yaml"
+          - rank: 1
+            filename: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_dual_host_cluster_desc_rank_1.yaml"
+
     See examples/ttrun/ for example configuration files.
     """
     program = ctx.args
     try:
-        config = parse_binding_config(rank_binding)
+        config = parse_binding_config(rank_binding, mock_cluster_rank_binding)
     except (ValueError, ValidationError) as e:
         raise click.ClickException(f"Configuration error: {e}")
 

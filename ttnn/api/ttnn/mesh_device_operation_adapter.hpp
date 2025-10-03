@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
+#include <tt_stl/reflection.hpp>
 
 namespace ttnn::device_operation {
 
@@ -146,7 +147,7 @@ struct MeshDeviceOperationAdapter {
         // Hash the program hash and the tensor coordinates the workload is targeting.
         auto hash = compute_program_hash(attrs, tensor_args);
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args)) {
-            tt::utils::hash_combine(hash, coord);
+            ttsl::hash::hash_combine(hash, coord);
         }
         return hash;
     }

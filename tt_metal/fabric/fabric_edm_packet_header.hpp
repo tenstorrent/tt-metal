@@ -15,7 +15,7 @@
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #else
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #endif
 
 namespace tt::tt_fabric {

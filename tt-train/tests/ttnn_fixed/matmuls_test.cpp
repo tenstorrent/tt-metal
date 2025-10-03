@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,7 +28,8 @@ protected:
 
 namespace {
 
-xt::xarray<float> matmul(const xt::xarray<float>& a, const xt::xarray<float>& b, bool transpose_a, bool transpose_b) {
+[[maybe_unused]] xt::xarray<float> matmul(
+    const xt::xarray<float>& a, const xt::xarray<float>& b, bool transpose_a, bool transpose_b) {
     // Conditionally transpose the inputs
     auto A = transpose_a ? xt::transpose(a) : a;
     auto B = transpose_b ? xt::transpose(b) : b;
@@ -38,7 +39,7 @@ xt::xarray<float> matmul(const xt::xarray<float>& a, const xt::xarray<float>& b,
 
 // Backward pass for matrix multiplication.
 // Given out_grad = dL/dy, compute gradients with respect to a and b.
-std::pair<xt::xarray<float>, xt::xarray<float>> matmul_backward(
+[[maybe_unused]] std::pair<xt::xarray<float>, xt::xarray<float>> matmul_backward(
     const xt::xarray<float>& a,
     const xt::xarray<float>& b,
     const xt::xarray<float>& out_grad,

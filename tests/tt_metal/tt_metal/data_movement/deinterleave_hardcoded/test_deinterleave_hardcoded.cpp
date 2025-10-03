@@ -60,7 +60,7 @@ bool run_dm(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const D
 
     // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
     return true;
@@ -187,14 +187,14 @@ TEST_F(MeshDeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
 
             dest_core_runtime_args.push_back(0);                               // start_x
             dest_core_runtime_args.push_back(8);                               // end_x
-            dest_core_runtime_args.push_back(2 * (x % 4) + 0);                 // start_y
-            dest_core_runtime_args.push_back(2 * (x % 4) + 2);                 // end_y
+            dest_core_runtime_args.push_back((2 * (x % 4)) + 0);               // start_y
+            dest_core_runtime_args.push_back((2 * (x % 4)) + 2);               // end_y
             dest_core_runtime_args.push_back(384);                             // src_width_stride
             dest_core_runtime_args.push_back(36864);                           // src_height_offset_to_next
             dest_core_runtime_args.push_back(192 * y);                         // src_offset
             dest_core_runtime_args.push_back(12288);                           // dst_size_bytes
             dest_core_runtime_args.push_back(12288 * y);                       // dst_offset
-            dest_core_runtime_args.push_back(2 * (y % 4) + (x >= 4 ? 0 : 1));  // offset_x
+            dest_core_runtime_args.push_back((2 * (y % 4)) + (x >= 4 ? 0 : 1));                     // offset_x
             dest_core_runtime_args.push_back(x >= 4 ? offset_y_part2_count : offset_y_part_count);  // offset_y
             dest_core_runtime_args.push_back(16);                                                   // num_src_cores
             dest_core_runtime_args.push_back(x >= 4 ? 0 : 12288);  // dst_rollover_offset

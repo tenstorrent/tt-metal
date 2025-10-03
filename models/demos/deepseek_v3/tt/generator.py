@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.mla import MLA
 from models.demos.deepseek_v3.tt.model import Model
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE
+from models.demos.deepseek_v3.utils.config_helpers import MAX_BATCH_SIZE, get_weight_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import add_inv_scale_to_state_dict
@@ -74,7 +74,8 @@ class DeepseekGenerator:
 
         # Load HF config + tokenizer
         self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
-        self._ensure_max_seq_len(self.hf_config)
+        # self._ensure_max_seq_len(self.hf_config)
+        self.hf_config.max_seq_len = 4096  # TODO: Change this when needed?
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -96,9 +97,13 @@ class DeepseekGenerator:
 
         # Paged attention setup
         self.paged_config = MLA.get_valid_paged_config(self.hf_config.max_seq_len, MAX_BATCH_SIZE, self.dp_factor)
-        self.page_table_tt, _ = MLA.create_page_table(
-            MAX_BATCH_SIZE, dp_factor=self.dp_factor, config=self.paged_config, mesh_device=mesh_device
-        )
+        self.page_tables_tt = [
+            MLA.create_page_table(
+                paged_config=self.paged_config,
+                mesh_device=mesh_device,
+            )
+            for _ in range(self.hf_config.num_hidden_layers)
+        ]
         self.rope = RotarySetup(device=mesh_device, batch_size=MAX_BATCH_SIZE, hf_config=self.hf_config)
 
         # Prepare weights/configs
@@ -125,9 +130,8 @@ class DeepseekGenerator:
         hf_config.max_seq_len = 4096
 
     def _prepare_run_configs(self, cache_dir: str | Path | None) -> None:
-        cache_root = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
-        weights_out = cache_root / "weights"
-        weights_out.mkdir(parents=True, exist_ok=True)
+        weight_cache_path = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
+        weight_cache_path.mkdir(parents=True, exist_ok=True)
 
         if self.random_weights:
             if self.single_layer and self.single_layer.lower() == "moe":
@@ -144,46 +148,55 @@ class DeepseekGenerator:
                 torch_state,
                 block_shape=self.hf_config.quantization_config["weight_block_size"],
             )
-            stripped = _strip_model_prefix(torch_state)
             model_state = {
                 k: v
-                for k, v in stripped.items()
-                if k.startswith("embed_tokens.")
-                or k.startswith("layers.")
-                or k.startswith("norm.")
+                for k, v in torch_state.items()
+                if k.startswith("model.embed_tokens.")
+                or k.startswith("model.layers.")
+                or k.startswith("model.norm.")
                 or k.startswith("lm_head.")
             }
         else:
-            logger.info("Loading HF weights (this may take a while)...")
+            logger.info(f"Loading HF weights from {self.model_path} (this may take a while)...")
             hf_weights = load_model_weights(self.model_path)
             logger.info("HF weights loaded")
 
-            # Split weight dicts for Model and LMHead
-            stripped = _strip_model_prefix(hf_weights)
-            if "lm_head.weight" not in stripped:
+            if "lm_head.weight" not in hf_weights:
                 raise RuntimeError(
                     "No HF safetensors found in model path or missing 'lm_head.weight'. "
                     "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
                 )
             model_state = {
                 k: v
-                for k, v in stripped.items()
-                if k.startswith("embed_tokens.")
-                or k.startswith("layers.")
-                or k.startswith("norm.")
+                for k, v in hf_weights.items()
+                if k.startswith("model.embed_tokens.")
+                or k.startswith("model.layers.")
+                or k.startswith("model.norm.")
                 or k.startswith("lm_head.")
             }
         # Convert weights to TT tensors-on-disk and build weight_config
         logger.info("Converting weights to TTNN SavedWeight format (Model)...")
-        self.model_weight_config = Model.convert_weights(
-            self.hf_config, model_state, weights_out / "model_1d", self.mesh_device
-        )  # Build model and head decode configs + states
-        model_decode_cfg = Model.decode_model_config(self.hf_config, self.mesh_device)
-        model_state = Model.create_state(self.hf_config, self.mesh_device, paged_config=self.paged_config, ccl=self.ccl)
-        model_shared_state = Model.create_shared_state(self.hf_config, self.mesh_device)
+        self.model_weight_config = get_weight_config(
+            ModuleClass=Model,
+            hf_config=self.hf_config,
+            state_dicts=(model_state,),
+            weight_cache_path=weight_cache_path,
+            mesh_device=self.mesh_device,
+            force_recalculate=False,
+        )
+        logger.info("Building model decode config...")
+        model_decode_cfg = Model.decode_model_config(hf_config=self.hf_config, mesh_device=self.mesh_device)
+        logger.info("Creating model states...")
+        model_state = Model.create_state(
+            hf_config=self.hf_config, mesh_device=self.mesh_device, paged_config=self.paged_config, ccl=self.ccl
+        )
+        logger.info("Creating model shared states...")
+        model_shared_state = Model.create_shared_state(hf_config=self.hf_config, mesh_device=self.mesh_device)
+        logger.info("Creating model run config...")
         self.model_run_config = create_run_config(
             model_decode_cfg, self.model_weight_config, model_state, model_shared_state
         )
+        logger.info("Model run config created...")
 
     def _tt_from_tokens_step(self, tokens_step: torch.Tensor) -> ttnn.Tensor:
         """Tokens step: [B] -> TTNN tensor [1, 1, B] uint32, replicated to mesh."""
@@ -226,7 +239,11 @@ class DeepseekGenerator:
 
         # Model forward
         logits_tt = Model.forward_decode(
-            tt_tokens, tt_positions, rope_tensors, self.page_table_tt, self.model_run_config
+            tt_tokens,
+            tt_positions,
+            self.model_run_config,
+            rope_tensors,
+            self.page_tables_tt,
         )
         # Gather to host
         logits = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
@@ -297,6 +314,7 @@ class DeepseekGenerator:
         generations: List[List[int]] = [[] for _ in range(len(prompts))]
         for gen_idx in range(max_new_tokens):
             # Decode one step with previous next_tokens
+            logger.info(f"Generating token# {gen_idx}/{max_new_tokens}")
             logits = self._decode_step(next_tokens, positions)
             pred_tokens = self._sample_greedy(logits)
             if teacher_forcing is not None:

@@ -60,8 +60,8 @@ void add_sequential_port_pairs(
     }
     uint32_t num_pairs = total_ports / 2;
     for (uint32_t i = 0; i < num_pairs; ++i) {
-        uint32_t port_a = i * 2 + 1;
-        uint32_t port_b = i * 2 + 2;
+        uint32_t port_a = (i * 2) + 1;
+        uint32_t port_b = (i * 2) + 2;
         internal_connections[port_type].push_back({PortId(port_a), PortId(port_b)});
     }
 }
@@ -73,19 +73,6 @@ std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> create_inte
     std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>> internal_connections;
     add_sequential_port_pairs(internal_connections, port_type, ports);
     return internal_connections;
-}
-
-// Helper function to create both ports and internal connections efficiently
-std::pair<
-    std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>,
-    std::unordered_map<PortType, std::vector<std::pair<PortId, PortId>>>>
-create_ports_and_connections(
-    const std::function<std::unordered_map<PortType, std::unordered_map<PortId, std::vector<AsicChannel>>>()>&
-        ports_func,
-    PortType connection_port_type) {
-    auto ports = ports_func();
-    auto internal_connections = create_internal_connections_from_ports(ports, connection_port_type);
-    return {ports, internal_connections};
 }
 
 }  // anonymous namespace

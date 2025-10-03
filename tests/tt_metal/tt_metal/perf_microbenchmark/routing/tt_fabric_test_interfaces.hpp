@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -115,6 +115,10 @@ public:
 };
 
 class IDistributedContextManager {
+public:
+    virtual ~IDistributedContextManager() = default;
+
+private:
     virtual uint32_t get_randomized_master_seed() const = 0;
     virtual void barrier() const = 0;
 };

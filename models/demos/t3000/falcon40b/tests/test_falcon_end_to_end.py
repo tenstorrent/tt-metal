@@ -7,12 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import (
-    disable_persistent_kernel_cache,
-    enable_persistent_kernel_cache,
-    profiler,
-    skip_for_grayskull,
-)
+from models.common.utility_functions import disable_persistent_kernel_cache, enable_persistent_kernel_cache, profiler
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
@@ -379,7 +374,6 @@ def run_test_FalconCausalLM_end_to_end(
         assert does_pass
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
 @pytest.mark.parametrize(
     "llm_mode, batch, seq_len, kv_cache_len",

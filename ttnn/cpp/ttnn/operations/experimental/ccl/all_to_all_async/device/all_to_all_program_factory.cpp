@@ -15,7 +15,6 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -409,11 +408,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     const uint32_t packets_per_row = tt::div_up(input_shard_col_tiles, contig_pages_advanced);
     const uint32_t packets_per_device_shard = packets_per_row * input_shard_row_tiles;
     const uint32_t final_packet_id = packets_per_device_shard - 1;
-    const uint32_t final_packet_global_id = (ring_size - 2) + final_packet_id * (ring_size - 1);
+    const uint32_t final_packet_global_id = (ring_size - 2) + (final_packet_id * (ring_size - 1));
 
     const uint32_t final_packet_first_tile_id =
         (final_packet_global_id % N_DRAM_BANKS) +
-        contig_pages_advanced * N_DRAM_BANKS * (final_packet_global_id / N_DRAM_BANKS);
+        (contig_pages_advanced * N_DRAM_BANKS * (final_packet_global_id / N_DRAM_BANKS));
     const uint32_t final_packet_second_tile_id = final_packet_first_tile_id + N_DRAM_BANKS;
     TT_FATAL(
         final_packet_second_tile_id < intermediate_buffer.buffer()->num_pages(),

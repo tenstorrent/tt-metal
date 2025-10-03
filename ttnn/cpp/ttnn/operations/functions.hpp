@@ -54,7 +54,7 @@ static Tensor index_trilu(
         for (int32_t y = 0; y < padded_shape[penultimate]; y++) {
             for (int32_t x = 0; x < padded_shape[ultimate]; x++) {
                 int32_t value = (IS_UPPER) ? (x >= (y + diag)) : (y >= (x - diag));
-                output_buffer[index + y * padded_shape[ultimate] + x] = static_cast<T>(value);
+                output_buffer[index + (y * padded_shape[ultimate]) + x] = static_cast<T>(value);
             }  // dim X
         }  // dim Y
         index += offset;

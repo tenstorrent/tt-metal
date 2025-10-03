@@ -15,8 +15,9 @@ def golden_maxpool2d(
     channels: int,
     kernel_size: Tuple[int, int],
     stride: Tuple[int, int],
-    padding: Tuple[int, int],
+    padding,  # Can be Tuple[int, int] or List[int, int, int, int]
     dilation: Tuple[int, int],
+    ceil_mode: bool = False,
     **_,
 ):
     import torch
@@ -25,8 +26,29 @@ def golden_maxpool2d(
         0, 3, 1, 2
     )  # 1, 1, NHW, C -> N, C, H, W
 
+    if isinstance(padding, (list, tuple)) and len(padding) == 4:
+        # Apply padding using torch.nn.functional.pad with 4D format
+        # ttnn format: [pad_t, pad_b, pad_l, pad_r]
+        # torch.nn.functional.pad expects: [pad_left, pad_right, pad_top, pad_bottom]
+        pad_t, pad_b, pad_l, pad_r = padding
+        input_tensor = torch.nn.functional.pad(
+            input_tensor, (pad_l, pad_r, pad_t, pad_b), mode="constant", value=float("-inf")
+        )
+        torch_padding = 0  # No padding in max_pool2d since we already padded
+    elif isinstance(padding, (list, tuple)) and len(padding) == 2:
+        # Standard 2D padding format (pad_h, pad_w)
+        torch_padding = padding
+    else:
+        # Assume it's already in the correct format
+        torch_padding = padding
+
     output_tensor = torch.nn.functional.max_pool2d(
-        input_tensor, kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation
+        input_tensor,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=torch_padding,
+        dilation=dilation,
+        ceil_mode=ceil_mode,
     )
 
     N, C, H, W = output_tensor.shape

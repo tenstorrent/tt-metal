@@ -4,7 +4,6 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include "nlp_concat_heads_decode_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
@@ -25,7 +24,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t head_tiles = head_dim / TILE_WIDTH;
     uint32_t head_size = head_tiles * single_tile_size;
@@ -98,7 +97,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         uint32_t in_tile_offset_by_batch =
-            i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
+            i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
@@ -131,7 +130,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
             for (uint32_t i = 0; i < num_cores; ++i) {
                 uint32_t in_tile_offset_by_batch =
-                    i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
+                    i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
                 const auto& core = cores[i];
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = in_tile_offset_by_batch;
@@ -158,7 +157,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
-    const uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    const uint32_t single_tile_size = tt::tile_size(cb_data_format);
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     auto tile_h = tile_shape[0];
     auto tile_w = tile_shape[1];
@@ -240,7 +239,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(2 + 2 * in_num_cores);
+        reader_runtime_args.reserve(2 + (2 * in_num_cores));
         reader_runtime_args = {
             in_tile_offset_by_batch,
             q_start_addr,

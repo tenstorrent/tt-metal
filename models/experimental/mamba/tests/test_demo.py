@@ -6,11 +6,9 @@ import pytest
 
 from models.experimental.mamba.demo.demo import run_demo
 from models.experimental.mamba.reference.decode_model import MambaPretrainedModelName
-from models.common.utility_functions import skip_for_grayskull
 
 
 @pytest.mark.skip(reason="Test failing, see issue #7551")
-@skip_for_grayskull("Not supported on Grayskull")
 @pytest.mark.parametrize(
     "model_version, batch, genlen",
     (

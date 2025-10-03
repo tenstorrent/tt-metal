@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -96,7 +96,8 @@ Result conv1d(
             conv_config,
             compute_config,
             memory_config,
-            std::nullopt,
+            Conv2dSliceConfig{
+                .slice_type = Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
             true,
             true));
 

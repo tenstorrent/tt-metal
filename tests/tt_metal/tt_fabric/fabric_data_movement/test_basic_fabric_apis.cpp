@@ -41,7 +41,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 
 namespace tt::tt_fabric {
@@ -259,6 +258,13 @@ void RunSetUnicastRouteTest(BaseFabricFixture* fixture, bool is_multi_mesh = fal
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());
+            if (!is_2d_fabric && std::abs(
+                                     static_cast<long>(src_fabric_node_id.chip_id) -
+                                     static_cast<long>(dst_fabric_node_id.chip_id)) >= MAX_CHIPS_LOWLAT_1D) {
+                // Skip 1D route buffer comparison if src and dst are more than 16 chips apart
+                continue;
+            }
+
             uint32_t result_offset = dst_idx * RESULT_SIZE_PER_DEVICE;
             // Compare route buffers
             bool route_buffers_match = true;
@@ -1204,12 +1210,7 @@ TEST_F(Fabric1DFixture, TestSetUnicastRoute) {
 }
 
 // 1 mesh all-to-all
-TEST_F(Fabric2DFixture, TestSetUnicastRoute) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
-        GTEST_SKIP() << "Test applicable only on T3K";
-    }
-    RunSetUnicastRouteTest(this, false);
-}
+TEST_F(Fabric2DFixture, TestSetUnicastRoute) { RunSetUnicastRouteTest(this, false); }
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

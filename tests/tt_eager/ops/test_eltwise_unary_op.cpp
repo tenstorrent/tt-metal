@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cmath>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -101,7 +101,7 @@ bool run_test(MeshDevice* device, const ttnn::Shape& shape, float low, float hig
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::LOG) {
         auto host_output = host_function<::detail::log>(input_tensor);
-        auto device_output = ttnn::log(input_tensor.to_device(device)).cpu();
+        auto device_output = ttnn::log(input_tensor.to_device(device), /*fast_and_approximate_mode=*/true).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::TANH) {
         auto host_output = host_function<::detail::tanh>(input_tensor);

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023-2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023-2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -112,7 +112,7 @@ int main() {
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
         // Add the program to the workload for the mesh.
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        workload.add_program(device_range, std::move(program));
         // Enqueue the workload for execution on the mesh (non-blocking) and wait for completion before reading back.
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
         distributed::Finish(cq);

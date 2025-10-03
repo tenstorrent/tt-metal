@@ -13,7 +13,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -39,7 +38,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -58,14 +57,13 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 using std::vector;
 using namespace tt;
 ////////////////////////////////////////////////////////////////////////////////
 // This benchmark measures the compute performance of matmul. When in the slow
 // dispatch mode, it uses LaunchProgram API and measures performance via device
-// profiler. In the fast dispatch mode, it uses EnqueueProgram API and measures
+// profiler. In the fast dispatch mode, it uses EnqueueMeshWorkload API and measures
 // the execution time. Regarding kernels, the compute kernel used
 // “bmm_large_block_zm_fused_bias_activation.cpp” as is and the data movement
 // kernels were implemented with reference to kernels of
@@ -360,7 +358,7 @@ int main(int argc, char** argv) {
         if (single_core) {
             data_format = dtype == 0 ? tt::DataFormat::Bfp8_b : tt::DataFormat::Float16_b;
         }
-        uint32_t single_tile_size = tt_metal::detail::TileSize(data_format);
+        uint32_t single_tile_size = tt::tile_size(data_format);
         TT_ASSERT(single_tile_size == (dtype == 0 ? (256 * 4) + (16 * 4) : 2048));
 
         auto grid_size = device->compute_with_storage_grid_size();
@@ -371,8 +369,8 @@ int main(int argc, char** argv) {
 
         uint32_t num_cores_y = grid_size.y;
         uint32_t num_cores_x = grid_size.x;
-        uint32_t per_core_Mt = (Mt - 1) / num_cores_y + 1;
-        uint32_t per_core_Nt = (Nt - 1) / num_cores_x + 1;
+        uint32_t per_core_Mt = ((Mt - 1) / num_cores_y) + 1;
+        uint32_t per_core_Nt = ((Nt - 1) / num_cores_x) + 1;
         uint32_t in0_block_w =
             get_in0_block_w(per_core_Mt, per_core_Nt, Kt, single_tile_size, l1_size, l1_unreserved_base);
         if (in0_block_w == 0) {
@@ -386,8 +384,8 @@ int main(int argc, char** argv) {
             TT_ASSERT(false);
         }
 
-        uint32_t num_blocks_y = (Mt - 1) / per_core_Mt + 1;
-        uint32_t num_blocks_x = (Nt - 1) / per_core_Nt + 1;
+        uint32_t num_blocks_y = ((Mt - 1) / per_core_Mt) + 1;
+        uint32_t num_blocks_x = ((Nt - 1) / per_core_Nt) + 1;
         uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
         TT_ASSERT(num_blocks_total <= num_cores_x * num_cores_y);
         CoreCoord core_range = get_core_range(num_blocks_y, num_blocks_x, num_cores_y, num_cores_x);
@@ -604,9 +602,8 @@ int main(int argc, char** argv) {
 
         log_info(LogTest, "Num tests {}", num_tests);
         // Create MeshWorkload
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         for (uint32_t i = 0; i < num_tests; ++i) {
             if (!fast_dispatch_mode) {
@@ -636,7 +633,7 @@ int main(int argc, char** argv) {
                 tt_metal::distributed::Finish(device->mesh_command_queue());
                 auto t_end = std::chrono::high_resolution_clock::now();
                 log_debug(LogTest, "EnqueueMeshWorkload done");
-                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+                tt_metal::ReadMeshDeviceProfilerResults(*device);
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end =
@@ -1265,8 +1262,8 @@ tt_metal::Program create_program(
     // Parameters for last row, col, or block
     uint32_t last_block_h = Mt % per_core_Mt == 0 ? per_core_Mt : Mt % per_core_Mt;
     uint32_t last_block_w = Nt % per_core_Nt == 0 ? per_core_Nt : Nt % per_core_Nt;
-    uint32_t last_block_num_nonzero_subblocks_h = (last_block_h - 1) / out_subblock_h + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = (last_block_w - 1) / out_subblock_w + 1;
+    uint32_t last_block_num_nonzero_subblocks_h = ((last_block_h - 1) / out_subblock_h) + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_block_w - 1) / out_subblock_w) + 1;
     uint32_t last_subblock_of_last_block_h =
         last_block_h % out_subblock_h == 0 ? out_subblock_h : last_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w =
@@ -1420,7 +1417,7 @@ std::vector<T> get_col_slice(std::vector<T> data, int start_col_index, int num_c
     std::vector<T> result;
     for (int r = 0; r < rows; r++) {
         for (int c = start_col_index; c < (start_col_index + num_cols); c++) {
-            result.push_back(data.at(r * cols + c));
+            result.push_back(data.at((r * cols) + c));
         }
     }
     return result;
@@ -1472,7 +1469,7 @@ void prepare_inputs(
             std::vector<float> in1_block_slice(in0_block_w * num_c * 1024, (float)0);
             int num_ones = std::min(in0_block_w, static_cast<uint32_t>(num_c)) * 32;
             for (int i = 0; i < num_ones; i++) {
-                in1_block_slice.at(i * (num_c * 32) + i) = (float)1;
+                in1_block_slice.at((i * (num_c * 32)) + i) = (float)1;
             }
 
             auto in1_block_tilized = tilize_swizzled(in1_block_slice, in0_block_w * 32, num_c * 32);
@@ -1520,9 +1517,9 @@ bool validation_single_core(
         for (size_t j = 0; j < Nt * 32; ++j) {
             float sum = 0;
             for (size_t k = 0; k < Kt * 32; ++k) {
-                sum += to_float(values0[i * Kt * 32 + k]) * to_float(values1[k * Nt * 32 + j]);
+                sum += to_float(values0[(i * Kt * 32) + k]) * to_float(values1[(k * Nt * 32) + j]);
             }
-            golden_vec[i * Nt * 32 + j] = sum * num_blocks;
+            golden_vec[(i * Nt * 32) + j] = sum * num_blocks;
         }
     }
 
@@ -1568,9 +1565,9 @@ bool validation_single_core_fp8(
         for (size_t j = 0; j < Nt * 32; ++j) {
             float sum = 0;
             for (size_t k = 0; k < Kt * 32; ++k) {
-                sum += values0[i * Kt * 32 + k] * values1[k * Nt * 32 + j];
+                sum += values0[(i * Kt * 32) + k] * values1[(k * Nt * 32) + j];
             }
-            golden_vec[i * Nt * 32 + j] = sum * num_blocks;
+            golden_vec[(i * Nt * 32) + j] = sum * num_blocks;
         }
     }
 
@@ -1624,7 +1621,7 @@ bool validation(
             auto result_flat_layout = unpack_bfp8_tiles_into_float_vec(result_vec, true, false);
             auto result_untilized = untilize_swizzled(result_flat_layout, num_r * 32, num_c * 32);
 
-            uint32_t num_patterns = (num_c - 1) / in0_block_w + 1;
+            uint32_t num_patterns = ((num_c - 1) / in0_block_w) + 1;
             uint32_t last_remain_c = num_c % in0_block_w == 0 ? in0_block_w : num_c % in0_block_w;
 
             for (int32_t i = 0; i < num_patterns; ++i) {

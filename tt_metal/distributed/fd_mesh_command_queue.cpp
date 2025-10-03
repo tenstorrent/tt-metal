@@ -18,7 +18,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "device.hpp"
@@ -71,7 +71,7 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
-MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
+[[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
         if (mesh_device->is_local(coord)) {
             return coord;

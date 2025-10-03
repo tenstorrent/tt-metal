@@ -10,8 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
-
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_i1_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::i1, APPROXIMATE>();

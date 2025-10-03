@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -87,7 +87,7 @@ Transformer::Transformer(const TransformerConfig &config) {
     auto create_positional_embedding = [position_embedding_type,
                                         max_sequence_length,
                                         embedding_dim,
-                                        dropout_prob]() -> std::shared_ptr<autograd::ModuleBase> {
+                                        dropout_prob]() -> std::shared_ptr<modules::ModuleBase> {
         if (position_embedding_type == PositionalEmbeddingType::Trainable) {
             return std::make_shared<ttml::modules::TrainablePositionalEmbedding>(
                 ttml::modules::PositionalEmbeddingConfig{

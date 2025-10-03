@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -149,11 +149,11 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     auto e_data_format =
         running_var_has_value ? datatype_to_dataformat_converter(running_var_tensor->dtype()) : DataFormat::Float16_b;
 
-    uint32_t a_single_tile_size = tt_metal::detail::TileSize(a_data_format);
-    uint32_t b_single_tile_size = tt_metal::detail::TileSize(b_data_format);
-    uint32_t c_single_tile_size = tt_metal::detail::TileSize(c_data_format);
-    uint32_t d_single_tile_size = tt_metal::detail::TileSize(d_data_format);
-    uint32_t e_single_tile_size = tt_metal::detail::TileSize(e_data_format);
+    uint32_t a_single_tile_size = tt::tile_size(a_data_format);
+    uint32_t b_single_tile_size = tt::tile_size(b_data_format);
+    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
+    uint32_t d_single_tile_size = tt::tile_size(d_data_format);
+    uint32_t e_single_tile_size = tt::tile_size(e_data_format);
 
     // we parallelize the computation across the output tiles
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();

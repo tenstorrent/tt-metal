@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"

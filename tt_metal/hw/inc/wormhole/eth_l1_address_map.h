@@ -24,7 +24,7 @@ struct address_map {
     // active/idle eth cores have very different mem maps
     // Reserve some space at the end of l1 for l1_barrier
     static constexpr std::int32_t ERISC_BARRIER_SIZE = 32;
-    static constexpr std::int32_t MAX_SIZE = 256 * 1024 - ERISC_BARRIER_SIZE;
+    static constexpr std::int32_t MAX_SIZE = (256 * 1024) - ERISC_BARRIER_SIZE;
 
     // Sizes
     static constexpr std::int32_t APP_FIRMWARE_SIZE = 32 * 1024;
@@ -38,7 +38,7 @@ struct address_map {
 
     // Kernel config buffer is WIP
     // Size is presently based on the old sizes of the RTAs + CB config + Sems
-    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 16 * 16;
+    static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = (96 * 4) + (16 * 16);
 
     // Base addresses
     static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
@@ -74,7 +74,7 @@ struct address_map {
     // CONFIG SPACE starting from MAX_L1_LOADING_ADDR to MAX_SIZE
     static constexpr std::int32_t MAX_NUM_CONCURRENT_TRANSACTIONS = 8;
     static constexpr std::int32_t ERISC_APP_ROUTING_INFO_SIZE = 48;
-    static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 160 + 16 * MAX_NUM_CONCURRENT_TRANSACTIONS;
+    static constexpr std::int32_t ERISC_APP_SYNC_INFO_SIZE = 160 + (16 * MAX_NUM_CONCURRENT_TRANSACTIONS);
 
     static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = MAX_L1_LOADING_ADDR;
     static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ class MeshWorkloadImpl;
 
 namespace inspector {
 class Data;
-class RpcServer;
+class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
 }
 
 class Inspector {
