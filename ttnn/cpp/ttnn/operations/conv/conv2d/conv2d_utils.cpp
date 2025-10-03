@@ -724,14 +724,11 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     input_tensor = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
 
     if (needs_shard_or_reshard) {
-        uint32_t padding_needed = tt::round_up(flattened_input_shape[3], 8) - flattened_input_shape[3];
-        if (padding_needed && !is_mm_conv) {
+        uint32_t padding_needed =
+            tt::round_up(flattened_padded_input_shape[3], tt::tt_metal::hal::get_l1_alignment() / 2) -
+            flattened_padded_input_shape[3];
+        if (padding_needed && !is_mm_conv && !input_tensor.is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
-            log_info(
-                tt::LogOp,
-                "Padding input tensor channels from {} to {} for alignment",
-                flattened_input_shape[3],
-                padding_needed + flattened_input_shape[3]);
             input_tensor = ttnn::pad(input_tensor, pad_spec, 0.0f);
         }
 
@@ -1014,7 +1011,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     if (width.size < winning_config.size && !is_mm_conv) {
         winning_config = width;
     }
-
 
     log_trace(
         tt::LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);

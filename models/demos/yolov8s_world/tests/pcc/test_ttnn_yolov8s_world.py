@@ -149,8 +149,6 @@ def test_sppf(device, input_tensor, use_pretrained_weight, reset_seeds, model_lo
     ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     ttnn_input = ttnn.permute(ttnn_input, (0, 2, 3, 1))
 
-    ttnn_input = ttnn.from_device(ttnn_input)
-
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device)
     )
