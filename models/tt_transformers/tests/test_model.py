@@ -90,9 +90,7 @@ def test_model_inference(
             pytest.skip("Skipping Phi-3-mini-128k-instruct for single layer dummy weights test.")
 
         if ("Llama" in model_name_env) and ("Vision" in model_name_env) and (weights == "instruct"):
-            pytest.skip(
-                "Skipping Llama Vision full model test for now. See issue TBD: create issue about CrossAttn functionality"
-            )
+            pytest.skip("Skipping Llama Vision full model test: no CrossAttention functionality in this test.")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b

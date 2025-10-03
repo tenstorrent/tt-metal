@@ -1509,9 +1509,6 @@ class ModelArgs:
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
-        # multimodal llama additionally adds cross attention layers
-        # they are calculated in HF but not calculated in Meta
-        self.n_layers -= len(text_config.get("cross_attention_layers", ()))
 
         self.sliding_window_pattern = (
             [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
@@ -2527,7 +2524,7 @@ class ModelArgs:
                 # We keep language_model because transformers don't let us change or delete it
             model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
-                wrapper = HfModelWrapper(model, self.head_dim)
+                wrapper = HfModelWrapper(model, self.head_dim, config=self.hf_config)
                 return wrapper
             else:
                 return model
@@ -2842,11 +2839,12 @@ class HfDecoderWrapper:
 
 
 class HfModelWrapper:
-    def __init__(self, model, head_dim):
+    def __init__(self, model, head_dim, config=None):
         from transformers import DynamicCache
 
         self.model = model
         self.head_dim = head_dim
+        self.config = config
         self.past_key_values = DynamicCache()
 
     def forward(self, inputs_embeds, start_pos, mode="decode"):
@@ -2873,7 +2871,9 @@ class HfModelWrapper:
             fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
         except:
             fuse_qkv, fuse_mlp = False, False
-        return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
+        return self.model.load_state_dict(
+            convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp, self.config)
+        )
 
     def eval(self):
         self.model.eval()
