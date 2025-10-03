@@ -8,6 +8,8 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
+target_compile_options(fabric PUBLIC -Wno-int-to-pointer-cast -fno-semantic-interposition)
+
 target_sources(
     fabric
     PUBLIC
