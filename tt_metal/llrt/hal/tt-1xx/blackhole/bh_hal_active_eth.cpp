@@ -30,6 +30,40 @@ namespace active_eth_dev_msgs {
 #include "hal/generated/dev_msgs_impl.hpp"
 }
 
+std::vector<std::vector<HalJitBuildConfig>> configure_for_1erisc() {
+    return {
+        // DM
+        {
+            // ERISC0
+            {.fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = SUBORDINATE_AERISC_RESET_PC,
+             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        },
+    };
+}
+
+std::vector<std::vector<HalJitBuildConfig>> configure_for_2erisc() {
+    return {
+        // DM
+        {
+            // ERISC0
+            {.fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = MEM_AERISC_VOID_LAUNCH_FLAG,
+             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+            // ERISC1
+            {.fw_base_addr = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE,
+             .local_init_addr = MEM_SUBORDINATE_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
+             .fw_launch_addr = SUBORDINATE_AERISC_RESET_PC,
+             .fw_launch_addr_value = MEM_SUBORDINATE_AERISC_FIRMWARE_BASE,
+             .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
+        },
+    };
+}
+
 HalCoreInfoType create_active_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
 
@@ -110,19 +144,14 @@ HalCoreInfoType create_active_eth_mem_map() {
     fw_mailbox_addr[ttsl::as_underlying_type<FWMailboxMsg>(FWMailboxMsg::PORT_STATUS)] =
         (uint64_t)&((eth_status_t*)MEM_SYSENG_ETH_STATUS)->port_status;
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {
-        // DM
-        {
-            // BH active ethernet runs idle erisc FW on the second ethernet
-            // TODO: add config for ERISC0
-            // ERISC1
-            {.fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
-             .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-             .fw_launch_addr = SUBORDINATE_IERISC_RESET_PC,
-             .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
-             .memory_load = ll_api::memory::Loading::CONTIGUOUS},
-        },
-    };
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes;
+    // rtoptions not included in here due to circular dependency
+    if (is_2_erisc_mode()) {
+        processor_classes = configure_for_2erisc();
+    } else {
+        processor_classes = configure_for_1erisc();
+    }
+
     static_assert(sizeof(mailboxes_t) <= MEM_AERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::ACTIVE_ETH,

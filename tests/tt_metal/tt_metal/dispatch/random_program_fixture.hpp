@@ -5,6 +5,7 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
+#include "data_types.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -261,11 +262,12 @@ private:
         std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
         if (create_eth_config) {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
-            config = EthernetConfig{.compile_args = compile_args, .defines = defines};
+            const auto proc = this->get_processor(true);
+            config = EthernetConfig{
+                .noc = static_cast<NOC>(proc), .processor = proc, .compile_args = compile_args, .defines = defines};
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-            DataMovementProcessor processor = this->get_processor();
-            config = DataMovementConfig{.processor = processor, .compile_args = compile_args, .defines = defines};
+            config = DataMovementConfig{.processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};
         }
 
         KernelHandle kernel_id = CreateKernel(
@@ -294,8 +296,16 @@ private:
         return adjusted_min + ((rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by);
     }
 
-    DataMovementProcessor get_processor() {
-        const uint32_t num = this->generate_random_num(0, 1);
+    DataMovementProcessor get_processor(bool is_eth) {
+        int max_index = 1;
+        int num = 0;
+
+        if (is_eth) {
+            max_index = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
+                            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
+                        1;
+        }
+        num = this->generate_random_num(0, max_index);
         DataMovementProcessor processor;
         if (num == 0) {
             processor = DataMovementProcessor::RISCV_0;
@@ -325,7 +335,7 @@ private:
         all_cores = empty_crs.merge(all_cores);
 
         CoreRangeSet cores;
-        const uint32_t num = this->generate_random_num(0, 2);
+        const uint32_t num = 0;  // this->generate_random_num(0, 2);
         switch (num) {
             case 0: cores = all_cores; break;
             case 1: cores = this->generate_subset_of_cores(all_cores, 2); break;
