@@ -516,6 +516,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     bool posted = false,
     uint32_t trid = 0) {
     if constexpr (!one_packet) {
+        // For unicast, use posted for initial transactions, because we use static VCs so writes will land in order, so barriering on the last transaction will wait for all.
+        // Use initial settings for mcast, because posted mcasts can cause hangs.
+        bool post_initial_transactions = !mcast || posted;
         while (len_bytes > NOC_MAX_BURST_SIZE) {
             while (!noc_cmd_buf_ready(noc, cmd_buf));
             ncrisc_noc_fast_write<noc_mode, use_trid>(
@@ -529,7 +532,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
                 linked,
                 num_dests,
                 multicast_path_reserve,
-                posted,
+                post_initial_transactions,
                 trid);
             src_addr += NOC_MAX_BURST_SIZE;
             dest_addr += NOC_MAX_BURST_SIZE;
