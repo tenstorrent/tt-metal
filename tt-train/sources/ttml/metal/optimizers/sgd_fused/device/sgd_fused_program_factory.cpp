@@ -96,7 +96,7 @@ void assign_per_core_runtime_args(
         } else if (core_group_2.contains(core)) {
             num_rows_per_core = num_rows_per_core_group_2;
         } else {
-            TT_FATAL(false, "Core not in specified core ranges");
+            TT_THROW("Core {} not in specified core ranges", core);
         }
 
         // Reader kernel: (param_addr, grad_addr, momentum_buffer_addr, number_of_rows, offset_in_rows)
@@ -111,16 +111,16 @@ void assign_per_core_runtime_args(
              num_rows_written});
 
         // Compute kernel: (learning_rate)
-        SetRuntimeArgs(
-            program,
-            kernels.compute_group_1,
-            core,
-            {std::bit_cast<uint32_t>(lr),
-             std::bit_cast<uint32_t>(momentum),
-             std::bit_cast<uint32_t>(1.0f - dampening),
-             std::bit_cast<uint32_t>(weight_decay)});
-
-        if (!core_group_2.ranges().empty()) {
+        if (core_group_1.contains(core)) {
+            SetRuntimeArgs(
+                program,
+                kernels.compute_group_1,
+                core,
+                {std::bit_cast<uint32_t>(lr),
+                 std::bit_cast<uint32_t>(momentum),
+                 std::bit_cast<uint32_t>(1.0f - dampening),
+                 std::bit_cast<uint32_t>(weight_decay)});
+        } else if (core_group_2.contains(core)) {
             SetRuntimeArgs(
                 program,
                 kernels.compute_group_2,
@@ -129,6 +129,8 @@ void assign_per_core_runtime_args(
                  std::bit_cast<uint32_t>(momentum),
                  std::bit_cast<uint32_t>(1.0f - dampening),
                  std::bit_cast<uint32_t>(weight_decay)});
+        } else {
+            TT_THROW("Core {} not in specified core ranges", core);
         }
 
         // Writer kernel: (dst_addr, momentum_buffer_addr, number_of_rows, offset_in_rows)
@@ -367,6 +369,8 @@ void SGDFusedProgramFactory::override_runtime_arguments(
             runtime_args[kMomentumIdx] = std::bit_cast<uint32_t>(momentum);
             runtime_args[kDampeningIdx] = std::bit_cast<uint32_t>(1.0f - dampening);
             runtime_args[kWeightDecayIdx] = std::bit_cast<uint32_t>(weight_decay);
+        } else {
+            TT_THROW("Core {} not in specified core ranges", core);
         }
         // Update output buffer for the writer kernel
         {
