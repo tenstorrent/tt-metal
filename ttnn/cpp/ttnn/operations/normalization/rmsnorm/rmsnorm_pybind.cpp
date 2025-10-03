@@ -81,6 +81,9 @@ void bind_normalization_rms_norm(py::module& module) {
                * - BFLOAT16, FLOAT32, BFLOAT8_B (matching input)
                  - TILE
 
+        Memory Support:
+            - Interleaved: DRAM and L1
+
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded inputs cannot be height-sharded.

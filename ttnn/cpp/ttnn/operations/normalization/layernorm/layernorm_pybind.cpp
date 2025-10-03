@@ -120,13 +120,18 @@ void bind_normalization_layernorm_operation(py::module& module) {
 
             Output dtype typically matches input; PRE_ALL_GATHER produces BF16
 
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded (L1): Block sharded
+
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
+            - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
             - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
-            - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
+
 
         Example:
             .. code-block:: python
