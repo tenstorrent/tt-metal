@@ -576,8 +576,7 @@ private:
                 }
 
                 if (!pairs.empty()) {
-                    bool cycles_found =
-                        tt::tt_fabric::fabric_tests::detect_cycles_in_traffic(pairs, route_manager_, test.name);
+                    bool cycles_found = tt::tt_fabric::fabric_tests::detect_cycles(pairs, route_manager_, test.name);
 
                     if (cycles_found) {
                         all_tests_cycle_free = false;

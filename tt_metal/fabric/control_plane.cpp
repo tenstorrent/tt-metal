@@ -1441,8 +1441,10 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
 }
 
 bool ControlPlane::detect_inter_mesh_cycles(
-    const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs, const std::string& test_name) const {
-    // Type aliases for cycle detection
+    const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs,
+    std::vector<std::vector<FabricNodeId>>& output_cycles,
+    const std::string& test_name) const {
+    // Type aliases for node-level cycle detection
     using NodeGraph = std::unordered_map<FabricNodeId, std::vector<FabricNodeId>>;
     using CyclePath = std::vector<FabricNodeId>;
     enum class DFSState { UNVISITED, VISITING, VISITED };
@@ -1454,15 +1456,15 @@ bool ControlPlane::detect_inter_mesh_cycles(
 
     log_debug(tt::LogFabric, "Detecting cycles in {} traffic pairs for test '{}'", traffic_pairs.size(), test_name);
 
-    // Enhanced: Track which flows use which edges to distinguish bidirectional traffic from true cycles
-    struct DirectedEdge {
+    // Track which flows use which node edges for filtering bidirectional traffic
+    struct DirectedNodeEdge {
         FabricNodeId from;
         FabricNodeId to;
-        bool operator==(const DirectedEdge& other) const { return from == other.from && to == other.to; }
+        bool operator==(const DirectedNodeEdge& other) const { return from == other.from && to == other.to; }
     };
 
-    struct EdgeHash {
-        std::size_t operator()(const DirectedEdge& edge) const {
+    struct NodeEdgeHash {
+        std::size_t operator()(const DirectedNodeEdge& edge) const {
             auto h1 = std::hash<uint32_t>{}(*edge.from.mesh_id);
             auto h2 = std::hash<uint32_t>{}(edge.from.chip_id);
             auto h3 = std::hash<uint32_t>{}(*edge.to.mesh_id);
@@ -1471,54 +1473,54 @@ bool ControlPlane::detect_inter_mesh_cycles(
         }
     };
 
-    // Track which flows use which edges for accurate cycle detection
-    std::unordered_map<DirectedEdge, std::vector<std::pair<FabricNodeId, FabricNodeId>>, EdgeHash> edge_to_flows;
+    // Track which flows use which node edges for accurate cycle detection
+    std::unordered_map<DirectedNodeEdge, std::vector<std::pair<FabricNodeId, FabricNodeId>>, NodeEdgeHash>
+        edge_to_flows;
     NodeGraph routing_graph;
 
     for (const auto& [src, dest] : traffic_pairs) {
         try {
-            // IMPORTANT: Routes are channel-specific. In topologies with limited inter-mesh connectivity,
-            // not all devices have routes on all channels. We need to check multiple channels to get
-            // a complete routing picture for cycle detection.
-            std::vector<std::pair<FabricNodeId, chan_id_t>> route;
+            // Get routing path by trying available channels
+            // We only need the node sequence, not channel details
+            std::vector<std::pair<FabricNodeId, chan_id_t>> route_with_channels;
 
             // Try to find a valid route on any available channel
-            // Get the ethernet channels available for this source device
             auto active_channels = this->get_active_fabric_eth_channels(src);
             bool route_found = false;
 
             for (const auto& [chan_id, chan_direction] : active_channels) {
-                route = get_fabric_route(src, dest, chan_id);
-                if (!route.empty()) {
+                route_with_channels = get_fabric_route(src, dest, chan_id);
+                if (!route_with_channels.empty()) {
                     route_found = true;
                     break;  // Found a valid route, use it for cycle detection
                 }
             }
 
             // If no route found on any channel, skip this pair
-            if (!route_found || route.empty()) {
+            if (!route_found || route_with_channels.empty()) {
                 log_trace(tt::LogFabric, "No route found on any channel for {}->{} during cycle detection", src, dest);
                 continue;
             }
 
-            // Convert route to node-only path (ignore channels for cycle detection)
-            std::vector<FabricNodeId> path;
-            for (const auto& [node, channel] : route) {
-                path.push_back(node);
+            // Extract node path (discard channel information)
+            std::vector<FabricNodeId> node_path;
+            node_path.reserve(route_with_channels.size());
+            for (const auto& [node, channel] : route_with_channels) {
+                node_path.push_back(node);
             }
 
-            // Add edges to routing graph AND track which flow uses each edge
-            for (size_t i = 0; i < path.size() - 1; ++i) {
-                FabricNodeId current_node = path[i];
-                FabricNodeId next_node = path[i + 1];
+            // Add node edges to routing graph AND track which flow uses each edge
+            for (size_t i = 0; i < node_path.size() - 1; ++i) {
+                const FabricNodeId& current_node = node_path[i];
+                const FabricNodeId& next_node = node_path[i + 1];
 
                 // Skip self-loops (don't represent actual deadlock conditions)
                 if (current_node == next_node) {
                     continue;
                 }
 
-                // Track which flow uses this edge
-                DirectedEdge edge{current_node, next_node};
+                // Track which flow uses this node edge
+                DirectedNodeEdge edge{current_node, next_node};
                 edge_to_flows[edge].push_back({src, dest});
 
                 // Avoid duplicate edges in routing graph
@@ -1545,7 +1547,7 @@ bool ControlPlane::detect_inter_mesh_cycles(
         return false;
     }
 
-    // DFS cycle detection function
+    // DFS cycle detection function for node graph
     std::function<bool(
         const NodeGraph&,
         FabricNodeId,
@@ -1592,7 +1594,7 @@ bool ControlPlane::detect_inter_mesh_cycles(
         return found_cycle;
     };
 
-    // Detect cycles using DFS
+    // Detect cycles using DFS on node graph
     std::vector<CyclePath> cycles;
     std::unordered_map<FabricNodeId, DFSState> state;
 
@@ -1612,85 +1614,73 @@ bool ControlPlane::detect_inter_mesh_cycles(
         }
     }
 
-    // Filter out false positive cycles caused by bidirectional intermesh traffic
-    // A cycle is a FALSE POSITIVE only if it represents a DIRECT bidirectional intermesh link
-    // with different flows using opposite directions AND the flows are simple point-to-point
+    // Filter out false positive cycles
     std::vector<CyclePath> true_cycles;
     for (const auto& cycle : cycles) {
         bool is_false_positive = false;
 
-        // Check if this is a simple 2-node bidirectional cycle (A->B->A) between different meshes
-        if (cycle.size() == 3 && cycle[0] == cycle[2]) {
-            FabricNodeId node_a = cycle[0];
-            FabricNodeId node_b = cycle[1];
+        // FILTER 1: Intra-mesh cycles (all hops within the same mesh)
+        // We only care about inter-mesh cycles since intra-mesh uses dimension-ordered routing (cycle-free)
+        bool is_intra_mesh_cycle = true;
+        if (!cycle.empty()) {
+            MeshId first_mesh_id = cycle[0].mesh_id;
+            for (const auto& node : cycle) {
+                if (node.mesh_id != first_mesh_id) {
+                    is_intra_mesh_cycle = false;
+                    break;
+                }
+            }
+        }
 
-            // Only consider filtering if this is a DIRECT intermesh connection (different meshes)
-            if (node_a.mesh_id != node_b.mesh_id) {
-                DirectedEdge forward{node_a, node_b};
-                DirectedEdge reverse{node_b, node_a};
+        if (is_intra_mesh_cycle) {
+            is_false_positive = true;
+            if (!cycle.empty()) {
+                log_debug(
+                    tt::LogFabric,
+                    "Filtering out intra-mesh cycle (mesh {}, {} nodes) - only inter-mesh cycles are relevant",
+                    *cycle[0].mesh_id,
+                    cycle.size());
+            }
+        }
 
-                // Check if these edges are used by different flows (no contention)
-                auto forward_it = edge_to_flows.find(forward);
-                auto reverse_it = edge_to_flows.find(reverse);
+        // FILTER 2: Simple 2-node bidirectional cycle (A->B->A)
+        // If different flows use opposite directions, it's NOT a deadlock - they have independent paths
+        if (!is_false_positive && cycle.size() == 3 && cycle[0] == cycle[2]) {
+            const FabricNodeId& node_a = cycle[0];
+            const FabricNodeId& node_b = cycle[1];
 
-                if (forward_it != edge_to_flows.end() && reverse_it != edge_to_flows.end()) {
-                    // Check if any flow uses BOTH edges (that would be a real cycle)
-                    bool same_flow_uses_both = false;
-                    for (const auto& forward_flow : forward_it->second) {
-                        for (const auto& reverse_flow : reverse_it->second) {
-                            if (forward_flow == reverse_flow) {
-                                same_flow_uses_both = true;
-                                break;
-                            }
-                        }
-                        if (same_flow_uses_both) {
+            DirectedNodeEdge forward{node_a, node_b};
+            DirectedNodeEdge reverse{node_b, node_a};
+
+            // Check if these node edges are used by different flows
+            auto forward_it = edge_to_flows.find(forward);
+            auto reverse_it = edge_to_flows.find(reverse);
+
+            if (forward_it != edge_to_flows.end() && reverse_it != edge_to_flows.end()) {
+                // Check if any flow uses BOTH node edges (that would be a real cycle)
+                bool same_flow_uses_both = false;
+                for (const auto& forward_flow : forward_it->second) {
+                    for (const auto& reverse_flow : reverse_it->second) {
+                        if (forward_flow == reverse_flow) {
+                            same_flow_uses_both = true;
                             break;
                         }
                     }
-
-                    // If different flows use opposite directions on an intermesh link,
-                    // it's potentially safe bidirectional traffic, BUT we need to verify
-                    // that these nodes aren't part of a larger cyclic dependency
-                    if (!same_flow_uses_both) {
-                        // Check if either node has other outgoing edges in the routing graph
-                        // If they do, this might be part of a larger cycle (not just bidirectional traffic)
-                        bool node_a_has_other_edges = false;
-                        bool node_b_has_other_edges = false;
-
-                        auto a_neighbors_it = routing_graph.find(node_a);
-                        if (a_neighbors_it != routing_graph.end()) {
-                            // Check if node_a has outgoing edges to nodes other than node_b
-                            for (const auto& neighbor : a_neighbors_it->second) {
-                                if (neighbor != node_b) {
-                                    node_a_has_other_edges = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        auto b_neighbors_it = routing_graph.find(node_b);
-                        if (b_neighbors_it != routing_graph.end()) {
-                            // Check if node_b has outgoing edges to nodes other than node_a
-                            for (const auto& neighbor : b_neighbors_it->second) {
-                                if (neighbor != node_a) {
-                                    node_b_has_other_edges = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        // Only filter if this is an ISOLATED bidirectional link (no other dependencies)
-                        if (!node_a_has_other_edges && !node_b_has_other_edges) {
-                            is_false_positive = true;
-                            log_debug(
-                                tt::LogFabric,
-                                "Filtering out false positive 2-node cycle {}->{}->{}: isolated bidirectional "
-                                "intermesh traffic with different flows (safe due to flow control)",
-                                node_a,
-                                node_b,
-                                node_a);
-                        }
+                    if (same_flow_uses_both) {
+                        break;
                     }
+                }
+
+                // If different flows use opposite directions, it's safe bidirectional traffic
+                // Hardware has flow control and these flows don't block each other
+                if (!same_flow_uses_both) {
+                    is_false_positive = true;
+                    log_debug(
+                        tt::LogFabric,
+                        "Filtering out bidirectional 2-node cycle {}↔{}: "
+                        "different flows using opposite directions (safe bidirectional traffic)",
+                        node_a.chip_id,
+                        node_b.chip_id);
                 }
             }
         }
@@ -1720,10 +1710,14 @@ bool ControlPlane::detect_inter_mesh_cycles(
                 if (j > 0) {
                     cycle_str << " -> ";
                 }
-                cycle_str << cycles[i][j];
+                const auto& node = cycles[i][j];
+                cycle_str << node;
             }
             log_debug(tt::LogFabric, "Cycle {}: {}", i + 1, cycle_str.str());
         }
+
+        // Convert to output format
+        output_cycles = cycles;
     } else {
         log_debug(
             tt::LogFabric,
@@ -1733,6 +1727,13 @@ bool ControlPlane::detect_inter_mesh_cycles(
     }
 
     return has_cycles;
+}
+
+// Wrapper overload without output parameter
+bool ControlPlane::detect_inter_mesh_cycles(
+    const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs, const std::string& test_name) const {
+    std::vector<std::vector<FabricNodeId>> dummy_cycles;
+    return detect_inter_mesh_cycles(traffic_pairs, dummy_cycles, test_name);
 }
 
 std::optional<RoutingDirection> ControlPlane::get_forwarding_direction(

@@ -132,6 +132,14 @@ public:
         const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs,
         const std::string& test_name = "CycleDetection") const;
 
+    // Overload that returns detected cycles for debugging/logging
+    // Returns true if cycles are detected, and populates output_cycles with the cycle paths
+    // Each cycle is a vector of nodes showing the routing path
+    bool detect_inter_mesh_cycles(
+        const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs,
+        std::vector<std::vector<FabricNodeId>>& output_cycles,
+        const std::string& test_name = "CycleDetection") const;
+
     // Returns the direction in which the data should be forwarded from the src to reach the dest
     std::optional<RoutingDirection> get_forwarding_direction(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
