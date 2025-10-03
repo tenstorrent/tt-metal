@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
+
+from models.common.lightweightmodule import LightweightModule
 from .tt_config import get_resnet_config
 from .components.tt_components import (
     ResNetTimeEmbedding,
@@ -14,7 +15,7 @@ from .components.convolution_layer import ConvolutionLayer
 from .components.group_normalization_layer import GroupNormalizationLayer
 
 
-class TtResnetBlock2D(nn.Module):
+class TtResnetBlock2D(LightweightModule):
     def __init__(
         self,
         device,

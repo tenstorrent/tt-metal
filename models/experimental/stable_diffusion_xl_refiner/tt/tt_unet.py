@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_downblock2d import TtDownBlock2D
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_crossattndownblock2d import TtCrossAttnDownBlock2D
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
@@ -20,7 +22,7 @@ from models.experimental.stable_diffusion_xl_refiner.tt.components.group_normali
 )
 
 
-class TtUNet2DConditionModel:
+class TtUNet2DConditionModel(LightweightModule):
     def __init__(
         self,
         device,

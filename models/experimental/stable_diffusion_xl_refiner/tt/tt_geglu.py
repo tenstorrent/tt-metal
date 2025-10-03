@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+
+from models.common.lightweightmodule import LightweightModule
 from .components.weight_loader import WeightLoader
 
 
-class TtGEGLU:
+class TtGEGLU(LightweightModule):
     def __init__(
         self,
         device,
