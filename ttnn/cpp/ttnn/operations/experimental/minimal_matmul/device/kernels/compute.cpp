@@ -131,6 +131,10 @@ void MAIN {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
+    UNPACK(
+        DPRINT << "compute: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
+               << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL());
+
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
             // Accumulation buffer
@@ -140,8 +144,9 @@ void MAIN {
                 cb_wait_front(in1_cb, in1_block_num_tiles);
                 // safe_print_full_tile(in0_cb);
                 // safe_print_full_tile(in1_cb);
-                DPRINT << "matmul on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
-                       << ENDL();
+                UNPACK(
+                    DPRINT << "compute: matmul on m_block: " << m_block << ", n_block: " << n_block
+                           << ", k_block: " << k_block << ENDL());
                 matmul_blocks(
                     in0_cb,
                     in1_cb,
