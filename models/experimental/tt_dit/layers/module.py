@@ -249,7 +249,7 @@ class Parameter:
         dtype: ttnn.DataType = ttnn.bfloat16,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapping: Mapping[int, int] | None = None,
-        to_host: bool = False,
+        on_host: bool = False,
     ) -> None:
         self.shape = tuple(shape)
         self.device = device
@@ -257,7 +257,7 @@ class Parameter:
         self.dtype = dtype
         self.memory_config = memory_config
         self.mesh_mapping = dict(mesh_mapping) if mesh_mapping else {}
-        self.to_host = to_host
+        self.on_host = on_host
         self._data = None
 
         local_shape = list(self.shape)
@@ -279,14 +279,14 @@ class Parameter:
             dtype=self.dtype,
             memory_config=self.memory_config,
             mesh_mapping=self.mesh_mapping,
-            to_host=self.to_host,
+            on_host=self.on_host,
         )
 
     def save(self, path: str | Path, /) -> None:
         ttnn.dump_tensor(path, self.data)
 
     def load(self, path: str | Path, /) -> None:
-        self.data = ttnn.load_tensor(path, device=None if self.to_host else self.device)
+        self.data = ttnn.load_tensor(path, device=None if self.on_host else self.device)
 
     @property
     def data(self) -> ttnn.Tensor:
@@ -299,7 +299,7 @@ class Parameter:
         self._data = value
 
     def _check_data(self, value: ttnn.Tensor) -> None:
-        if self.to_host:
+        if self.on_host:
             if value.device() is not None:
                 msg = "expected host tensor, got device tensor"
                 raise ParameterLoadingError(msg)
