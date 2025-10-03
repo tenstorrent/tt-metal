@@ -93,7 +93,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       # Test group selection - default to all enabled for scheduled runs
-      run_APC_models_tests: ${{ github.event_name == 'schedule' || inputs.run_APC_models_tests }}
       run_conv_tests: ${{ github.event_name == 'schedule' || inputs.run_conv_tests }}
       run_matmul_tests: ${{ github.event_name == 'schedule' || inputs.run_matmul_tests }}
       run_pool_tests: ${{ github.event_name == 'schedule' || inputs.run_pool_tests }}
