@@ -2445,8 +2445,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         "per_core_N must be divisible by override output tile width");
                     auto mem_config = this->output_mem_config;
                     if (!program_config.gather_in0) {
-                        uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                        uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                        uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                        uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                         uint32_t num_cores = num_blocks_x * num_blocks_y;
                         CoreRangeSet all_cores =
                             num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
@@ -2488,8 +2488,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         per_core_N % tile_width_ratio == 0,
                         "per_core_N must be divisible by override output tile width");
 
-                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     auto grid_size = input_tensor_a.device()->compute_with_storage_grid_size();
                     CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid_size, true);
@@ -2512,8 +2512,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         per_core_N % tile_width_ratio == 0,
                         "per_core_N must be divisible by override output tile width");
 
-                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     CoreRangeSet all_cores;
                     ShardOrientation shard_orientation;
                     if (program_config.transpose_mcast) {
@@ -2540,8 +2540,8 @@ std::vector<ttnn::TensorSpec> Matmul::compute_output_specs(
                         per_core_N % tile_width_ratio == 0,
                         "per_core_N must be divisible by override output tile width");
 
-                    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-                    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+                    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
                     uint32_t num_cores = num_blocks_x * num_blocks_y;
                     ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
                     if (input_tensor_a.is_sharded()) {
@@ -2605,7 +2605,7 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> create_homogenous_mesh_wor
     std::unordered_map<MeshCoordinateRange, MatmulCallback> callbacks = {};
 
     auto workload_device_range = get_range_from_mesh_coords(tensor_coords);
-    AddProgramToMeshWorkload(matmul_workload, std::move(matmul_program.program), workload_device_range);
+    matmul_workload.add_program(workload_device_range, std::move(matmul_program.program));
     callbacks[workload_device_range] = std::move(matmul_program.override_runtime_arguments_callback.value());
     return {.workload = std::move(matmul_workload), .per_program_callbacks = std::move(callbacks)};
 }
@@ -2740,10 +2740,8 @@ operation::CacheableMeshWorkload<std::vector<Tensor>> Matmul::create_mesh_worklo
                         false,
                         false,
                         false);
-                    AddProgramToMeshWorkload(
-                        dram_sharded_mm_workload,
-                        std::move(dram_sharded_mm_program.program),
-                        MeshCoordinateRange(coord, coord));
+                    dram_sharded_mm_workload.add_program(
+                        MeshCoordinateRange(coord, coord), std::move(dram_sharded_mm_program.program));
                     callbacks[MeshCoordinateRange(coord, coord)] =
                         std::move(dram_sharded_mm_program.override_runtime_arguments_callback.value());
                 }

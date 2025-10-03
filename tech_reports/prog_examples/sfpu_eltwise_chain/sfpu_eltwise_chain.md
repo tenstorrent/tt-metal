@@ -168,7 +168,7 @@ KernelHandle compute_kernel_id = CreateKernel(
 After executing the program, we validate the results using Pearson Correlation Coefficient:
 
 ```cpp
-distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+workload.add_program(device_range, std::move(program));
 distributed::EnqueueMeshWorkload(cq, workload, false);
 distributed::Finish(cq);
 

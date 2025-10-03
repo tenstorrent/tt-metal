@@ -83,7 +83,7 @@ distributed::MeshWorkload initialize_program_data_movement(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return workload;
 }
 
@@ -119,7 +119,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = dm_defines});
 
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return workload;
 }
 
@@ -170,7 +170,7 @@ std::pair<distributed::MeshWorkload, tt::tt_metal::KernelHandle> initialize_prog
 
     auto kernel_id =
         initialize_program_compute(mesh_device, program, core_range_set, num_unique_rt_args, num_common_rt_args);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_id};
 }
 
@@ -191,7 +191,7 @@ initialize_program_compute_multi_range_sets(
         kernel_ids.push_back(
             initialize_program_compute(mesh_device, program, core_range_set, num_unique_rt_args, num_common_rt_args));
     }
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     return {std::move(workload), kernel_ids};
 }
 
@@ -437,7 +437,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     // Generate an rt arg val based on x and y.
-                    uint32_t val_offset = x * 100 + y * 10;
+                    uint32_t val_offset = (x * 100) + (y * 10);
                     std::vector<uint32_t> initial_runtime_args = {101 + val_offset, 202 + val_offset};
                     SetRuntimeArgs(program, kernel, logical_core, initial_runtime_args);
                     core_to_rt_args[logical_core] = initial_runtime_args;
@@ -490,7 +490,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord logical_core(x, y);
                     // Generate rt args length and val based on x,y arbitrarily.
-                    uint32_t val_offset = x * 100 + y * 10;
+                    uint32_t val_offset = (x * 100) + (y * 10);
                     uint32_t num_rt_args = 2 + x + y;
                     std::vector<uint32_t> initial_runtime_args;
                     initial_runtime_args.reserve(num_rt_args);
@@ -592,9 +592,9 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
         // Split into 4 quads
         // Slow dispatch test. All coords are available for use
         CoreRange core_range_0(CoreCoord(0, 0), CoreCoord(max_x / 2, max_y / 2));
-        CoreRange core_range_1(CoreCoord(max_x / 2 + 1, 0), CoreCoord(max_x, max_y / 2));
-        CoreRange core_range_2(CoreCoord(0, max_y / 2 + 1), CoreCoord(max_x / 2, max_y));
-        CoreRange core_range_3(CoreCoord(max_x / 2 + 1, max_y / 2 + 1), CoreCoord(max_x, max_y));
+        CoreRange core_range_1(CoreCoord((max_x / 2) + 1, 0), CoreCoord(max_x, max_y / 2));
+        CoreRange core_range_2(CoreCoord(0, (max_y / 2) + 1), CoreCoord(max_x / 2, max_y));
+        CoreRange core_range_3(CoreCoord((max_x / 2) + 1, (max_y / 2) + 1), CoreCoord(max_x, max_y));
 
         CoreRangeSet core_range_set_0(std::vector{core_range_0, core_range_1});
         CoreRangeSet core_range_set_1(std::vector{core_range_2, core_range_3});

@@ -45,8 +45,7 @@ bool runTest(
         tt::tt_metal::ComputeConfig{
             .compile_args = compile_args,
         });
-    distributed::AddProgramToMeshWorkload(
-        workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     distributed::Finish(mesh_device->mesh_command_queue());
@@ -60,7 +59,7 @@ bool runTest(
     auto pos = path.find_last_of('.');
     // NOLINTNEXTLINE(bugprone-inc-dec-in-conditions)
     while (--pos && path[pos] >= '0' && path[pos] <= '9') {
-        continue;
+        continue;  // NOLINT(readability-redundant-control-flow)
     }
     if (path[pos] == '-') {
         while (path[++pos] != '.') {

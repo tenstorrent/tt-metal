@@ -64,6 +64,12 @@ tt::tt_metal::distributed::MeshCoordinate TensorTopology::get_device_coord(
     }
 
     // Return the mesh coordinate at the flattened position
+    TT_FATAL(
+        flattened_index < mesh_coords_.size(),
+        "Flattened index {} is out of bounds of mesh_coordinates {} in tensor topology with distribution shape {}",
+        flattened_index,
+        mesh_coords_.size(),
+        distribution_shape_);
     return mesh_coords_[flattened_index];
 }
 
@@ -92,6 +98,29 @@ std::optional<tt::tt_metal::distributed::MeshCoordinate> TensorTopology::get_ten
 
     // No match found
     return std::nullopt;
+}
+
+bool operator==(const TensorTopology& lhs, const TensorTopology& rhs) {
+    return lhs.distribution_shape() == rhs.distribution_shape() && lhs.placements() == rhs.placements() &&
+           lhs.mesh_coords() == rhs.mesh_coords();
+}
+
+bool operator!=(const TensorTopology& lhs, const TensorTopology& rhs) { return !(lhs == rhs); }
+
+std::ostream& operator<<(std::ostream& os, const TensorTopology& tensor_topology) {
+    os << "TensorTopology(";
+    os << "distribution_shape=" << tensor_topology.distribution_shape();
+    os << ", placements=" << tensor_topology.placements();
+    os << ", mesh_coords=";
+    for (size_t i = 0; i < tensor_topology.mesh_coords().size(); i++) {
+        const auto& coord = tensor_topology.mesh_coords()[i];
+        if (i > 0) {
+            os << ", ";
+        }
+        os << coord;
+    }
+    os << ")";
+    return os;
 }
 
 }  // namespace tt::tt_metal
