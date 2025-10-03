@@ -9,8 +9,6 @@
 namespace ttsl {
 namespace {
 
-using ::testing::ElementsAre;
-
 TEST(OptionalReferenceTest, DefaultConstruction) {
     optional_reference<int> ref;
     EXPECT_FALSE(ref.has_value());

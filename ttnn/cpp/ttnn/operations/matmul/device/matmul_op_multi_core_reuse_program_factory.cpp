@@ -11,7 +11,6 @@
 
 using namespace tt::constants;
 using namespace tt;
-using tt_metal::Buffer;
 
 tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::IDevice* device,

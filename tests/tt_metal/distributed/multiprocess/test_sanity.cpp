@@ -26,7 +26,6 @@ namespace tt::tt_metal::distributed {
 using ::testing::ElementsAre;
 using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_fabric::MeshId;
-using ::tt::tt_fabric::MeshScope;
 
 // Parameterized test fixture for mesh device validation
 class BigMeshDualRankMeshShapeSweepFixture : public MeshDeviceFixtureBase,
