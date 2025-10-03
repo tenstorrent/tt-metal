@@ -158,6 +158,7 @@ jobs:
 
   build-tt-train:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: [ build, find-changed-files ]
     runs-on: tt-ubuntu-2204-large-stable
     container:
       image: harbor.ci.tenstorrent.net/${{ needs.build.outputs.basic-dev-docker-image || 'docker-image-unresolved!' }}
