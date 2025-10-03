@@ -177,37 +177,11 @@ uint32_t read_mask_chunk(
 template <uint32_t cb_mask_in, uint32_t PNHt>
 void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos) {
     /*
-    example 1: 64 seqlen at cur_pos 40, 2 cores, 32 chunk size
-    k_num_chunks = 2
-    Sk_chunk_t = 1
-    cur_pos = 40
-    cur_pos_in_chunk = 8
-    cur_pos_in_chunk_t = 0
-    cur_pos_in_tile = 8
+    Generate causal attention mask (original implementation):
+    - Mask positions > cur_pos with -inf (causal mask)
+    - Allow positions <= cur_pos
 
-    example 2: 1024 seqlen at cur_pos 990, 2 cores, 128 chunk size
-    k_num_chunks = 8
-    Sk_chunk_t = 4
-    cur_pos = 990
-    cur_pos_in_chunk = 94
-    cur_pos_in_chunk_t = 2
-    cur_pos_in_tile = 30
-
-    example 3: 64 seqlen at cur_pos 63, 2 cores, 32 chunk size
-    k_num_chunks = 2
-    Sk_chunk_t = 1
-    cur_pos = 63
-    cur_pos_in_chunk = 31
-    cur_pos_in_chunk_t = 0
-    cur_pos_in_tile = 31
-
-    example 3: 64 seqlen at cur_pos 0, 2 cores, 32 chunk size
-    k_num_chunks = 2
-    Sk_chunk_t = 1
-    cur_pos = 0
-    cur_pos_in_chunk = 0
-    cur_pos_in_chunk_t = 0
-    cur_pos_in_tile = 0
+    This mask is applied only to the final chunk containing cur_pos.
     */
 
     // the cb_mask in is of size PNHt * Sk_chunk_t
@@ -255,6 +229,67 @@ void generate_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t cur_pos)
         }
         for (uint32_t j = 1; j < PNHt; ++j) {
             // copy from cb_mask_in[i] to cb_mask_in[j*Sk_chunk_t + i]
+            copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
+            if (j == PNHt - 1) {
+                noc_async_read_barrier();
+            }
+        }
+    }
+
+    cb_push_back(cb_mask_in, total_read_tiles);
+}
+
+template <uint32_t cb_mask_in, uint32_t PNHt>
+void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, uint32_t window_start) {
+    /*
+    Generate sliding window mask for the first chunk:
+    - Mask positions < window_start with -inf (sliding window start)
+    - Allow positions >= window_start
+
+    This mask is applied only to the first chunk to enforce sliding window constraint.
+    */
+
+    // the cb_mask in is of size PNHt * Sk_chunk_t
+    uint32_t total_read_tiles = PNHt * Sk_chunk_t;
+    uint32_t window_start_in_chunk = window_start % (Sk_chunk_t * 32);
+    uint32_t window_start_in_chunk_t = window_start_in_chunk / 32;
+    uint32_t window_start_in_tile = window_start_in_chunk % 32;
+    constexpr uint32_t NEG_INF = 0xFF80FF80;  // TODO: Make sure this is -inf
+
+    cb_reserve_back(cb_mask_in, total_read_tiles);
+
+    uint64_t noc_read_addr_base = get_noc_addr(get_read_ptr(cb_mask_in));
+    uint32_t q_write_ptr_base = get_read_ptr(cb_mask_in);
+    constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
+
+    for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
+        if (i < window_start_in_chunk_t) {
+            // Tile is completely before sliding window - fill with -inf
+            if (i == 0) {
+                fill_tile<tile_bytes>(cb_mask_in, i, NEG_INF);
+            } else {
+                copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, 0, i);
+            }
+        } else if (i == window_start_in_chunk_t && window_start_in_tile > 0) {
+            // Tile contains sliding window start - partial mask at beginning
+            fill_tile_partial<tile_bytes>(cb_mask_in, i, window_start_in_tile - 1, NEG_INF);
+        } else {
+            // Tile is within sliding window - fill with zeros (allow)
+            if (i == window_start_in_chunk_t && window_start_in_tile == 0) {
+                fill_tile<tile_bytes>(cb_mask_in, i, 0);
+            } else {
+                // Copy from the first allowed tile
+                uint32_t zero_tile_idx =
+                    (window_start_in_tile == 0) ? window_start_in_chunk_t : window_start_in_chunk_t;
+                copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, zero_tile_idx, i);
+                if (i == Sk_chunk_t - 1) {
+                    noc_async_read_barrier();
+                }
+            }
+        }
+
+        // Copy to all heads
+        for (uint32_t j = 1; j < PNHt; ++j) {
             copy_tile<tile_bytes>(noc_read_addr_base, q_write_ptr_base, i, j * Sk_chunk_t + i);
             if (j == PNHt - 1) {
                 noc_async_read_barrier();
