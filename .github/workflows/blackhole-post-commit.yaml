@@ -108,7 +108,7 @@ jobs:
 
             # Transform P100 to P100a for civ2_viommu_matrix (only if P100 exists, not P100a)
             if [[ "$runner_label" == *"P100"* && "$runner_label" != *"P100a"* ]]; then
-              civ2_viommu_matrix=$(echo "$runner_label" | sed 's/"P100"/"P100a"/g')
+              civ2_viommu_matrix=$(echo "$runner_label" | sed 's/"P100"/"P100a-viommu"/g')
             fi
           fi
           echo "matrix=$matrix" >> $GITHUB_OUTPUT
@@ -131,36 +131,49 @@ jobs:
       build-wheel: true
       version: "22.04"
       build-umd-tests: true
-  # build-artifact-profiler:
-  #   uses: ./.github/workflows/build-artifact.yaml
-  #   permissions:
-  #     packages: write
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      tracy: true
+      version: "22.04"
+      build-umd-tests: true
+  run-profiler-regression:
+    needs: [build-artifact-profiler, generate-matrix]
+    uses: ./.github/workflows/run-profiler-regression.yaml
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+    with:
+      arch: "blackhole"
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  # umd-unit-tests:
+  #   needs: [build-artifact, generate-matrix]
   #   secrets: inherit
-  #   with:
-  #     build-type: ${{ inputs.build-type || 'Release' }}
-  #     build-wheel: true
-  #     tracy: true
-  #     version: "22.04"
-  #     build-umd-tests: true
-  # run-profiler-regression:
-  #   needs: [build-artifact-profiler, generate-matrix]
-  #   uses: ./.github/workflows/run-profiler-regression.yaml
-  #   secrets: inherit
+  #   uses: ./.github/workflows/umd-unit-tests.yaml
   #   strategy:
   #     fail-fast: false
   #     matrix:
   #       test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
   #   with:
-  #     arch: "blackhole"
+  #     arch: blackhole
   #     runner-label: ${{ matrix.test-group }}
-  #     docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
-  umd-unit-tests:
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  sd-unit-tests:
     needs: [build-artifact, generate-matrix]
+    uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
-    uses: ./.github/workflows/umd-unit-tests.yaml
     strategy:
       fail-fast: false
       matrix:
@@ -170,52 +183,39 @@ jobs:
       runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  # sd-unit-tests:
-  #   needs: [build-artifact, generate-matrix]
-  #   uses: ./.github/workflows/build-and-unit-tests.yaml
-  #   secrets: inherit
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-  #   with:
-  #     arch: blackhole
-  #     runner-label: ${{ matrix.test-group }}
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
-  # fd-unit-tests:
-  #   needs: [build-artifact, generate-matrix]
-  #   uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-  #   secrets: inherit
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-  #   with:
-  #     timeout: 40
-  #     arch: blackhole
-  #     runner-label: ${{ matrix.test-group }}
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
+  fd-unit-tests:
+    needs: [build-artifact, generate-matrix]
+    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+    with:
+      timeout: 40
+      arch: blackhole
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   # FD C++ Unit Tests
-  # cpp-unit-tests:
-  #   needs: [build-artifact, generate-matrix]
-  #   secrets: inherit
-  #   uses: ./.github/workflows/cpp-post-commit.yaml
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-  #   with:
-  #     arch: blackhole
-  #     runner-label: ${{ matrix.test-group }}
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
+  cpp-unit-tests:
+    needs: [build-artifact, generate-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   # models-unit-tests:
   #   needs: [build-artifact, generate-matrix]
   #   secrets: inherit
@@ -260,21 +260,21 @@ jobs:
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  ttnn-stress-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      timeout: 45
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # ttnn-stress-tests:
+  #   needs: [build-artifact, generate-matrix]
+  #   secrets: inherit
+  #   uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+  #   with:
+  #     arch: blackhole
+  #     runner-label: ${{ matrix.test-group }}
+  #     timeout: 45
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   metalium-smoke-tests:
     needs: [build-artifact, generate-matrix]
     strategy:
@@ -361,20 +361,20 @@ jobs:
   #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  blackhole-20-cores-tests:
-    needs: [build-artifact, generate-matrix]
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-20-cores-tests.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # blackhole-20-cores-tests:
+  #   needs: [build-artifact, generate-matrix]
+  #   secrets: inherit
+  #   uses: ./.github/workflows/blackhole-20-cores-tests.yaml
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+  #   with:
+  #     arch: blackhole
+  #     runner-label: ${{ matrix.test-group }}
+  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   # Multi-card post-commit tests
   # blackhole-multi-card-post-commit-tests:
