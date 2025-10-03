@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -114,33 +115,8 @@ void configure_risc_settings(
     }
 }
 
-uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
-    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
-    return is_2D_routing ? direction : 0;
-}
-
-uint32_t get_vc1_connected_sender_channel(Topology topology) {
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        return builder_config::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
-    } else if (topology == tt::tt_fabric::Topology::Torus) {
-        return builder_config::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
-    }
-    return 0;  // invalid
-}
-
-uint32_t get_worker_or_vc1_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
-    uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
-    // if without vc1, return worker channel, otherwise return vc1 channel
-    if (topology == tt::tt_fabric::Topology::Ring) {
-        return builder_config::num_sender_channels_1d_ring - 1;  // channel 2 (last of 3)
-    } else if (topology == tt::tt_fabric::Topology::Torus) {
-        return builder_config::num_sender_channels_2d_torus - 1;  // channel 4 (last of 5)
-    }
-    return target_channel;  // Default to target_channel for Linear/Mesh
-}
-
 // for fabric with tensix extension, for linear/mesh topology, only one sender channel is used, and all
-// other sender channels are makred as skipped. For ring/torus topology, one extra vc1 sender channel will
+// other sender channels are marked as skipped. For ring/torus topology, one extra vc1 sender channel will
 // also be used.
 void update_sender_channel_servicing(
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
@@ -201,15 +177,6 @@ uint32_t get_downstream_edm_count(const bool is_2D_routing) {
 uint32_t get_vc0_downstream_edm_count(const bool is_2D_routing) {
     return is_2D_routing ? FabricEriscDatamoverConfig::num_downstream_edms_2d_vc0
                          : FabricEriscDatamoverConfig::num_downstream_edms_vc0;
-}
-
-size_t get_dateline_sender_channel_skip_idx(const bool is_2D_routing) {
-    return is_2D_routing ? FabricEriscDatamoverConfig::dateline_sender_channel_skip_idx_2d
-                         : FabricEriscDatamoverConfig::dateline_sender_channel_skip_idx;
-}
-
-uint32_t get_downstream_edm_sender_channel(const bool is_2D_routing, const eth_chan_directions direction) {
-    return is_2D_routing ? direction : 1;
 }
 
 }  // anonymous namespace
@@ -464,8 +431,21 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         min_buffer_size);
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
 
+    // Compute available channel buffering space from memory regions
+    size_t available_channel_buffering_space = std::accumulate(
+        this->available_buffer_memory_regions.begin(),
+        this->available_buffer_memory_regions.end(),
+        size_t{0},
+        [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
+
     this->channel_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
-        options, this->available_buffer_memory_regions);
+        topology,
+        options,
+        this->num_used_sender_channels,
+        this->num_used_receiver_channels,
+        this->channel_buffer_size_bytes,
+        available_channel_buffering_space,
+        this->available_buffer_memory_regions);
 
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_receiver_channels; i++) {

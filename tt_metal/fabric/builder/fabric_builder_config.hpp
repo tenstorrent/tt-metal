@@ -8,9 +8,29 @@
 #include <cstddef>
 
 #include "tt_metal/api/tt-metalium/fabric_types.hpp"
+#include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
+#include <vector>
 
 namespace tt::tt_fabric {
+
+/**
+ * Memory region definition for fabric channel allocation.
+ * Represents a contiguous memory region with start and size.
+ */
+struct MemoryRegion {
+    size_t start_address;
+    size_t size;
+
+    MemoryRegion(size_t start, size_t size) : start_address(start), size(size) {
+        // TT_FATAL will be available when this is used
+    }
+
+    size_t get_size() const { return size; }
+    size_t get_start_address() const { return start_address; }
+    size_t get_end_address() const { return start_address + size; }
+    bool contains(size_t address) const { return address >= start_address && address < get_end_address(); }
+};
 
 enum class FabricEriscDatamoverType {
     Default = 0,
@@ -62,4 +82,35 @@ static constexpr std::size_t num_downstream_sender_channels = num_sender_channel
 
 static constexpr std::size_t num_receiver_channels = 2;
 }  // namespace builder_config
+
+/**
+ * Structure to hold all parameters needed for allocator construction.
+ * This simplifies passing multiple parameters to allocator constructors.
+ */
+struct AllocatorConstructionParams {
+    Topology topology;
+    FabricEriscDatamoverOptions options;
+    size_t num_used_sender_channels;
+    size_t num_used_receiver_channels;
+    size_t channel_buffer_size_bytes;
+    size_t available_channel_buffering_space;
+    std::vector<MemoryRegion> memory_regions;
+
+    AllocatorConstructionParams(
+        Topology topology,
+        const FabricEriscDatamoverOptions& options,
+        size_t num_used_sender_channels,
+        size_t num_used_receiver_channels,
+        size_t channel_buffer_size_bytes,
+        size_t available_channel_buffering_space,
+        const std::vector<MemoryRegion>& memory_regions) :
+        topology(topology),
+        options(options),
+        num_used_sender_channels(num_used_sender_channels),
+        num_used_receiver_channels(num_used_receiver_channels),
+        channel_buffer_size_bytes(channel_buffer_size_bytes),
+        available_channel_buffering_space(available_channel_buffering_space),
+        memory_regions(memory_regions) {}
+};
+
 }  // namespace tt::tt_fabric

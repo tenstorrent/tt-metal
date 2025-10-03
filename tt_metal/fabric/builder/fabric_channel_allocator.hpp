@@ -5,31 +5,12 @@
 #pragma once
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 #include <tt_stl/assert.hpp>
 
 #include <cstdint>
 #include <vector>
 
 namespace tt::tt_fabric {
-
-/**
- * Memory region definition for fabric channel allocation.
- * Represents a contiguous memory region with start and end addresses.
- */
-struct MemoryRegion {
-    size_t start_address;
-    size_t size;
-
-    MemoryRegion(size_t start, size_t size) : start_address(start), size(size) {
-        TT_FATAL(size > 0, "Initialized MemoryRegion of size 0.");
-    }
-
-    size_t get_size() const { return size; }
-    size_t get_start_address() const { return start_address; }
-    size_t get_end_address() const { return start_address + size; }
-    bool contains(size_t address) const { return address >= start_address && address < get_end_address(); }
-};
 
 /**
  * Base interface class for fabric channel allocators.
