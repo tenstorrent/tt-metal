@@ -716,5 +716,61 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     EXPECT_EQ(dst_aligned, src);
 }
 
+TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
+    if (!mesh_device_->get_memory_pinning_parameters().can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+
+    // Use a replicated mesh buffer so per-device buffers are interleaved (not sharded)
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    // Make the buffer multiple tiles to exercise multi-page transfers
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    // Prepare source data and write it to a single shard (0,0)
+    distributed::MeshCoordinate coord(0, 0);
+    auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
+
+    // Prepare write source buffer and pin the entire destination range for the target shard
+    auto src = std::make_shared<vector_aligned<uint32_t>>(bytes_per_device / sizeof(uint32_t), 0);
+    std::iota(src->begin(), src->end(), 0);
+    // Create HostBuffer on top of dst
+    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+
+    auto pinned_unique = mesh_device_->pin_memory(
+        coordinate_range_set,
+        host_buffer,
+        /*map_to_noc=*/true);
+    std::shared_ptr<PinnedMemory> pinned_shared = std::move(pinned_unique);
+
+    auto write_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
+        .shard_coord = coord,
+        .host_data = static_cast<void*>(src->data()),
+        .pinned_memory = pinned_shared,
+        .region = BufferRegion(0, bytes_per_device),
+    };
+    mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/true);
+
+    // Read back via hugepage
+    // Prepare read destination buffer. Use aigned vector for ease of verification with src above.
+    auto dst = vector_aligned<uint32_t>(bytes_per_device / sizeof(uint32_t), 0);
+    auto read_transfer = distributed::MeshCommandQueue::ShardDataTransfer{
+        .shard_coord = coord,
+        .host_data = static_cast<void*>(dst.data()),
+        .pinned_memory = nullptr,
+        .region = BufferRegion(0, bytes_per_device),
+    };
+    mesh_device_->mesh_command_queue().enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+
+    EXPECT_EQ(*src, dst);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
