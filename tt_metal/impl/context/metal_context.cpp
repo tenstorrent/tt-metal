@@ -248,12 +248,14 @@ void MetalContext::teardown() {
     inspector_data_.reset();
 }
 
-MetalContext& MetalContext::instance() {
-    static tt::stl::Indestructible<MetalContext> inst;
+MetalContext& MetalContext::instance(const std::string& root_dir) {
+    static tt::stl::Indestructible<MetalContext> inst(root_dir);
     return inst.get();
 }
 
-MetalContext::MetalContext() {
+MetalContext::MetalContext(const std::string& root_dir) {
+    rtoptions_.set_root_dir(root_dir);
+
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc;

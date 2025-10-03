@@ -264,10 +264,12 @@ RunTimeOptions::RunTimeOptions() {
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
-    std::filesystem::path p(root_dir);
-    p /= "";  // ensures trailing slash, never duplicates
-    this->root_dir = p.string();
-    this->is_root_dir_set = true;
+    if (!root_dir.empty()) {
+        std::filesystem::path p(root_dir);
+        p /= "";  // ensures trailing slash, never duplicates
+        this->root_dir = p.string();
+        this->is_root_dir_set = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
