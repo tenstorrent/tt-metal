@@ -464,7 +464,7 @@ private:
         SenderConfig resolved_sender;
         resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
         resolved_sender.core = parsed_sender.core;
-        resolved_sender.link_id = parsed_sender.link_id;  // Transfer link ID
+        resolved_sender.link_id = parsed_sender.link_id.value_or(0);  // Default to link 0 if not specified
 
         resolved_sender.patterns.reserve(parsed_sender.patterns.size());
         for (const auto& parsed_pattern : parsed_sender.patterns) {
@@ -1076,7 +1076,8 @@ private:
             const auto& sync_val = sync_patterns_and_sync_val_pair.second;
 
             // Create sender config with all split sync patterns
-            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns};
+            // Sync always uses link 0 (no override allowed)
+            SenderConfig sync_sender = {.device = src_device, .patterns = sync_patterns, .link_id = 0};
 
             test.global_sync_configs.push_back(std::move(sync_sender));
 
@@ -1481,10 +1482,8 @@ private:
             to_yaml(out, config.core.value());
         }
 
-        if (config.link_id) {
-            out << YAML::Key << "link_id";
-            out << YAML::Value << config.link_id.value();
-        }
+        out << YAML::Key << "link_id";
+        out << YAML::Value << config.link_id;
 
         out << YAML::Key << "patterns";
         out << YAML::Value;

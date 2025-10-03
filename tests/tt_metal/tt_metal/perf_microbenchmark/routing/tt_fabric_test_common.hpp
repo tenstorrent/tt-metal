@@ -46,6 +46,13 @@ using Shape = tt::tt_metal::Shape;
 using MeshHostRankId = tt::tt_fabric::MeshHostRankId;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
+using HalProgrammableCoreType = tt::tt_metal::HalProgrammableCoreType;
+using HalL1MemAddrType = tt::tt_metal::HalL1MemAddrType;
+using ShardOrientation = tt::tt_metal::ShardOrientation;
+using ShardSpecBuffer = tt::tt_metal::ShardSpecBuffer;
+using BufferType = tt::tt_metal::BufferType;
+using TensorMemoryLayout = tt::tt_metal::TensorMemoryLayout;
+using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 
 using Topology = tt::tt_fabric::Topology;
 

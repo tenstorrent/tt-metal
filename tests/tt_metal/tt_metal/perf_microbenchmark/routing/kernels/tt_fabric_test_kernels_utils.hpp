@@ -692,7 +692,6 @@ struct LineSyncConfig {
         line_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fields.dst_address);
 
         uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-        DPRINT << "line sync L1 address: " << (uint32_t)fields.dst_address << ENDL();
         packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
     }
@@ -2240,7 +2239,6 @@ private:
 
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
-            DPRINT << "packet_header_address: " << (uint32_t)packet_header_address << ENDL();
             // Use the mapped connection index instead of 'i'
             uint8_t connection_idx = sync_config_to_fabric_connection_map[i];
             new (&line_sync_configs()[i])

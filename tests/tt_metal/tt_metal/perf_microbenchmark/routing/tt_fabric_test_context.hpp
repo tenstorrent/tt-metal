@@ -164,14 +164,24 @@ public:
 
         log_info(
             tt::LogTest,
-            "process_traffic_config: test={} enable_flow_control={}",
+            "process_traffic_config: test={} enable_flow_control={} global_sync={}",
             config.name,
-            config.enable_flow_control);
+            config.enable_flow_control,
+            config.global_sync);
 
         // Allocate resources
-        log_info(tt::LogTest, "Allocating resources for test config");
+        log_debug(tt::LogTest, "Allocating resources for test config");
         this->allocator_->allocate_resources(config);
         log_debug(tt::LogTest, "Resource allocation complete");
+
+        // Use unified connection manager when BOTH sync AND flow control are enabled
+        // - This ensures sync and credit returns use the same link tracking for correct mux detection
+        // - When only sync is enabled (no flow control), separate managers avoid mux overhead
+        if (config.enable_flow_control && config.global_sync) {
+            for (auto& [_, device] : test_devices_) {
+                device.set_use_unified_connection_manager(true);
+            }
+        }
 
         // Transfer mux cores from allocator to devices
         setup_mux_cores();
@@ -248,7 +258,8 @@ public:
                             .dst_logical_core = dummy_dst_core,
                             .target_address = sync_address,
                             .atomic_inc_address = sync_address,
-                            .dst_noc_encoding = dst_noc_encoding};
+                            .dst_noc_encoding = dst_noc_encoding,
+                            .link_id = sync_sender.link_id};  // Derive from SenderConfig (always 0 for sync)
 
                         // Add sync config to the master sender on this device
                         this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
@@ -730,7 +741,8 @@ private:
             .sender_id = sender_id,
             .target_address = target_address,
             .atomic_inc_address = atomic_inc_address,
-            .payload_buffer_size = payload_buffer_size};
+            .payload_buffer_size = payload_buffer_size,
+            .link_id = traffic_config.link_id};  // Derive from sender's link_id
 
         // NEW: Add credit flow info if flow control is enabled
         if (traffic_config.parameters.enable_flow_control) {
@@ -844,8 +856,7 @@ private:
             // Process regular senders only (ignore sync senders)
             for (const auto& [core_coord, sender] : test_device.get_senders()) {
                 for (const auto& [config, _] : sender.get_configs()) {
-                    // trace only one of the links, use link 0 as default
-                    uint32_t link_id = config.link_id.value_or(0);
+                    uint32_t link_id = config.link_id;
                     if (link_id == 0) {
                         trace_traffic_path(src_node_id, config);
                     }
@@ -1028,7 +1039,7 @@ private:
                 std::set<std::pair<RoutingDirection, uint32_t>> core_direction_links;
                 for (const auto& [config, _] : sender.get_configs()) {
                     RoutingDirection direction = fixture_->get_forwarding_direction(*config.hops);
-                    uint32_t link_id = config.link_id.value_or(0);  // Default to link 0 if not specified
+                    uint32_t link_id = config.link_id;
                     core_direction_links.insert({direction, link_id});
                 }
 
@@ -1091,7 +1102,7 @@ private:
             for (const auto& [core, sender] : test_device.get_senders()) {
                 for (const auto& [config, _] : sender.get_configs()) {
                     RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
-                    uint32_t config_link_id = config.link_id.value_or(0);
+                    uint32_t config_link_id = config.link_id;
 
                     // Create cache key: device_id + direction + link_id
                     std::string cache_key = std::to_string(device_id.chip_id) + "_" +

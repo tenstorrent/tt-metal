@@ -82,7 +82,7 @@ struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
     std::vector<TrafficPatternConfig> patterns;
-    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
+    uint32_t link_id;  // Link ID for multi-link tests
 };
 
 enum class RoutingType {

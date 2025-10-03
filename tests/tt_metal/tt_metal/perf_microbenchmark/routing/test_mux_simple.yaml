@@ -1,6 +1,6 @@
 Tests:
   - name: "mux_simple_p2p"
-    #sync: true  # Disable sync for simple p2p test
+    sync: true  # Disable sync for simple p2p test
     enable_flow_control: true  # Enable flow control (mux) for this test
     fabric_setup:
       topology: Linear

@@ -146,6 +146,9 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     if (sender_yaml["core"]) {
         config.core = parse_core_coord(sender_yaml["core"]);
     }
+    if (sender_yaml["link_id"]) {
+        config.link_id = parse_scalar<uint32_t>(sender_yaml["link_id"]);
+    }
 
     const auto& patterns_yaml = sender_yaml["patterns"];
     TT_FATAL(patterns_yaml.IsSequence(), "Expected patterns to be a sequence");
