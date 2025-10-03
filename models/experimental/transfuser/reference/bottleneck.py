@@ -203,6 +203,7 @@ class Bottleneck(nn.Module):
             dilation=dilation,
             norm_layer=norm_layer,
         )
+        print(f"inside reference.................{self.downsample =}")
         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0 else nn.Identity()
 
     def zero_init_last(self) -> None:
