@@ -234,6 +234,7 @@ struct ChipMulticastFields1D {
     static ChipMulticastFields1D build_from_args(size_t& arg_idx) {
         uint32_t mcast_start_hops = get_local_arg_val<uint32_t>(arg_idx++);
         uint32_t num_hops = get_local_arg_val<uint32_t>(arg_idx++);
+        DPRINT << "mcast_start_hops: " << (uint32_t)mcast_start_hops << " num_hops: " << (uint32_t)num_hops << ENDL();
         return ChipMulticastFields1D(mcast_start_hops, num_hops);
     }
 
@@ -540,6 +541,7 @@ struct FabricConnectionArray {
     // Memory map is required for allocating local semaphore addresses for mux connections
     template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX, typename MemoryMapType>
     void parse_from_args(size_t& rt_args_idx, MemoryMapType& memory_map) {
+        DPRINT << "parsing connections, num connections: " << (uint32_t)num_connections << ENDL();
         for (uint8_t i = 0; i < num_connections; i++) {
             // Parse connection type flag
             is_mux[i] = get_arg_val<uint32_t>(rt_args_idx++) != 0;
@@ -592,6 +594,7 @@ struct FabricConnectionArray {
                 get_fabric_connection(i).open();
             }
         }
+        DPRINT << "opened all connections" << ENDL();
     }
 
     FORCE_INLINE void close_all() {
@@ -602,6 +605,7 @@ struct FabricConnectionArray {
                 get_fabric_connection(i).close();
             }
         }
+        DPRINT << "closed all connections" << ENDL();
     }
 
     // Unified send operations (dispatch hidden from callers)
@@ -688,6 +692,7 @@ struct LineSyncConfig {
         line_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fields.dst_address);
 
         uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
+        DPRINT << "line sync L1 address: " << (uint32_t)fields.dst_address << ENDL();
         packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val, fields.atomic_inc_wrap});
     }
@@ -701,7 +706,13 @@ struct LineSyncConfig {
 
     void global_sync_finish(uint8_t sync_iter) {
         // sync wait
+        DPRINT << "line sync core: waiting for sync finish, line sync val: " << (uint32_t)line_sync_val
+               << " sync_iter: " << (uint32_t)sync_iter << ENDL();
+        DPRINT << "curr value: " << (uint32_t)*line_sync_ptr
+               << " expected: " << (uint32_t)(line_sync_val * (sync_iter + 1)) << ENDL();
         noc_semaphore_wait_min(line_sync_ptr, line_sync_val * (sync_iter + 1));
+        DPRINT << "line sync core: sync finish done, line sync val: " << (uint32_t)*line_sync_ptr
+               << " sync_iter: " << (uint32_t)sync_iter << ENDL();
     }
 
 private:
@@ -716,6 +727,7 @@ template <bool IS_MASTER_CORE, uint8_t NUM_LOCAL_CORES>
 struct LocalSyncConfig {
     LocalSyncConfig(const uint32_t sync_address, const uint32_t sync_val) :
         sync_address(sync_address), sync_val(sync_val) {
+        DPRINT << "LocalSyncConfig::LocalSyncConfig: sync_address: " << (uint32_t)sync_address << ENDL();
         sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_address);
     }
 
@@ -2161,11 +2173,17 @@ struct SyncKernelConfig {
 
         // Send sync start packets
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            DPRINT << "sync core: sending global sync start packet for connection " << (uint32_t)i
+                   << ", iter: " << (uint32_t)sync_iter << ENDL();
             line_sync_configs()[i].global_sync_start();
+            DPRINT << "sync core: sent global sync start packet for connection " << (uint32_t)i
+                   << ", iter: " << (uint32_t)sync_iter << ENDL();
         }
 
         // Wait for acks (only need one config to check)
+        DPRINT << "sync core: waiting for global sync finish, iter: " << (uint32_t)sync_iter << ENDL();
         line_sync_configs()[0].global_sync_finish(sync_iter);
+        DPRINT << "sync core: global sync finish done, iter: " << (uint32_t)sync_iter << ENDL();
 
         // Close all sync connections
         sync_connections.close_all();
@@ -2189,6 +2207,9 @@ struct SyncKernelConfig {
     alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
 
+    // Mapping from sync config index to fabric connection index (same pattern as sender)
+    std::array<uint8_t, NUM_SYNC_FABRIC_CONNECTIONS> sync_config_to_fabric_connection_map;
+
     // Helper accessors
     LineSyncConfigType* line_sync_configs() {
         return reinterpret_cast<LineSyncConfigType*>(line_sync_configs_storage.data());
@@ -2211,10 +2232,19 @@ private:
 
         // Initialize line sync configurations with connection array
         uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
+
+        // Parse sync config to fabric connection mapping (same pattern as sender traffic configs)
+        for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
+            sync_config_to_fabric_connection_map[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+        }
+
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
             uint32_t packet_header_address = this->memory_map.get_packet_header_address();
+            DPRINT << "packet_header_address: " << (uint32_t)packet_header_address << ENDL();
+            // Use the mapped connection index instead of 'i'
+            uint8_t connection_idx = sync_config_to_fabric_connection_map[i];
             new (&line_sync_configs()[i])
-                LineSyncConfigType(&sync_connections, i, packet_header_address, line_sync_val);
+                LineSyncConfigType(&sync_connections, connection_idx, packet_header_address, line_sync_val);
 
             // setup packet header fields
             line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(

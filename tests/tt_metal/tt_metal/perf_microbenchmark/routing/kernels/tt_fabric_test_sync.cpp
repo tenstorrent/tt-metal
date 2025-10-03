@@ -37,10 +37,14 @@ void kernel_main() {
 
     // Perform global sync (master sync core) for start of sync
     uint8_t local_sync_iter = 0, global_sync_iter = 0;
+    DPRINT << "sync core: performing global sync for start of sync" << ENDL();
     sync_config->global_sync(global_sync_iter++);
+    DPRINT << "sync core: global sync for start of sync done" << ENDL();
 
     // Perform local sync for start of sync
+    DPRINT << "sync core: performing local sync for start of sync" << ENDL();
     sync_config->local_sync(local_sync_iter++);
+    DPRINT << "sync core: local sync for start of sync done" << ENDL();
 
     // Perform local sync for end of sync
     // first sync tells sync core to start global sync, second sync is waiting for global sync done

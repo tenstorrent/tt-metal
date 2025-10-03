@@ -229,6 +229,8 @@ public:
                         auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                             sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
 
+                        log_info(tt::LogTest, "sync sender: {}, dst_node_ids: {}", sync_sender.device, dst_node_ids);
+
                         // for 2d, we need to spcify the mcast start node id
                         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
                         if (fixture_->is_2D_routing_enabled() &&
@@ -595,10 +597,18 @@ private:
     // SAFETY MODEL:
     // - Receiver buffer holds N packets total
     // - Receiver accumulates B credits before returning (batch_size)
-    // - Maximum buffer occupancy: initial_credits packets (before any credits returned)
+    // - Maximum buffer occupancy: initial_credits (I) packets (sender blocks after sending I packets)
     // - After receiver processes B packets and returns credits, sender can send B more
-    // - Buffer then has: (initial_credits - B) + B = initial_credits packets again
-    // - Therefore: initial_credits + batch_size = N ensures no overflow
+    // - Buffer then has: (I - B) + B = I packets again (steady state)
+    //
+    // CONSTRAINTS: 1 ≤ B ≤ I ≤ N
+    // - B ≥ 1: Batch size must be at least 1 credit
+    // - B ≤ I: Initial credits must cover at least one batch (else deadlock)
+    // - I ≤ N: Initial credits cannot exceed buffer capacity (else overflow)
+    //
+    // OPERATIONAL MODES:
+    // - Pipelined: B < I < N (e.g., B=N/3, I=2N/3) - continuous flow, low latency
+    // - Wrap-around sync: B = I = N - fill/drain buffer, minimal credit overhead
     //
     static std::pair<uint32_t, uint32_t> calculate_credit_config(
         uint32_t receiver_buffer_size_bytes, uint32_t packet_size_bytes) {
@@ -614,12 +624,20 @@ private:
             return {1u, 1u};
         }
 
-        // Calculate batch size (1/3 of buffer for balanced operation)
+        // Calculate batch size (1/3 of buffer for balanced pipelined operation)
         uint32_t batch_size = std::max(1u, max_packets_in_buffer / 3);
 
-        // Initial credits = buffer_capacity - batch_size
-        // This ensures: initial_credits + batch_size = buffer_capacity
+        // Initial credits = 2/3 of buffer for pipelined mode
+        // This maintains: batch_size ≤ initial_credits ≤ buffer_capacity
         uint32_t initial_credits = max_packets_in_buffer - batch_size;
+
+        // Validate constraints: 1 ≤ B ≤ I ≤ N
+        TT_FATAL(
+            batch_size >= 1 && batch_size <= initial_credits && initial_credits <= max_packets_in_buffer,
+            "Credit config violates safety constraints: B={}, I={}, N={} (requires 1 ≤ B ≤ I ≤ N)",
+            batch_size,
+            initial_credits,
+            max_packets_in_buffer);
 
         log_debug(
             tt::LogTest,
@@ -825,7 +843,7 @@ private:
 
             // Process regular senders only (ignore sync senders)
             for (const auto& [core_coord, sender] : test_device.get_senders()) {
-                for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
+                for (const auto& [config, _] : sender.get_configs()) {
                     // trace only one of the links, use link 0 as default
                     uint32_t link_id = config.link_id.value_or(0);
                     if (link_id == 0) {
@@ -1008,7 +1026,7 @@ private:
 
                 // Get unique (direction, link_id) pairs this core sends traffic to
                 std::set<std::pair<RoutingDirection, uint32_t>> core_direction_links;
-                for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
+                for (const auto& [config, _] : sender.get_configs()) {
                     RoutingDirection direction = fixture_->get_forwarding_direction(*config.hops);
                     uint32_t link_id = config.link_id.value_or(0);  // Default to link 0 if not specified
                     core_direction_links.insert({direction, link_id});
@@ -1071,7 +1089,7 @@ private:
         for (const auto& [device_coord, test_device] : test_devices_) {
             const auto& device_id = test_device.get_node_id();
             for (const auto& [core, sender] : test_device.get_senders()) {
-                for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
+                for (const auto& [config, _] : sender.get_configs()) {
                     RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
                     uint32_t config_link_id = config.link_id.value_or(0);
 

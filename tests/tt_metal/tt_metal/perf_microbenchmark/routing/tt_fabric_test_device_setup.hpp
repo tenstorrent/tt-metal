@@ -364,6 +364,15 @@ public:
             } else {
                 // Generate fabric connection args directly using passed parameters
                 const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
+                log_info(
+                    tt::LogTest,
+                    "adding fabric connection args for core {} direction {} link {} fabric_node_id {} neighbor_node_id "
+                    "{}",
+                    core,
+                    static_cast<int>(key.direction),
+                    key.link_idx,
+                    fabric_node_id,
+                    neighbor_node_id);
                 append_fabric_connection_rt_args(
                     fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
             }
@@ -453,7 +462,6 @@ public:
     void connect_to_fabric_router();
     bool validate_results(std::vector<uint32_t>& data) const override;
 
-    // Method to access traffic configurations for traffic analysis
     const std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>>& get_configs() const { return configs_; }
 
     // global line sync configs - stores sync traffic configs with their fabric connection keys
@@ -1154,6 +1162,7 @@ inline void TestDevice::create_sync_kernel() {
     // Get sync connection count from sync_connection_manager_
     size_t num_sync_connections =
         sync_connection_manager_.get_connection_count_for_core(sync_core, true);  // is_sender=true
+    log_info(tt::LogTest, "sync core: {}, num sync connections: {}", sync_core, num_sync_connections);
 
     // Compile-time args
     std::vector<uint32_t> ct_args = {
@@ -1183,27 +1192,19 @@ inline void TestDevice::create_sync_kernel() {
     // Expected sync value for global sync
     local_args.push_back(this->global_sync_val_);
 
+    // Add sync config to fabric connection mapping (same pattern as sender traffic configs)
+    // This mapping tells each LineSyncConfig which fabric connection index to use
+    for (const auto& [sync_config, connection_key] : sync_sender.global_sync_configs_) {
+        uint32_t array_idx =
+            sync_connection_manager_.get_connection_array_index_for_key(sync_core, true, connection_key);
+        TT_FATAL(
+            array_idx != UINT32_MAX, "Failed to find connection array index for sync config on core {}", sync_core);
+        local_args.push_back(array_idx);
+    }
+
     // Add sync routing args for each sync config
-    for (size_t i = 0; i < sync_sender.global_sync_configs_.size(); ++i) {
-        const auto& [sync_config, connection_key] = sync_sender.global_sync_configs_[i];
-
-        // Get array index for this connection key from sync_connection_manager_
-        // uint32_t fabric_conn_idx = sync_connection_manager_.get_connection_array_index_for_key(
-        //     sync_core, true, connection_key);  // is_sender=true
-
-        // Add sync routing args (chip send type + routing info)
-        auto sync_traffic_args = sync_config.get_args(true);
-        log_debug(
-            tt::LogTest,
-            "fabric connection {} (dir={} link={}) has sync config src_node_id: {} dst_node_ids {} hops {} "
-            "mcast_start_hops {} ",
-            fabric_conn_idx,
-            static_cast<int>(connection_key.direction),
-            connection_key.link_idx,
-            sync_config.src_node_id,
-            sync_config.dst_node_ids,
-            sync_config.hops,
-            sync_config.parameters.mcast_start_hops);
+    for (const auto& [sync_config, _] : sync_sender.global_sync_configs_) {
+        auto sync_traffic_args = sync_config.get_args(true /* is_sync_config */);
         local_args.insert(local_args.end(), sync_traffic_args.begin(), sync_traffic_args.end());
     }
 
