@@ -147,10 +147,11 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">rms_norm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.rms_norm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.rms_norm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">default_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.rms_norm" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<dl>
-<dt>Computes RMS norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</dt>
-<dd>
-<p>See <a class="reference external" href="https://arxiv.org/pdf/1910.07467">Root Mean Square Layer Normalization</a> for more details.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.rms_norm(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">epsilon:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">1e-12,</span> <span class="pre">weight:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">bias:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">residual_input_tensor:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">program_config:</span> <span class="pre">Optional[ttnn.ProgramConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.DeviceComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
+<blockquote>
+<div>
+<p>Computes RMS norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
+See <a class="reference external" href="https://arxiv.org/pdf/1910.07467">Root Mean Square Layer Normalization</a> for more details.</p>
 <div class="math notranslate nohighlight">
 \[\text{RMS_norm}(x, \gamma, \beta, \epsilon) = \frac{x}{\sqrt{\epsilon+\frac{1}{N}\sum_{i=1}^{N}x^{2}}} \cdot \gamma + \beta\]</div>
 <dl class="simple">
@@ -162,8 +163,8 @@
 </ul>
 </dd>
 </dl>
-</dd>
-</dl>
+</div>
+</blockquote>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -262,6 +263,12 @@
 </table>
 </div>
 <dl class="simple">
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+</ul>
+</dd>
 <dt>Limitations:</dt>
 <dd>
 <ul class="simple">
@@ -270,6 +277,8 @@
 <li><p>If <cite>residual_input_tensor</cite> is provided, it must match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>’s padded shape.</p></li>
 <li><p>If the <cite>weight</cite>/<cite>bias</cite> tensors are TILE layout: last padded dim must match <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>’s last padded dim.</p></li>
 <li><p>If the <cite>weight</cite>/<cite>bias</cite> tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.</p></li>
+<li><p>If the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> is sharded, the <code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> must also be sharded. In that case, the
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">output</span></code> memory layout and buffer type must match the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>’s memory configuration.</p></li>
 </ul>
 </dd>
 </dl>

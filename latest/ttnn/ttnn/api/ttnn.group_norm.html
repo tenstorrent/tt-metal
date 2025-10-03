@@ -147,10 +147,11 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">group_norm</span></span><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">Operation(python_fully_qualified_name='ttnn.group_norm',</span> <span class="pre">function=&lt;ttnn._ttnn.operations.normalization.group_norm_t</span> <span class="pre">object&gt;,</span> <span class="pre">preprocess_golden_function_inputs=&lt;function</span> <span class="pre">default_preprocess_golden_function_inputs&gt;,</span> <span class="pre">golden_function=&lt;function</span> <span class="pre">_golden_function&gt;,</span> <span class="pre">postprocess_golden_function_outputs=&lt;function</span> <span class="pre">_postprocess_golden_function_outputs&gt;,</span> <span class="pre">is_cpp_operation=True,</span> <span class="pre">is_experimental=False)</span></em><a class="headerlink" href="#ttnn.group_norm" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<dl>
-<dt>Computes group_norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</dt>
-<dd>
-<p>See <a class="reference external" href="https://arxiv.org/abs/1803.08494">Group Normalization</a> for more details.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn.group_norm(input_tensor:</span> <span class="pre">ttnn.Tensor,</span> <span class="pre">num_groups:</span> <span class="pre">int,</span> <span class="pre">epsilon:</span> <span class="pre">float</span> <span class="pre">=</span> <span class="pre">1e-12,</span> <span class="pre">input_mask:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">weight:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">bias:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">reciprocals:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">memory_config:</span> <span class="pre">Optional[ttnn.MemoryConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">dtype:</span> <span class="pre">Optional[ttnn.DataType]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">core_grid:</span> <span class="pre">Optional[ttnn.CoreGrid]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">inplace:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">True,</span> <span class="pre">output_layout:</span> <span class="pre">Optional[ttnn.Layout]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">num_out_blocks:</span> <span class="pre">Optional[int]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">compute_kernel_config:</span> <span class="pre">Optional[ttnn.DeviceComputeKernelConfig]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">negative_mask:</span> <span class="pre">Optional[ttnn.Tensor]</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">use_welford:</span> <span class="pre">bool</span> <span class="pre">=</span> <span class="pre">False)</span> <span class="pre">-&gt;</span> <span class="pre">ttnn.Tensor</span></code></p>
+<blockquote>
+<div>
+<p>Computes group_norm over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
+See <a class="reference external" href="https://arxiv.org/abs/1803.08494">Group Normalization</a> for more details.</p>
 <div class="math notranslate nohighlight">
 \[\text{group_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta\]</div>
 <dl class="simple">
@@ -177,8 +178,8 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 </dd>
 </dl>
 <p>See the sharded example in this document for more details on how to properly prepare the op’s inputs using these functions.</p>
-</dd>
-</dl>
+</div>
+</blockquote>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -285,6 +286,13 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 </table>
 </div>
 <dl>
+<dt>Memory Support:</dt>
+<dd>
+<ul class="simple">
+<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Sharded (L1): Height and Block sharded</p></li>
+</ul>
+</dd>
 <dt>Limitations:</dt>
 <dd>
 <ul class="simple">
@@ -295,13 +303,13 @@ Concretely, the input tensor is expected to have a shape of [N, 1, H*W, C], wher
 <li><p><code class="xref py py-attr docutils literal notranslate"><span class="pre">inplace</span></code> is not supported for TILE-layout inputs and requires input and output layouts to be identical.</p></li>
 <li><p>When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.</p></li>
 <li><p>When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.</p></li>
-<li><p>Width-sharding is not supported (use height or block sharding)</p></li>
+<li><p>Width-sharding is not supported</p></li>
 </ul>
 </dd>
 <dt>Example (Sharded Input):</dt>
 <dd>
 <div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span> <span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">1</span>
+<div class="highlight"><pre><span></span><span class="n">N</span><span class="p">,</span> <span class="n">C</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">1</span>
 <span class="n">num_groups</span> <span class="o">=</span> <span class="mi">2</span>
 
 <span class="c1"># Prepare random inputs</span>
