@@ -120,6 +120,15 @@ struct ReduceScatterProgramArtifacts {
     uint32_t num_cores_per_link;
 };
 
+void reduce_scatter_common_validates(
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    uint32_t dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    const ttnn::MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& optional_output_tensor);
+
 tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     const Tensor& input_tensor,
     Tensor& intermediate_tensor,
