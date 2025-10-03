@@ -3,21 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-from pathlib import Path
 import time
+from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
-import torch
 import pytest
+import torch
 import ttnn
 from loguru import logger
-from transformers import CLIPTextModelWithProjection, CLIPTokenizer
-
-from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
-from models.experimental.tt_dit.parallel.manager import CCLManager
+from models.experimental.tt_dit.encoders.clip.model_clip import CLIPConfig, CLIPEncoder
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.experimental.tt_dit.parallel.manager import CCLManager
 from models.experimental.tt_dit.utils.check import assert_quality
+from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 
 
 @pytest.mark.parametrize(
@@ -44,7 +43,7 @@ from models.experimental.tt_dit.utils.check import assert_quality
 def test_clip_encoder(
     *,
     mesh_device: ttnn.Device,
-    submesh_shape: ttnn.MeshShape,
+    submesh_shape: tuple[int, int],
     model_name: str,
     clip_path: str,
     tokenizer_path: str,
@@ -58,7 +57,7 @@ def test_clip_encoder(
     print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
 
     # For N300 with parallel factor = 1, use factor=1 regardless of submesh shape
-    if mesh_device.shape == (1, 2) and (submesh_shape == (1, 1) or submesh_shape == (1, 2)):
+    if tuple(mesh_device.shape) == (1, 2) and submesh_shape in [(1, 1), (1, 2)]:
         parallel_factor = 1
     else:
         parallel_factor = encoder_submesh.shape[1]
@@ -131,7 +130,7 @@ def test_clip_encoder(
 
     # times TT model inference only
     tt_start_time = time.time()
-    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, encoder_submesh, with_projection=True)
+    tt_sequence_output, tt_pooled_output = tt_clip(tt_prompt, encoder_submesh)
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
@@ -142,22 +141,22 @@ def test_clip_encoder(
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
-    hf_sequence_output = hf_output.hidden_states[-2]  # second-to-last hidden state (before final projection)
-    hf_projected_output = hf_output.text_embeds  # projected/pooled output
+    hf_sequence_output = hf_output.hidden_states[-1]
+    hf_pooled_output = hf_output.text_embeds  # projected pooled output
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
-    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-2])[0])
-    tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-1])[0])
+    tt_pooled_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output)[0])
 
     logger.info(f"TT model execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF model execution time: {hf_execution_time:.4f} seconds")
 
     assert hf_sequence_output.shape == tt_sequence_output_torch.shape
-    assert hf_projected_output.shape == tt_projected_output_torch.shape
+    assert hf_pooled_output.shape == tt_pooled_output_torch.shape
 
     assert_quality(hf_sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
-    assert_quality(hf_projected_output, tt_projected_output_torch, pcc=expected_pcc)
+    assert_quality(hf_pooled_output, tt_pooled_output_torch, pcc=expected_pcc)
 
 
 if __name__ == "__main__":
