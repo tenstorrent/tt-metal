@@ -1052,7 +1052,6 @@ jobs:
                 -H "Content-Type: application/json" \
                 --data-binary @"$TEMP_JSON_FILE" \
                 "$COMMENTS_API")
-
               # Clean up temp file
               rm -f "$TEMP_JSON_FILE"
 
