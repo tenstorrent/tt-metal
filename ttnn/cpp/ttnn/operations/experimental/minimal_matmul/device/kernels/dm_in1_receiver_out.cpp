@@ -45,11 +45,13 @@ void kernel_main() {
     const uint64_t in1_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
 
+    DPRINT << "in1recv: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
+           << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                DPRINT << "read in1 on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
-                       << ENDL();
+                DPRINT << "in1recv: read in1 on m_block: " << m_block << ", n_block: " << n_block
+                       << ", k_block: " << k_block << ENDL();
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
 #ifndef SKIP_IN1
@@ -66,13 +68,13 @@ void kernel_main() {
 #ifndef SKIP_OUT
             uint32_t out_read_ptr = get_read_ptr(cb_id_out);
             // safe_print_bf16_tile(out_read_ptr);
-            DPRINT << "write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
+            DPRINT << "in1recv: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
             for (uint32_t m = 0; m < M_block_tiles; m++) {
                 uint32_t m_id = m_block * M_block_tiles + m;
                 for (uint32_t n = 0; n < N_block_tiles; n++) {
                     uint32_t n_id = n_block * N_block_tiles + n;
                     uint32_t tile_id = m_id * N_tiles + n_id;
-                    DPRINT << "write out tile " << tile_id << ENDL();
+                    // DPRINT << "write out tile " << tile_id << ENDL();
                     noc_async_write_tile(tile_id, out_reader, out_read_ptr);
                     out_read_ptr += input_tile_size;
                 }

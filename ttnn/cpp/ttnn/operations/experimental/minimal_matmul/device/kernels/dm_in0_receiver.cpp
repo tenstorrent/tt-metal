@@ -36,11 +36,14 @@ void kernel_main() {
     const uint64_t in0_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
 
+    DPRINT << "in0recv: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
+           << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
+
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                DPRINT << "read in0 on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
-                       << ENDL();
+                DPRINT << "in0recv: read in0 on m_block: " << m_block << ", n_block: " << n_block
+                       << ", k_block: " << k_block << ENDL();
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 #ifndef SKIP_IN0

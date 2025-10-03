@@ -326,30 +326,29 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 (std::uint32_t)in1_mcast_sender.y,  // in1_mcast_sender_noc_y
             };
             SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
-
-            std::vector<uint32_t> compute_compile_time_args = {
-                M_blocks_per_core * core.y,
-                M_blocks_per_core * (core.y + 1) - 1,
-                K_tiles,
-                N_blocks_per_core * core.x,
-                N_blocks_per_core * (core.x + 1) - 1,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                subblock_h,
-                subblock_w};
-
-            // auto compute_kernels_id = CreateKernel(
-            CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
-                core,
-                tt::tt_metal::ComputeConfig{
-                    .math_fidelity = math_fidelity,
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                    .math_approx_mode = math_approx_mode,
-                    .compile_args = compute_compile_time_args});
         }
+        std::vector<uint32_t> compute_compile_time_args = {
+            M_blocks_per_core * core.y,
+            M_blocks_per_core * (core.y + 1) - 1,
+            K_tiles,
+            N_blocks_per_core * core.x,
+            N_blocks_per_core * (core.x + 1) - 1,
+            M_block_tiles,
+            K_block_tiles,
+            N_block_tiles,
+            subblock_h,
+            subblock_w};
+
+        // auto compute_kernels_id = CreateKernel(
+        CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
+            core,
+            tt::tt_metal::ComputeConfig{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .math_approx_mode = math_approx_mode,
+                .compile_args = compute_compile_time_args});
     }
 
     auto override_runtime_arguments_callback =
