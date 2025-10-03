@@ -50,7 +50,7 @@ def create_yolov11_input_tensors(
         analyze_tensor_precision(ttnn_input_tensor, "PREPROCESSING", "AFTER_SUB_MODULE_RESHAPE")
         
         ttnn_input_tensor = ttnn.from_torch(
-            ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, mesh_mapper=inputs_mesh_mapper
+            ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper
         )
         # Convert back to torch for analysis
         ttnn_torch_converted = ttnn.to_torch(ttnn_input_tensor)
