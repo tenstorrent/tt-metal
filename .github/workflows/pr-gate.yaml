@@ -44,6 +44,7 @@ on:
   push:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
+      - afuller/tt-train-from-pkgs
 
 concurrency:
   # Groups to control cancelling of obsolete runs.
