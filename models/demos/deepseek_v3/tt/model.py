@@ -6,6 +6,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -339,6 +340,7 @@ class Model(SharedStateAddOn, AbstractModule):
             for meta_layer_idx, (is_padding_layer, layer_idx) in enumerate(
                 zip(per_row_is_padding_layer, per_row_meta_layer_indices, strict=True)
             ):
+                logger.debug(f"Processing row {row_idx}, layer {layer_idx} (meta layer {meta_layer_idx})")
                 if is_padding_layer:
                     continue
                 x_next = block_forward_fn(x, row_idx, block_configs[meta_layer_idx], page_tables[layer_idx])
