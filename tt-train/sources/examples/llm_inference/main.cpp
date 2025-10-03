@@ -78,7 +78,6 @@ int main(int argc, char **argv) {
     app.add_option("-c,--config", model_path, "Path to the LLM config")->default_val(model_path);
     app.add_option("--safetensors", safetensors_path, "Path to the model safetensors file")
         ->default_val(safetensors_path);
-    app.add_option("--temperature", temperature, "Sampling temperature")->default_val(temperature);
     app.add_option("--num_tokens", tokens_to_generate, "Number of tokens to generate")->default_val(tokens_to_generate);
     CLI11_PARSE(app, argc, argv);
 
@@ -94,6 +93,9 @@ int main(int argc, char **argv) {
 
     // Load tokenizer
     auto tokenizer = std::make_shared<ttml::tokenizers::BPETokenizer>(training_config.tokenizer_path);
+
+    // Set eval parameters
+    temperature = eval_config.temperature;
 
     ttml::autograd::ctx().set_seed(training_config.seed);
     fmt::print("Setting random seed to: {}\n", training_config.seed);
