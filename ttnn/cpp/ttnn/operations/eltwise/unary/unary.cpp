@@ -412,7 +412,7 @@ Tensor Hardmish::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::HARDMISH;
 
-    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+    return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{UnaryOpType::HARDMISH}}, memory_config, optional_output_tensor);
 }
 
 Tensor Tanhshrink::invoke(

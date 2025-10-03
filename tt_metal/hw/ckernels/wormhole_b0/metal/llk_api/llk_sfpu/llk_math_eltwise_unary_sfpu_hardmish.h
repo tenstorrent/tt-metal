@@ -10,7 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
@@ -20,7 +19,7 @@ inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
 template <bool APPROXIMATE, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardmish(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+        sfpu::hardmish<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

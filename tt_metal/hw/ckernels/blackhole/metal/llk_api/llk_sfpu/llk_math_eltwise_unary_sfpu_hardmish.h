@@ -10,7 +10,6 @@
 
 namespace ckernel {
 
-// New LLK SFPU APIs
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardmish_init() {
