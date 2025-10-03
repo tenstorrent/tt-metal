@@ -76,45 +76,46 @@ HalCoreInfoType create_idle_eth_mem_map() {
     // No active fw on this core
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);
 
-    std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
-    std::vector<HalJitBuildConfig> processor_types(1);
-    for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
-        DeviceAddr fw_base, local_init, fw_launch;
-        uint32_t fw_launch_value;
-        ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
-        switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
-            case EthProcessorTypes::DM0: {
-                fw_base = MEM_IERISC_FIRMWARE_BASE;
-                local_init = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                fw_launch = IERISC_RESET_PC;
-                fw_launch_value = fw_base;
-            } break;
-            case EthProcessorTypes::DM1: {
-                fw_base = MEM_SUBORDINATE_IERISC_FIRMWARE_BASE;
-                local_init = MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
-                fw_launch = SUBORDINATE_IERISC_RESET_PC;
-                fw_launch_value = fw_base;
-            } break;
-            default: TT_THROW("Unexpected processor class {} for Quasar Idle Ethernet", processor_class_idx);
-        }
-        processor_types[0] = HalJitBuildConfig{
-            .fw_base_addr = fw_base,
-            .local_init_addr = local_init,
-            .fw_launch_addr = fw_launch,
-            .fw_launch_addr_value = fw_launch_value,
-            .memory_load = memory_load,
-        };
-        processor_classes[processor_class_idx] = processor_types;
-    }
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes(0);
+    // TODO Disabling Erisc FW for now
+    // std::vector<HalJitBuildConfig> processor_types(1);
+    // for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
+    //     DeviceAddr fw_base, local_init, fw_launch;
+    //     uint32_t fw_launch_value;
+    //     ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
+    //     switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
+    //         case EthProcessorTypes::DM0: {
+    //             fw_base = MEM_IERISC_FIRMWARE_BASE;
+    //             local_init = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+    //             fw_launch = IERISC_RESET_PC;
+    //             fw_launch_value = fw_base;
+    //         } break;
+    //         case EthProcessorTypes::DM1: {
+    //             fw_base = MEM_SUBORDINATE_IERISC_FIRMWARE_BASE;
+    //             local_init = MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
+    //             fw_launch = SUBORDINATE_IERISC_RESET_PC;
+    //             fw_launch_value = fw_base;
+    //         } break;
+    //         default: TT_THROW("Unexpected processor class {} for Quasar Idle Ethernet", processor_class_idx);
+    //     }
+    //     processor_types[0] = HalJitBuildConfig{
+    //         .fw_base_addr = fw_base,
+    //         .local_init_addr = local_init,
+    //         .fw_launch_addr = fw_launch,
+    //         .fw_launch_addr_value = fw_launch_value,
+    //         .memory_load = memory_load,
+    //     };
+    //     processor_classes[processor_class_idx] = processor_types;
+    // }
 
     static_assert(sizeof(mailboxes_t) <= MEM_IERISC_MAILBOX_SIZE);
     return {
         HalProgrammableCoreType::IDLE_ETH,
         CoreType::ETH,
-        processor_classes,
-        mem_map_bases,
-        mem_map_sizes,
-        fw_mailbox_addr,
+        std::move(processor_classes),
+        std::move(mem_map_bases),
+        std::move(mem_map_sizes),
+        std::move(fw_mailbox_addr),
         false /*supports_cbs*/,
         false /*supports_receiving_multicast_cmds*/,
         idle_eth_dev_msgs::create_factory()};

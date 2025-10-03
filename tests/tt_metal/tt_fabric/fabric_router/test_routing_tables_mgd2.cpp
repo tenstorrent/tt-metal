@@ -502,9 +502,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyMeshMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected
@@ -593,9 +593,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXYMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // check all neighbors including wrap-around connections are present in TORUS_XY
@@ -669,9 +669,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusXMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected
@@ -755,9 +755,9 @@ TEST(MeshGraphValidation, TestSingleGalaxyTorusYMGD2) {
         auto row = i / mesh_row_size;
         auto col = i % mesh_row_size;
         int N_wrap = (i - mesh_row_size + mesh_size) % mesh_size;
-        int E_wrap = row * mesh_row_size + (col + 1) % mesh_row_size;
+        int E_wrap = (row * mesh_row_size) + ((col + 1) % mesh_row_size);
         int S_wrap = (i + mesh_row_size) % mesh_size;
-        int W_wrap = row * mesh_row_size + (col - 1 + mesh_row_size) % mesh_row_size;
+        int W_wrap = (row * mesh_row_size) + ((col - 1 + mesh_row_size) % mesh_row_size);
 
         // _wrap represents the wrapped neighbor indices
         // if X == X_wrap, it means that the neighbor is within the mesh and should be connected

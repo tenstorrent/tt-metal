@@ -86,8 +86,8 @@ std::vector<float> reference_implementation_conv2d(
     uint32_t stride_width = stride[1];
 
     // Calculate output height and width
-    uint32_t Xh = (input_height - kernel_height + 2 * padding_height) / stride_height + 1;
-    uint32_t Xw = (input_width - kernel_width + 2 * padding_width) / stride_width + 1;
+    uint32_t Xh = ((input_height - kernel_height + 2 * padding_height) / stride_height) + 1;
+    uint32_t Xw = ((input_width - kernel_width + 2 * padding_width) / stride_width) + 1;
 
     std::vector<float> output = std::vector<float>(batch_size * output_channels * Xh * Xw);
     uint32_t i = 0;
@@ -103,12 +103,12 @@ std::vector<float> reference_implementation_conv2d(
                                 if (h + kh - padding_height >= 0 && h + kh - padding_height < input_height &&
                                     w + kw - padding_width >= 0 && w + kw - padding_width < input_width) {
                                     sum += input
-                                               [n * input_channels * input_height * input_width +
-                                                ci * input_height * input_width +
-                                                (h + kh - padding_height) * input_width + w + kw - padding_width] *
+                                               [(n * input_channels * input_height * input_width) +
+                                                (ci * input_height * input_width) +
+                                                ((h + kh - padding_height) * input_width) + w + kw - padding_width] *
                                            kernel
-                                               [co * input_channels * kernel_height * kernel_width +
-                                                ci * kernel_height * kernel_width + kh * kernel_width + kw];
+                                               [(co * input_channels * kernel_height * kernel_width) +
+                                                (ci * kernel_height * kernel_width) + (kh * kernel_width) + kw];
                                 }
                             }
                         }

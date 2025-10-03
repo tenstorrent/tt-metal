@@ -92,7 +92,7 @@ TEST_F(MeshDispatchFixture, TensixProgramGlobalCircularBuffers) {
                 receiver_noc_coords.push_back(mesh_device->worker_core_from_logical_core(receiver_core));
             }
         }
-        std::vector<uint32_t> sender_runtime_args(11 + receiver_noc_coords.size() * 2);
+        std::vector<uint32_t> sender_runtime_args(11 + (receiver_noc_coords.size() * 2));
         uint32_t sender_args_idx = 0;
         sender_runtime_args[sender_args_idx++] = global_cb.config_address();  // config_addr
         sender_runtime_args[sender_args_idx++] = 1;                           // is_sender

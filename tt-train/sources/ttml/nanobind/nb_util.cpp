@@ -48,7 +48,9 @@ constexpr auto BFLOAT = "Unsupported type: Bfloat";
 }
 
 nb::ndarray<nb::numpy> make_numpy_tensor(
-    const tt::tt_metal::Tensor& t, std::optional<tt::tt_metal::DataType> new_type) {
+    const tt::tt_metal::Tensor& t,
+    std::optional<tt::tt_metal::DataType> new_type,
+    const ttnn::distributed::MeshToTensor* composer) {
     const auto make_numpy_tensor_from_data =
         []<typename NumpyType>(const auto& tensor_data, const auto& tensor_spec /*, const auto& tensor_strides*/) {
             const tt::tt_metal::Shape& tensor_shape = tensor_spec.logical_shape();
@@ -84,8 +86,9 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
         return ttnn::untilize_with_unpadding(tensor, output_tensor_end, std::nullopt);
     };
 
-    const auto impl = [&make_numpy_tensor_from_data, &convert_to_row_major]<typename MetalType, typename NumpyType>(
-                          const tt::tt_metal::Tensor& tensor) {
+    const auto impl = [&make_numpy_tensor_from_data,
+                       &convert_to_row_major,
+                       composer]<typename MetalType, typename NumpyType>(const tt::tt_metal::Tensor& tensor) {
         if (tensor.storage_type() == ttnn::types::StorageType::HOST) {
             if (tensor.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
                 const auto row_major_tensor = convert_to_row_major(tensor);
@@ -96,7 +99,22 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
             const auto tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(tensor);
             return make_numpy_tensor_from_data.template operator()<NumpyType>(tensor_data, tensor.tensor_spec());
         }
-        const auto cpu_tensor = tensor.cpu(/*blocking=*/true);
+
+        // Move to CPU and convert to row major
+        auto cpu_tensor = tensor.cpu(/*blocking=*/true);
+        cpu_tensor = cpu_tensor.to_layout(tt::tt_metal::Layout::ROW_MAJOR);
+
+        // If composer is provided, use it to compose distributed tensor shards
+        if (composer != nullptr) {
+            auto composed_result = composer->compose<MetalType>(cpu_tensor);
+            auto& vec = std::get<0>(composed_result);
+            auto& shape = std::get<1>(composed_result);
+
+            // Create a temporary tensor spec with the composed shape
+            auto composed_spec = tt::tt_metal::TensorSpec(shape, cpu_tensor.tensor_spec().tensor_layout());
+            return make_numpy_tensor_from_data.template operator()<NumpyType>(vec, composed_spec);
+        }
+
         const auto cpu_tensor_data = tt::tt_metal::host_buffer::get_as<const MetalType>(cpu_tensor);
         const auto cpu_tensor_spec = cpu_tensor.tensor_spec();
         const auto cpu_tensor_strides = cpu_tensor.strides();
@@ -249,7 +267,10 @@ nb::ndarray<nb::numpy> make_numpy_tensor(
 }
 
 tt::tt_metal::Tensor make_metal_tensor(
-    nb::ndarray<> numpy_data, tt::tt_metal::Layout target_layout, std::optional<tt::tt_metal::DataType> new_type) {
+    nb::ndarray<> numpy_data,
+    tt::tt_metal::Layout target_layout,
+    std::optional<tt::tt_metal::DataType> new_type,
+    const ttnn::distributed::TensorToMesh* mapper) {
     const auto numpy_data_type = numpy_data.dtype();
     NB_COND_THROW(
         !(numpy_data_type.bits % 8),
@@ -259,7 +280,7 @@ tt::tt_metal::Tensor make_metal_tensor(
 
     const auto rank = numpy_data.ndim();
 
-    const auto impl = [&numpy_data_type, rank, &numpy_data, target_layout]<typename NumpyType>(
+    const auto impl = [&numpy_data_type, rank, &numpy_data, target_layout, mapper]<typename NumpyType>(
                           tt::tt_metal::DataType tensor_data_type) {
         static_assert(std::is_same_v<NumpyType, std::remove_cvref_t<NumpyType>>);
         NB_COND_THROW(
@@ -290,7 +311,8 @@ tt::tt_metal::Tensor make_metal_tensor(
         const auto make_device_tensor = [target_layout,
                                          tensor_data_type,
                                          &numpy_data,
-                                         &shape_container]<typename MetalType>() -> tt::tt_metal::Tensor {
+                                         &shape_container,
+                                         mapper]<typename MetalType>() -> tt::tt_metal::Tensor {
             const tt::tt_metal::Shape tensor_shape(shape_container);
             const tt::tt_metal::MemoryConfig tensor_memory_config{};
             // Our tensor will initially be created from row-major numpy data, regardless of target layout
@@ -306,14 +328,32 @@ tt::tt_metal::Tensor make_metal_tensor(
                 std::vector<MetalType> converted_data;
                 converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
 
-                auto row_major_tensor = tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
+                auto row_major_tensor =
+                    (mapper != nullptr)
+                        ? ttnn::distributed::create_distributed_tensor(
+                              ttsl::make_const_span(converted_data), tensor_shape, tensor_layout, *mapper)
+                        : tt::tt_metal::Tensor::from_vector(converted_data, tensor_spec, device);
+
+                // Move distributed tensor to device
+                if (mapper != nullptr) {
+                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
+                }
 
                 if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
                     return row_major_tensor;
                 }
                 return ttnn::tilize_with_zero_padding(row_major_tensor);
             } else {
-                auto row_major_tensor = tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
+                auto row_major_tensor =
+                    (mapper != nullptr)
+                        ? ttnn::distributed::create_distributed_tensor(
+                              ttsl::make_const_span(numpy_data_span), tensor_shape, tensor_layout, *mapper)
+                        : tt::tt_metal::Tensor::from_span(numpy_data_span, tensor_spec, device);
+
+                // Move distributed tensor to device
+                if (mapper != nullptr) {
+                    row_major_tensor = ttnn::to_device(row_major_tensor, device, tt::tt_metal::MemoryConfig{});
+                }
 
                 if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
                     return row_major_tensor;

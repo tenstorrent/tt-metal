@@ -183,8 +183,8 @@ process_mcast_in0_program_and_create_override_variables(
     uint32_t start_core_y = start_core.y;
     uint32_t num_cores_c = compute_with_storage_grid_size.x;
 
-    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores_with_work = num_blocks_total;
 
@@ -747,8 +747,8 @@ process_mcast_in0_program_and_create_override_variables(
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
-    uint32_t last_out_num_blocks_w = (last_per_core_N - 1) / out_block_w + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
+    uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
     uint32_t last_subblock_of_last_block_w =
         last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
     uint32_t last_block_padded_subblock_tiles_addr_skip =
@@ -860,7 +860,8 @@ process_mcast_in0_program_and_create_override_variables(
                 // WRITER
                 // out tensor args
                 (std::uint32_t)out_buffer->address(),
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N  // out_tensor_start_tile_id
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
 
             if (output_idx_x == num_blocks_x - 1) {
@@ -1043,8 +1044,8 @@ process_mcast_in1_program_and_create_override_variables(
 
     CoreCoord start_core = {0, 0};
 
-    uint32_t num_blocks_y = (M - 1) / per_core_M + 1;
-    uint32_t num_blocks_x = (N - 1) / per_core_N + 1;
+    uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
     uint32_t num_cores = num_blocks_total;
 
@@ -1473,8 +1474,8 @@ process_mcast_in1_program_and_create_override_variables(
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
-    uint32_t last_out_num_blocks_h = (last_per_core_M - 1) / out_block_h + 1;
-    uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
+    uint32_t last_out_num_blocks_h = ((last_per_core_M - 1) / out_block_h) + 1;
+    uint32_t last_block_num_nonzero_subblocks_h = ((last_out_block_h - 1) / out_subblock_h) + 1;
     uint32_t last_subblock_of_last_block_h =
         last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
     uint32_t last_block_padded_block_tiles_h_skip =
@@ -1511,7 +1512,8 @@ process_mcast_in1_program_and_create_override_variables(
                 // WRITER
                 // out tensor args
                 (std::uint32_t)out_buffer->address(),
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N,  // out_tensor_start_tile_id
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * N),  // out_tensor_start_tile_id
 
                 // padding args (READER)
                 (std::uint32_t)out_block_w,  // last_block_w
@@ -1550,8 +1552,9 @@ process_mcast_in1_program_and_create_override_variables(
 
                 // WRITER
                 // out tensor args
-                (std::uint32_t)out_buffer->address(),                                     // out_tensor_addr
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * N  // out_tensor_start_tile_id
+                (std::uint32_t)out_buffer->address(),  // out_tensor_addr
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * N)  // out_tensor_start_tile_id
             };
 
             if (output_idx_y == num_blocks_y - 1) {
@@ -2610,8 +2613,8 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     uint32_t num_cores = num_cores_x * num_cores_y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
-    uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
-    uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
+    uint32_t num_blocks_y = ((Mt - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
     // TODO: Max used grid can actually exceed mcast receiver grid if in0 is sharded
@@ -3004,8 +3007,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t num_cores_available = num_cores_x * num_cores_y;
 
     // Calculate number of blocks along x and y; tensor dims are padded up to 512
-    uint32_t num_blocks_y = (Mt - 1) / per_core_M + 1;
-    uint32_t num_blocks_x = (Nt - 1) / per_core_N + 1;
+    uint32_t num_blocks_y = ((Mt - 1) / per_core_M) + 1;
+    uint32_t num_blocks_x = ((Nt - 1) / per_core_N) + 1;
     uint32_t num_blocks_total = num_blocks_y * num_blocks_x;
 
     TT_FATAL(
@@ -3434,8 +3437,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = Nt % per_core_N == 0 ? per_core_N : Nt % per_core_N;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
-    uint32_t last_out_num_blocks_w = (last_per_core_N - 1) / out_block_w + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
+    uint32_t last_out_num_blocks_w = ((last_per_core_N - 1) / out_block_w) + 1;
+    uint32_t last_block_num_nonzero_subblocks_w = ((last_out_block_w - 1) / out_subblock_w) + 1;
     uint32_t last_subblock_of_last_block_w =
         last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
     uint32_t last_block_padded_subblock_tiles_addr_skip =
@@ -3507,7 +3510,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
                 // WRITER
                 // out tensor args
                 (std::uint32_t)out_buffer->address(),
-                (std::uint32_t)output_idx_x * per_core_N + output_idx_y * per_core_M * Nt  // out_tensor_start_tile_id
+                ((std::uint32_t)output_idx_x * per_core_N) +
+                    (output_idx_y * per_core_M * Nt)  // out_tensor_start_tile_id
             };
 
             if (output_idx_x == num_blocks_x - 1) {

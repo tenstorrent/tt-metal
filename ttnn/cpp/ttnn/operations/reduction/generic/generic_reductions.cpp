@@ -199,11 +199,17 @@ static Tensor reduce_impl(
     bool single_reduce_op = (dim.empty()) || (dim.size() == 1 && (dim[0] == rank - 1 || dim[0] == rank - 2)) ||
                             (dim.size() == 2 && dim[1] == rank - 1 && dim[0] == rank - 2);
     if (!single_reduce_op) {
-        auto reduce_nd_loop = [&](const bool use_reduce_type) -> Tensor {
+        auto reduce_nd_loop = [&](const bool use_reduce_type, float scalar) -> Tensor {
             Tensor output_tensor = input_tensor_arg;
+            bool first = true;
             for (int i_dim = rank - 1; i_dim >= 0; i_dim--) {
                 bool found = std::find(dim.begin(), dim.end(), i_dim) != dim.end();
                 if (found) {
+                    // Only apply the scalar once when reducing dim-by-dim,
+                    // otherwise the result will be scaled multiple times.
+                    float effective_scalar = first ? scalar : 1.0;
+                    first = false;
+
                     bool transpose = i_dim < rank - 2;
                     int reduce_dim = i_dim;
                     if (transpose) {
@@ -217,7 +223,7 @@ static Tensor reduce_impl(
                             /*keepdim=*/true,
                             memory_config,
                             compute_kernel_config,
-                            scalar,
+                            effective_scalar,
                             non_height_width_dims);
                     } else {
                         output_tensor = reduce_impl<ReduceType::Sum>(
@@ -226,7 +232,7 @@ static Tensor reduce_impl(
                             /*keepdim=*/true,
                             memory_config,
                             compute_kernel_config,
-                            scalar,
+                            effective_scalar,
                             non_height_width_dims);
                     }
                     if (transpose) {
@@ -239,12 +245,14 @@ static Tensor reduce_impl(
         constexpr bool linear_type =
             reduce_type == ReduceType::Sum || reduce_type == ReduceType::Max || reduce_type == ReduceType::Min;
         if (dim.size() == 1 || linear_type) {
-            output_tensor = reduce_nd_loop(/*use_reduce_type=*/true);
+            output_tensor = reduce_nd_loop(/*use_reduce_type=*/true, scalar);
         } else if constexpr (reduce_type == ReduceType::Mean) {
+            int reduced_volume = 1;
+            for (int axis : dim) {
+                reduced_volume *= input_shape[axis];
+            }
             output_tensor = reduce_nd_loop(
-                /*use_reduce_type=*/false);
-            float inv_volume = 1.0f / input_tensor_arg.logical_volume();
-            output_tensor = ttnn::mul_sfpu(inv_volume, output_tensor, memory_config);
+                /*use_reduce_type=*/false, scalar / reduced_volume);
         } else {
             TT_THROW("Unsupported reduction operation");
         }

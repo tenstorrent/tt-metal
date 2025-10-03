@@ -531,7 +531,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
         runtime_args_0.push_back(0);
         runtime_args_1.push_back(input_num_pages_per_stick[input_id]);
         runtime_args_1.push_back(input_num_sticks[input_id] - input_num_sticks_per_risc);
-        runtime_args_1.push_back(input_write_offsets[input_id] + output_stride * input_num_sticks_per_risc);
+        runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * input_num_sticks_per_risc));
         runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
     }
 

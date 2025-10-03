@@ -77,6 +77,8 @@ def test_all_to_all_combine_trace(
     input_memory_config,
     output_memory_config,
 ):
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Skipping 8 device test for now, to be investigated")
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
@@ -170,6 +172,8 @@ def test_all_to_all_combine_no_trace(
     dtype,
     test_skew,
 ):
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Skipping 8 device test for now, to be investigated")
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, axis)
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices

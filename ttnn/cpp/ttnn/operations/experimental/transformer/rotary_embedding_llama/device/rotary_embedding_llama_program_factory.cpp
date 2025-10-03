@@ -236,7 +236,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_multi_core(
 
     for (uint32_t batch_parallel = 0; batch_parallel < batch_parallel_factor; batch_parallel++) {
         for (uint32_t seq_parallel = 0; seq_parallel < seq_parallel_factor; seq_parallel++) {
-            uint32_t core_idx = batch_parallel * seq_parallel_factor + seq_parallel;
+            uint32_t core_idx = (batch_parallel * seq_parallel_factor) + seq_parallel;
             uint32_t start_batch = batch_parallel * batch_per_core;
             uint32_t end_batch = std::min(start_batch + batch_per_core, batch);
             uint32_t start_seq = seq_parallel * seq_per_core;

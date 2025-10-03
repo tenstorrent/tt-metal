@@ -972,32 +972,44 @@ def is_grayskull():
     return "grayskull" in ARCH_NAME
 
 
-def skip_for_blackhole(reason_str="not working for Blackhole"):
-    return pytest.mark.skipif(is_blackhole(), reason=reason_str)
-
-
-def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
-    return pytest.mark.skipif(is_wormhole_b0(), reason=reason_str)
-
-
-def run_for_blackhole(reason_str="only runs for Blackhole"):
-    return pytest.mark.skipif(not is_blackhole(), reason=reason_str)
-
-
-def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
-    return pytest.mark.skipif(not is_wormhole_b0(), reason=reason_str)
-
-
-def run_for_grayskull(reason_str="only runs for Grayskull"):
-    return pytest.mark.skipif(not is_grayskull(), reason=reason_str)
-
-
 def is_slow_dispatch():
     return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
 
 
+def ti_skip(condition, reason="Invalid test parameters"):
+    return pytest.mark.skipif(condition, reason="Skipping unsupported case: " + reason)
+
+
+def skip_for_blackhole(reason_str="not a blackhole test"):
+    return ti_skip(is_blackhole(), reason=reason_str)
+
+
+def skip_for_wormhole_b0(reason_str="not a wormhole test"):
+    return ti_skip(is_wormhole_b0(), reason=reason_str)
+
+
+def run_for_blackhole(reason_str="only runs for Blackhole"):
+    return ti_skip(not is_blackhole(), reason=reason_str)
+
+
+def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):
+    return ti_skip(not is_wormhole_b0(), reason=reason_str)
+
+
+def run_for_grayskull(reason_str="only runs for Grayskull"):
+    return ti_skip(not is_grayskull(), reason=reason_str)
+
+
+def skip_for_n_dev(n, reason_str="Test is not meant for this number of devices"):
+    return ti_skip(ttnn.get_num_devices() == n, reason=reason_str)
+
+
+def skip_for_n_or_less_dev(n, reason_str="Test is not meant for this number of devices"):
+    return ti_skip(ttnn.get_num_devices() <= n, reason=reason_str)
+
+
 def skip_for_slow_dispatch(reason_str="not working for slow dispatch"):
-    return pytest.mark.skipif(is_slow_dispatch(), reason=reason_str)
+    return ti_skip(is_slow_dispatch(), reason=reason_str)
 
 
 def get_devices_for_t3000(all_devices, num_devices):

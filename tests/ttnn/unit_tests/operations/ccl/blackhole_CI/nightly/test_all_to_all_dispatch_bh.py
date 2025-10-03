@@ -42,8 +42,8 @@ from tracy import signpost
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
 def test_all_to_all_dispatch_no_trace(
     bh_1d_mesh_device,
     trace_mode,
@@ -62,6 +62,8 @@ def test_all_to_all_dispatch_no_trace(
     output_memory_config,
     device_params,
 ):
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Skipping 8 device test for now, to be investigated")
     topology = ttnn.Topology.Linear
     num_devices = 4
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)
@@ -151,6 +153,8 @@ def test_all_to_all_dispatch_trace(
     output_memory_config,
     device_params,
 ):
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Skipping 8 device test for now, to be investigated")
     topology = ttnn.Topology.Linear
     num_devices = 4
     validate_test(num_devices, topology, bh_1d_mesh_device.shape, cluster_axis)

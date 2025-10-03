@@ -95,6 +95,58 @@ Tensor local_sum(
     return sum_tensor;
 }
 
+// moreh sum does not support float32 datatye
+Tensor local_sum_float32(
+    const ttnn::Tensor& gathered_tensor,
+    int reduce_dim,
+    uint32_t num_devices,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) {
+    const auto& input_shape = gathered_tensor.logical_shape();
+    int rank = input_shape.size();
+
+    // 1. Reshape to expose the device dimension
+    uint32_t dim_to_split_size = input_shape[reduce_dim];
+    TT_FATAL(
+        dim_to_split_size % num_devices == 0,
+        "Gathered dimension size ({}) must be divisible by the number of devices ({}).",
+        dim_to_split_size,
+        num_devices);
+    uint32_t local_dim_size = dim_to_split_size / num_devices;
+    // if row major convert first to tile layout
+    auto input_tensor = gathered_tensor;
+    bool is_rm = (gathered_tensor.layout() == Layout::ROW_MAJOR);
+    if (is_rm) {
+        input_tensor = ttnn::to_layout(gathered_tensor, Layout::TILE);
+    }
+
+    ttnn::SmallVector<uint32_t> reshape_dims_vec;
+    for (int i = 0; i < rank; ++i) {
+        if (i == reduce_dim) {
+            reshape_dims_vec.push_back(num_devices);
+            reshape_dims_vec.push_back(local_dim_size);
+        } else {
+            reshape_dims_vec.push_back(input_shape[i]);
+        }
+    }
+    ttnn::Shape reshaped_shape(reshape_dims_vec);
+    auto reshaped_tensor = ttnn::reshape(input_tensor, reshaped_shape);
+
+    // 2. Transpose to bring the device dimension next to the data to be reduced
+    // Shape is now [N, num_devices, local_rows, H, W]
+    // We want to sum over num_devices, so we transpose it with local_rows
+    // New shape: [N, local_rows, num_devices, H, W]
+    int device_dim = reduce_dim;
+    int local_rows_dim = reduce_dim + 1;
+    auto transposed_tensor = ttnn::transpose(reshaped_tensor, device_dim, local_rows_dim);
+
+    // 3. Reduce along the device dimension (which is now at `local_rows_dim`)
+    auto sum_tensor = ttnn::sum(transposed_tensor, local_rows_dim, false, memory_config);
+    if (is_rm) {
+        return ttnn::to_layout(sum_tensor, Layout::ROW_MAJOR);
+    }
+    return sum_tensor;
+}
+
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const uint32_t num_devices,
@@ -114,7 +166,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         ttnn::ccl::get_active_physical_devices(input_tensor).size());
 
     auto padded_tensor = input_tensor;
-    auto initial_shape = input_tensor.padded_shape();
+    auto initial_shape = input_tensor.logical_shape();
     // force RS+AG by using dim 3 after padding
     // temporary before adding support for RS dim 2
     if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
@@ -153,7 +205,11 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             std::nullopt);
         reshaped_tensor.deallocate();
 
-        auto sum_tensor = local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
+        bool is_float32 = (input_tensor.dtype() == DataType::FLOAT32);
+        auto sum_tensor =
+            is_float32
+                ? local_sum_float32(gather_tensor, static_cast<int>(composite_dim), num_devices, out_memory_config)
+                : local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
         gather_tensor.deallocate();
 
         return ttnn::reshape(sum_tensor, initial_shape);
@@ -197,7 +253,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         barrier_semaphores[1]);
     scattered_tensor.deallocate();
     // slice to inital shape if needed using slice
-    if (gathered.padded_shape() != initial_shape) {
+    if (gathered.logical_shape() != initial_shape) {
         ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
@@ -228,7 +284,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         (cluster_axis == 0) ? mesh_view.get_devices_on_column(0) : mesh_view.get_devices_on_row(0);
     uint32_t dim = finding_scatter_dim(input_tensor.padded_shape(), input_tensor.layout(), devices.size());
     auto padded_tensor = input_tensor;
-    auto initial_shape = input_tensor.padded_shape();
+    auto initial_shape = input_tensor.logical_shape();
     // force RS+AG by using dim 3 after padding
     // temporary before adding support for RS dim 2
     if (dim == 2 && input_tensor.layout() == Layout::TILE && input_tensor.dtype() != DataType::BFLOAT8_B) {
@@ -266,7 +322,11 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
             cluster_axis);
         reshaped_tensor.deallocate();
 
-        auto sum_tensor = local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
+        bool is_float32 = (input_tensor.dtype() == DataType::FLOAT32);
+        auto sum_tensor =
+            is_float32
+                ? local_sum_float32(gather_tensor, static_cast<int>(composite_dim), devices.size(), out_memory_config)
+                : local_sum(gather_tensor, static_cast<int>(composite_dim), out_memory_config);
         gather_tensor.deallocate();
 
         return ttnn::reshape(sum_tensor, initial_shape);
@@ -312,7 +372,7 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         barrier_semaphores[1]);
     scattered_tensor.deallocate();
     // slice to inital shape if needed using slice
-    if (gathered.padded_shape() != initial_shape) {
+    if (gathered.logical_shape() != initial_shape) {
         ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> ends = {initial_shape[0], initial_shape[1], initial_shape[2], initial_shape[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};

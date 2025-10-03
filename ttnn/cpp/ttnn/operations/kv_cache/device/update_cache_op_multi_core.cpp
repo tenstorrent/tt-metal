@@ -329,7 +329,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     uint32_t cache_HtWt = cache_tensor.padded_shape()[-2] * Wt / TILE_HEIGHT;
     uint32_t cache_CHtWt = cache_tensor.padded_shape()[1] * cache_HtWt;
     uint32_t update_idxt = update_idx / TILE_HEIGHT;
-    uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
+    uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -429,9 +429,9 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
                 num_blocks_written * Wt,
             });
 
-        const uint32_t cache_start_id = start_idx                                     // user batch start
-                                        + num_blocks_written / input_Ht * cache_HtWt  // cache head offset
-                                        + (num_blocks_written % input_Ht) * Wt;       // seq_len offset
+        const uint32_t cache_start_id = start_idx                                       // user batch start
+                                        + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
+                                        + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
 
         tt::tt_metal::SetRuntimeArgs(
             program,
@@ -467,7 +467,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
         const auto update_idx = static_cast<const UpdateCache*>(operation)->update_idx;
 
         uint32_t update_idxt = update_idx / TILE_HEIGHT;
-        uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
+        uint32_t start_idx = (batch_idx * cache_CHtWt) + (update_idxt * Wt);
 
         auto src_buffer = input_tensors.at(1).buffer();
 
@@ -492,9 +492,9 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
             }
 
             {
-                const uint32_t cache_start_id = start_idx                                     // user batch start
-                                                + num_blocks_written / input_Ht * cache_HtWt  // cache head offset
-                                                + (num_blocks_written % input_Ht) * Wt;       // seq_len offset
+                const uint32_t cache_start_id = start_idx                                       // user batch start
+                                                + (num_blocks_written / input_Ht * cache_HtWt)  // cache head offset
+                                                + ((num_blocks_written % input_Ht) * Wt);       // seq_len offset
 
                 auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();

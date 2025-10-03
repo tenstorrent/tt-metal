@@ -97,7 +97,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         uint32_t in_tile_offset_by_batch =
-            i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
+            i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
@@ -130,7 +130,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
             for (uint32_t i = 0; i < num_cores; ++i) {
                 uint32_t in_tile_offset_by_batch =
-                    i < 16 ? i * sub_tile_line_bytes : (i - 16) * sub_tile_line_bytes + 512 * element_size;
+                    i < 16 ? i * sub_tile_line_bytes : ((i - 16) * sub_tile_line_bytes) + (512 * element_size);
                 const auto& core = cores[i];
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = in_tile_offset_by_batch;
@@ -239,7 +239,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_decode
 
         const auto& core = cores[i];
         std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(2 + 2 * in_num_cores);
+        reader_runtime_args.reserve(2 + (2 * in_num_cores));
         reader_runtime_args = {
             in_tile_offset_by_batch,
             q_start_addr,

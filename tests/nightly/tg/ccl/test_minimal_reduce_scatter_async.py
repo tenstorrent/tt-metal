@@ -18,7 +18,9 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
         (4, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (4, [1, 1, 333, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
-        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
+        (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [1, 1, 32, 1536], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # from CSV
+        (8, [1, 1, 32, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # from CSV
     ],
     ids=[
         "batch_8",
@@ -27,6 +29,8 @@ from models.common.utility_functions import skip_for_blackhole, skip_for_wormhol
         "batch_1_sd35_prompt",
         "batch_2",
         "batch_1",
+        "deepseek_1",
+        "deepseek_2",
     ],
 )
 @pytest.mark.parametrize(

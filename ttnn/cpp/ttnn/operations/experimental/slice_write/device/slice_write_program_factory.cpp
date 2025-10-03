@@ -143,7 +143,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
+            auto num_sticks_per_core_pad32 = num_sticks_per_core + ((32 - num_sticks_per_core % 32) % 32);
             num_sticks_per_core_read =
                 tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, input_row_size_bytes, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -274,7 +274,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
+        output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()),
         output_row_size_bytes,
         input_row_size_bytes,
         input_row_size_bytes_offset,

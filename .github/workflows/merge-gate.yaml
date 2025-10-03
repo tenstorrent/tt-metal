@@ -69,7 +69,7 @@ jobs:
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
-      version: 22.04
+      version: 24.04
 
   fail-fast:
     if: failure()
