@@ -549,7 +549,7 @@ void py_module(py::module& module) {
         Memory Support:
             - Interleaved: DRAM and L1
             - Input A also supports sharding (width, height, block), with row major orientation, depending on the program config
-            - Input B must be interleaved for multi-cast matmuls, but can be width sharded for certain reuse/multi-core configs
+            - Input B also supports sharding (width, height, block), with row major orientation depending on the program config, although in a more limited manner than Input A
             - Sharded outputs (when used): must match Input A buffer type and memory layout; some configs disallow width sharded outputs
 
         Example:
