@@ -239,9 +239,13 @@ TEST_F(MeshDispatchFixture, TestCreateKernelFromBinary) {
         tt_metal::experimental::SetKernelBinaryPathPrefix(mesh_device.get(), binary_kernel_path);
 
         // 3b. Call CreateKernelFromBinary to create each kernel from the binaries.
-        auto kernel_handle_binary = tt_metal::experimental::CreateKernelFromBinary(binary_program_, kernel_file, binary_core, tt_metal::DataMovementConfig{ .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::NOC_0,
-            .compile_args = { }}, binary_hash);
+        auto kernel_handle_binary = tt_metal::experimental::CreateKernelFromBinary(
+            binary_program_,
+            "simple_add",
+            binary_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::NOC_0, .compile_args = {}},
+            binary_hash);
         SetRuntimeArgs(binary_program_, kernel_handle_binary, binary_core, {table_address, input_a, input_b});
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), binary_workload, false);
         distributed::Finish(mesh_device->mesh_command_queue());

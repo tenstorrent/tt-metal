@@ -978,7 +978,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
     // 3. Setup the KernelDescriptor to read the binary. Repeat step 2 & 3 for the other kernels.
     tt::tt_metal::KernelDescriptor reader_kernel_descriptor = {
         .kernel_source = "reader_bmm_8bank_output_tiles_partitioned",
-        .source_type = tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH,
+        .source_type = tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
         .binary_hash = binary_hash,
         .core_ranges = all_device_cores_set,
         .compile_time_args = reader_compile_time_args,
@@ -989,7 +989,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
     binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash("ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp");
     tt::tt_metal::KernelDescriptor writer_kernel_descriptor = {
         .kernel_source = "writer_unary_interleaved_start_id",
-        .source_type = tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH,
+        .source_type = tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
         .binary_hash = binary_hash,
         .core_ranges = all_device_cores_set,
         .compile_time_args = writer_compile_time_args,
@@ -1015,7 +1015,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
     binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash("ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp");
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
         .kernel_source = "bmm",
-        .source_type = tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH,
+        .source_type = tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
         .binary_hash = binary_hash,
         .core_ranges = core_group_1,
         .compile_time_args = compute_ct_args_group_1,
@@ -1027,7 +1027,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmulFromBinary) {
     binary_hash = tt::tt_metal::experimental::ComputeKernelOriginalPathHash("ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp");
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_2 = {
         .kernel_source = "bmm",
-        .source_type = tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH,
+        .source_type = tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
         .binary_hash = binary_hash,
         .core_ranges = core_group_2,
         .compile_time_args = compute_ct_args_group_2,

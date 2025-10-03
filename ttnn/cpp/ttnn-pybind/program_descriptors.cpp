@@ -172,7 +172,10 @@ void py_module_types(py::module& module) {
     )pbdoc")
         .value("FILE_PATH", tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH, "Kernel source is a file path")
         .value("SOURCE_CODE", tt::tt_metal::KernelDescriptor::SourceType::SOURCE_CODE, "Kernel source is inline code")
-        .value("BINARY_PATH", tt::tt_metal::KernelDescriptor::SourceType::BINARY_PATH, "Kernel source is a binary path");
+        .value(
+            "BINARY_PATH",
+            tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
+            "Kernel source is a binary path");
 
     kernel_descriptor_class
         .def(py::init<>(), R"pbdoc(

@@ -255,7 +255,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
     for (auto& kernel_descriptor : descriptor.kernels) {
         bool is_src_file = kernel_descriptor.source_type == KernelDescriptor::SourceType::FILE_PATH;
-        bool is_binary = kernel_descriptor.source_type == KernelDescriptor::SourceType::BINARY_PATH;
+        bool is_binary = kernel_descriptor.source_type == KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH;
         std::vector<uint32_t> compile_args(
             kernel_descriptor.compile_time_args.begin(), kernel_descriptor.compile_time_args.end());
         std::map<std::string, std::string> defines(kernel_descriptor.defines.begin(), kernel_descriptor.defines.end());
