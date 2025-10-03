@@ -190,6 +190,9 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
+    // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
+    bool enable_2_erisc_mode = false;
+
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
@@ -232,6 +235,8 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled; }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    // Return a hash of which watcher features are enabled
+    uint32_t get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms; }
     void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
     int get_watcher_dump_all() const { return watcher_settings.dump_all; }
@@ -372,8 +377,13 @@ public:
         }
     }
     std::string get_compile_hash_string() const {
-        std::string compile_hash_str =
-            fmt::format("{}_{}_{}", get_watcher_enabled(), get_kernels_early_return(), get_erisc_iram_enabled());
+        std::string compile_hash_str = fmt::format(
+            "{}_{}_{}_{}_{}",
+            get_watcher_hash(),
+            get_kernels_early_return(),
+            get_erisc_iram_enabled(),
+            get_enable_2_erisc_mode(),
+            get_is_fabric_2_erisc_mode_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -469,6 +479,9 @@ public:
     // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
     // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
     bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
+
+    // Feature flag to enable 2-erisc mode on Blackhole
+    bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
