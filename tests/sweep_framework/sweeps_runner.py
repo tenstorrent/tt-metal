@@ -516,6 +516,10 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
                 # Check if we should skip remaining tests in the suite
                 if config.skip_on_timeout:
+                    # Add the timed-out test result before skipping
+                    results.append(result)
+                    suite_pbar.update()
+
                     # Skip all remaining tests in the suite
                     logger.info("Skipping remaining tests in suite due to timeout.")
                     for j in range(i + 1, len(test_vectors)):
