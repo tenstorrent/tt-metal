@@ -41,7 +41,7 @@ constexpr auto silu_bw =
 
 constexpr auto sdpa_fw =
     ttnn::register_operation<"ttml::metal::sdpa_fw", ttml::metal::ops::sdpa_fw::SDPAForwardOperation>();
-// To be determined if this should be in a separate "optimizers.hpp" file
+
 constexpr auto sgd_fused =
     ttnn::register_operation<"ttml::metal::sgd_fused", ttml::metal::optimizers::sgd_fused::SGDFusedOptimizer>();
 
