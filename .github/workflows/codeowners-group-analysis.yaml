@@ -866,16 +866,81 @@ jobs:
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
-          # For now, skip complex owner selection and just check if we should ping
-          if [ "$PING_OWNERS" = "true" ]; then
-            echo "Creating ping comment..."
+          # Collect owners to ping
+          OWNERS_TO_PING=""
 
-            # Simple ping message for now
+          # Add team members who haven't approved yet
+          if [ -n "$TEAMS" ] && [ -n "$TEAM_MEMBERS" ]; then
+            echo "Processing teams: $TEAMS"
+            IFS=',' read -ra TEAM_ARRAY <<< "$TEAMS"
+            for team in "${TEAM_ARRAY[@]}"; do
+              # Skip the large-changes team
+              if [ "$team" = "@tenstorrent/metalium-codeowners-large-changes" ]; then
+                continue
+              fi
+
+              # Find team members
+              team_entry=$(echo "$TEAM_MEMBERS" | tr '|' '\n' | grep "^$team:" | head -1)
+              if [ -n "$team_entry" ]; then
+                team_owners=$(echo "$team_entry" | cut -d':' -f2)
+                if [ "$team_owners" != "insufficient-permissions" ] && [ "$team_owners" != "team-not-found" ] && [ "$team_owners" != "unauthorized" ] && [ "$team_owners" != "api-error" ] && [ "$team_owners" != "no-members" ]; then
+                  # Add team members to ping list (limit to first 2 for brevity)
+                  member_count=0
+                  IFS=',' read -ra MEMBERS_ARRAY <<< "$team_owners"
+                  for member in "${MEMBERS_ARRAY[@]}"; do
+                    if [ $member_count -ge 2 ]; then
+                      break
+                    fi
+                    # Only add if they haven't approved
+                    if ! echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+                      OWNERS_TO_PING="$OWNERS_TO_PING@$member "
+                      member_count=$((member_count + 1))
+                    fi
+                  done
+                fi
+              fi
+            done
+          fi
+
+          # Add individual owners who haven't approved yet
+          if [ -n "$INDIVIDUALS" ]; then
+            echo "Processing individuals: $INDIVIDUALS"
+            IFS='@@@' read -ra PATTERN_GROUPS <<< "$INDIVIDUALS"
+            for pattern_group in "${PATTERN_GROUPS[@]}"; do
+              if [ -n "$pattern_group" ]; then
+                owners=$(echo "$pattern_group" | cut -d':' -f2)
+                # Add individual owners to ping list (limit to first 2 for brevity)
+                owner_count=0
+                IFS=',' read -ra OWNERS_ARRAY <<< "$owners"
+                for owner_pair in "${OWNERS_ARRAY[@]}"; do
+                  if [ $owner_count -ge 2 ]; then
+                    break
+                  fi
+                  username=$(echo "$owner_pair" | cut -d'|' -f1)
+                  # Only add if they haven't approved
+                  if ! echo "$APPROVED_REVIEWERS" | grep -q "$username"; then
+                    OWNERS_TO_PING="$OWNERS_TO_PING@$username "
+                    owner_count=$((owner_count + 1))
+                  fi
+                done
+              fi
+            done
+          fi
+
+          # Create ping message
+          if [ -n "$OWNERS_TO_PING" ]; then
+            PING_MESSAGE="Hi $OWNERS_TO_PING- this PR **[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_NAME [@$PR_AUTHOR_LOGIN] needs your approval/review to merge this."
+          else
             PING_MESSAGE="Hi! This PR **[$PR_TITLE](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_NAME [@$PR_AUTHOR_LOGIN] needs code owner review to merge."
+          fi
+
+          # Send the ping comment if enabled
+          if [ "$PING_OWNERS" = "true" ]; then
+            echo "Creating ping comment with owners: $OWNERS_TO_PING"
 
             # Create temporary file to avoid shell interpretation of JSON
             TEMP_JSON_FILE=$(mktemp)
-            echo "{\"body\": \"$PING_MESSAGE\"}" > "$TEMP_JSON_FILE"
+            jq -n --arg body "$PING_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"
 
             RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -898,6 +963,7 @@ jobs:
             fi
           else
             echo "Ping owners is disabled - no ping comment will be created"
+            echo "Would have pinged: $OWNERS_TO_PING"
           fi
 
           echo "Notification step completed successfully"
