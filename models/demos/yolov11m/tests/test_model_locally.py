@@ -295,6 +295,7 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
                 input_height=input_tensor.shape[2],
                 input_width=input_tensor.shape[3],
                 is_sub_module=False,
+                input_tensor=input_tensor,  # 🔧 FIX: Pass actual image tensor instead of generating random data
             )
             
             # Run TTNN inference

@@ -12,11 +12,20 @@ from models.demos.yolov11m.tt.common import get_mesh_mappers
 
 
 def create_yolov11_input_tensors(
-    device, batch=1, input_channels=3, input_height=320, input_width=320, is_sub_module=True
+    device, batch=1, input_channels=3, input_height=320, input_width=320, is_sub_module=True, input_tensor=None
 ):
     num_devices = device.get_num_devices()
     inputs_mesh_mapper, _, _ = get_mesh_mappers(device)
-    torch_input_tensor = torch.randn(batch * device.get_num_devices(), input_channels, input_height, input_width)
+    
+    # Use provided input tensor or generate random data as fallback
+    if input_tensor is not None:
+        torch_input_tensor = input_tensor
+        # Ensure the tensor has the right batch size for multi-device
+        if torch_input_tensor.shape[0] != batch * device.get_num_devices():
+            # Repeat the tensor if needed for multi-device setup
+            torch_input_tensor = torch_input_tensor.repeat(device.get_num_devices(), 1, 1, 1)
+    else:
+        torch_input_tensor = torch.randn(batch * device.get_num_devices(), input_channels, input_height, input_width)
     if is_sub_module:
         ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
         ttnn_input_tensor = torch.reshape(
