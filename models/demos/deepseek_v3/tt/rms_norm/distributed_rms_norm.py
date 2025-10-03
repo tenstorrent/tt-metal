@@ -77,6 +77,7 @@ class DistributedRMSNorm(RMSNormBase):
             mesh_device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             rms_norm_stats_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mode="prefill",
         )  # type: ignore
 
     @classmethod
@@ -114,6 +115,7 @@ class DistributedRMSNorm(RMSNormBase):
                 core_grid=ttnn.CoreGrid(y=1, x=1),
                 strategy=ttnn.ShardStrategy.WIDTH,
             ),
+            mode="decode",
         )  # type: ignore
 
     @classmethod
@@ -123,6 +125,7 @@ class DistributedRMSNorm(RMSNormBase):
         mesh_device: ttnn.Device,
         memory_config: ttnn.MemoryConfig,
         rms_norm_stats_memory_config: ttnn.MemoryConfig,
+        mode: str,
     ) -> dict[str, OpConfigBase]:
         """Generate model configuration for RMSNorm."""
         return {
@@ -130,7 +133,8 @@ class DistributedRMSNorm(RMSNormBase):
             "rms_norm_pre_all_gather": RMSNormPreAllGatherConfig(
                 dtype=ttnn.bfloat16,
             ),
-            "all_gather": AllGatherAsyncConfig(
+            "all_gather_"
+            + mode: AllGatherAsyncConfig(
                 dim=3,
                 cluster_axis=1,
                 mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -156,16 +160,20 @@ class DistributedRMSNorm(RMSNormBase):
         Returns:
             ModelState containing the state information for this module
         """
+        # CCL states setup (Must be in order of execution)
+        get_ag_params = lambda phase, axis: {
+            "multi_device_global_semaphore": ccl.get_gather_sem(phase=phase, axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(phase=phase, axis=axis),
+            "num_links": ccl.get_max_links(phase=phase, axis=axis),
+        }
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-            },
+            "all_gather_prefill": get_ag_params("prefill", 1),
+            "all_gather_decode": get_ag_params("decode", 1),
         }
 
     @classmethod
-    def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig) -> ttnn.Tensor:
+    def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig, mode: str) -> ttnn.Tensor:
         """Forward pass of the embedding.
 
         Args:
@@ -181,7 +189,7 @@ class DistributedRMSNorm(RMSNormBase):
         tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
 
         # AllGather stats
-        tt_gathered_stats = ttnn.experimental.all_gather_async(tt_stats, **cfg["all_gather"])
+        tt_gathered_stats = ttnn.experimental.all_gather_async(tt_stats, **cfg["all_gather_" + mode])
         ttnn.deallocate(tt_stats)
 
         # Run distributed rmsnorm part 2

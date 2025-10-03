@@ -91,6 +91,26 @@ class MoE(SharedStateAddOn, AbstractModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
+        # CCL states setup (Must be in order of execution)
+        get_rs_params = lambda phase, axis: {
+            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(phase=phase, axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(phase=phase, axis=axis),
+            "num_links": ccl.get_max_links(axis=axis),
+        }
+        get_ag_params = lambda phase, axis: {
+            "multi_device_global_semaphore": ccl.get_gather_sem(phase=phase, axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(phase=phase, axis=axis),
+            "num_links": ccl.get_max_links(phase=phase, axis=axis),
+        }
+        ccl_states_prefill = {
+            "final_output_reduce_scatter_prefill": get_rs_params("prefill", 1),
+            "revert_tp_prefill": get_ag_params("prefill", 1),
+        }
+        ccl_states_decode = {
+            "final_output_reduce_scatter_decode": get_rs_params("decode", 1),
+            "revert_tp_decode": get_ag_params("decode", 1),
+        }
+
         return {
             "expert_mapping_tensors": expert_mapping_tensors,
             # CCL-specific parameters (semaphores and num_links)
@@ -100,15 +120,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             "all_to_all_combine": {
                 "num_links": 1,
             },
-            "final_output_reduce_scatter": {
-                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
-            "revert_tp": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
+            **ccl_states_prefill,
+            **ccl_states_decode,
         }
 
     @classmethod

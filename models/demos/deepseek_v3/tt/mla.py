@@ -785,32 +785,32 @@ class MLA(AbstractModule):
         )
 
         # CCL states setup (Must be in order of execution)
-        get_rs_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(axis=axis),
-            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
+        get_rs_params = lambda phase, axis: {
+            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(phase=phase, axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(phase=phase, axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
-        get_ag_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
-            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
-            "num_links": ccl.get_max_links(axis=axis),
+        get_ag_params = lambda phase, axis: {
+            "multi_device_global_semaphore": ccl.get_gather_sem(phase=phase, axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(phase=phase, axis=axis),
+            "num_links": ccl.get_max_links(phase=phase, axis=axis),
         }
         ccl_states_prefill = {
-            "wq_a_rs_prefill": get_rs_params(1),
-            "wq_a_ag_prefill": get_ag_params(1),
-            "wkv_a_ag_prefill": get_ag_params(1),
-            "wo_ag_prefill": get_ag_params(1),
+            "wq_a_rs_prefill": get_rs_params("prefill", 1),
+            "wq_a_ag_prefill": get_ag_params("prefill", 1),
+            "wkv_a_ag_prefill": get_ag_params("prefill", 1),
+            "wo_ag_prefill": get_ag_params("prefill", 1),
         }
         ccl_states_decode = {
-            "wq_a_rs_decode": get_rs_params(1),
-            "wq_a_ag_decode": get_ag_params(1),
-            "wq_a2a_ag_decode": get_ag_params(1),
-            "wq_a2a_rs_decode": get_rs_params(1),
-            "wkv_a_ag_decode": get_ag_params(1),
-            "wkv_a_rs_decode": get_rs_params(1),
-            "flash_mla_ag_decode": get_ag_params(1),
-            "flash_mla_rs_decode": get_rs_params(1),
-            "wo_ag_decode": get_ag_params(1),
+            "wq_a_rs_decode": get_rs_params("decode", 1),
+            "wq_a_ag_decode": get_ag_params("decode", 1),
+            "wq_a2a_ag_decode": get_ag_params("decode", 1),
+            "wq_a2a_rs_decode": get_rs_params("decode", 1),
+            "wkv_a_ag_decode": get_ag_params("decode", 1),
+            "wkv_a_rs_decode": get_rs_params("decode", 1),
+            "flash_mla_ag_decode": get_ag_params("decode", 1),
+            "flash_mla_rs_decode": get_rs_params("decode", 1),
+            "wo_ag_decode": get_ag_params("decode", 1),
         }
 
         return {
