@@ -47,6 +47,8 @@ class Stage(nn.Module):
             architecture=image_architecture, normalize=True, out_features=self.config.perception_output_features
         )
         self.s = getattr(self.image_encoder.features, stage_name)
+        print(self.s)
+        print("vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv")
 
     def forward(self, image):
         """

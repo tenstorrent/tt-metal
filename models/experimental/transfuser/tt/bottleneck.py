@@ -137,7 +137,9 @@ class TTRegNetBottleneck:
     def __call__(self, x, device):
         identity = x
         logger.info(f"conv1- 1x1 convolution")
+        logger.info(f"x.shape{x.shape =}")
         # conv1: 1x1 expansion
+        # import pdb; pdb.set_trace()
         out, shape_ = self.conv1(device, x, x.shape)
 
         logger.info(f"conv2- 3x3 grouped convolution")
