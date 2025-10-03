@@ -192,14 +192,30 @@ class Attention(nn.Module):
     ):
         bsz, seqlen, _ = x.shape
         # xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
-        wq, wk, wv = self.wqkv.weight[:, :8192], self.wqkv.weight[:, 8192:9216], self.wqkv.weight[:, 9216:]
-        xq, xk, xv = x @ wq, x @ wk, x @ wv
+        # wq, wk, wv = self.wqkv.weight[:, :8192], self.wqkv.weight[:, 8192:9216], self.wqkv.weight[:, 9216:]
+        # xq, xk, xv = x @ wq, x @ wk, x @ wv
+        x_qkv = x @ self.wqkv.weight
+        x_qkv = x_qkv.squeeze(1)
+        B, N = x_qkv.shape
+        blk_big, blk_mid, blk_tail = 8 * 128, 128, 128
+        block = blk_big + blk_mid + blk_tail  # 1280
+        repeats = N // block  # 8
+
+        xr = x_qkv.view(B, repeats, block)  # [32, 8, 1280]
+
+        xq = xr[:, :, :blk_big].reshape(B, repeats * blk_big)  # [32, 8192] = [32, 8*1024]
+        xk = xr[:, :, blk_big : blk_big + blk_mid].reshape(B, repeats * blk_mid)  # [32, 1024] = [32, 128*8]
+        xv = xr[:, :, blk_big + blk_mid :].reshape(B, repeats * blk_tail)  # [32, 1024] = [32, 128*8]
+
+        xq = xq.unsqueeze(1)
+        xk = xk.unsqueeze(1)
+        xv = xv.unsqueeze(1)
+
+        xq, xk, xv = xq.contiguous(), xk.contiguous(), xv.contiguous()
 
         xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
-
-        breakpoint()
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
@@ -336,5 +352,48 @@ class Transformer(nn.Module):
         return h.float()
 
 
+def reverse_permute(tensor, n_heads, dim1, dim2):
+    return tensor.view(n_heads, 2, dim1 // n_heads // 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+
+
 def permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+
+
+def convert_rope_style_hf_to_meta(cos_hf: torch.Tensor, sin_hf: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Converts RoPE cos/sin tensors from Hugging Face style (half-dim duplicated)
+    to Meta style (pairwise duplicated / odd-even interleaved).
+
+    Args:
+        cos_hf: Cosine tensor in HF format [..., seq_len, head_dim]
+                (e.g., [c0, c1, ..., c_{d/2-1}, c0, c1, ..., c_{d/2-1}])
+        sin_hf: Sine tensor in HF format [..., seq_len, head_dim]
+                (e.g., [s0, s1, ..., s_{d/2-1}, s0, s1, ..., s_{d/2-1}])
+
+    Returns:
+        A tuple containing (cos_meta, sin_meta) in Meta format [..., seq_len, head_dim]
+        (e.g., [c0, c0, c1, c1, ..., c_{d/2-1}, c_{d/2-1}],
+         [s0, s0, s1, s1, ..., s_{d/2-1}, s_{d/2-1}])
+    """
+    # Input validation (optional but good practice)
+    if cos_hf.shape != sin_hf.shape:
+        raise ValueError("cos_hf and sin_hf must have the same shape.")
+    if len(cos_hf.shape) < 2:
+        raise ValueError("Input tensors must have at least 2 dimensions (seq_len, head_dim).")
+
+    head_dim = cos_hf.shape[-1]
+    if head_dim % 2 != 0:
+        raise ValueError(f"Head dimension ({head_dim}) must be even.")
+
+    half_head_dim = head_dim // 2
+
+    # Select the first half (contains the unique frequencies)
+    cos_unique = cos_hf[..., :half_head_dim]
+    sin_unique = sin_hf[..., :half_head_dim]
+
+    # Repeat each unique frequency pairwise
+    cos_meta = torch.repeat_interleave(cos_unique, repeats=2, dim=-1)
+    sin_meta = torch.repeat_interleave(sin_unique, repeats=2, dim=-1)
+
+    return cos_meta, sin_meta
