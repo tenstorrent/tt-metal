@@ -27,7 +27,7 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     // NOLINTNEXTLINE(cert-err52-cpp)
     if (setjmp(gJumpBuf)) {
         // Returned from the longjmp
-        // Do not run Application() again
+        // Do not run main() again
     } else {
         main();
     }

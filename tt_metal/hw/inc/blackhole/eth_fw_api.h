@@ -309,7 +309,7 @@ static void update_boot_results_eth_link_status_check() {
     uint64_t next_timestamp = get_next_link_status_check_timestamp();
     // Debounce to only be called at every interval
     // wrap-around safe comparison. calling this too many times can result in link
-    // stability
+    // instability
     if ((curr_timestamp - next_timestamp) < (UINT64_MAX / 2)) {
         invalidate_l1_cache();
         reinterpret_cast<void (*)(uint32_t)>(
