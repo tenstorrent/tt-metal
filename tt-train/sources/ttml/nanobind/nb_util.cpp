@@ -324,6 +324,7 @@ tt::tt_metal::Tensor make_metal_tensor(
 
             std::span<const NumpyType> numpy_data_span(
                 static_cast<const NumpyType*>(numpy_data.data()), numpy_data.size());
+
             if constexpr (!std::is_same_v<MetalType, NumpyType>) {
                 std::vector<MetalType> converted_data;
                 converted_data.assign(numpy_data_span.begin(), numpy_data_span.end());
