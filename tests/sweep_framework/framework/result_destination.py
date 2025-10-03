@@ -184,6 +184,8 @@ class PostgresResultDestination(ResultDestination):
             TestStatus.FAIL_CRASH_HANG: "fail_crash_hang",
             TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
             TestStatus.NOT_RUN: "skipped",
+            TestStatus.XFAIL: "xfail",  # Expected failure
+            TestStatus.XPASS: "xpass",  # Unexpected pass
         }
         return status_mapping.get(test_status, "error")
 
@@ -321,6 +323,8 @@ class FileResultDestination(ResultDestination):
                         RunnerStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
                         RunnerStatus.FAIL_WATCHER: "fail_watcher",
                         RunnerStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+                        RunnerStatus.XFAIL: "xfail",  # Expected failure
+                        RunnerStatus.XPASS: "xpass",  # Unexpected pass
                     }
                     return TestStatus(mapping.get(value, "error"))
             except Exception:
@@ -437,6 +441,9 @@ class FileResultDestination(ResultDestination):
             _op_kind = _parts[0] if len(_parts) > 0 and _parts[0] else (header.get("op_kind") or "unknown")
             _op_name = _parts[-1] if len(_parts) > 0 and _parts[-1] else (header.get("op_name") or "unknown")
 
+            exception = str(raw.get("exception", None))
+            error_hash = generate_error_hash(exception)
+
             record = OpTest(
                 github_job_id=run_context.get("github_job_id", None),
                 full_test_name=header.get("sweep_name"),
@@ -446,8 +453,8 @@ class FileResultDestination(ResultDestination):
                 filepath=header.get("sweep_name"),
                 success=is_success,
                 skipped=is_skipped,
-                error_message=raw.get("exception", None),
-                error_hash=generate_error_hash(raw.get("exception", None)),
+                error_message=exception,
+                error_hash=error_hash,
                 config=None,
                 frontend="ttnn.op",
                 model_name="n/a",
@@ -462,7 +469,7 @@ class FileResultDestination(ResultDestination):
                 card_type="n/a",
                 backend="n/a",
                 data_source="ttnn op test",
-                input_hash=header.get("input_hash"),
+                input_hash=raw.get("input_hash"),
                 message=_coerce_to_optional_string(raw.get("message", None)),
                 exception=_coerce_to_optional_string(raw.get("exception", None)),
                 metrics=raw.get("device_perf", None),

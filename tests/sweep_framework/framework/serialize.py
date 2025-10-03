@@ -5,7 +5,10 @@
 import ttnn
 import json
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
-from ttnn._ttnn.tensor import DataType, Layout  # make eval("DataType.*"/"Layout.*") resolvable
+from framework.statuses import VectorValidity, VectorStatus
+import torch
+
+TTNN_NAME = ttnn.__name__
 
 TTNN_NAME = ttnn.__name__
 
@@ -74,7 +77,7 @@ def _ttnn_type_from_name(type_name):
     try:
         the_type = getattr(ttnn, uq_type_name)
     except AttributeError as e:
-        logger.debug(f"Not an enum. No attribute {uq_type_name} in {ttnn} : {e}")
+        logger.debug(f"Hopefully not an enum {e}")
 
     return the_type
 
@@ -101,7 +104,7 @@ def deserialize(object):
                 return maybe_enum
         try:
             return eval(object)
-        except (SyntaxError, NameError):
+        except (SyntaxError, NameError) as e:
             return str(object)
 
     except Exception as e:
@@ -143,16 +146,19 @@ def deserialize_structured(object):
                 data = json.dumps(data)
             return type.from_json(data)
 
-        elif isinstance(object, str) and "." in object:
-            maybe_enum = _deserialize_ttnn_enum(object)
-            if maybe_enum is not None:
-                return maybe_enum
+        elif isinstance(object, str):
+            if "." in object:
+                maybe_enum = _deserialize_ttnn_enum(object)
+                if maybe_enum is not None:
+                    return maybe_enum
+            elif object in ["sum", "mean", "max", "min", "std", "var"]:
+                return object
         try:
             return eval(object)
         except (SyntaxError, NameError):
             return str(object)
     except Exception as e:
-        logger.exception(f"deserialize failed {e}")
+        logger.exception(f"Deserialize structured failed {e}")
         raise
 
 
