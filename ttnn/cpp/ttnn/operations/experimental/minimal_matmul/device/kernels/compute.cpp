@@ -113,6 +113,12 @@ void MAIN {
     constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
 
+    uint32_t argidx = 0;
+    const uint32_t M_block_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_block_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_block_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_block_end = get_arg_val<uint32_t>(argidx++);
+
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t out_cb = tt::CBIndex::c_2;
@@ -131,8 +137,8 @@ void MAIN {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
-    for (uint32_t m_block = 0; m_block < M_num_blocks; m_block++) {
-        for (uint32_t n_block = 0; n_block < N_num_blocks; n_block++) {
+    for (uint32_t m_block = M_block_start; m_block < M_block_end; m_block++) {
+        for (uint32_t n_block = N_block_start; n_block < N_block_end; n_block++) {
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {

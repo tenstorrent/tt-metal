@@ -160,8 +160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     std::vector<uint32_t> compute_compile_time_args = {
         M_tiles, K_tiles, N_tiles, M_block, K_block, N_block, subblock_h, subblock_w};
 
-    // auto compute_kernels_id = CreateKernel(
-    CreateKernel(
+    auto compute_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
         core_grid,
@@ -192,19 +191,31 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     std::vector<std::vector<uint32_t>> compute_args_per_core(num_cores);
     std::vector<std::vector<uint32_t>> writer_args_per_core(num_cores);
 
+    uint32_t M_num_blocks = M_tiles / M_block;
+    uint32_t N_num_blocks = N_tiles / N_block;
+    uint32_t M_blocks_per_core = M_num_blocks / grid_size.y;
+    uint32_t N_blocks_per_core = N_num_blocks / grid_size.x;
+
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
-        // CoreCoord core = cores.at(core_id);
+        CoreCoord core = cores.at(core_id);
+        uint32_t M_block_start = core.y * M_blocks_per_core;
+        uint32_t M_block_end = M_block_start + M_blocks_per_core;
+        uint32_t N_block_start = core.x * N_blocks_per_core;
+        uint32_t N_block_end = N_block_start + N_blocks_per_core;
 
         // Store runtime args for later use
-        reader_args_per_core[core_id] = {input_addr};
+        reader_args_per_core[core_id] = {input_addr, M_block_start, M_block_end, N_block_start, N_block_end};
 
-        writer_args_per_core[core_id] = {weight_addr, out_addr};
+        compute_args_per_core[core_id] = {M_block_start, M_block_end, N_block_start, N_block_end};
+
+        writer_args_per_core[core_id] = {weight_addr, out_addr, M_block_start, M_block_end, N_block_start, N_block_end};
     }
     SetRuntimeArgs(program, reader_kernels_id, cores, reader_args_per_core);
+    SetRuntimeArgs(program, compute_kernels_id, cores, compute_args_per_core);
     SetRuntimeArgs(program, writer_kernels_id, cores, writer_args_per_core);
 
     auto override_runtime_arguments_callback =
-        [num_cores, cores, reader_kernels_id, writer_kernels_id](
+        [num_cores, cores, reader_kernels_id, writer_kernels_id, compute_kernels_id](
             const void* operation,
             tt::tt_metal::Program& program,
             const std::vector<Tensor>& input_tensors,

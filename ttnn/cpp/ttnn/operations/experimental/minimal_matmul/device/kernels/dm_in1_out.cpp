@@ -27,6 +27,10 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_block_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_block_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_block_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_block_end = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in1_args = TensorAccessorArgs<7>();
@@ -43,8 +47,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
 
-    for (uint32_t m_block = 0; m_block < M_num_blocks; m_block++) {
-        for (uint32_t n_block = 0; n_block < N_num_blocks; n_block++) {
+    for (uint32_t m_block = M_block_start; m_block < M_block_end; m_block++) {
+        for (uint32_t n_block = N_block_start; n_block < N_block_end; n_block++) {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
                 DPRINT << "read in1 on m_block: " << m_block << ", n_block: " << n_block << ", k_block: " << k_block
                        << ENDL();
