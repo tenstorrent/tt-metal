@@ -207,8 +207,6 @@ Tensor Tensor::from_vector(
     auto res = create_tensor_from_row_major_data(std::move(buffer), buffer_spec, /*device=*/nullptr, cq_id, pad_value);
     // Convert to datatype from original spec
     res = ttnn::to_dtype(res, spec.data_type());
-    auto tt = res.tensor_spec().page_config().get_tile();
-    (void)tt;  // suppress unused variable warning in release build
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
     }
