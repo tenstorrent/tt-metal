@@ -5,6 +5,49 @@
 import math
 
 import ttnn
+import torch
+
+
+def analyze_tensor_precision(tensor, operation_name, step_name=""):
+    """Analyze and log tensor precision/diversity"""
+    try:
+        # Convert to torch for analysis
+        if hasattr(tensor, 'cpu'):
+            torch_tensor = ttnn.to_torch(tensor).cpu()
+        else:
+            torch_tensor = tensor
+        
+        # Flatten and get unique values
+        flat_tensor = torch_tensor.flatten()
+        total_elements = flat_tensor.numel()
+        unique_values = torch.unique(flat_tensor)
+        num_unique = len(unique_values)
+        
+        # Calculate diversity percentage
+        diversity_pct = (num_unique / total_elements) * 100 if total_elements > 0 else 0
+        
+        # Get value range
+        min_val = float(flat_tensor.min())
+        max_val = float(flat_tensor.max())
+        mean_val = float(flat_tensor.mean())
+        
+        # Log the analysis
+        step_suffix = f" ({step_name})" if step_name else ""
+        print(f"🔍 [PRECISION] {operation_name}{step_suffix}:")
+        print(f"    Unique values: {num_unique:,} out of {total_elements:,} total ({diversity_pct:.2f}%)")
+        print(f"    Range: [{min_val:.6f}, {max_val:.6f}], Mean: {mean_val:.6f}")
+        print(f"    Dtype: {torch_tensor.dtype}")
+        
+        # Show some sample unique values if heavily quantized
+        if num_unique <= 50:
+            sample_values = unique_values[:10].tolist()
+            print(f"    Sample values: {[f'{v:.6f}' for v in sample_values]}")
+        
+        return num_unique, diversity_pct, (min_val, max_val, mean_val)
+        
+    except Exception as e:
+        print(f"⚠️ [PRECISION] Failed to analyze {operation_name}: {e}")
+        return None, None, None
 
 
 class Yolov11Conv2D:
@@ -90,44 +133,7 @@ class Yolov11Conv2D:
         stride = [self.stride[0], self.stride[1]]
         padding = [self.padding[0], self.padding[1]]
 
-        # 🔍 DEBUGGING: Analyze conv2d parameters
-        print(f"🔍 [CONV2D DEBUG] Conv2D operation details:")
-        print(f"    Input shape: {x.shape}")
-        print(f"    Input memory config: {x.memory_config()}")
-        print(f"    Input memory layout: {x.memory_config().memory_layout}")
-        print(f"    Input buffer type: {x.memory_config().buffer_type}")
-        print(f"    Input storage type: {x.storage_type()}")
-        print(f"    Input is sharded: {x.is_sharded()}")
-        print(f"    In channels: {self.in_channels}, Out channels: {self.out_channels}")
-        print(f"    Kernel size: {kernel_size}, Stride: {stride}, Padding: {padding}")
-        print(f"    Groups: {self.groups}")
-        print(f"    Activation dtype: {self.activation_dtype}")
-        print(f"    Conv config shard layout: {self.conv_config.shard_layout}")
-        print(f"    Weight shape: {self.weight.shape}")
-        print(f"    Weight memory config: {self.weight.memory_config()}")
-        if self.bias is not None:
-            print(f"    Bias shape: {self.bias.shape}")
-            print(f"    Bias memory config: {self.bias.memory_config()}")
-        else:
-            print(f"    Bias: None")
-        
-        # Calculate expected output memory
-        expected_output_elements = batch_size * self.out_channels * input_height * input_width
-        expected_output_mb = (expected_output_elements * 2) / (1024 * 1024)  # bfloat16 = 2 bytes
-        print(f"    Expected output elements: {expected_output_elements}")
-        print(f"    Expected output memory: {expected_output_mb:.2f} MB")
-        
-        if expected_output_mb > 1.43:
-            print(f"    ⚠️  WARNING: Expected output ({expected_output_mb:.2f}MB) exceeds L1 limit!")
-        else:
-            print(f"    ✅ Expected output ({expected_output_mb:.2f}MB) fits in L1")
-        
-        # 🔍 DEBUGGING: Check if we need to force DRAM via slice_config
-        # According to PR #27147, the conv2d should auto-select DRAM based on input memory config
-        # But if there are explicit slice configs, they might override this
-        print(f"    🔧 Conv2D should auto-select DRAM based on input memory config")
-        print(f"    🔧 Input is in DRAM: {x.memory_config().buffer_type == ttnn.BufferType.DRAM}")
-        print(f"    🔧 Input is HEIGHT_SHARDED: {x.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED}")
+        analyze_tensor_precision(x, f"Conv2D-{self.in_channels}→{self.out_channels}", "INPUT")
 
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
@@ -149,13 +155,9 @@ class Yolov11Conv2D:
             return_weights_and_bias=True,
             dtype=self.activation_dtype
         )
-        
-        # 🔍 DEBUGGING: Analyze conv2d output
-        print(f"🔍 [CONV2D DEBUG] Conv2D operation completed:")
-        print(f"    Output shape: {x.shape}")
-        print(f"    Output memory config: {x.memory_config()}")
-        print(f"    Output storage type: {x.storage_type()}")
-        print(f"    Actual output height: {output_height}, width: {output_width}")
+
+        # 🔍 PRECISION TRACKING: Analyze output after conv2d
+        analyze_tensor_precision(x, f"Conv2D-{self.in_channels}→{self.out_channels}", "OUTPUT")
         
         hw = output_height * output_width
         print(f"    Expected hw: {hw}, Actual x.shape[2]: {x.shape[2]}")
