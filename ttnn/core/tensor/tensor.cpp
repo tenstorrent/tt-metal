@@ -41,29 +41,10 @@ namespace tt::tt_metal {
 namespace {
 
 template <typename T>
-HostBuffer create_host_buffer_from_row_major_data(tt::stl::Span<const T> data, const TensorSpec& spec, T pad_value) {
-    return tensor_impl::logical_matches_physical(spec)
-               ? HostBuffer(std::vector<T>(data.begin(), data.end()))
-               : HostBuffer(tensor_impl::encode_tensor_data(data, spec, pad_value));
-}
-
-template <typename T>
 HostBuffer create_host_buffer_from_row_major_data(std::vector<T>&& data, const TensorSpec& spec, T pad_value) {
     return tensor_impl::logical_matches_physical(spec)
                ? HostBuffer(std::move(data))
                : HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(data), spec, pad_value));
-}
-
-template <typename T>
-Tensor create_tensor_from_row_major_data(
-    auto&& data,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    std::optional<ttnn::QueueId> cq_id,
-    T pad_value) {
-    Tensor tensor(create_host_buffer_from_row_major_data(std::forward<decltype(data)>(data), spec, pad_value), spec);
-
-    return (device != nullptr) ? tensor.to_device(device, spec.memory_config(), cq_id) : tensor;
 }
 
 }  // namespace
@@ -197,14 +178,12 @@ Tensor Tensor::from_vector(
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == convert_to_data_type<T>()) {
-        return create_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
-    }
+
     // Create host tensor with DataType matching buffer
     auto buffer_dtype = convert_to_data_type<T>();
     auto buffer_spec =
         TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
-    auto res = create_tensor_from_row_major_data(std::move(buffer), buffer_spec, /*device=*/nullptr, cq_id, pad_value);
+    auto res = Tensor(create_host_buffer_from_row_major_data(std::move(buffer), buffer_spec, pad_value), buffer_spec);
     // Convert to datatype from original spec
     res = ttnn::to_dtype(res, spec.data_type());
     if (device) {
