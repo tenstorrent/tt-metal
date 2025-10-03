@@ -172,18 +172,21 @@ void generate(
     std::vector<float> logits_vector(original_vocab_size, 0.0F);
 
     // Create a large negative mask for out-of-vocab logits
-    auto vocab_mask = std::vector<float>(padded_vocab_size - original_vocab_size, 1e4F);
+    bool need_logits_padding = (padded_vocab_size != original_vocab_size);
+    std::optional<ttnn::Tensor> logits_padding_mask;
+    if (need_logits_padding) {
+        auto vocab_mask = std::vector<float>(padded_vocab_size - original_vocab_size, 1e4F);
 
-    auto argmax_zeros =
-        ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
+        auto argmax_zeros =
+            ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, original_vocab_size}), device, tt::tt_metal::DataType::BFLOAT16);
 
-    auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
-        vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
+        auto argmax_nonzero = ttml::core::from_vector<float, tt::tt_metal::DataType::BFLOAT16>(
+            vocab_mask, ttnn::Shape({1U, 1U, 1U, padded_vocab_size - original_vocab_size}), device, ttnn::Layout::TILE);
 
-    auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
+        auto logits_padding_mask_vector = std::vector<ttnn::Tensor>{argmax_zeros, argmax_nonzero};
 
-    auto logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
-
+        logits_padding_mask = ttnn::concat(logits_padding_mask_vector, 3);
+    }
     // Main token generation loop
     for (uint32_t token_idx = 0; token_idx < tokens_to_generate; ++token_idx) {
         // Possibly truncate the prompt if it exceeds max_sequence_length
