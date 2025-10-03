@@ -36,6 +36,7 @@ using namespace tt::tt_fabric;
 //   8:  rx2_noc_x        (u32)
 //   9:  rx2_noc_y        (u32)
 //   10: sem2_l1_addr     (u32)
+//   11: dst2_is_local    (u32)  // 1 if dst2 device == src device
 //   … fabric-connection args … (inserted by append_fabric_connection_rt_args on host)
 //   … then optional Phase-A diagnostics:
 //      e_hops (u32), w_hops (u32), n_hops (u32), s_hops (u32)
@@ -61,6 +62,7 @@ void kernel_main() {
     const uint32_t rx2_noc_x = get_arg_val<uint32_t>(idx++);
     const uint32_t rx2_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem2_l1_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t dst2_is_local = get_arg_val<uint32_t>(idx++);
 
     // Build the fabric connection next (these args were appended by the host
     // right after the fixed 6 args).
@@ -110,6 +112,13 @@ void kernel_main() {
         // 2) send header (completes the packet)
         sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 
+        // If one of the destinations is the local chip, fabric mcast won't loop back.
+        // Do a local NOC write into the local replica of dst_buf.
+        if (dst2_is_local) {
+            uint64_t local_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
+            noc_async_write(local_noc_addr, src_l1_addr, PAGE_SIZE);
+        }
+
         cb_pop_front(CB_ID, 1);
     }
 
@@ -129,10 +138,16 @@ void kernel_main() {
     sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 
     // Completion to RX#2
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst2_dev_id, /*dst_mesh_id=*/dst2_mesh_id);
-    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem2_noc, /*inc=*/1, /*width_bits=*/32));
-    sender.wait_for_empty_write_slot();
-    sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+    if (dst2_is_local) {
+        // Local completion; ordering is ensured by noc_async_writes_flushed() above.
+        volatile tt_l1_ptr uint32_t* sem2_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem2_l1_addr);
+        noc_semaphore_set(sem2_ptr, 1);
+    } else {
+        (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst2_dev_id, /*dst_mesh_id=*/dst2_mesh_id);
+        header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem2_noc, /*inc=*/1, /*width_bits=*/32));
+        sender.wait_for_empty_write_slot();
+        sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+    }
 
     sender.close();
 }

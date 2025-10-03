@@ -300,18 +300,20 @@ Notes:
         return PerfPoint{};
     }
 
+    const bool dst2_is_local = (dst2_phys == src_phys);
     std::vector<uint32_t> writer_rt = {
-        (uint32_t)dst_buf->address(),  // 0: dst_base
-        (uint32_t)p.mesh_id,           // 1: dst1_mesh_id (logical)
-        (uint32_t)p.dst_chip,          // 2: dst1_dev_id  (logical)
-        (uint32_t)rx_xy.x,             // 3: rx1_noc_x
-        (uint32_t)rx_xy.y,             // 4: rx1_noc_y
-        (uint32_t)gsem.address(),      // 5: sem1_l1_addr
-        (uint32_t)p.mesh_id,           // 6: dst2_mesh_id (logical)
-        (uint32_t)p.dst_chip2,         // 7: dst2_dev_id  (logical)
-        (uint32_t)rx2_xy.x,            // 8: rx2_noc_x
-        (uint32_t)rx2_xy.y,            // 9: rx2_noc_y
-        (uint32_t)gsem2.address()      // 10: sem2_l1_addr
+        (uint32_t)dst_buf->address(),        // 0: dst_base
+        (uint32_t)p.mesh_id,                 // 1: dst1_mesh_id (logical)
+        (uint32_t)p.dst_chip,                // 2: dst1_dev_id  (logical)
+        (uint32_t)rx_xy.x,                   // 3: rx1_noc_x
+        (uint32_t)rx_xy.y,                   // 4: rx1_noc_y
+        (uint32_t)gsem.address(),            // 5: sem1_l1_addr
+        (uint32_t)p.mesh_id,                 // 6: dst2_mesh_id (logical)
+        (uint32_t)p.dst_chip2,               // 7: dst2_dev_id  (logical)
+        (uint32_t)rx2_xy.x,                  // 8: rx2_noc_x
+        (uint32_t)rx2_xy.y,                  // 9: rx2_noc_y
+        (uint32_t)gsem2.address(),           // 10: sem2_l1_addr
+        (uint32_t)(dst2_is_local ? 1u : 0u)  // 11: dst2_is_local flag
     };
 
     // Pack the fabric-connection runtime args for the writer kernel.
