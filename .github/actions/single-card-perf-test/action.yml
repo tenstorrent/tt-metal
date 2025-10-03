@@ -33,3 +33,4 @@ runs:
         exit $status
 
       if: ${{ inputs.device_perf_model_name == '' }}
+      shell: bash
