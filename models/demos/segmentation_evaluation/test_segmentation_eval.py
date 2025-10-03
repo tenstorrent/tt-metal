@@ -121,6 +121,7 @@ def evaluation(
                     y_pred = model.run(x)
                     y_pred = ttnn.to_torch(y_pred, mesh_composer=model.runner_infra.output_mesh_composer)
                     y_pred = y_pred.permute(0, 3, 1, 2).to(torch.float32)
+                    y_pred = y_pred.reshape(1, 1, 480, 640)
 
                 y_pred_np = y_pred.detach().cpu().numpy()
                 pred_list.extend([y_pred_np[s] for s in range(y_pred_np.shape[0])])
