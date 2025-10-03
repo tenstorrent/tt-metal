@@ -52,7 +52,6 @@ namespace fabric_router_tests {
 extern "C" bool isFabricUnitTest();
 bool isFabricUnitTest() { return true; }
 
-using tt::tt_metal::ShardedBufferConfig;
 using tt::tt_metal::ShardOrientation;
 using tt::tt_metal::ShardSpecBuffer;
 
