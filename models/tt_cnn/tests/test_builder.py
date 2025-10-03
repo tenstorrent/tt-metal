@@ -228,7 +228,7 @@ def test_downblock(input_size, batch_size, device):
         ),
     ]
 
-    torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configurations[0])
+    torch_input_tensor, ttnn_input_tensor = create_conv2d_input_tensor(configurations[0], device)
 
     downblock = [
         TtConv2d(configurations[0], device),
