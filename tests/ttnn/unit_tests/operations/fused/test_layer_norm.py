@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_blackhole, comp_pcc
@@ -16,6 +17,101 @@ def skip_welford_blackhole(use_welford):
     return pytest.mark.skipif(
         use_welford and is_blackhole(), reason="Welford's algorithm is not supported on Blackhole"
     )
+
+
+import torch
+
+import torch
+
+
+def assert_tensor_allclose(a: torch.Tensor, b: torch.Tensor, eps: float = 1e-6):
+    """
+    Robust allclose assertion for PyTorch tensors.
+    Supports float32, float64, and bfloat16.
+
+    Uses combined ULP + abs/rel tolerance.
+    Near zero, abs tolerance dominates (so ULP doesn't blow up).
+    """
+
+    if a.shape != b.shape:
+        raise AssertionError(f"Shape mismatch: {a.shape} vs {b.shape}")
+    if a.dtype != b.dtype:
+        raise AssertionError(f"Dtype mismatch: {a.dtype} vs {b.dtype}")
+    if a.dtype not in (torch.float32, torch.float64, torch.bfloat16):
+        raise TypeError(f"Only float32/float64/bfloat16 supported, got {a.dtype}")
+
+    if not torch.equal(torch.isnan(a), torch.isnan(b)):
+        raise AssertionError("NaN mismatch between tensors")
+    if not torch.equal(torch.isinf(a), torch.isinf(b)):
+        raise AssertionError("Inf mismatch between tensors")
+
+    # --- dtype-specific defaults ---
+    if a.dtype == torch.float64:
+        max_ulp = 2
+        base_eps = 1e-12
+        bits = 64
+    elif a.dtype == torch.float32:
+        max_ulp = 4
+        base_eps = 1e-6
+        bits = 32
+    elif a.dtype == torch.bfloat16:
+        max_ulp = 16
+        base_eps = 1e-3
+        bits = 16
+
+    eff_eps = max(eps, base_eps)
+    atol = eff_eps
+    rtol = eff_eps
+
+    # --- ULP distance ---
+    if a.dtype == torch.float32:
+        a_int, b_int = a.view(torch.int32), b.view(torch.int32)
+    elif a.dtype == torch.float64:
+        a_int, b_int = a.view(torch.int64), b.view(torch.int64)
+    elif a.dtype == torch.bfloat16:
+        a_int, b_int = a.view(torch.int16).to(torch.int32), b.view(torch.int16).to(torch.int32)
+
+    def to_ordered(x, bits):
+        return torch.where(x < 0, ~(x) + 1 << (bits - 1), x)
+
+    ulp_diff = (to_ordered(a_int, bits) - to_ordered(b_int, bits)).abs()
+
+    # --- absolute/relative check ---
+    diff = (a - b).abs().to(torch.float32)
+    tol = atol + rtol * b.abs().to(torch.float32)
+
+    # --- final decision ---
+    ok_mask = (ulp_diff <= max_ulp) | (diff <= tol)
+    if not torch.all(ok_mask):
+        # Get multi-dimensional indices of failing elements
+        bad_idx = (~ok_mask).nonzero(as_tuple=True)
+
+        failing_a = a[bad_idx]
+        failing_b = b[bad_idx]
+        failing_diffs = diff[bad_idx]
+        failing_tols = tol[bad_idx]
+        failing_ulps = ulp_diff[bad_idx]
+
+        max_diff = failing_diffs.max().item()
+        max_tol = failing_tols.max().item()
+        max_ulp_found = failing_ulps.max().item()
+
+        # Print a small sample for debug
+        n_show = min(10, failing_a.numel())
+        print("---- Failing elements (showing up to 10) ----")
+        for i in range(n_show):
+            idx = tuple(dim[i].item() for dim in bad_idx)
+            print(
+                f"Index {idx}: a={failing_a[i].item()}, b={failing_b[i].item()}, "
+                f"abs diff={failing_diffs[i].item()}, tol={failing_tols[i].item()}, "
+                f"ULP diff={failing_ulps[i].item()}"
+            )
+
+        raise AssertionError(
+            f"{failing_a.numel()} elements failed. "
+            f"Max abs diff={max_diff} (tol={max_tol}), "
+            f"Max ULP={max_ulp_found} (limit={max_ulp}), dtype={a.dtype}"
+        )
 
 
 @pytest.mark.parametrize("h", [32])
@@ -151,7 +247,7 @@ def test_large_layer_norm(device, h, w, use_welford):
 
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
+    torch_input_tensor = torch.rand((h, w))
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
@@ -312,12 +408,12 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
 
 
-@pytest.mark.parametrize("use_welford", [True])
+@pytest.mark.parametrize("use_welford", [False])
 @pytest.mark.parametrize("two_stage", [True])
 @pytest.mark.parametrize("repeating", [True])
 def test_layer_norm_sharded(device, use_welford, two_stage, repeating):
     torch.manual_seed(0)
-
+    dtype = torch.bfloat16
     tile_height = 32
     tile_width = 32
 
@@ -347,62 +443,14 @@ def test_layer_norm_sharded(device, use_welford, two_stage, repeating):
         shard_width = tensor_width // shard_grid_cols
         mem_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
 
-    # Run torch layer norm
-    # Create a tensor that has identical rows,
-    # each row has values from 1 to tensor_width
     if repeating:
-        # torch_input_tensor = torch.rand((tensor_height, tensor_width), dtype=torch.bfloat16)
-        torch_input_tensor = torch.arange(tensor_width).repeat(tensor_height, 1).to(torch.bfloat16)
+        # torch_input_tensor = torch.rand((tensor_height, tensor_width), dtype=dtype)
+        torch_input_tensor = torch.arange(tensor_width).repeat(tensor_height, 1).to(dtype)
     else:
-        torch_input_tensor = (
-            torch.arange(tensor_height * tensor_width).reshape(tensor_height, tensor_width).to(torch.bfloat16)
-        )
-
-    if two_stage:
-        # Print the means of each (shard_grid cols * shard_grid rows) width shard across the width dim
-        for i in range(shard_grid_cols * shard_grid_rows):
-            print(f"Shard {i} means: {torch_input_tensor[:, i * shard_width:(i + 1) * shard_width].mean(dim=1)}")
-
-        # Print the mean of the first shard_grid_cols shards across the width dim
-        print(
-            f"First {shard_grid_cols} shards means: {torch_input_tensor[:, :shard_grid_cols * shard_width].mean(dim=1)}"
-        )
-        # Print the mean of the last shard_grid_cols shards across the width dim
-        print(
-            f"Last {shard_grid_cols} shards means: {torch_input_tensor[:, -shard_grid_cols * shard_width:].mean(dim=1)}"
-        )
-        # Print means of first tile_height rows across the first half of the tensor width
-        print(
-            f"First {tile_height} rows means (first half): {torch_input_tensor[:tile_height, :tensor_width//2].mean(dim=1)}"
-        )
-        # Print means of first tile_height rows across the second half of the tensor width
-        print(
-            f"First {tile_height} rows means (second half): {torch_input_tensor[:tile_height, tensor_width//2:].mean(dim=1)}"
-        )
-    else:
-        # Print the partial means of each (X,Y) shard of the input tensor
-        for i in range(shard_grid_rows):
-            for j in range(shard_grid_cols):
-                print(
-                    f"Shard {j},{i} means: {torch_input_tensor[i * shard_height:(i + 1) * shard_height, j * shard_width:(j + 1) * shard_width].mean(dim=1)}"
-                )
+        torch_input_tensor = torch.arange(tensor_height * tensor_width).reshape(tensor_height, tensor_width).to(dtype)
 
     # torch_input_tensor = torch.rand((tensor_height, tensor_width), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[tensor_width])
-
-    # Print the input tensor and the mean along the width
-    # Compute a tensor xmm that subtracts the column-wise mean
-    # from each element in the corresponding row of the input tensor
-    xmm = torch_input_tensor - torch_input_tensor.mean(dim=1).unsqueeze(1)
-    means = torch_input_tensor.mean(dim=1)
-    print(f"Input tensor: {torch_input_tensor}")
-    print(f"Means: {means}")
-    print(f"Variances: {torch_input_tensor.var(dim=1)}")
-    print(f"x - mean: {xmm}")
-    print(f"1/sqrt(var+eps): {1/torch.sqrt((torch_input_tensor + 1e-12).var(dim=1))}")
-    print(
-        f"(x- mean) * 1/sqrt(var+eps): {(xmm * 0.0140)}"
-    )  # 1/torch.sqrt((torch_input_tensor + 1e-12).var(dim=1)).unsqueeze(1))}")
 
     # Tensor dimensions in tiles (padded)
     Mt = (tensor_height + tile_height - 1) // tile_height
@@ -448,7 +496,6 @@ def test_layer_norm_sharded(device, use_welford, two_stage, repeating):
     # Convert to TTNN tensor
     input_ttnn = ttnn.from_torch(
         torch_input_tensor,
-        dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.Layout.TILE,
         device=device,
         memory_config=memory_config,
@@ -475,6 +522,68 @@ def test_layer_norm_sharded(device, use_welford, two_stage, repeating):
     output_ttnn = ttnn.to_layout(output_ttnn, ttnn.ROW_MAJOR_LAYOUT)
     output_ttnn = ttnn.from_device(output_ttnn)
     output_ttnn = ttnn.to_torch(output_ttnn)
+
+    # Print some stuff
+    # Compute means and vars in float32, like tt does internally
+    torch_input_tensor = torch_input_tensor.to(torch.float32)
+    if two_stage:
+        # Print the means and varsof each (shard_grid cols * shard_grid rows) width shard across the width dim
+        for i in range(shard_grid_cols * shard_grid_rows):
+            print(f"Shard {i} means: {torch_input_tensor[:, i * shard_width:(i + 1) * shard_width].mean(dim=1)}")
+            print(
+                f"Shard {i} vars: {torch_input_tensor[:, i * shard_width:(i + 1) * shard_width].var(dim=1, correction=0)}"
+            )
+
+        # Print the mean of the first shard_grid_cols shards across the width dim
+        print(
+            f"First {shard_grid_cols} shards means: {torch_input_tensor[:, :shard_grid_cols * shard_width].mean(dim=1)}"
+        )
+        # Print the mean of the last shard_grid_cols shards across the width dim
+        print(
+            f"Last {shard_grid_cols} shards means: {torch_input_tensor[:, -shard_grid_cols * shard_width:].mean(dim=1)}"
+        )
+        # Print means of first tile_height rows across the first half of the tensor width
+        print(
+            f"First {tile_height} rows means (first half): {torch_input_tensor[:tile_height, :tensor_width//2].mean(dim=1)}"
+        )
+        # Print vars of first tile_height rows across the first half of the tensor width
+        print(
+            f"First {tile_height} rows vars (first half): {torch_input_tensor[:tile_height, :tensor_width//2].var(dim=1, correction=0)}"
+        )
+        # Print means of first tile_height rows across the second half of the tensor width
+        print(
+            f"First {tile_height} rows means (second half): {torch_input_tensor[:tile_height, tensor_width//2:].mean(dim=1)}"
+        )
+        # Print vars of first tile_height rows across the second half of the tensor width
+        print(
+            f"First {tile_height} rows vars (second half): {torch_input_tensor[:tile_height, tensor_width//2:].var(dim=1, correction=0)}"
+        )
+    else:
+        # Print the partial means and varsof each (X,Y) shard of the input tensor
+        for i in range(shard_grid_rows):
+            for j in range(shard_grid_cols):
+                print(
+                    f"Shard {j},{i} means: {torch_input_tensor[i * shard_height:(i + 1) * shard_height, j * shard_width:(j + 1) * shard_width].mean(dim=1)}"
+                )
+                print(
+                    f"Shard {j},{i} vars: {torch_input_tensor[i * shard_height:(i + 1) * shard_height, j * shard_width:(j + 1) * shard_width].var(dim=1, correction=0)}"
+                )
+
+    xmm = torch_input_tensor - torch_input_tensor.mean(dim=1).unsqueeze(1)
+    inv_sqrt_var = 1 / torch.sqrt((torch_input_tensor + 1e-12).var(dim=1, correction=0)).unsqueeze(1)
+    means = torch_input_tensor.mean(dim=1)
+    print(f"Input tensor: {torch_input_tensor}")
+    print(f"Means: {means}")
+    print(f"Variances: {torch_input_tensor.var(dim=1, correction=0)}")
+    print(f"1/sqrt(var+eps): {inv_sqrt_var}")
+    print(f"x - mean: {xmm}")
+    print(f"xmm * 1/sqrt(var+eps): {xmm * inv_sqrt_var}")
+
+    print(f"Torch output tensor: {torch_output_tensor}")
+    print(f"TTNN output tensor: {output_ttnn}")
+
+    # Print ULP differences
+    assert_tensor_allclose(torch_output_tensor, output_ttnn, 1e-6)
 
     # print(f"Torch output tensor: {torch_output_tensor}")
     # print(f"TTNN output tensor: {output_ttnn}")
