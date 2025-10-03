@@ -572,8 +572,7 @@ class resnet50:
             return self.optimized_run(input_tensor, device, batch_size, ops_parallel_config)
 
     def first_run(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
-        ## copy input to device sharded directly
-        # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
+        input_tensor = ttnn.to_device(input_tensor, device)
         act_block_h_override = 0
         if is_wormhole_b0():
             if batch_size == 16:
@@ -912,8 +911,7 @@ class resnet50:
         return x
 
     def optimized_run(self, input_tensor, device, batch_size, ops_parallel_config) -> ttnn.Tensor:
-        ## copy input to device sharded directly
-        # x = ttnn.to_device(input_tensor, device=self.device, memory_config=self.conv1.conv.input_sharded_memory_config)
+        input_tensor = ttnn.to_device(input_tensor, device)
         act_block_h_override = 0
         if is_wormhole_b0():
             if batch_size == 16:
