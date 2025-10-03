@@ -198,6 +198,16 @@ RunTimeOptions::RunTimeOptions() {
         this->enable_hw_cache_invalidation = true;
     }
 
+    // Parse RELIABILITY_MODE: "strict" or "relaxed"
+    if (const char* reliability_mode_str = getenv("RELIABILITY_MODE"); reliability_mode_str != nullptr) {
+        std::string mode(reliability_mode_str);
+        if (mode == "relaxed") {
+            reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+        } else if (mode == "strict") {
+            reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        }
+    }
+
     if (std::getenv("TT_METAL_SIMULATOR")) {
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
         this->runtime_target_device_ = tt::TargetDevice::Simulator;
