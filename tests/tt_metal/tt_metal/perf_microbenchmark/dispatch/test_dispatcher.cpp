@@ -249,7 +249,6 @@ void gen_linear_or_packed_write_test(
 
     bool done = false;
     while (!done && total_size_bytes < buffer_size) {
-        total_size_bytes += sizeof(CQDispatchCmd);
         if (debug_g) {
             total_size_bytes += sizeof(CQDispatchCmd);
         }
@@ -273,6 +272,7 @@ void gen_linear_or_packed_write_test(
                     xfer_size_bytes = min_xfer_size_bytes_g;
                 }
 
+                total_size_bytes += sizeof(CQDispatchCmdLarge);
                 if (is_linear_multicast) {
                     gen_dispatcher_multicast_write_cmd(
                         device, dispatch_cmds, worker_cores, device_data, xfer_size_bytes);
@@ -282,8 +282,12 @@ void gen_linear_or_packed_write_test(
                 }
                 break;
             }
-            case 4: gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data); break;
+            case 4:
+                total_size_bytes += sizeof(CQDispatchCmd);
+                gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data);
+                break;
             case 5:
+                total_size_bytes += sizeof(CQDispatchCmd);
                 done = gen_rnd_dispatcher_packed_write_large_cmd(
                     device, worker_cores, dispatch_cmds, device_data, buffer_size - total_size_bytes);
                 break;
