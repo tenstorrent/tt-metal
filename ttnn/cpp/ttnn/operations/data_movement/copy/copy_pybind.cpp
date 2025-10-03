@@ -88,6 +88,7 @@ void py_bind_assign(py::module& module) {
     Output tensor will be of same data type as Input tensor.
 
     .. csv-table::
+
         :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
         "input_a", "Tensor assign is applied to", "Tensor", "Tensor of shape [W, Z, Y, X]", "Yes"

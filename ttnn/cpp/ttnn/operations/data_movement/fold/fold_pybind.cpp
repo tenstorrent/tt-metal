@@ -23,6 +23,7 @@ void bind_fold_operation(py::module& module) {
             Output tensor will be on TT accelerator device, in ROW_MAJOR.
 
             .. csv-table::
+
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
                 "input", "Input tensor", "Tensor", "Tensor of shape [N, H, W, C]", "Yes"
                 "stride_h", "Stride along the H-dimension", "int", "", "Yes"

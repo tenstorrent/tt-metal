@@ -473,6 +473,7 @@ Data Movement
    ttnn.split
    ttnn.squeeze
    ttnn.stack
+   ttnn.fold
    ttnn.tilize
    ttnn.tilize_with_val_padding
    ttnn.tilize_with_zero_padding

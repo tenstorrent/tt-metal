@@ -30,6 +30,7 @@ void py_bind_bcast(py::module& module) {
             Output tensor will have BFLOAT16 data type.
 
             .. csv-table::
+
                 :header: "Argument", "Description", "Data type", "Valid range", "Required"
 
                 "input_a", "Input tensor", "Tensor", "Tensor of shape [W0, Z0, Y0, X0]", "Yes"
