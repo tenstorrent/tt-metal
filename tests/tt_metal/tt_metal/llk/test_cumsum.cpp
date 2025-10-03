@@ -34,7 +34,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -73,8 +72,8 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
         for (int k = 0; k < dim_a; k++) {
             float res = 0;
             for (int j = 0; j < dim_b; j++) {
-                res += static_cast<float>(src[i * W * H + j * j_mul + k * k_mul]);
-                golden[i * W * H + j * j_mul + k * k_mul] = res;
+                res += static_cast<float>(src[(i * W * H) + (j * j_mul) + (k * k_mul)]);
+                golden[(i * W * H) + (j * j_mul) + (k * k_mul)] = res;
             }
         }
     }
@@ -82,13 +81,14 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
     return golden;
 }
 
-void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device, const CumsumConfig& test_config) {
+void run_single_core_cumsum(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CumsumConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 

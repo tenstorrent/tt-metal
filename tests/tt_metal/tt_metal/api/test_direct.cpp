@@ -46,7 +46,7 @@ namespace unit_tests::dram::direct {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_only(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& reader_core) {
@@ -59,7 +59,7 @@ bool reader_only(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -115,7 +115,7 @@ bool reader_only(
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool writer_only(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const size_t& byte_size,
     const size_t& l1_byte_address,
     const CoreCoord& writer_core) {
@@ -128,7 +128,7 @@ bool writer_only(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -189,7 +189,7 @@ struct ReaderWriterConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const ReaderWriterConfig& test_config) {
+bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t cb_index = 0;
@@ -202,7 +202,7 @@ bool reader_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const R
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -286,7 +286,7 @@ struct ReaderDatacopyWriterConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_datacopy_writer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const ReaderDatacopyWriterConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderDatacopyWriterConfig& test_config) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;
@@ -300,7 +300,7 @@ bool reader_datacopy_writer(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
     tt::tt_metal::InterleavedBufferConfig dram_config{

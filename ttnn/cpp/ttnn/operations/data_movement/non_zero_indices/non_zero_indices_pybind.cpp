@@ -16,7 +16,6 @@ namespace py = pybind11;
 void bind_non_zero(py::module& module) {
     auto doc = fmt::format(
         R"doc(
-
             Returns the number of elements (N) that are non-zero as well as a tensor of the same shape as input where the first N elements are the indices of non-zero elements.
 
             Args:
@@ -24,7 +23,6 @@ void bind_non_zero(py::module& module) {
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
                 List of ttnn.Tensor: the output tensors.
@@ -44,12 +42,10 @@ void bind_non_zero(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) { return self(queue_id, input_tensor, memory_config); },
+               const std::optional<ttnn::MemoryConfig>& memory_config) { return self(input_tensor, memory_config); },
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace detail

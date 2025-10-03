@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     _nearest_y,
     is_wormhole_b0,
     torch2tt_tensor,

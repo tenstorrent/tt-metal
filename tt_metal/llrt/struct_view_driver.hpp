@@ -45,7 +45,7 @@ public:
     StructSpan(const StructInfo info, byte_type* base, size_t size) : info_(info), base_(base), size_(size) {}
     size_t size() const { return size_; }
 
-    view_type operator[](size_t i) const { return {info_, base_ + i * info_.get_size()}; }
+    view_type operator[](size_t i) const { return {info_, base_ + (i * info_.get_size())}; }
     class iterator {
     private:
         const StructInfo info_;
@@ -62,13 +62,16 @@ public:
         view_type operator*() const { return {info_, ptr_}; }
     };
     iterator begin() const { return {info_, base_}; }
-    iterator end() const { return {info_, base_ + size_ * info_.get_size()}; }
+    iterator end() const { return {info_, base_ + (size_ * info_.get_size())}; }
 
 private:
     StructInfo info_;
     byte_type* base_;
     size_t size_;
 };
+
+template <typename Struct>
+class StructBuffer;
 
 template <bool Const, typename Struct>
 class BaseStructView {
@@ -77,6 +80,7 @@ private:
     using same_const_t = std::conditional_t<Const, const T, T>;
     template <Struct::Field F>
     using FieldTraits = typename Struct::template FieldTraits<Const, F>;
+    friend class StructBuffer<Struct>;
 
 public:
     using byte_type = same_const_t<std::byte>;
@@ -134,6 +138,11 @@ public:
     StructBuffer(const StructInfo info) : info_(info), storage_(std::make_unique<std::byte[]>(info.get_size())) {}
     StructBuffer(const StructBuffer& other) : StructBuffer(other.info_) {
         std::copy(other.data(), other.data() + size(), data());
+    }
+    // Construct from view
+    template <bool Const>
+    StructBuffer(const BaseStructView<Const, Struct>& view) : StructBuffer(view.info_) {
+        std::copy(view.data(), view.data() + size(), data());
     }
     StructBuffer& operator=(const StructBuffer& other) {
         *this = StructBuffer(other);

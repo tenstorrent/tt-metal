@@ -142,7 +142,7 @@ struct HostToFabricLiteInterface {
 
     explicit HostToFabricLiteInterface() = default;
 
-    inline void init() volatile {
+    void init() volatile {
         h2d.sender_host_write_index = 0;
         h2d.receiver_host_read_index = 0;
         d2h.fabric_sender_channel_index = 0;

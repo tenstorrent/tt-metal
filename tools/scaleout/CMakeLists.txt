@@ -1,5 +1,7 @@
 project(scaleout_tools)
 
+add_executable(run_cluster_validation validation/run_cluster_validation.cpp)
+
 # Library target
 add_library(scaleout_tools OBJECT)
 add_library(TT::ScaleoutTools ALIAS scaleout_tools)
@@ -44,6 +46,8 @@ target_sources(
 target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
+target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
+
 target_link_libraries(
     scaleout_tools
     PUBLIC
@@ -51,10 +55,19 @@ target_link_libraries(
         umd::device
     PRIVATE
         enchantum::enchantum
+        tt-logger::tt-logger
         $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
+target_link_libraries(
+    run_cluster_validation
+    PRIVATE
+        TT::ScaleoutTools
+        enchantum::enchantum
+        protobuf::libprotobuf
+        tt_metal
+)
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
 

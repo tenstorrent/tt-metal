@@ -56,7 +56,7 @@ def extract_metadata_from_file(filepath: pathlib.Path) -> Dict[str, Any]:
     This is optimized for large files by reading only the beginning of the file.
     Uses ijson for streaming if available and file is large.
     """
-    metadata_fields = ["initiated_by", "git_sha", "github_pipeline_id", "run_start_ts", "run_end_ts"]
+    metadata_fields = ["initiated_by", "git_sha", "github_pipeline_id", "run_start_ts", "run_end_ts", "run_contents"]
     metadata = {}
 
     file_size_mb = filepath.stat().st_size / (1024 * 1024)
@@ -308,6 +308,8 @@ def extract_common_metadata(files: List[pathlib.Path]) -> Dict[str, Any]:
         common_metadata["run_start_ts"] = datetime_to_str(earliest_start)
     if latest_end:
         common_metadata["run_end_ts"] = datetime_to_str(latest_end)
+
+    common_metadata["run_contents"] = "all sweeps (nightly)"
 
     return common_metadata
 

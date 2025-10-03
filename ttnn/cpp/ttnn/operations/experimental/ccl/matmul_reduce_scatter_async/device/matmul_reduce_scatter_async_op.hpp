@@ -89,9 +89,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     Tensor& reduce_scatter_output_tensor,
     const Tensor& weight_tensor,
     Tensor& matmul_output_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    const std::optional<MeshCoordinate>& forward_coord,
+    const std::optional<MeshCoordinate>& backward_coord,
     uint32_t dim,
     uint32_t num_links,
     uint32_t ring_size,
@@ -104,7 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     CoreCoord core_grid_offset,
 
     /* Matmul Params */
-    std::optional<const Tensor> bias,
+    const std::optional<const Tensor>& bias,
     bool bcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config,

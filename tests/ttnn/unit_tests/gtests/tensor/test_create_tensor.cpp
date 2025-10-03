@@ -44,7 +44,7 @@ namespace {
 void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const ttnn::Shape& input_shape) {
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
-    const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId io_cq = ttnn::QueueId(0);
     constexpr DataType dtype = DataType::BFLOAT16;
     constexpr uint32_t datum_size_bytes = 2;
 

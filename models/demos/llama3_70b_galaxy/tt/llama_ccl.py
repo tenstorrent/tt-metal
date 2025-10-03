@@ -517,6 +517,8 @@ class TT_CCL:
 
             buffers_dict = {
                 "QKV": [(1, 1, seqlen, 1280)],
+                "SDPA": [(1, 1, seqlen // 2, 1024)],
+                "SDPA_REVERSE": [(1, 1, seqlen // 2, 1024)],
                 "WO": [(1, 1, seqlen, 2048)],
                 "FF1": [(1, 1, seqlen, 3584)],
                 "FF3": [(1, 1, seqlen, 3584)],
@@ -907,6 +909,7 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
+            num_workers_per_link=1,
         )
 
         # reshape input back
@@ -991,19 +994,28 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
-    def ring_all_gather(self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None):
+    def ring_all_gather(
+        self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None, reverse_order=False
+    ):
         B = input_tensor_mesh.shape[1]
         input_tensor_mesh = ttnn.reshape(
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
         )
         seqlen = input_tensor_mesh.shape[-2]
+        if "SDPA" in buffer_key:
+            # SDPA input is 8x (4= ring_size (number of devices in ring), 2 = number of chunks per device) shorter than the sequence length
+            seqlen = seqlen * 8
         persistent_buffers = (
             self.all_gather_buffers[seqlen].get(buffer_key, None) if seqlen in self.all_gather_buffers else None
         )
         # persistent_buffers = None
 
         num_links = 4
-        ttnn_tensor_out = ttnn.experimental.all_gather_async(
+        if reverse_order:
+            all_gather_function = ttnn.experimental.all_gather_async_reversed
+        else:
+            all_gather_function = ttnn.experimental.all_gather_async
+        ttnn_tensor_out = all_gather_function(
             input_tensor=input_tensor_mesh,
             # persistent_intermediate_buffer=persistent_buffers["intermediate"],
             persistent_output_buffer=persistent_buffers,
@@ -1016,7 +1028,9 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
         )
-        if self.mode == "prefill" and buffer_key is not None:
+        if self.mode == "prefill" and buffer_key is not None and dim != 2:
+            # This condition excludes SDPA tensors (which use dim=2) from reshaping
+            # All other tensors (QKV, WO, FF1, FF3, FF2, LAYERNORM) use dims 0, 1, or 3
             # reshape input back
             if buffer_key != "LM_HEAD":
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))

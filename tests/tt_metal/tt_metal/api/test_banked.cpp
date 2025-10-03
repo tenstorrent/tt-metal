@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -31,7 +31,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using std::vector;
@@ -56,7 +55,7 @@ namespace local_test_functions {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool reader_cb_writer(
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const BankedConfig& cfg,
     const bool banked_reader,
     const bool banked_writer) {
@@ -71,7 +70,7 @@ bool reader_cb_writer(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     std::string reader_kernel_name = "";
@@ -191,7 +190,7 @@ bool reader_cb_writer(
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device, const BankedConfig& cfg) {
+bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const BankedConfig& cfg) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;
@@ -204,7 +203,7 @@ bool reader_datacopy_writer(std::shared_ptr<distributed::MeshDevice> mesh_device
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
 
     distributed::DeviceLocalBufferConfig in_config{

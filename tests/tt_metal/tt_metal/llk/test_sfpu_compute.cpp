@@ -19,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -40,7 +40,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
 
@@ -146,14 +145,15 @@ struct SfpuConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_sfpu_all_same_buffer(std::shared_ptr<distributed::MeshDevice> mesh_device, const SfpuConfig& test_config) {
+bool run_sfpu_all_same_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 

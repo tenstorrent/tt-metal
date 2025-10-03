@@ -119,7 +119,6 @@ def run_perf_e2e_yolov7(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV7_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
@@ -155,6 +154,7 @@ def test_e2e_performant(
 
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": YOLOV7_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
@@ -166,7 +166,7 @@ def test_e2e_performant(
 )
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((640, 640), 125)],
+    [((640, 640), 202)],
 )
 def test_e2e_performant_dp(
     mesh_device,

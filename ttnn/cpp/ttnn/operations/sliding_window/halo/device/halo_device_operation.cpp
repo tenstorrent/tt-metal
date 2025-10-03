@@ -90,11 +90,14 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         input_tensor.memory_config().shard_spec()->shape[1]};
 
     auto out_mem_config = output_memory_config_.with_shard_spec(ShardSpec{
-        output_memory_config_.shard_spec()->grid,
-        shard_shape,
-        shard_shape,
-        output_memory_config_.shard_spec()->orientation});
-    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config))};
+        output_memory_config_.shard_spec()->grid, shard_shape, output_memory_config_.shard_spec()->orientation});
+    auto padded_output_shape = output_shape;
+    padded_output_shape[-2] = tt::round_up(padded_output_shape[-2], shard_shape[0]);
+    padded_output_shape[-1] = tt::round_up(padded_output_shape[-1], shard_shape[1]);
+    return {TensorSpec(
+        output_shape,
+        TensorLayout::fromPaddedShape(
+            output_dtype, PageConfig(Layout::ROW_MAJOR), out_mem_config, output_shape, padded_output_shape))};
 }
 
 operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
@@ -114,6 +117,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
 
     Program program = CreateProgram();
 
+    uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
+
     if (this->in_place_) {
         // after untilize bfloat8 is converted to bfloat16
         const tt::tt_metal::DataType dtype = input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B
@@ -128,8 +133,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         // for small stick sizes alignment can cause the shards to be larger than the number of sticks, thus
         // we must account for alignment when computing the size delta between input and output shards
         uint32_t aligned_delta_size =
-            align_buffer(this->max_out_nsticks_per_core_ * output_width_bytes) / output_width_bytes -
-            align_buffer(this->in_nsticks_per_core_ * input_width_bytes) / input_width_bytes;
+            (align_buffer(this->max_out_nsticks_per_core_ * output_width_bytes) / output_width_bytes) -
+            (align_buffer(this->in_nsticks_per_core_ * input_width_bytes) / input_width_bytes);
         int32_t in_out_shard_size_delta = (this->in_place_ && is_in_tiled)
                                               ? 0
                                               : aligned_delta_size;  // for in place with tilized data we untilize
@@ -143,6 +148,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             remote_read_,
             is_in_tiled,
             device,
+            num_cores_x,
             max_out_nsticks_per_core_,
             in_nsticks_per_core_,
             this->in_place_,
@@ -178,6 +184,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             padding_exists,
             config_.num_cores_nhw,
             config_.num_cores_c,
+            num_cores_x,
             max_out_nsticks_per_core_,
             max_ref_size,
             in_out_shard_size_delta,
@@ -197,6 +204,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             transpose_mcast_,
             remote_read_,
             device,
+            num_cores_x,
             is_in_tiled,
             UNTILIZE_BLOCK_SIZE);
 

@@ -130,6 +130,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     bool remote_read,
     bool is_in_tiled,
     tt::tt_metal::IDevice* device,
+    uint32_t num_cores_x,
     uint32_t max_out_nsticks_per_core = INT_MAX,
     uint32_t in_nsticks_per_core = 0,
     bool in_place = false,
@@ -150,6 +151,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool transpose_mcast,
     bool remote_read,
     tt::tt_metal::IDevice* device,
+    uint32_t num_cores_x,
     bool is_in_tiled,
     int block_size);
 

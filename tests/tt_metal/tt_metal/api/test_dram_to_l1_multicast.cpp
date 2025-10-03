@@ -45,7 +45,7 @@ struct DRAMtoL1MulticastConfig {
 
 bool dram_to_l1_multicast(
     tt::tt_metal::MeshDispatchFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const DRAMtoL1MulticastConfig& cfg) {
     bool pass = true;
 
@@ -54,7 +54,7 @@ bool dram_to_l1_multicast(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
 
     auto& program_ = workload.get_programs().at(device_range);
 

@@ -25,7 +25,10 @@
 namespace tt::scaleout_tools {
 
 void validate_fsd_against_gsd(
-    const std::string& fsd_filename, const std::string& gsd_filename, bool strict_validation) {
+    const std::string& fsd_filename,
+    const std::string& gsd_filename,
+    bool strict_validation,
+    bool assert_on_connection_mismatch) {
     // Read the generated FSD using protobuf
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor generated_fsd;
     std::ifstream fsd_file(fsd_filename);
@@ -52,7 +55,7 @@ void validate_fsd_against_gsd(
     }
 
     // Handle the new GSD structure with compute_node_specs
-    if (!discovered_gsd["compute_node_specs"]) {
+    if (!discovered_gsd["compute_node_specs"] || discovered_gsd["compute_node_specs"].size() == 0) {
         throw std::runtime_error("GSD missing compute_node_specs");
     }
     YAML::Node asic_info_node = discovered_gsd["compute_node_specs"];
@@ -70,15 +73,9 @@ void validate_fsd_against_gsd(
         discovered_hostnames.insert(hostname_entry.first.as<std::string>());
     }
 
-    if (strict_validation) {
-        if (generated_hostnames != discovered_hostnames) {
-            throw std::runtime_error("Hostnames mismatch");
-        }
-    } else {
-        for (const auto& hostname : discovered_hostnames) {
-            if (generated_hostnames.find(hostname) == generated_hostnames.end()) {
-                throw std::runtime_error("Hostname not found in FSD: " + hostname);
-            }
+    for (const auto& hostname : discovered_hostnames) {
+        if (not generated_hostnames.contains(hostname)) {
+            throw std::runtime_error("Hostname not found in FSD: " + hostname);
         }
     }
 
@@ -161,8 +158,13 @@ void validate_fsd_against_gsd(
         }
     }
     if (strict_validation) {
-        if (fsd_board_types.size() != 0) {
-            throw std::runtime_error("Expected all board types to be found in FSD");
+        for (const auto& [fsd_key, fsd_board_type] : fsd_board_types) {
+            const auto& [hostname, tray_id] = fsd_key;
+            if (discovered_hostnames.contains(hostname)) {
+                throw std::runtime_error(
+                    "Board type not found in GSD for discovered host " + hostname + ", tray " +
+                    std::to_string(tray_id));
+            }
         }
     }
 
@@ -172,13 +174,15 @@ void validate_fsd_against_gsd(
     }
 
     // Determine which connection types exist in the discovered GSD
-    bool has_local_eth_connections =
-        discovered_gsd["local_eth_connections"] && !discovered_gsd["local_eth_connections"].IsNull();
-    bool has_global_eth_connections =
-        discovered_gsd["global_eth_connections"] && !discovered_gsd["global_eth_connections"].IsNull();
+    bool has_local_eth_connections = discovered_gsd["local_eth_connections"] &&
+                                     !discovered_gsd["local_eth_connections"].IsNull() &&
+                                     discovered_gsd["local_eth_connections"].size() > 0;
+    bool has_global_eth_connections = discovered_gsd["global_eth_connections"] &&
+                                      !discovered_gsd["global_eth_connections"].IsNull() &&
+                                      discovered_gsd["global_eth_connections"].size() > 0;
 
     // At least one connection type should exist
-    if (!has_local_eth_connections && !has_global_eth_connections) {
+    if (!(has_local_eth_connections || has_global_eth_connections)) {
         throw std::runtime_error("No connection types found in discovered GSD");
     }
 
@@ -203,8 +207,8 @@ void validate_fsd_against_gsd(
         const std::string& hostname_1 = hosts[host_id_1].hostname();
         const std::string& hostname_2 = hosts[host_id_2].hostname();
 
-        PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-        PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+        PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), AsicChannel{asic_location_1, ChanId(chan_id_1)}};
+        PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), AsicChannel{asic_location_2, ChanId(chan_id_2)}};
 
         // Sort to ensure consistent ordering
         std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint> connection_pair_sorted;
@@ -257,8 +261,10 @@ void validate_fsd_against_gsd(
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
             uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-            PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+            PhysicalChannelEndpoint conn_1{
+                hostname_1, TrayId(tray_id_1), AsicChannel{asic_location_1, ChanId(chan_id_1)}};
+            PhysicalChannelEndpoint conn_2{
+                hostname_2, TrayId(tray_id_2), AsicChannel{asic_location_2, ChanId(chan_id_2)}};
 
             // Sort to ensure consistent ordering
             PhysicalChannelConnection connection_pair_sorted;
@@ -297,8 +303,10 @@ void validate_fsd_against_gsd(
             uint32_t tray_id_2 = second_conn["tray_id"].as<uint32_t>();
             uint32_t asic_location_2 = second_conn["asic_location"].as<uint32_t>();
 
-            PhysicalChannelEndpoint conn_1{hostname_1, TrayId(tray_id_1), asic_location_1, ChanId(chan_id_1)};
-            PhysicalChannelEndpoint conn_2{hostname_2, TrayId(tray_id_2), asic_location_2, ChanId(chan_id_2)};
+            PhysicalChannelEndpoint conn_1{
+                hostname_1, TrayId(tray_id_1), AsicChannel{asic_location_1, ChanId(chan_id_1)}};
+            PhysicalChannelEndpoint conn_2{
+                hostname_2, TrayId(tray_id_2), AsicChannel{asic_location_2, ChanId(chan_id_2)}};
 
             // Sort to ensure consistent ordering
             PhysicalChannelConnection connection_pair_sorted;
@@ -361,8 +369,8 @@ void validate_fsd_against_gsd(
 
             Board board_a = create_board(board_type_a);
             Board board_b = create_board(board_type_b);
-            auto port_a = board_a.get_port_for_asic_channel({conn.first.asic_location, conn.first.channel_id});
-            auto port_b = board_b.get_port_for_asic_channel({conn.second.asic_location, conn.second.channel_id});
+            auto port_a = board_a.get_port_for_asic_channel(conn.first.asic_channel);
+            auto port_b = board_b.get_port_for_asic_channel(conn.second.asic_channel);
 
             PhysicalPortEndpoint port_a_conn;
             PhysicalPortEndpoint port_b_conn;
@@ -422,8 +430,11 @@ void validate_fsd_against_gsd(
     // Only in strict validation: also find connections in FSD but not in GSD
     if (strict_validation) {
         for (const auto& conn : generated_connections) {
-            if (discovered_connections.find(conn) == discovered_connections.end()) {
-                missing_in_gsd.insert(conn);
+            if (discovered_hostnames.contains(conn.first.hostname) &&
+                discovered_hostnames.contains(conn.second.hostname)) {
+                if (not discovered_connections.contains(conn)) {
+                    missing_in_gsd.insert(conn);
+                }
             }
         }
     }
@@ -470,7 +481,10 @@ void validate_fsd_against_gsd(
     // Handle validation results
     if (!missing_in_gsd.empty() || !extra_in_gsd.empty()) {
         std::string mode_text = strict_validation ? "" : " in non-strict validation";
-        throw std::runtime_error("Connection mismatch detected" + mode_text + ". Check console output for details.");
+        if (assert_on_connection_mismatch) {
+            throw std::runtime_error(
+                "Connection mismatch detected" + mode_text + ". Check console output for details.");
+        }
     } else {
         // Success message differs based on validation mode
         if (strict_validation) {

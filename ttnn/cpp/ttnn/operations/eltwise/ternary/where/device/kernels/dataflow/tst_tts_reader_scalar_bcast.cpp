@@ -49,7 +49,7 @@ void kernel_main() {
     // #endif
 
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = 0;
+    constexpr bool has_sharding = false;  // TODO: add sharding support
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

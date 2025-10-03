@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,6 +65,8 @@ struct MeshTraceBuffer {
     // The MeshBuffer this trace will be serialized to, before being run on a
     // MeshDevice
     std::shared_ptr<MeshBuffer> mesh_buffer = nullptr;
+
+    ~MeshTraceBuffer();
 };
 
 // Top level class - Manages MeshTrace

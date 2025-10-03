@@ -41,7 +41,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -95,13 +94,13 @@ struct TestConfig {
 };
 
 void run_single_core_tilize_program(
-    std::shared_ptr<distributed::MeshDevice> mesh_device, const TestConfig& test_config) {
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const TestConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt::tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 

@@ -7,7 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <limits>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
@@ -127,7 +127,7 @@ inline std::vector<uint16_t> gold_bcast_op(
 // Returns C=A*B, A and B are row-major untilized
 // Accumulates in FP32
 inline std::vector<uint16_t> gold_bmm(
-    const std::vector<uint32_t> shapeA,
+    const std::vector<uint32_t>& shapeA,
     const std::vector<uint16_t>& A,
     const std::vector<uint32_t>& shapeB,
     const std::vector<uint16_t>& B,

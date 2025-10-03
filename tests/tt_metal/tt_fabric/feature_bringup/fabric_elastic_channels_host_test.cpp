@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,13 +17,14 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 #include <chrono>
 #include <cstring>
 #include <iostream>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -468,16 +469,12 @@ void run_test(
 
     log_info(tt::LogAlways, "Launching programs");
 
-    tt_metal::distributed::MeshWorkload local_workload = tt_metal::distributed::CreateMeshWorkload();
-    tt_metal::distributed::MeshWorkload remote_workload = tt_metal::distributed::CreateMeshWorkload();
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        local_workload,
-        std::move(test_resources.local_device.program),
-        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
-    tt_metal::distributed::AddProgramToMeshWorkload(
-        remote_workload,
-        std::move(test_resources.remote_device.program),
-        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    tt_metal::distributed::MeshWorkload local_workload;
+    tt_metal::distributed::MeshWorkload remote_workload;
+    local_workload.add_program(
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(test_resources.local_device.program));
+    remote_workload.add_program(
+        tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(test_resources.remote_device.program));
 
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] {
@@ -589,8 +586,8 @@ TestResources create_test_resources(
     CoreCoord eth_receiver_core,
     const TestConfig& config) {
     TestResources resources;
-    resources.local_device.device = device_0;
-    resources.remote_device.device = device_1;
+    resources.local_device.device = std::move(device_0);
+    resources.remote_device.device = std::move(device_1);
     resources.local_device.eth_core = eth_sender_core;
     resources.remote_device.eth_core = eth_receiver_core;
 

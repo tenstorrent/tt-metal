@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "where_utils.hpp"
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
 #include <fmt/format.h>
@@ -15,7 +15,7 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
         case WhereVariant::TTT:
             if (broadcast_type == WhereBroadcastType::COL_BCAST) {
                 reader_kernel = KernelName::ReaderColBcastTTT;
-                compute_kernel = KernelName::ComputeColBcastTTT;
+                compute_kernel = KernelName::ComputeBcastTTT;
                 writer_kernel = KernelName::WriterColBcastTTT;  // Use binary_ng compatible writer
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTTT;
@@ -24,6 +24,10 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
                 reader_kernel = KernelName::ReaderRowBcastTTT;
                 compute_kernel = KernelName::ComputeNoBcastTTT;
+                writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::SCALAR_BCAST) {
+                reader_kernel = KernelName::ReaderScalarBcastTTT;
+                compute_kernel = KernelName::ComputeBcastTTT;
                 writer_kernel = KernelName::WriterNoBcast;
             } else {
                 reader_kernel = KernelName::ReaderNoBcastTTT;
@@ -37,13 +41,17 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 reader_kernel = KernelName::ReaderColBcastTTS;
                 compute_kernel = KernelName::ComputeColBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+                reader_kernel = KernelName::ReaderRowBcastTTS;
+                compute_kernel = KernelName::ComputeNoBcastTTS;
+                writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTTS;
                 compute_kernel = KernelName::ComputeNoBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (
-            broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-            broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
                 reader_kernel = KernelName::ReaderScalarBcastTTS;
                 compute_kernel = KernelName::ComputeScalarBcastTTS;
                 writer_kernel = KernelName::WriterNoBcast;
@@ -59,13 +67,17 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 reader_kernel = KernelName::ReaderColBcastTST;
                 compute_kernel = KernelName::ComputeColBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
+            } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+                reader_kernel = KernelName::ReaderRowBcastTST;
+                compute_kernel = KernelName::ComputeNoBcastTST;
+                writer_kernel = KernelName::WriterNoBcast;
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTST;
                 compute_kernel = KernelName::ComputeNoBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
             } else if (
-            broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
-            broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
+                broadcast_type == WhereBroadcastType::SCALAR_A_BCAST ||
+                broadcast_type == WhereBroadcastType::SCALAR_B_BCAST) {
                 reader_kernel = KernelName::ReaderScalarBcastTST;
                 compute_kernel = KernelName::ComputeScalarBcastTST;
                 writer_kernel = KernelName::WriterNoBcast;
@@ -75,12 +87,11 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 writer_kernel = KernelName::WriterNoBcast;
             }
             break;
+            // TODO: Move TSS impl from Unary infra once sharding support is added
 
-        case WhereVariant::TSS:
-            reader_kernel = KernelName::ReaderNoBcastTSS;
-            compute_kernel = KernelName::ComputeNoBcastTSS;
-            writer_kernel = KernelName::WriterNoBcast;
-            break;
+        case WhereVariant::TSS: TT_THROW("TSS variant is yet to be moved into Where Device Operation");
+
+        default: TT_THROW("Invalid where variant");
     }
 }
 
@@ -94,13 +105,13 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderOuterBcastTTT: return fmt::format(dataflow, root, "ternary_reader_outerbcast_ttt.cpp");
         case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
-        case KernelName::ReaderOuterBcastTTS:
-            return fmt::format(dataflow, root, "ternary_reader_outerbcast_tst_tts.cpp");
-        case KernelName::ReaderOuterBcastTST:
-            return fmt::format(dataflow, root, "ternary_reader_outerbcast_tst_tts.cpp");
+        case KernelName::ReaderOuterBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
+        case KernelName::ReaderOuterBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_outer_bcast.cpp");
         case KernelName::ReaderScalarBcastTTS: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
         case KernelName::ReaderScalarBcastTST: return fmt::format(dataflow, root, "tst_tts_reader_scalar_bcast.cpp");
-        case KernelName::ReaderNoBcastTSS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tss.cpp");
+        case KernelName::ReaderScalarBcastTTT:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+                   "ternary_reader_scalar_ttt.cpp";
         case KernelName::ReaderColBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_colbcast_ttt.cpp";
@@ -113,6 +124,10 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderRowBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
                    "ternary_reader_rowbcast_ttt.cpp";
+        case KernelName::ReaderRowBcastTST:
+        case KernelName::ReaderRowBcastTTS:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/dataflow/"
+                   "tts_tst_reader_row_bcast.cpp";
 
         case KernelName::WriterNoBcast:
             return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
@@ -125,11 +140,11 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ComputeNoBcastTTT: return fmt::format(compute, root, "where_sfpu_no_bcast_ttt.cpp");
         case KernelName::ComputeNoBcastTST: return fmt::format(compute, root, "where_sfpu_no_bcast_tst.cpp");
         case KernelName::ComputeNoBcastTTS: return fmt::format(compute, root, "where_sfpu_no_bcast_tts.cpp");
-        case KernelName::ComputeNoBcastTSS: return fmt::format(compute, root, "where_sfpu_no_bcast_tss.cpp");
         case KernelName::ComputeScalarBcastTST: return fmt::format(compute, root, "where_sfpu_scalar_bcast_tst.cpp");
         case KernelName::ComputeScalarBcastTTS: return fmt::format(compute, root, "where_sfpu_scalar_bcast_tts.cpp");
-        case KernelName::ComputeColBcastTTT:
-            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_ttt.cpp";
+        case KernelName::ComputeBcastTTT:
+            return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/"
+                   "where_sfpu_col_scalar_bcast_ttt.cpp";
         case KernelName::ComputeColBcastTTS:
             return "ttnn/cpp/ttnn/operations/eltwise/ternary/where/device/kernels/compute/where_sfpu_col_bcast_tts.cpp";
         case KernelName::ComputeColBcastTST:
@@ -313,9 +328,9 @@ WhereBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, const 
 
         // Row broadcast case: at least one tensor is broadcasting in height and widths are same
         if ((pred_row_broadcasted || tensor_row_broadcasted) && same_width) {
-            // TTS and TST do not support row broadcast - fallback to legacy
-            log_debug(tt::LogOp, "2-tensor row broadcast not supported, falling back to legacy");
-            return WhereBroadcastType::INVALID_BCAST;
+            // TTS and TST now support row broadcast
+            log_debug(tt::LogOp, "2-tensor row broadcast detected for TTS/TST");
+            return WhereBroadcastType::ROW_BCAST;
         }
     }
 
@@ -340,7 +355,42 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::OUTER_BCAST;
     }
 
+    // Multi-dimensional mixed ROW and COL broadcast (i.e., cases where both height and width require broadcasting in
+    // different tensors)
     if (!same_height && !same_width) {
+        // Get last dimension sizes
+        auto pred_w = predicate_shape[-1];
+        auto true_w = true_shape[-1];
+        auto false_w = false_shape[-1];
+
+        auto pred_h = predicate_shape[-2];
+        auto true_h = true_shape[-2];
+        auto false_h = false_shape[-2];
+
+        auto max_h = std::max({pred_h, true_h, false_h});
+        auto max_w = std::max({pred_w, true_w, false_w});
+
+        bool pred_row_bcast = (pred_h == 1 && max_h > 1);
+        bool true_row_bcast = (true_h == 1 && max_h > 1);
+        bool false_row_bcast = (false_h == 1 && max_h > 1);
+
+        bool pred_col_bcast = (pred_w == 1 && max_w > 1);
+        bool true_col_bcast = (true_w == 1 && max_w > 1);
+        bool false_col_bcast = (false_w == 1 && max_w > 1);
+
+        bool is_pred_scalar = (pred_row_bcast && pred_col_bcast);
+        bool is_true_scalar = (true_row_bcast && true_col_bcast);
+        bool is_false_scalar = (false_row_bcast && false_col_bcast);
+
+        bool is_pred_non_bcast = (pred_h == max_h && pred_w == max_w);
+        bool is_true_non_bcast = (true_h == max_h && true_w == max_w);
+        bool is_false_non_bcast = (false_h == max_h && false_w == max_w);
+
+        if ((is_pred_scalar || is_pred_non_bcast) && (is_true_scalar || is_true_non_bcast) &&
+            (is_false_scalar || is_false_non_bcast)) {
+            return WhereBroadcastType::SCALAR_BCAST;
+        }
+
         return WhereBroadcastType::INVALID_BCAST;
     }
 
