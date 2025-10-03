@@ -21,11 +21,12 @@ KERNEL_MAIN {
         auto tile1 = read_tile(in1, i);
 
         tile_regs_acquire();
-        add_tiles(tile0, tile1, 0);
+        constexpr uint32_t dst_idx = 0;
+        add_tiles(tile0, tile1, dst_idx);
         tile_regs_commit();
         tile_regs_wait();
 
-        write_packed_tile(0, out, i);
+        write_packed_tile(dst_idx, out, i);
 
         tile_regs_release();
     }
