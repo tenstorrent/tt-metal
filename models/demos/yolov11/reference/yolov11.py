@@ -31,9 +31,21 @@ class DFL(nn.Module):
 
 
 class Conv(nn.Module):
-    def __init__(self, in_channel, out_channel, kernel=1, stride=1, padding=0, dilation=1, groups=1, enable_act=True):
+    def __init__(
+        self,
+        in_channel,
+        out_channel,
+        kernel=1,
+        stride=1,
+        padding=0,
+        dilation=1,
+        groups=1,
+        enable_act=True,
+        split_weights=False,
+    ):
         super().__init__()
         self.enable_act = enable_act
+        self.split_weights = split_weights
         if enable_act:
             self.conv = nn.Conv2d(
                 in_channel,
@@ -220,6 +232,7 @@ class C3k2(nn.Module):
                 padding=padding[0],
                 dilation=dilation[0],
                 groups=groups[0],
+                split_weights=True,
             )
             self.cv2 = Conv(
                 in_channel[1],
@@ -253,6 +266,7 @@ class C3k2(nn.Module):
                 padding=padding[0],
                 dilation=dilation[0],
                 groups=groups[0],
+                split_weights=True,
             )
             self.cv2 = Conv(
                 in_channel[1],
