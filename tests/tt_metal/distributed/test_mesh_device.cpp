@@ -30,7 +30,6 @@ namespace {
 
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
-using ::tt::tt_metal::distributed::MeshContainer;
 
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
     MeshDeviceConfig config(MeshShape(1, 1));
