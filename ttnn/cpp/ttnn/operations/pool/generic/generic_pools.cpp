@@ -357,10 +357,10 @@ static std::vector<Tensor> pool2d_invoke(
             output_tensors.size() == 2,
             "Expected two output tensors when return_indices is true, but got {}.",
             output_tensors.size());
-        return std::move(output_tensors);
+        return output_tensors;
     } else {
         TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
-        return std::move(output_tensors);
+        return output_tensors;
     }
 }
 
