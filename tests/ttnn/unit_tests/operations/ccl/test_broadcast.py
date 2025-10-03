@@ -9,7 +9,7 @@ import ttnn
 
 
 @pytest.mark.parametrize("num_devices", [8])
-@pytest.mark.parametrize("output_shape", [[2, 32]])
+@pytest.mark.parametrize("output_shape", [[32, 32]])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("mem_config", [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)])
@@ -26,6 +26,7 @@ def test_broadcast_op(t3k_mesh_device, num_devices, output_shape, layout, input_
     sender_tensor_torch = torch.arange(1, 1 + torch.prod(torch.tensor(output_shape)), dtype=torch.bfloat16).reshape(
         output_shape
     )
+    print("sender tensor: ", sender_tensor_torch)
     # Create mesh tensor with sender's tensor at sender_coord, zeros elsewhere
     device_tensors = []
     for i in range(num_devices):
@@ -52,11 +53,16 @@ def test_broadcast_op(t3k_mesh_device, num_devices, output_shape, layout, input_
         topology=ttnn.Topology.Linear,
         cluster_axis=cluster_axis,
     )
+    print("output tensor: ", output_tensor.shape)
 
     # Convert output to torch and check all devices received sender's tensor
     output_tensor_torch = ttnn.to_torch(
         output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=cluster_axis)
     )
+    print("output tensor torch: ", output_tensor_torch.shape)
+    print("output tensor torch: ", output_tensor_torch)
     for i in range(num_devices):
         received = output_tensor_torch.narrow(cluster_axis, i, 1).squeeze(cluster_axis)
+        print("received: ", received)
+        print("expected: ", sender_tensor_torch)
         assert torch.allclose(received, sender_tensor_torch), f"Device {i} did not receive correct tensor"
