@@ -80,9 +80,9 @@ OUTPUT_ARCH(riscv)
 #endif
 
 #elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_MAIN_AERISC)
-#define DATA_START MEM_AERISC_LOCAL_BASE
-#define DATA_SIZE MEM_AERISC_LOCAL_SIZE
-#define STACK_MIN_SIZE 0
+#define DATA_START (MEM_AERISC_LOCAL_BASE)  // Offset for ethernet firmware
+#define DATA_SIZE (MEM_AERISC_LOCAL_SIZE)   // Reduce available size
+#define STACK_MIN_SIZE 0x100                        // Add some stack protection
 #define TEXT_START MEM_AERISC_FIRMWARE_BASE
 #if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_AERISC_FIRMWARE_SIZE

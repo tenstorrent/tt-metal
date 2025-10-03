@@ -298,25 +298,25 @@ FORCE_INLINE bool is_port_up() {
 
 static void service_eth_msg() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
-    invalidate_l1_cache();
-    reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+    // invalidate_l1_cache();
+    // reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
 #endif
 }
 
 static void update_boot_results_eth_link_status_check() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
-    uint64_t curr_timestamp = eth_read_wall_clock();
-    uint64_t next_timestamp = get_next_link_status_check_timestamp();
-    // Debounce to only be called at every interval
-    // wrap-around safe comparison. calling this too many times can result in link
-    // stability
-    if ((curr_timestamp - next_timestamp) < (UINT64_MAX / 2)) {
-        invalidate_l1_cache();
-        reinterpret_cast<void (*)(uint32_t)>(
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    // uint64_t curr_timestamp = eth_read_wall_clock();
+    // uint64_t next_timestamp = get_next_link_status_check_timestamp();
+    // // Debounce to only be called at every interval
+    // // wrap-around safe comparison. calling this too many times can result in link
+    // // stability
+    // if ((curr_timestamp - next_timestamp) < (UINT64_MAX / 2)) {
+    //     invalidate_l1_cache();
+    //     reinterpret_cast<void (*)(uint32_t)>(
+    //         (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
 
-        update_next_link_status_check_timestamp();
-    }
+    //     update_next_link_status_check_timestamp();
+    // }
 #endif
 }
 

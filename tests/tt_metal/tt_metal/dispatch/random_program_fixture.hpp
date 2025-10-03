@@ -304,9 +304,8 @@ private:
             max_index = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                             tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
                         1;
-        } else {
-            num = this->generate_random_num(0, max_index);
         }
+        num = this->generate_random_num(0, max_index);
         DataMovementProcessor processor;
         if (num == 0) {
             processor = DataMovementProcessor::RISCV_0;

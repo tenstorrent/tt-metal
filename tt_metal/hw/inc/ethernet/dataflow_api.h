@@ -148,8 +148,8 @@ void eth_noc_async_write_barrier() {
  * | dst_addr          | Destination address in remote eth core L1 memory        | uint32_t | 0..256kB | True     |
  * | num_bytes         | Size of data transfer in bytes, must be multiple of 16  | uint32_t | 0..256kB | True     |
  */
-FORCE_INLINE
-void eth_send_bytes(
+template <bool ctx_switch = true>
+FORCE_INLINE void eth_send_bytes(
     uint32_t src_addr,
     uint32_t dst_addr,
     uint32_t num_bytes,
@@ -157,7 +157,7 @@ void eth_send_bytes(
     uint32_t num_bytes_per_send_word_size = 1) {
     uint32_t num_bytes_sent = 0;
     while (num_bytes_sent < num_bytes) {
-        internal_::eth_send_packet(
+        internal_::eth_send_packet<ctx_switch>(
             0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
         num_bytes_sent += num_bytes_per_send;
     }

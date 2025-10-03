@@ -106,7 +106,6 @@ inline void initialize_local_memory() {
 
 int __attribute__((noinline)) main(void) {
     WAYPOINT("I");
-    reinterpret_cast<volatile uint32_t*>(0x10)[0] = 0x1;
     configure_csr();
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
@@ -143,6 +142,10 @@ int __attribute__((noinline)) main(void) {
 
     // Add an invalidate before the first read of mailboxes->go_messages[0].signal
     invalidate_l1_cache();
+
+    // Print value of ETH_RISC_PREFECTH_CTRL into 0x40
+    // uint32_t prefetch_ctrl = READ_REG(RISCV_DEBUG_REG_ETH_RISC_PREFECTH_CTRL);
+    // ((volatile uint32_t*)(0x40))[1] = READ_REG(RISCV_DEBUG_REG_ETH_RISC_PREFECTH_PC);
 
     while (1) {
         // Wait...
@@ -193,12 +196,12 @@ int __attribute__((noinline)) main(void) {
             if (enables & (1u << index)) {
                 WAYPOINT("R");
 
-                flush_erisc_icache();
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+                flush_erisc_icache();
                 reinterpret_cast<void (*)()>(kernel_lma)();
                 WAYPOINT("D");
             }

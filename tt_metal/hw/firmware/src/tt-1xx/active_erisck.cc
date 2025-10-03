@@ -29,9 +29,15 @@ void _start() {
     asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
 #endif
     extern uint32_t __kernel_data_lma[];
-    do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
+    extern uint32_t __ldm_bss_start[];
+    extern uint32_t __ldm_bss_end[];
+    // wzerorange(__ldm_bss_start, __ldm_bss_start);
+    // Copy initialized data.
+    extern uint32_t __ldm_data_start[];
+    extern uint32_t __ldm_data_end[];
+    // l1_to_local_mem_copy(__ldm_data_start, __kernel_data_lma, 0);
 
-    noc_local_state_init(NOC_INDEX);
+    // noc_local_state_init(NOC_INDEX);
 
     {
         DeviceZoneScopedMainChildN("ERISC-KERNEL");

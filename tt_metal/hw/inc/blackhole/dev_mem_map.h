@@ -46,7 +46,7 @@
 
 // Taken from base fw executable. It places the stack here.
 #define MEM_ERISC_LOCAL_SIZE (8 * 1024)
-#define MEM_ERISC_BASE_FW_LOCAL_SIZE 0x700
+#define MEM_ERISC_BASE_FW_LOCAL_SIZE 0x950
 #define MEM_ERISC_KERNEL_SIZE (24 * 1024)
 #define MEM_ERISC_RESERVED1 0
 #define MEM_ERISC_RESERVED1_SIZE 1024
