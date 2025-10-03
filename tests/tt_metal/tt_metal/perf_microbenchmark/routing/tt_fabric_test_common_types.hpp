@@ -140,6 +140,7 @@ struct ParsedTestConfig {
     uint32_t seed{};
     uint32_t num_top_level_iterations = 1;
     bool check_for_cycles = false;
+    bool cycle_detection_only = false;  // Skip traffic execution, only perform cycle detection
 };
 
 struct TestConfig {
@@ -166,6 +167,7 @@ struct TestConfig {
     // Cycle detection fields
     bool check_for_cycles = false;
     uint32_t num_top_level_iterations = 1;
+    bool cycle_detection_only = false;  // Skip traffic execution, only perform cycle detection
 };
 
 // ======================================================================================

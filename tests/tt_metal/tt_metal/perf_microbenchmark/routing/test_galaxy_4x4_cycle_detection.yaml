@@ -1,0 +1,859 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Comprehensive cycle detection test suite for Galaxy 4x4 dual mesh topology
+# All tests use cycle_detection_only: true to skip traffic execution
+# These tests are designed to validate cycle detection logic with various traffic patterns
+
+Tests:
+  # ======================================================================================
+  # Test 1: Bidirectional Inter-Mesh Traffic (No Cycles Expected)
+  # Simple A↔B pattern using independent physical resources
+  # ======================================================================================
+  - name: BidirectionalInterMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Mesh 0 → Mesh 1
+      - device: [0, 15]
+        patterns:
+          - destination:
+              device: [1, 3]
+      # Mesh 1 → Mesh 0 (bidirectional)
+      - device: [1, 3]
+        patterns:
+          - destination:
+              device: [0, 15]
+
+  # ======================================================================================
+  # Test 2: All-to-All Within Single Mesh (No Inter-Mesh Cycles Expected)
+  # Intra-mesh uses dimension-ordered routing (cycle-free)
+  # ======================================================================================
+  - name: AllToAllIntraMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    patterns:
+      - type: all_to_all
+
+  # ======================================================================================
+  # Test 3: Cross-Mesh All-to-All (Bidirectional Cycles Expected)
+  # Every device in mesh 0 sends to every device in mesh 1 and vice versa
+  # ======================================================================================
+  - name: CrossMeshAllToAll
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Mesh 0 devices sending to multiple Mesh 1 devices
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 0]}
+          - destination: {device: [1, 1]}
+      - device: [0, 1]
+        patterns:
+          - destination: {device: [1, 0]}
+          - destination: {device: [1, 1]}
+      # Mesh 1 devices sending back to Mesh 0 (creates bidirectional)
+      - device: [1, 0]
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [0, 1]}
+      - device: [1, 1]
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [0, 1]}
+
+  # ======================================================================================
+  # Test 4: Ring Pattern Across Meshes
+  # M0:C0 → M1:C0 → M1:C1 → M0:C1 → M0:C0 (potential cycle)
+  # ======================================================================================
+  - name: InterMeshRingPattern
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 0]}
+      - device: [1, 0]
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [1, 1]
+        patterns:
+          - destination: {device: [0, 1]}
+      - device: [0, 1]
+        patterns:
+          - destination: {device: [0, 0]}
+
+  # ======================================================================================
+  # Test 5: Complex Multi-Hop Cycle
+  # Tests longer cycle paths across multiple chips
+  # ======================================================================================
+  - name: MultiHopCycle
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 5]}
+      - device: [0, 5]
+        patterns:
+          - destination: {device: [1, 3]}
+      - device: [1, 3]
+        patterns:
+          - destination: {device: [1, 7]}
+      - device: [1, 7]
+        patterns:
+          - destination: {device: [0, 12]}
+      - device: [0, 12]
+        patterns:
+          - destination: {device: [0, 0]}
+
+  # ======================================================================================
+  # Test 6: Random Pairing Cross-Mesh
+  # Random device pairings between meshes
+  # ======================================================================================
+  - name: RandomPairingCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 3]
+        patterns:
+          - destination: {device: [1, 11]}
+      - device: [0, 7]
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [0, 14]
+        patterns:
+          - destination: {device: [1, 5]}
+      - device: [1, 11]
+        patterns:
+          - destination: {device: [0, 8]}
+      - device: [1, 2]
+        patterns:
+          - destination: {device: [0, 13]}
+      - device: [1, 5]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  # ======================================================================================
+  # Test 7: Hub Pattern (One device receives from many)
+  # Tests convergence patterns
+  # ======================================================================================
+  - name: HubPatternCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Multiple M0 devices send to M1:C0
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 0]}
+      - device: [0, 3]
+        patterns:
+          - destination: {device: [1, 0]}
+      - device: [0, 12]
+        patterns:
+          - destination: {device: [1, 0]}
+      - device: [0, 15]
+        patterns:
+          - destination: {device: [1, 0]}
+      # M1:C0 sends to multiple M0 devices (potential cycle)
+      - device: [1, 0]
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [0, 3]}
+          - destination: {device: [0, 12]}
+          - destination: {device: [0, 15]}
+
+  # ======================================================================================
+  # Test 8: Broadcast-like Pattern
+  # One device sends to many across meshes
+  # ======================================================================================
+  - name: BroadcastCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 0]}
+          - destination: {device: [1, 3]}
+          - destination: {device: [1, 12]}
+          - destination: {device: [1, 15]}
+
+  # ======================================================================================
+  # Test 9: Diagonal Cross-Mesh Pattern
+  # Tests diagonal communication patterns
+  # ======================================================================================
+  - name: DiagonalCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 15]}
+      - device: [0, 3]
+        patterns:
+          - destination: {device: [1, 12]}
+      - device: [0, 12]
+        patterns:
+          - destination: {device: [1, 3]}
+      - device: [0, 15]
+        patterns:
+          - destination: {device: [1, 0]}
+      # Return paths
+      - device: [1, 15]
+        patterns:
+          - destination: {device: [0, 0]}
+      - device: [1, 12]
+        patterns:
+          - destination: {device: [0, 3]}
+      - device: [1, 3]
+        patterns:
+          - destination: {device: [0, 12]}
+      - device: [1, 0]
+        patterns:
+          - destination: {device: [0, 15]}
+
+  # ======================================================================================
+  # Test 10: Edge Devices Only
+  # Communication only between edge devices (mesh boundaries)
+  # ======================================================================================
+  - name: EdgeDevicesOnly
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Top row of M0 to top row of M1
+      - device: [0, 3]
+        patterns:
+          - destination: {device: [1, 3]}
+      - device: [0, 7]
+        patterns:
+          - destination: {device: [1, 7]}
+      - device: [0, 11]
+        patterns:
+          - destination: {device: [1, 11]}
+      - device: [0, 15]
+        patterns:
+          - destination: {device: [1, 15]}
+      # Bottom row of M1 to bottom row of M0
+      - device: [1, 0]
+        patterns:
+          - destination: {device: [0, 0]}
+      - device: [1, 4]
+        patterns:
+          - destination: {device: [0, 4]}
+      - device: [1, 8]
+        patterns:
+          - destination: {device: [0, 8]}
+      - device: [1, 12]
+        patterns:
+          - destination: {device: [0, 12]}
+
+  # ======================================================================================
+  # Test 11: Stress Test - High Traffic Density
+  # Many concurrent flows to stress cycle detection
+  # ======================================================================================
+  - name: CycleDetectionStressTest
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    patterns:
+      - type: full_device_random_pairing
+        iterations: 5
+
+  # ======================================================================================
+  # Test 12: Sequential Chain Across Meshes
+  # M0:C0 → M0:C1 → M1:C2 → M1:C3 → M0:C4 (no cycle expected)
+  # ======================================================================================
+  - name: SequentialChainCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 1]}
+      - device: [0, 1]
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [1, 2]
+        patterns:
+          - destination: {device: [1, 3]}
+      - device: [1, 3]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  # ======================================================================================
+  # Test 13: Star Pattern (Central Hub in Different Mesh)
+  # All M0 devices communicate through a hub in M1
+  # ======================================================================================
+  - name: StarPatternCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # M0 devices send to M1 hub
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 7]}
+      - device: [0, 5]
+        patterns:
+          - destination: {device: [1, 7]}
+      - device: [0, 10]
+        patterns:
+          - destination: {device: [1, 7]}
+      - device: [0, 15]
+        patterns:
+          - destination: {device: [1, 7]}
+      # M1 hub sends back to M0 devices
+      - device: [1, 7]
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [0, 5]}
+          - destination: {device: [0, 10]}
+          - destination: {device: [0, 15]}
+
+  # ======================================================================================
+  # Test 14: Alternating Mesh Hops
+  # Path alternates between meshes: M0→M1→M0→M1→M0
+  # ======================================================================================
+  - name: AlternatingMeshHops
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [1, 1]
+        patterns:
+          - destination: {device: [0, 2]}
+      - device: [0, 2]
+        patterns:
+          - destination: {device: [1, 3]}
+      - device: [1, 3]
+        patterns:
+          - destination: {device: [0, 4]}
+      - device: [0, 4]
+        patterns:
+          - destination: {device: [0, 0]}
+
+  # ======================================================================================
+  # Test 15: Unidirectional Ring (No Reverse Traffic)
+  # Tests pure ring without bidirectional flows
+  # ======================================================================================
+  - name: UnidirectionalRing
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [0, 5]}
+      - device: [0, 5]
+        patterns:
+          - destination: {device: [1, 10]}
+      - device: [1, 10]
+        patterns:
+          - destination: {device: [1, 15]}
+      - device: [1, 15]
+        patterns:
+          - destination: {device: [0, 0]}
+
+  # ======================================================================================
+  # Test 16: Multiple Independent Rings
+  # Tests detection of multiple separate cycles in the same routing graph
+  # ======================================================================================
+  - name: MultipleIndependentRings
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Ring 1: M0:C0 → M1:C1 → M1:C2 → M0:C3 → M0:C0
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [1, 1]
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [1, 2]
+        patterns:
+          - destination: {device: [0, 3]}
+      - device: [0, 3]
+        patterns:
+          - destination: {device: [0, 0]}
+      # Ring 2: M0:C12 → M1:C13 → M1:C14 → M0:C15 → M0:C12
+      - device: [0, 12]
+        patterns:
+          - destination: {device: [1, 13]}
+      - device: [1, 13]
+        patterns:
+          - destination: {device: [1, 14]}
+      - device: [1, 14]
+        patterns:
+          - destination: {device: [0, 15]}
+      - device: [0, 15]
+        patterns:
+          - destination: {device: [0, 12]}
+
+  # ======================================================================================
+  # Test 17: Nested Cycles (Cycle within a Cycle)
+  # M0:C0 → M1:C1 → M0:C2 → M1:C3 → M0:C0 (outer)
+  # M1:C1 → M1:C5 → M0:C6 → M1:C1 (inner)
+  # ======================================================================================
+  - name: NestedCycles
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Outer cycle
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [1, 1]
+        patterns:
+          - destination: {device: [0, 2]}
+          - destination: {device: [1, 5]}  # Also part of inner cycle
+      - device: [0, 2]
+        patterns:
+          - destination: {device: [1, 3]}
+      - device: [1, 3]
+        patterns:
+          - destination: {device: [0, 0]}
+      # Inner cycle
+      - device: [1, 5]
+        patterns:
+          - destination: {device: [0, 6]}
+      - device: [0, 6]
+        patterns:
+          - destination: {device: [1, 1]}
+
+  # ======================================================================================
+  # Test 18: Figure-Eight Pattern
+  # Two cycles sharing a common node
+  # ======================================================================================
+  - name: FigureEightPattern
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Left loop: M0:C0 → M1:C1 → M0:C4 (center) → M0:C0
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [1, 1]
+        patterns:
+          - destination: {device: [0, 4]}
+      # Right loop: M0:C4 (center) → M1:C5 → M0:C8 → M0:C4
+      - device: [0, 4]
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [1, 5]}
+      - device: [1, 5]
+        patterns:
+          - destination: {device: [0, 8]}
+      - device: [0, 8]
+        patterns:
+          - destination: {device: [0, 4]}
+
+  # ======================================================================================
+  # Test 19: Asymmetric Bidirectional (Different Path Lengths)
+  # M0:C0 → M1:C1 (short path)
+  # M1:C1 → M1:C5 → M0:C10 → M0:C0 (long path back)
+  # ======================================================================================
+  - name: AsymmetricBidirectional
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [1, 1]
+        patterns:
+          - destination: {device: [1, 5]}
+      - device: [1, 5]
+        patterns:
+          - destination: {device: [0, 10]}
+      - device: [0, 10]
+        patterns:
+          - destination: {device: [0, 0]}
+
+  # ======================================================================================
+  # Test 20: Dense All-Corners Communication
+  # All four corners of each mesh communicate with opposite mesh corners
+  # ======================================================================================
+  - name: DenseAllCornersCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # M0 corners to M1 corners
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 0]}
+          - destination: {device: [1, 15]}
+      - device: [0, 3]
+        patterns:
+          - destination: {device: [1, 3]}
+          - destination: {device: [1, 12]}
+      - device: [0, 12]
+        patterns:
+          - destination: {device: [1, 12]}
+          - destination: {device: [1, 3]}
+      - device: [0, 15]
+        patterns:
+          - destination: {device: [1, 15]}
+          - destination: {device: [1, 0]}
+      # M1 corners to M0 corners (creates bidirectional)
+      - device: [1, 0]
+        patterns:
+          - destination: {device: [0, 0]}
+          - destination: {device: [0, 15]}
+      - device: [1, 3]
+        patterns:
+          - destination: {device: [0, 3]}
+          - destination: {device: [0, 12]}
+      - device: [1, 12]
+        patterns:
+          - destination: {device: [0, 12]}
+          - destination: {device: [0, 3]}
+      - device: [1, 15]
+        patterns:
+          - destination: {device: [0, 15]}
+          - destination: {device: [0, 0]}
+
+  # ======================================================================================
+  # Test 21: Zigzag Pattern
+  # Traffic alternates between meshes in a zigzag pattern
+  # ======================================================================================
+  - name: ZigzagCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [1, 2]
+        patterns:
+          - destination: {device: [0, 4]}
+      - device: [0, 4]
+        patterns:
+          - destination: {device: [1, 6]}
+      - device: [1, 6]
+        patterns:
+          - destination: {device: [0, 8]}
+      - device: [0, 8]
+        patterns:
+          - destination: {device: [1, 10]}
+      - device: [1, 10]
+        patterns:
+          - destination: {device: [0, 12]}
+      - device: [0, 12]
+        patterns:
+          - destination: {device: [1, 14]}
+      - device: [1, 14]
+        patterns:
+          - destination: {device: [0, 0]}
+
+  # ======================================================================================
+  # Test 22: Butterfly Pattern
+  # Cross-over communication pattern
+  # ======================================================================================
+  - name: ButterflyCrossMesh
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Top-left to bottom-right, top-right to bottom-left
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 15]}
+      - device: [0, 3]
+        patterns:
+          - destination: {device: [1, 12]}
+      # Crossover
+      - device: [1, 15]
+        patterns:
+          - destination: {device: [0, 3]}
+      - device: [1, 12]
+        patterns:
+          - destination: {device: [0, 0]}
+
+  # ======================================================================================
+  # Test 23: Sparse Random Long Paths
+  # Long multi-hop paths with sparse node selection
+  # ======================================================================================
+  - name: SparseRandomLongPaths
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 1]
+        patterns:
+          - destination: {device: [0, 9]}
+      - device: [0, 9]
+        patterns:
+          - destination: {device: [1, 4]}
+      - device: [1, 4]
+        patterns:
+          - destination: {device: [1, 11]}
+      - device: [1, 11]
+        patterns:
+          - destination: {device: [0, 6]}
+      - device: [0, 6]
+        patterns:
+          - destination: {device: [0, 14]}
+      - device: [0, 14]
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [1, 2]
+        patterns:
+          - destination: {device: [0, 1]}
+
+  # ======================================================================================
+  # Test 24: Layered Communication (Row-based)
+  # Each row of M0 communicates with corresponding row in M1
+  # ======================================================================================
+  - name: LayeredRowCommunication
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # Row 0 (chips 0-3) of M0 to Row 0 of M1
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 1]}
+      - device: [0, 1]
+        patterns:
+          - destination: {device: [1, 2]}
+      - device: [0, 2]
+        patterns:
+          - destination: {device: [1, 3]}
+      - device: [0, 3]
+        patterns:
+          - destination: {device: [1, 0]}
+      # Row 3 (chips 12-15) of M1 to Row 3 of M0
+      - device: [1, 12]
+        patterns:
+          - destination: {device: [0, 13]}
+      - device: [1, 13]
+        patterns:
+          - destination: {device: [0, 14]}
+      - device: [1, 14]
+        patterns:
+          - destination: {device: [0, 15]}
+      - device: [1, 15]
+        patterns:
+          - destination: {device: [0, 12]}
+
+  # ======================================================================================
+  # Test 25: Multi-Destination Broadcast with Cycle
+  # One node sends to many, all recipients send back creating multiple cycles
+  # ======================================================================================
+  - name: MultiDestBroadcastCycle
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    cycle_detection_only: true
+    check_for_cycles: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      # M0:C0 broadcasts to multiple M1 devices
+      - device: [0, 0]
+        patterns:
+          - destination: {device: [1, 1]}
+          - destination: {device: [1, 5]}
+          - destination: {device: [1, 9]}
+          - destination: {device: [1, 13]}
+      # All M1 recipients send back to M0:C0
+      - device: [1, 1]
+        patterns:
+          - destination: {device: [0, 0]}
+      - device: [1, 5]
+        patterns:
+          - destination: {device: [0, 0]}
+      - device: [1, 9]
+        patterns:
+          - destination: {device: [0, 0]}
+      - device: [1, 13]
+        patterns:
+          - destination: {device: [0, 0]}

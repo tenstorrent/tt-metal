@@ -1561,10 +1561,10 @@ bool ControlPlane::detect_inter_mesh_cycles(
                             std::vector<FabricNodeId>& path,
                             std::vector<CyclePath>& cycles) -> bool {
         if (state[node] == DFSState::VISITING) {
-            // Found a back edge - extract the cycle
+            // Found a back edge - extract the full path including pre-cycle nodes
             auto cycle_start = std::find(path.begin(), path.end(), node);
             if (cycle_start != path.end()) {
-                CyclePath cycle(cycle_start, path.end());
+                CyclePath cycle(path.begin(), path.end());  // Include full path, not just cycle portion
                 cycle.push_back(node);  // Close the cycle
                 cycles.push_back(cycle);
                 return true;
@@ -1614,84 +1614,50 @@ bool ControlPlane::detect_inter_mesh_cycles(
         }
     }
 
-    // Filter out false positive cycles
-    std::vector<CyclePath> true_cycles;
+    // Filter out cycles where the actual cycle loop (not the pre-cycle path) is entirely within one mesh
+    // We only care about cycles where the loop portion crosses mesh boundaries
+    std::vector<CyclePath> inter_mesh_cycles;
     for (const auto& cycle : cycles) {
-        bool is_false_positive = false;
+        if (cycle.empty()) {
+            continue;
+        }
 
-        // FILTER 1: Intra-mesh cycles (all hops within the same mesh)
-        // We only care about inter-mesh cycles since intra-mesh uses dimension-ordered routing (cycle-free)
-        bool is_intra_mesh_cycle = true;
-        if (!cycle.empty()) {
-            MeshId first_mesh_id = cycle[0].mesh_id;
-            for (const auto& node : cycle) {
-                if (node.mesh_id != first_mesh_id) {
-                    is_intra_mesh_cycle = false;
+        // Find where the cycle actually starts (where the last node appears earlier in the path)
+        size_t cycle_start_idx = cycle.size() - 1;
+        for (size_t i = 0; i < cycle.size() - 1; ++i) {
+            if (cycle[i] == cycle[cycle.size() - 1]) {
+                cycle_start_idx = i;
+                break;
+            }
+        }
+
+        // Check if the actual cycle loop crosses mesh boundaries
+        bool cycle_loop_crosses_meshes = false;
+        if (cycle_start_idx < cycle.size() - 1) {
+            MeshId cycle_loop_mesh_id = cycle[cycle_start_idx].mesh_id;
+            for (size_t i = cycle_start_idx; i < cycle.size(); ++i) {
+                if (cycle[i].mesh_id != cycle_loop_mesh_id) {
+                    cycle_loop_crosses_meshes = true;
                     break;
                 }
             }
         }
 
-        if (is_intra_mesh_cycle) {
-            is_false_positive = true;
-            if (!cycle.empty()) {
-                log_debug(
-                    tt::LogFabric,
-                    "Filtering out intra-mesh cycle (mesh {}, {} nodes) - only inter-mesh cycles are relevant",
-                    *cycle[0].mesh_id,
-                    cycle.size());
-            }
-        }
-
-        // FILTER 2: Simple 2-node bidirectional cycle (A->B->A)
-        // If different flows use opposite directions, it's NOT a deadlock - they have independent paths
-        if (!is_false_positive && cycle.size() == 3 && cycle[0] == cycle[2]) {
-            const FabricNodeId& node_a = cycle[0];
-            const FabricNodeId& node_b = cycle[1];
-
-            DirectedNodeEdge forward{node_a, node_b};
-            DirectedNodeEdge reverse{node_b, node_a};
-
-            // Check if these node edges are used by different flows
-            auto forward_it = edge_to_flows.find(forward);
-            auto reverse_it = edge_to_flows.find(reverse);
-
-            if (forward_it != edge_to_flows.end() && reverse_it != edge_to_flows.end()) {
-                // Check if any flow uses BOTH node edges (that would be a real cycle)
-                bool same_flow_uses_both = false;
-                for (const auto& forward_flow : forward_it->second) {
-                    for (const auto& reverse_flow : reverse_it->second) {
-                        if (forward_flow == reverse_flow) {
-                            same_flow_uses_both = true;
-                            break;
-                        }
-                    }
-                    if (same_flow_uses_both) {
-                        break;
-                    }
-                }
-
-                // If different flows use opposite directions, it's safe bidirectional traffic
-                // Hardware has flow control and these flows don't block each other
-                if (!same_flow_uses_both) {
-                    is_false_positive = true;
-                    log_debug(
-                        tt::LogFabric,
-                        "Filtering out bidirectional 2-node cycle {}↔{}: "
-                        "different flows using opposite directions (safe bidirectional traffic)",
-                        node_a.chip_id,
-                        node_b.chip_id);
-                }
-            }
-        }
-
-        if (!is_false_positive) {
-            true_cycles.push_back(cycle);
+        if (cycle_loop_crosses_meshes) {
+            // This cycle loop crosses mesh boundaries - keep it
+            inter_mesh_cycles.push_back(cycle);
+        } else {
+            log_debug(
+                tt::LogFabric,
+                "Filtering out intra-mesh cycle loop (mesh {}, loop size {}) - only inter-mesh cycle loops are "
+                "relevant",
+                *cycle[cycle_start_idx].mesh_id,
+                cycle.size() - cycle_start_idx);
         }
     }
 
-    // Use filtered cycles instead of all detected cycles
-    cycles = true_cycles;
+    // Use filtered cycles
+    cycles = inter_mesh_cycles;
 
     bool has_cycles = !cycles.empty();
 

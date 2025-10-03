@@ -227,6 +227,18 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
         test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
     }
 
+    if (test_yaml["check_for_cycles"]) {
+        test_config.check_for_cycles = parse_scalar<bool>(test_yaml["check_for_cycles"]);
+    }
+
+    if (test_yaml["cycle_detection_only"]) {
+        test_config.cycle_detection_only = parse_scalar<bool>(test_yaml["cycle_detection_only"]);
+        // If cycle_detection_only is true, automatically enable check_for_cycles
+        if (test_config.cycle_detection_only) {
+            test_config.check_for_cycles = true;
+        }
+    }
+
     return test_config;
 }
 

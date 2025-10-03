@@ -30,18 +30,111 @@ void dump_cycles_to_yaml(
     fout << "test_name: " << test_name << "\n";
     fout << "level: " << level << "\n";
     fout << "cycles_found: " << cycles.size() << "\n";
+    fout << "\n";
     fout << "cycles:\n";
 
     for (size_t i = 0; i < cycles.size(); ++i) {
-        fout << "  - cycle_" << i << ": [";
-        for (size_t j = 0; j < cycles[i].size(); ++j) {
+        const auto& cycle = cycles[i];
+
+        // Calculate cycle statistics
+        std::set<uint32_t> unique_meshes;
+        std::set<uint32_t> unique_chips;
+        size_t mesh_transitions = 0;
+        size_t cycle_start_idx = cycle.size() - 1;
+
+        for (size_t j = 0; j < cycle.size(); ++j) {
+            unique_meshes.insert(*cycle[j].mesh_id);
+            unique_chips.insert(cycle[j].chip_id);
+
+            if (j < cycle.size() - 1 && cycle[j].mesh_id != cycle[j + 1].mesh_id) {
+                mesh_transitions++;
+            }
+
+            // Find where the last node appears earlier (actual cycle point)
+            if (j < cycle.size() - 1 && cycle[j] == cycle[cycle.size() - 1]) {
+                cycle_start_idx = j;
+            }
+        }
+
+        size_t cycle_length = cycle.size() - cycle_start_idx;
+        bool is_bidirectional = (cycle_length == 3);  // A->B->A pattern
+
+        fout << "  - cycle_" << i << ":\n";
+        fout << "      # ===== SUMMARY =====\n";
+        fout << "      path_length: " << cycle.size() << "\n";
+        fout << "      cycle_length: " << cycle_length << "  # Minimal cycle loop size\n";
+        fout << "      meshes_involved: [";
+        bool first_mesh = true;
+        for (auto mesh : unique_meshes) {
+            if (!first_mesh) {
+                fout << ", ";
+            }
+            fout << mesh;
+            first_mesh = false;
+        }
+        fout << "]\n";
+        fout << "      mesh_transitions: " << mesh_transitions << "\n";
+        fout << "      is_bidirectional: " << (is_bidirectional ? "true" : "false");
+        if (is_bidirectional) {
+            fout << "  # Simple A↔B inter-mesh cycle";
+        }
+        fout << "\n";
+
+        // Compact path representation
+        fout << "      compact_path: [";
+        for (size_t j = 0; j < cycle.size(); ++j) {
             if (j > 0) {
                 fout << ", ";
             }
-            const auto& node = cycles[i][j];
-            fout << "M" << *node.mesh_id << ":C" << node.chip_id;
+            fout << "M" << *cycle[j].mesh_id << ":C" << cycle[j].chip_id;
         }
         fout << "]\n";
+
+        // Detailed path breakdown
+        fout << "\n";
+        fout << "      # ===== DETAILED PATH =====\n";
+        fout << "      path:\n";
+
+        for (size_t j = 0; j < cycle.size(); ++j) {
+            const auto& node = cycle[j];
+            fout << "        - node_" << j << ": ";
+            fout << "{ mesh: " << *node.mesh_id << ", chip: " << node.chip_id << " }";
+
+            // Add annotations
+            std::vector<std::string> annotations;
+
+            // Mesh transition indicator
+            if (j < cycle.size() - 1) {
+                const auto& next_node = cycle[j + 1];
+                if (node.mesh_id != next_node.mesh_id) {
+                    annotations.push_back("→ MESH TRANSITION →");
+                }
+            }
+
+            // Mark the cycle start point
+            if (j == cycle_start_idx && j < cycle.size() - 1) {
+                annotations.push_back("⟲ CYCLE START");
+            }
+
+            // Mark the cycle endpoint (where path loops back)
+            if (j == cycle.size() - 1) {
+                annotations.push_back("⟲ CYCLE BACK TO node_" + std::to_string(cycle_start_idx));
+            }
+
+            // Print annotations
+            if (!annotations.empty()) {
+                fout << "  #";
+                for (size_t a = 0; a < annotations.size(); ++a) {
+                    if (a > 0) {
+                        fout << " |";
+                    }
+                    fout << " " << annotations[a];
+                }
+            }
+
+            fout << "\n";
+        }
+        fout << "\n";
     }
 
     fout.close();

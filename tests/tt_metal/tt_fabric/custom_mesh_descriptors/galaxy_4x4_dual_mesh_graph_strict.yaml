@@ -30,10 +30,6 @@ Mesh: [
 }
 ]
 
-RelaxedGraph: [
-  # Connect the two 4x4 meshes via their North-South edges
-  # For an 8x4 Galaxy split into top (rows 0-3) and bottom (rows 4-7):
-  # Mesh 0 (top) South ports connect to Mesh 1 (bottom) North ports
-  # 4 bidirectional channels connecting the two meshes
-  [M0, M1, 4]
+Graph: [
+  [[M0, D7], [M1, D11], 1],
 ]

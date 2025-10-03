@@ -468,6 +468,7 @@ private:
         // Copy cycle detection fields
         resolved_test.check_for_cycles = parsed_test.check_for_cycles;
         resolved_test.num_top_level_iterations = parsed_test.num_top_level_iterations;
+        resolved_test.cycle_detection_only = parsed_test.cycle_detection_only;
 
         // Resolve defaults
         if (parsed_test.defaults.has_value()) {
