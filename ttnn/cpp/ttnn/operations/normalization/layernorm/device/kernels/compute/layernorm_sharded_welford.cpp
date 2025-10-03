@@ -43,6 +43,32 @@ inline To bit_cast(const From& from) noexcept {
     u.f = from;
     return u.t;
 }
+
+// Get the set size of the next block in the Welford combine.
+inline auto get_next_set_size(
+    const uint32_t block,
+    const uint32_t num_blocks_reduce,
+    const bool is_second_stage_reader,
+    const uint32_t num_blocks_first_stage,
+    const uint32_t second_stage_W,
+    const uint32_t block_w,
+    const uint32_t last_tile_W) {
+    if (is_second_stage_reader) {
+        // The next block is either one of the second-stage
+        // blocks from our core column  or one of the
+        // first-stage blocks from our core row (if row major).
+        // This logic relies on the fact that the second stage
+        // readers in a two-stage reduce get the reduce results
+        // from its core column (for row major) streamed in last
+        // (after the results for its core row)
+        return block >= num_blocks_first_stage ? second_stage_W : block_w;
+    }
+
+    // We're either not doing a two-stage reduce or we're
+    // not a second stage reader, so the next block will either
+    // be a full block or a partial one if it's the last
+    return block == num_blocks_reduce - 1 ? last_tile_W : block_w;
+}
 }  // namespace
 void MAIN {
     constexpr uint32_t is_top_row = get_compile_time_arg_val(0);
@@ -78,33 +104,26 @@ void MAIN {
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
     const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
     const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
-
+    uint32_t first_stage_W = 0;
+    uint32_t second_stage_W = 0;
+    if (use_two_stage_reduce) {
+        first_stage_W = num_blocks_first_stage * tile_width;
+        second_stage_W = (num_blocks_first_stage - 1) * tile_width + last_tile_W;
+    }
     uint32_t num_blocks_reduce;
     uint32_t combine_W;
     if (is_second_stage_reader) {
         // If we're the second stage reader, we're reducing the
         // entire tensor width
         num_blocks_reduce = num_blocks_first_stage + num_blocks_second_stage - 1;
-        combine_W = W;
+        combine_W = first_stage_W + second_stage_W;
     } else {
         // Either we're part of a two-stage reduce and not a reader,
         // or we're part of a single-stage reduce. Reduce width is
         // only along our row (or column)
         num_blocks_reduce = num_blocks_first_stage;
-        combine_W = (num_blocks_first_stage - 1) * tile_width + last_tile_W;
+        combine_W = first_stage_W;
     }
-
-    // DPRINT << "combine_W: " << combine_W << ENDL();
-    // DPRINT << "num_blocks_reduce: " << num_blocks_reduce << ENDL();
-    // DPRINT << "last_tile_W: " << last_tile_W << ENDL();
-    // DPRINT << "tile_width: " << tile_width << ENDL();
-    DPRINT << "partial_reduce_W: " << partial_reduce_W << ENDL();
-    DPRINT << "num_tiles_per_allgather_worker: " << num_tiles_per_allgather_worker << ENDL();
-    DPRINT << "use_two_stage_reduce: " << (uint32_t)use_two_stage_reduce << ENDL();
-    DPRINT << "is_second_stage_reader: " << (uint32_t)is_second_stage_reader << ENDL();
-    DPRINT << "num_reduce_tiles_per_block_h: " << num_reduce_tiles_per_block_h << ENDL();
-    DPRINT << "tile_width: " << tile_width << ENDL();
-    DPRINT << "last_tile_W: " << last_tile_W << ENDL();
 
     // Number of tiles for block_ht results (interleaved mean and var)
     const uint32_t num_block_ht_result_tiles = 2 * block_ht;
@@ -253,7 +272,17 @@ void MAIN {
                 // TODO RM: This should use a runtime arg where
                 // only the last core in each row has a reduced width
                 // const float n_b = b == num_blocks_reduce - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
-                const float n_b = b == num_blocks_reduce - 1 ? last_tile_W : block_w;
+                const float n_b = get_next_set_size(
+                    b,
+                    num_blocks_reduce,
+                    is_second_stage_reader,
+                    num_blocks_first_stage,
+                    second_stage_W,
+                    block_w,
+                    last_tile_W);
+
+                DPRINT << "n_b: " << n_b << ENDL();
+                tt::compute::common::print_full_tile(cb_ex_external, 0, true);
 
                 const float na2 = static_cast<float>(n_a) / (n_a + n_b);
                 const float nb2 = static_cast<float>(n_b) / (n_a + n_b);
@@ -312,6 +341,7 @@ void MAIN {
             }
 
             // Convert final M2 to var
+            DPRINT << "combine_W: " << combine_W << ENDL();
             binop_with_scalar_tile_init();
             mul_unary_tile(m2_acc_dst, bit_cast<uint32_t>(1.f / combine_W));
 
