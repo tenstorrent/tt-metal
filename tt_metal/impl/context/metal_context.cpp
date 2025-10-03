@@ -597,21 +597,29 @@ void MetalContext::initialize_control_plane() {
     // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
     if (cluster_->is_ubb_galaxy()) {
         std::string mesh_graph_descriptor;
-        switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
-            case tt::tt_fabric::FabricType::TORUS_XY:
-                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor" + suffix;
-                break;
-            case tt::tt_fabric::FabricType::TORUS_X:
-                mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor" + suffix;
-                break;
-            case tt::tt_fabric::FabricType::TORUS_Y:
-                mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor" + suffix;
-                break;
-            default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor" + suffix; break;
+        if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+            // For Blackhole Galaxy, only use the default descriptor
+            mesh_graph_descriptor = "single_bh_galaxy_mesh_graph_descriptor" + suffix;
+        } else {
+            // For regular Galaxy, handle different fabric types
+            switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
+                case tt::tt_fabric::FabricType::TORUS_XY:
+                    mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor" + suffix;
+                    break;
+                case tt::tt_fabric::FabricType::TORUS_X:
+                    mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor" + suffix;
+                    break;
+                case tt::tt_fabric::FabricType::TORUS_Y:
+                    mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor" + suffix;
+                    break;
+                default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor" + suffix; break;
+            }
         }
         mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
     }
+
+    log_debug(tt::LogMetal, "Using mesh graph descriptor: {}", mesh_graph_desc_path);
 
     TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
     TT_FATAL(
