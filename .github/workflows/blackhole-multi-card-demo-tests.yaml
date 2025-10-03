@@ -2,7 +2,18 @@ name: "(Blackhole) Multi-card Demo tests"
 
 on:
   workflow_dispatch:
+    inputs:
+      regenerate-ttnn-cache:
+        description: "Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
+        required: false
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      regenerate-ttnn-cache:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build-artifact:
@@ -40,3 +51,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
+      regenerate-ttnn-cache: ${{ inputs.regenerate-ttnn-cache || false  }}
