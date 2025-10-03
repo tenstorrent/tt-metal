@@ -285,7 +285,7 @@ jobs:
                     echo "$output_var=success:$run_url" >> $GITHUB_OUTPUT
                     return 0
                   else
-                    echo "🛑 $workflow_name failed (attempt $((retries + 1))): $run_url"
+                    echo "🛑 $workflow_name failed (attempt $((retries + 1))): $run_url/attempts/$(($retries + 1))"
                     if [ $retries -ge $((MAX_RETRIES - 1)) ]; then
                       echo "$output_var=failure:$run_url" >> $GITHUB_OUTPUT
                       return 1
