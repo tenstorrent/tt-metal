@@ -2658,7 +2658,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
    ////////////////////////////////////////////////////////////////////////////
    Program program = Program();
    // define core ranges
-   bool use_mcast = num_cores_per_batch > 1 or num_cores_per_group > 1;
 
    // create a vector of cores, in either RM or CM
    std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
@@ -2769,56 +2768,158 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
        reader_mcast_sender_defines["UNTILIZE_OUT"] = "1";
        reader_mcast_receiver_defines["UNTILIZE_OUT"] = "1";
    }
-   // reader compile time args
+   // Named compile time args for reader mcast sender
+   struct ReaderMcastSenderCompileTimeArgs {
+       uint32_t reduce_receiver_semaphore_id;
+       uint32_t reduce_sender_semaphore_id;
+       uint32_t num_cores_per_mcast_group;
+       uint32_t num_batch_group;
+       uint32_t num_batches;
+       uint32_t per_core_N;
+       uint32_t per_core_N_bytes;
+       uint32_t per_core_N_bytes_with_stride;
+       uint32_t datum_size_bytes;
+       uint32_t per_core_M;
+       uint32_t TILE_HEIGHT;
+       uint32_t block_h;
+       uint32_t block_w;
+       uint32_t block_hw;
+       uint32_t num_cols_per_group;
+       uint32_t num_tiles_per_batch;
+       uint32_t block_w_last;
+       uint32_t GROUP_SIZE_IS_POWER_OF_2;
+       uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W;
+       uint32_t group_row_offset;
+       uint32_t num_out_blocks;
+       uint32_t num_channels_per_group;
+       uint32_t num_rows_per_group;
+   };
+
+   ReaderMcastSenderCompileTimeArgs reader_mcast_sender_args = {
+       .reduce_receiver_semaphore_id = reduce_receiver_semaphore_id,
+       .reduce_sender_semaphore_id = reduce_sender_semaphore_id,
+       .num_cores_per_mcast_group = num_cores_per_mcast_group,
+       .num_batch_group = num_groups_per_core * num_batches_per_core_group_1,
+       .num_batches = num_batches_per_core_group_1,
+       .per_core_N = per_core_Nt,
+       .per_core_N_bytes = per_core_N_bytes_padded,
+       .per_core_N_bytes_with_stride = per_core_Nt * TILE_WIDTH * datum_size_bytes,
+       .datum_size_bytes = datum_size_bytes,
+       .per_core_M = per_core_Mt_group_1,
+       .TILE_HEIGHT = TILE_HEIGHT,
+       .block_h = block_ht_group_1,
+       .block_w = block_wt,
+       .block_hw = block_ht_group_1 * block_wt,
+       .num_cols_per_group = num_channels_per_group_mod_tile_w,
+       .num_tiles_per_batch = per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
+       .block_w_last = block_wt_last,
+       .GROUP_SIZE_IS_POWER_OF_2 = (num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
+       .GROUP_SIZE_SMALLER_THAN_TILE_W = num_channels_per_group < TILE_WIDTH,
+       .group_row_offset = num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+       .num_out_blocks = num_out_blocks,
+       .num_channels_per_group = num_channels_per_group,
+       .num_rows_per_group = num_rows_per_batch_per_core_group_1,
+   };
+
    std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {
-       (std::uint32_t)reduce_receiver_semaphore_id,                        // same
-       (std::uint32_t)reduce_sender_semaphore_id,                          // same
-       (std::uint32_t)num_cores_per_mcast_group,                           // same
-       (std::uint32_t)num_groups_per_core * num_batches_per_core_group_1,  // same
-       (std::uint32_t)num_batches_per_core_group_1,                        // same
-       (std::uint32_t)per_core_Nt,                                         // same?
-       (std::uint32_t)per_core_N_bytes_padded,                             // factor out
-       (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,         // factor out?
-       (std::uint32_t)datum_size_bytes,                                    // same
-       (std::uint32_t)per_core_Mt_group_1,  // Different, some cores will need the spillover, needs to be accounted for
-       (std::uint32_t)TILE_HEIGHT,
-       (std::uint32_t)block_ht_group_1,                                         // ditto as Mt? maybe factor this out?
-       (std::uint32_t)block_wt,                                                 // same
-       (std::uint32_t)block_ht_group_1 * block_wt,                              // Different, factor out?
-       (std::uint32_t)num_channels_per_group_mod_tile_w,                        // same?
-       (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,  // different + factor out?
-       (std::uint32_t)block_wt_last,                                            // same
-       (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,  // same
-       (std::uint32_t)num_channels_per_group < TILE_WIDTH,                                                 // same
-       (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,                                // same
-       (std::uint32_t)num_out_blocks,                                                                      // same
-       (std::uint32_t)num_channels_per_group,                                                              // same
-       (std::uint32_t)num_rows_per_batch_per_core_group_1,  // same? rename cuz wtf is this name
+       reader_mcast_sender_args.reduce_receiver_semaphore_id,
+       reader_mcast_sender_args.reduce_sender_semaphore_id,
+       reader_mcast_sender_args.num_cores_per_mcast_group,
+       reader_mcast_sender_args.num_batch_group,
+       reader_mcast_sender_args.num_batches,
+       reader_mcast_sender_args.per_core_N,
+       reader_mcast_sender_args.per_core_N_bytes,
+       reader_mcast_sender_args.per_core_N_bytes_with_stride,
+       reader_mcast_sender_args.datum_size_bytes,
+       reader_mcast_sender_args.per_core_M,
+       reader_mcast_sender_args.TILE_HEIGHT,
+       reader_mcast_sender_args.block_h,
+       reader_mcast_sender_args.block_w,
+       reader_mcast_sender_args.block_hw,
+       reader_mcast_sender_args.num_cols_per_group,
+       reader_mcast_sender_args.num_tiles_per_batch,
+       reader_mcast_sender_args.block_w_last,
+       reader_mcast_sender_args.GROUP_SIZE_IS_POWER_OF_2,
+       reader_mcast_sender_args.GROUP_SIZE_SMALLER_THAN_TILE_W,
+       reader_mcast_sender_args.group_row_offset,
+       reader_mcast_sender_args.num_out_blocks,
+       reader_mcast_sender_args.num_channels_per_group,
+       reader_mcast_sender_args.num_rows_per_group,
    };
    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
+   // Named compile time args for reader mcast receiver
+   struct ReaderMcastReceiverCompileTimeArgs {
+       uint32_t reduce_receiver_semaphore_id;
+       uint32_t reduce_sender_semaphore_id;
+       uint32_t num_batch_group;
+       uint32_t num_batches;
+       uint32_t per_core_N;
+       uint32_t per_core_N_bytes;
+       uint32_t per_core_N_bytes_with_stride;
+       uint32_t per_core_M;
+       uint32_t TILE_HEIGHT;
+       uint32_t block_h;
+       uint32_t block_w;
+       uint32_t block_hw;
+       uint32_t num_cols_per_group;
+       uint32_t num_tiles_per_batch;
+       uint32_t block_w_last;
+       uint32_t GROUP_SIZE_IS_POWER_OF_2;
+       uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W;
+       uint32_t group_row_offset;
+       uint32_t num_out_blocks;
+       uint32_t num_channels_per_group;
+       uint32_t num_rows_per_group;
+   };
+
+   ReaderMcastReceiverCompileTimeArgs reader_mcast_receiver_args = {
+       .reduce_receiver_semaphore_id = reduce_receiver_semaphore_id,
+       .reduce_sender_semaphore_id = reduce_sender_semaphore_id,
+       .num_batch_group = num_groups_per_core * num_batches_per_core_group_1,
+       .num_batches = num_batches_per_core_group_1,
+       .per_core_N = per_core_Nt,
+       .per_core_N_bytes = per_core_N_bytes_padded,
+       .per_core_N_bytes_with_stride = per_core_Nt * TILE_WIDTH * datum_size_bytes,
+       .per_core_M = per_core_Mt_group_1,
+       .TILE_HEIGHT = TILE_HEIGHT,
+       .block_h = block_ht_group_1,
+       .block_w = block_wt,
+       .block_hw = block_ht_group_1 * block_wt,
+       .num_cols_per_group = num_channels_per_group_mod_tile_w,
+       .num_tiles_per_batch = per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
+       .block_w_last = block_wt_last,
+       .GROUP_SIZE_IS_POWER_OF_2 = (num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
+       .GROUP_SIZE_SMALLER_THAN_TILE_W = num_channels_per_group < TILE_WIDTH,
+       .group_row_offset = num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+       .num_out_blocks = num_out_blocks,
+       .num_channels_per_group = num_channels_per_group,
+       .num_rows_per_group = num_rows_per_batch_per_core_group_1,
+   };
+
    std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1 = {
-       (std::uint32_t)reduce_receiver_semaphore_id,                             // same
-       (std::uint32_t)reduce_sender_semaphore_id,                               // same
-       (std::uint32_t)num_groups_per_core * num_batches_per_core_group_1,       // same
-       (std::uint32_t)num_batches_per_core_group_1,                             // same
-       (std::uint32_t)per_core_Nt,                                              // same
-       (std::uint32_t)per_core_N_bytes_padded,                                  // same? factor out?
-       (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,              // same
-       (std::uint32_t)per_core_Mt_group_1,                                      // different, same as sender
-       (std::uint32_t)TILE_HEIGHT,                                              // same
-       (std::uint32_t)block_ht_group_1,                                         // different, same as sender
-       (std::uint32_t)block_wt,                                                 // same
-       (std::uint32_t)block_ht_group_1 * block_wt,                              // different, factor out
-       (std::uint32_t)num_channels_per_group_mod_tile_w,                        // same
-       (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,  // differnt factor out?
-       (std::uint32_t)block_wt_last,                                            // same
-       (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,  // same
-       (std::uint32_t)num_channels_per_group < TILE_WIDTH,                                                 // same
-       (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,                                // same
-       (std::uint32_t)num_out_blocks,                                                                      // same
-       (std::uint32_t)num_channels_per_group,                                                              // same
-       (std::uint32_t)num_rows_per_batch_per_core_group_1};                                                // same
+       reader_mcast_receiver_args.reduce_receiver_semaphore_id,
+       reader_mcast_receiver_args.reduce_sender_semaphore_id,
+       reader_mcast_receiver_args.num_batch_group,
+       reader_mcast_receiver_args.num_batches,
+       reader_mcast_receiver_args.per_core_N,
+       reader_mcast_receiver_args.per_core_N_bytes,
+       reader_mcast_receiver_args.per_core_N_bytes_with_stride,
+       reader_mcast_receiver_args.per_core_M,
+       reader_mcast_receiver_args.TILE_HEIGHT,
+       reader_mcast_receiver_args.block_h,
+       reader_mcast_receiver_args.block_w,
+       reader_mcast_receiver_args.block_hw,
+       reader_mcast_receiver_args.num_cols_per_group,
+       reader_mcast_receiver_args.num_tiles_per_batch,
+       reader_mcast_receiver_args.block_w_last,
+       reader_mcast_receiver_args.GROUP_SIZE_IS_POWER_OF_2,
+       reader_mcast_receiver_args.GROUP_SIZE_SMALLER_THAN_TILE_W,
+       reader_mcast_receiver_args.group_row_offset,
+       reader_mcast_receiver_args.num_out_blocks,
+       reader_mcast_receiver_args.num_channels_per_group,
+       reader_mcast_receiver_args.num_rows_per_group,
+   };
    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -2838,46 +2939,44 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
            .compile_args = reader_mcast_sender_compile_time_args_group_1,
            .defines = reader_mcast_sender_defines});
    KernelHandle reader_mcast_receiver_kernels_id_group_1 = -1;
-   if (use_mcast) {
-       reader_mcast_receiver_kernels_id_group_1 = CreateKernel(
-           program,
-           (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-                          "welford_reader_mcast_receiver_unary_gn.cpp"
-                        : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
-                          "reader_mcast_receiver_unary_gn.cpp"),
-           mcast_receiver_cores_group_1,
-           tt::tt_metal::DataMovementConfig{
-               .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-               .noc = reader_noc,
-               .compile_args = reader_mcast_receiver_compile_time_args_group_1,
-               .defines = reader_mcast_receiver_defines});
-   }
+   reader_mcast_receiver_kernels_id_group_1 = CreateKernel(
+       program,
+       (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                      "welford_reader_mcast_receiver_unary_gn.cpp"
+                    : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
+                      "reader_mcast_receiver_unary_gn.cpp"),
+       mcast_receiver_cores_group_1,
+       tt::tt_metal::DataMovementConfig{
+           .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+           .noc = reader_noc,
+           .compile_args = reader_mcast_receiver_compile_time_args_group_1,
+           .defines = reader_mcast_receiver_defines});
 
    // writer defines
    std::map<std::string, std::string> writer_defines;
    // writer compile time args
    std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {
        1,
-       (std::uint32_t)gamma.has_value(),
-       (std::uint32_t)beta.has_value(),
-       (std::uint32_t)gamma_beta_num_cols_tile_per_core,
-       (std::uint32_t)per_core_Mt_group_1,
-       (std::uint32_t)per_core_Nt,
-       (std::uint32_t)per_core_N * datum_size_bytes,
-       (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
-       (std::uint32_t)num_groups_per_core,
-       (std::uint32_t)num_batches_per_core_group_1,
-       (std::uint32_t)num_channels_per_group_mod_tile_w,
-       (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
-       (std::uint32_t)block_wt_last,
-       (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
-       (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-       (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
-       (std::uint32_t)num_out_blocks,
-       (std::uint32_t)block_ht_group_1,
-       (std::uint32_t)block_wt,
-       (std::uint32_t)block_ht_group_1 * block_wt,
-       (std::uint32_t)groupnorm_mode};
+       (std::uint32_t)gamma.has_value(),                                                                   // same
+       (std::uint32_t)beta.has_value(),                                                                    // same
+       (std::uint32_t)gamma_beta_num_cols_tile_per_core,                                                   // same
+       (std::uint32_t)per_core_Mt_group_1,                                                                 // different
+       (std::uint32_t)per_core_Nt,                                                                         // same
+       (std::uint32_t)per_core_N * datum_size_bytes,                                                       // same
+       (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,                                         // same
+       (std::uint32_t)num_groups_per_core,                                                                 // same
+       (std::uint32_t)num_batches_per_core_group_1,                                                        // same
+       (std::uint32_t)num_channels_per_group_mod_tile_w,                                                   // same
+       (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,                             // different
+       (std::uint32_t)block_wt_last,                                                                       // same
+       (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,  // same
+       (std::uint32_t)num_channels_per_group < TILE_WIDTH,                                                 // same
+       (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,                                // same
+       (std::uint32_t)num_out_blocks,                                                                      // same
+       (std::uint32_t)block_ht_group_1,                                                                    // different
+       (std::uint32_t)block_wt,                                                                            // same
+       (std::uint32_t)block_ht_group_1 * block_wt,                                                         // same
+       (std::uint32_t)groupnorm_mode};                                                                     // same
 
    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
        auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();
@@ -2921,76 +3020,134 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
    if (untilize_out) {
        eltwise_binary_defines["UNTILIZE_OUT"] = "1";
    }
-   // compute kernel compile time args
+   // Named compile time args for compute kernels
+   struct ComputeKernelCompileTimeArgs {
+       uint32_t is_mcast_sender;
+       uint32_t do_gamma;
+       uint32_t do_beta;
+       uint32_t num_cores_per_mcast_group;
+       uint32_t batch;
+       uint32_t group;
+       uint32_t block_h;
+       uint32_t block_w;
+       uint32_t block_hw;
+       uint32_t subblock_w;
+       uint32_t num_subblocks_w;
+       uint32_t per_core_M;
+       uint32_t per_core_N;
+       uint32_t per_core_MN;
+       uint32_t per_core_N_tile_bytes;
+       uint32_t num_groups_per_reset;
+       uint32_t single_tile_size_bytes;
+       uint32_t num_tiles_per_batch;
+       uint32_t num_tiles_input_mask;
+       uint32_t num_cols_per_group;
+       uint32_t block_w_last;
+       uint32_t GROUP_SIZE_IS_POWER_OF_2;
+       uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W;
+       uint32_t group_row_offset;
+       uint32_t num_out_blocks;
+       uint32_t num_channels_per_group;
+       uint32_t num_rows_per_group;
+       uint32_t reciprocal_size;
+   };
+
+   ComputeKernelCompileTimeArgs mcast_sender_compute_args = {
+       .is_mcast_sender = 1,
+       .do_gamma = gamma.has_value(),
+       .do_beta = beta.has_value(),
+       .num_cores_per_mcast_group = num_cores_per_mcast_group,
+       .batch = num_batches_per_core_group_1,
+       .group = num_groups_per_core,
+       .block_h = block_ht_group_1,
+       .block_w = block_wt,
+       .block_hw = block_ht_group_1 * block_wt,
+       .subblock_w = subblock_wt,
+       .num_subblocks_w = num_subblocks_w,
+       .per_core_M = per_core_Mt_group_1,
+       .per_core_N = per_core_Nt,
+       .per_core_MN = per_core_Mt_group_1 * per_core_Nt,
+       .per_core_N_tile_bytes = per_core_Nt * TILE_HW * datum_size_bytes,
+       .num_groups_per_reset = num_groups_per_reset,
+       .single_tile_size_bytes = single_tile_size,
+       .num_tiles_per_batch = per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
+       .num_tiles_input_mask = num_groups_per_core * block_wt,
+       .num_cols_per_group = num_channels_per_group_mod_tile_w,
+       .block_w_last = block_wt_last,
+       .GROUP_SIZE_IS_POWER_OF_2 = (num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
+       .GROUP_SIZE_SMALLER_THAN_TILE_W = num_channels_per_group < TILE_WIDTH,
+       .group_row_offset = num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
+       .num_out_blocks = num_out_blocks,
+       .num_channels_per_group = num_channels_per_group,
+       .num_rows_per_group = num_rows_per_batch_per_core_group_1,
+       .reciprocal_size = num_reciprocals,
+   };
+
    std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {
-       (std::uint32_t)1,
-       (std::uint32_t)gamma.has_value(),
-       (std::uint32_t)beta.has_value(),
-       (std::uint32_t)num_cores_per_mcast_group,
-       (std::uint32_t)num_batches_per_core_group_1,
-       (std::uint32_t)num_groups_per_core,
-
-       (std::uint32_t)block_ht_group_1,
-       (std::uint32_t)block_wt,
-       (std::uint32_t)block_ht_group_1 * block_wt,
-
-       (std::uint32_t)subblock_wt,
-       (std::uint32_t)num_subblocks_w,
-
-       (std::uint32_t)per_core_Mt_group_1,
-       (std::uint32_t)per_core_Nt,
-       (std::uint32_t)per_core_Mt_group_1 * per_core_Nt,
-
-       (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
-       (std::uint32_t)num_groups_per_reset,
-       (std::uint32_t)single_tile_size,
-       (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
-       (std::uint32_t)num_groups_per_core * block_wt,
-       (std::uint32_t)num_channels_per_group_mod_tile_w,
-       (std::uint32_t)block_wt_last,
-       (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
-       (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-       (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
-       (std::uint32_t)num_out_blocks,
-       (std::uint32_t)num_channels_per_group,
-       (std::uint32_t)num_rows_per_batch_per_core_group_1,
-
-       (std::uint32_t)num_reciprocals};
+       mcast_sender_compute_args.is_mcast_sender,
+       mcast_sender_compute_args.do_gamma,
+       mcast_sender_compute_args.do_beta,
+       mcast_sender_compute_args.num_cores_per_mcast_group,
+       mcast_sender_compute_args.batch,
+       mcast_sender_compute_args.group,
+       mcast_sender_compute_args.block_h,
+       mcast_sender_compute_args.block_w,
+       mcast_sender_compute_args.block_hw,
+       mcast_sender_compute_args.subblock_w,
+       mcast_sender_compute_args.num_subblocks_w,
+       mcast_sender_compute_args.per_core_M,
+       mcast_sender_compute_args.per_core_N,
+       mcast_sender_compute_args.per_core_MN,
+       mcast_sender_compute_args.per_core_N_tile_bytes,
+       mcast_sender_compute_args.num_groups_per_reset,
+       mcast_sender_compute_args.single_tile_size_bytes,
+       mcast_sender_compute_args.num_tiles_per_batch,
+       mcast_sender_compute_args.num_tiles_input_mask,
+       mcast_sender_compute_args.num_cols_per_group,
+       mcast_sender_compute_args.block_w_last,
+       mcast_sender_compute_args.GROUP_SIZE_IS_POWER_OF_2,
+       mcast_sender_compute_args.GROUP_SIZE_SMALLER_THAN_TILE_W,
+       mcast_sender_compute_args.group_row_offset,
+       mcast_sender_compute_args.num_out_blocks,
+       mcast_sender_compute_args.num_channels_per_group,
+       mcast_sender_compute_args.num_rows_per_group,
+       mcast_sender_compute_args.reciprocal_size,
+   };
 
    std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
-       (std::uint32_t)0,
-       (std::uint32_t)gamma.has_value(),
-       (std::uint32_t)beta.has_value(),
-       (std::uint32_t)num_cores_per_mcast_group,
-       (std::uint32_t)num_batches_per_core_group_1,
-       (std::uint32_t)num_groups_per_core,
+       (std::uint32_t)0,                             // same
+       (std::uint32_t)gamma.has_value(),             // same
+       (std::uint32_t)beta.has_value(),              // same
+       (std::uint32_t)num_cores_per_mcast_group,     // same
+       (std::uint32_t)num_batches_per_core_group_1,  // same
+       (std::uint32_t)num_groups_per_core,           // same
 
-       (std::uint32_t)block_ht_group_1,
-       (std::uint32_t)block_wt,
-       (std::uint32_t)block_ht_group_1 * block_wt,
+       (std::uint32_t)block_ht_group_1,             // different
+       (std::uint32_t)block_wt,                     // same
+       (std::uint32_t)block_ht_group_1 * block_wt,  // different
 
-       (std::uint32_t)subblock_wt,
-       (std::uint32_t)num_subblocks_w,
+       (std::uint32_t)subblock_wt,      // same
+       (std::uint32_t)num_subblocks_w,  // same
 
-       (std::uint32_t)per_core_Mt_group_1,
-       (std::uint32_t)per_core_Nt,
-       (std::uint32_t)per_core_Mt_group_1 * per_core_Nt,
+       (std::uint32_t)per_core_Mt_group_1,                // different
+       (std::uint32_t)per_core_Nt,                        // same
+       (std::uint32_t)per_core_Mt_group_1 * per_core_Nt,  // different
 
-       (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,  // per_core_N_tile_bytes
-       (std::uint32_t)num_groups_per_reset,
-       (std::uint32_t)single_tile_size,
-       (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,
-       (std::uint32_t)num_groups_per_core * block_wt,
-       (std::uint32_t)num_channels_per_group_mod_tile_w,
-       (std::uint32_t)block_wt_last,
-       (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,
-       (std::uint32_t)num_channels_per_group < TILE_WIDTH,
-       (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,
-       (std::uint32_t)num_out_blocks,
-       (std::uint32_t)num_channels_per_group,
-       (std::uint32_t)num_rows_per_batch_per_core_group_1,
+       (std::uint32_t)per_core_Nt * TILE_HW * datum_size_bytes,                 // per_core_N_tile_bytes//same
+       (std::uint32_t)num_groups_per_reset,                                     // same
+       (std::uint32_t)single_tile_size,                                         // same
+       (std::uint32_t)per_core_Mt_group_1 * Wt / num_batches_per_core_group_1,  // different
+       (std::uint32_t)num_groups_per_core * block_wt,                           // same
+       (std::uint32_t)num_channels_per_group_mod_tile_w,                        // same
+       (std::uint32_t)block_wt_last,                                            // same
+       (std::uint32_t)(num_channels_per_group_mod_tile_w & (num_channels_per_group_mod_tile_w - 1)) == 0,  // same
+       (std::uint32_t)num_channels_per_group < TILE_WIDTH,                                                 // same
+       (std::uint32_t)num_channels_per_group - (block_wt - 1) * TILE_WIDTH,                                // same
+       (std::uint32_t)num_out_blocks,                                                                      // same
+       (std::uint32_t)num_channels_per_group,                                                              // same
+       (std::uint32_t)num_rows_per_batch_per_core_group_1,                                                 // same
 
-       (std::uint32_t)num_reciprocals};
+       (std::uint32_t)num_reciprocals};  // same
    // compute kernel
    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
