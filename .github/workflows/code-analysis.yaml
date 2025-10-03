@@ -1,58 +1,196 @@
-name: "Send Slack Message"
+name: "Code analysis"
 
 on:
+  schedule:
+    - cron: "0 */3 * * *" # This cron schedule runs the workflow every 3 hours
+  workflow_call:
+    inputs:
+      distro:
+        required: false
+        type: string
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "24.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
   workflow_dispatch:
+    inputs:
+      distro:
+        required: false
+        type: string
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "24.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
 
 jobs:
-  send-message:
+  determine-scan-type:
     runs-on: ubuntu-latest
+    outputs:
+      do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
+      do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
     steps:
-      - name: Get Patrick Roberts User ID
-        id: get-user-id
+      - id: find-changes
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
+
+      - id: compute-outputs
+        shell: bash
         run: |
-          # Get user list and find Patrick Roberts
-          USERS_RESPONSE=$(curl -s -H 'Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}' \
-            'https://slack.com/api/users.list')
+          do_full_scan=$([[ "${{ github.ref_name }}" == "main" || "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]] && echo "true" || echo "false")
+          do_scan=$([[ "$do_full_scan" == "true" || "${{ steps.find-changes.outputs.any-code-changed }}" == "true" || "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]] && echo "true" || echo "false")
+          echo "Do a scan: $do_scan"
+          echo "Do a full scan: $do_full_scan"
+          echo "do-full-scan=$do_full_scan" >> "$GITHUB_OUTPUT"
+          echo "do-scan=$do_scan" >> "$GITHUB_OUTPUT"
 
-          # Debug: Check if API call was successful
-          echo "API Response status:"
-          echo "$USERS_RESPONSE" | jq -r '.ok // "API call failed"'
+  build-docker-image:
+    uses: ./.github/workflows/build-docker-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      distro: ${{ inputs.distro || 'ubuntu' }}
+      version: ${{ inputs.version || '24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
 
-          # Check if the response has an error
-          if echo "$USERS_RESPONSE" | jq -e '.error' > /dev/null; then
-            echo "Slack API Error:"
-            echo "$USERS_RESPONSE" | jq -r '.error'
+  clang-tidy:
+    name: 🤖 Clang Tidy
+    needs: [ build-docker-image, determine-scan-type ]
+    if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
+    runs-on: tt-ubuntu-2204-xlarge-stable
+    environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    container:
+      image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}
+      env:
+        CCACHE_REMOTE_ONLY: "true"
+        CCACHE_TEMPDIR: /tmp/ccache
+        CARGO_HOME: /tmp/.cargo
+        TT_FROM_PRECOMPILED_DIR: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+      # Group 1457 is for the shared ccache drive
+      # tmpfs is for efficiency
+      options: >
+        --group-add 1457
+        --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check Redis credentials
+        # Failing internal jobs draws attention immediately so we can fix them and make them fast.
+        # Forks will never have secrets; don't fail the job for them, they'll just run slower
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
+            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
+          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
+          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}|read-only=${{ vars.REDIS_IS_READONLY }}"
+          echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
+          echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
-          # Debug: List some users to see the structure
-          echo "Sample users (first 3):"
-          echo "$USERS_RESPONSE" | jq -r '.members[0:3] | .[] | "\(.name // "no-name") - \(.real_name // "no-real-name") - \(.profile.display_name // "no-display-name")"'
-
-          # Try to find user with more flexible matching
-          USER_ID=$(echo "$USERS_RESPONSE" | jq -r '
-            .members[]? |
-            select(
-              (.real_name // "" | test("Patrick.*Roberts"; "i")) or
-              (.profile.display_name // "" | test("Patrick.*Roberts"; "i")) or
-              (.name // "" | test("patrick"; "i"))
-            ) |
-            .id' | head -1)
-
-          if [ -z "$USER_ID" ] || [ "$USER_ID" == "null" ]; then
-            echo "User Patrick Roberts not found. Trying alternative search..."
-            # List all users containing "patrick" (case insensitive)
-            echo "Users containing 'patrick':"
-            echo "$USERS_RESPONSE" | jq -r '.members[]? | select((.real_name // "" | test("patrick"; "i")) or (.profile.display_name // "" | test("patrick"; "i")) or (.name // "" | test("patrick"; "i"))) | "\(.name // "no-name") - \(.real_name // "no-real-name") - \(.profile.display_name // "no-display-name") - \(.id)"'
-            exit 1
-          fi
-
-          echo "Found user ID: $USER_ID"
-          echo "user_id=$USER_ID" >> $GITHUB_OUTPUT
-
-      - name: Send Slack Message
+      - name: Create ccache tmpdir
         run: |
-          curl -X POST -H 'Authorization: Bearer ${{ secrets.SLACK_BOT_TOKEN }}' \
-            -H 'Content-type: application/json' \
-            --data '{"channel":"C09HT5VSXRB","text":"Hi <@${{ steps.get-user-id.outputs.user_id }}>"}' \
-            https://slack.com/api/chat.postMessage
+          mkdir -p /tmp/ccache
+
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+          clean: true
+
+      - name: Determine merge base
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        run: |
+          echo "Current branch: ${{ github.ref_name }}"
+          MERGE_BASE=$(git merge-base ${{ github.ref_name }} origin/main)
+          echo "Merge base between ${{ github.ref_name }} and main: $MERGE_BASE"
+          echo "MERGE_BASE=$MERGE_BASE" >> $GITHUB_ENV
+
+      - name: Check out baseline
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.MERGE_BASE }}
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+          clean: true
+
+      - name: Create shim
+        run: |
+          # Suppress clang-tidy to first get an up-to-date build tree
+          ln -sf /usr/bin/true ./clang-tidy-shim
+
+      - name: 🔧 CMake configure
+        run: |
+          cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
+
+      - name: Prepare baseline ccache summary
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
+
+      - name: 🛠️ Baseline Build
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        run: |
+          cmake --build --preset clang-tidy
+
+      - name: Publish Ccache summary
+        if: ${{ needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
+          clean: false
+
+      - name: Restore shim
+        run: |
+          # Restore shim to legit clang-tidy
+          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
+          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
+
+      - name: Prepare ccache summary
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
+
+      - name: 🔍 Analyze code with clang-tidy
+        run: |
+          cmake --build --preset clang-tidy
+
+      - name: Publish Ccache summary
+        run: |
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
