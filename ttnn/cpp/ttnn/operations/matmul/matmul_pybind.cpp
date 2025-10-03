@@ -508,6 +508,25 @@ void py_module(py::module& module) {
           - if they are default then they should be set based on optional output tensor
           - if the are not default then they should be compared and if there is a difference an error is reported
 
+        Args:
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
+            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
+
+        Keyword Args:
+            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
+            transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
+            memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
+            dtype (ttnn.DataType): the data type of the output tensor. Defaults to `None`.
+            program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
+            activation (str, optional): the activation function to be applied. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
+            core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
+            output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
         Note:
             The input tensors support the following data types and layouts:
 
@@ -527,25 +546,11 @@ void py_module(py::module& module) {
                 * - BFLOAT8_B, BFLOAT4_B, BFLOAT16, FLOAT32
                   - TILE
 
-        Args:
-            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied. Needs to be on the device.
-            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Needs to be on the device.
-
-        Keyword Args:
-            transpose_a (bool, optional): Whether to transpose input_tensor_a. Defaults to `False`.
-            transpose_b (bool, optional): Whether to transpose input_tensor_b. Defaults to `False`.
-            memory_config(ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using ttnn.DRAM_MEMORY_CONFIG.
-            dtype (ttnn.DataType): the data type of the output tensor. Defaults to `None`.
-            program_config (ttnn.MatmulProgramConfig): the program configuration for the matmul operation. Defaults to `None`.
-            activation (str, optional): the activation function to be applied. Defaults to `None`.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig): the compute kernel configuration for the matmul operation. Defaults to `None`.
-            core_grid (ttnn.CoreGrid): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
-            output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
-            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of matmul is to be written. Defaults to `None`.
-
-
-        Returns:
-            ttnn.Tensor: the output tensor.
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Input A also supports sharding (width, height, block), with row major orientation, depending on the program config
+            - Input B must be interleaved for multi-cast matmuls, but can be width sharded for certain reuse/multi-core configs
+            - Sharded outputs (when used): must match Input A buffer type and memory layout; some configs disallow width sharded outputs
 
         Example:
             >>> # matrix x matrix - no batch dimensions
