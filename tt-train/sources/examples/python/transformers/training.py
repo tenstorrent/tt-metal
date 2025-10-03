@@ -14,11 +14,11 @@ sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
 
 import ttml
 from ttml.common.config import get_config, DeviceConfig, TrainingConfig
+from ttml.common.utils import set_seed, initialize_device, create_optimizer
+from ttml.common.model_factory import TransformerModelFactory
 import click
 
 from data import prepare_data
-from utils import set_seed, initialize_device, create_optimizer
-from model_factory import TransformerModelFactory
 from trainer import train
 
 
