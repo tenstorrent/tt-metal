@@ -205,4 +205,42 @@ TEST_F(TensorTopology2x4Test, GetTensorCoord) {
     EXPECT_EQ(tensor_topology.get_tensor_coord(MeshCoordinate(3, 3)), std::nullopt);
 }
 
+TEST_F(TensorTopology2x4Test, CreateFullyReplicatedTensorTopology) {
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices; i++) {
+        test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
+    }
+    const auto tensor_spec = TensorSpec(
+        ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    Tensor input_tensor = Tensor::from_vector(test_data, tensor_spec);
+
+    auto mapper = replicate_tensor_to_mesh_mapper(*mesh_device_);
+    Tensor replicated_tensor = distribute_tensor(input_tensor, *mapper);
+
+    const auto& tensor_topology = replicated_tensor.tensor_topology();
+    auto expected_topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_->shape());
+
+    EXPECT_EQ(tensor_topology, expected_topology);
+}
+
+TEST_F(TensorTopology2x4Test, CreateShardedTensorTopology) {
+    const int num_devices = mesh_device_->num_devices();
+    std::vector<float> test_data;
+    for (int i = 0; i < num_devices; i++) {
+        test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
+    }
+    const auto tensor_spec = TensorSpec(
+        ttnn::Shape{1, num_devices, 3, 1}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    Tensor input_tensor = Tensor::from_vector(test_data, tensor_spec);
+
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
+
+    const auto& tensor_topology = sharded_tensor.tensor_topology();
+    auto expected_topology = TensorTopology::create_sharded_tensor_topology(mesh_device_->shape(), 1);
+
+    EXPECT_EQ(tensor_topology, expected_topology);
+}
+
 }  // namespace ttnn::distributed::test
