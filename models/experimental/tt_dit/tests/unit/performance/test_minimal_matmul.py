@@ -31,7 +31,7 @@ def run_test_linear(device, M, K, N):
         packer_l1_acc=True,
     )
 
-    core_grid = ttnn.CoreCoord(1, 1)
+    core_grid = ttnn.CoreCoord(8, 8)
 
     # This is the optimal single-core config for 4096x4096x4096
     matmul_config = ttnn.MinimalMatmulConfig(

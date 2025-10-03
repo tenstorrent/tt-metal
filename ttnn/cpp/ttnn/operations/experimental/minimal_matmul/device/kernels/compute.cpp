@@ -104,14 +104,16 @@ void safe_print_full_tile(uint32_t cb_id) {
 
 namespace NAMESPACE {
 void MAIN {
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
+    constexpr uint32_t M_start_block = get_compile_time_arg_val(0);
+    constexpr uint32_t M_end_block = get_compile_time_arg_val(1);
+    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t N_start_block = get_compile_time_arg_val(3);
+    constexpr uint32_t N_end_block = get_compile_time_arg_val(4);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(6);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(8);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(9);
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
@@ -120,9 +122,7 @@ void MAIN {
 
     mm_init(in0_cb, in1_cb, intermediate_cb);
 
-    constexpr uint32_t M_num_blocks = M_tiles / M_block_tiles;
     constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
-    constexpr uint32_t N_num_blocks = N_tiles / N_block_tiles;
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -131,8 +131,8 @@ void MAIN {
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
 
-    for (uint32_t m_block = 0; m_block < M_num_blocks; m_block++) {
-        for (uint32_t n_block = 0; n_block < N_num_blocks; n_block++) {
+    for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
+        for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
