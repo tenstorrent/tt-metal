@@ -282,6 +282,11 @@ distributed::multihost::DistributedContext& MetalContext::global_distributed_con
     return *distributed_context_;
 }
 
+std::shared_ptr<distributed::multihost::DistributedContext> MetalContext::get_distributed_context_ptr() {
+    TT_FATAL(distributed_context_, "Distributed context not initialized.");
+    return distributed_context_;
+}
+
 MetalContext::~MetalContext() {
     distributed_context_.reset();
     cluster_.reset();
@@ -291,29 +296,29 @@ MetalContext::~MetalContext() {
 llrt::RunTimeOptions& MetalContext::rtoptions() { return rtoptions_; }
 
 Cluster& MetalContext::get_cluster() {
-    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    TT_FATAL(cluster_, "Trying to get cluster before initializing it.");
     return *cluster_;
 }
 
 const llrt::RunTimeOptions& MetalContext::rtoptions() const { return rtoptions_; }
 
 const Cluster& MetalContext::get_cluster() const {
-    TT_FATAL(cluster_, "Trying to get cluster before intializing it.");
+    TT_FATAL(cluster_, "Trying to get cluster before initializing it.");
     return *cluster_;
 }
 
 const Hal& MetalContext::hal() const {
-    TT_FATAL(hal_, "Trying to get hal before intializing it.");
+    TT_FATAL(hal_, "Trying to get hal before initializing it.");
     return *hal_;
 }
 
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
-    TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before intializing it.");
+    TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;
 }
 
 DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
-    TT_FATAL(dispatch_query_manager_, "Trying to get dispatch_query_manager before intializing it.");
+    TT_FATAL(dispatch_query_manager_, "Trying to get dispatch_query_manager before initializing it.");
     return *dispatch_query_manager_;
 }
 
@@ -323,7 +328,7 @@ const DispatchMemMap& MetalContext::dispatch_mem_map() const {
 
 const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
     auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
-    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before intializing it.", core_type);
+    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
     return *mem_map;
 }
 
@@ -946,7 +951,9 @@ void MetalContext::initialize_firmware(
         dev_msgs::launch_msg_buffer_num_entries * launch_msg_size, std::byte{0});
     for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
         std::copy(
-            launch_msg.data(), launch_msg.data() + launch_msg_size, init_launch_msg_data.data() + i * launch_msg_size);
+            launch_msg.data(),
+            launch_msg.data() + launch_msg_size,
+            init_launch_msg_data.data() + (i * launch_msg_size));
     }
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
     cluster_->write_core(

@@ -14,7 +14,7 @@ public:
     TensorTopology() :
         distribution_shape_(tt::tt_metal::distributed::MeshShape{1}),
         placements_({tt::tt_metal::distributed::MeshMapperConfig::Replicate{}}),
-        mesh_coords_({tt::tt_metal::distributed::MeshCoordinate{0}}) {}
+        mesh_coords_({tt::tt_metal::distributed::MeshCoordinate{0, 0}}) {}
 
     TensorTopology(
         tt::tt_metal::distributed::MeshShape distribution_shape,
@@ -55,8 +55,14 @@ public:
 private:
     tt::tt_metal::distributed::MeshShape distribution_shape_;
     tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_;
+
     // Physical device coordinates
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords_;
 };
+
+bool operator==(const TensorTopology& lhs, const TensorTopology& rhs);
+bool operator!=(const TensorTopology& lhs, const TensorTopology& rhs);
+
+std::ostream& operator<<(std::ostream& os, const TensorTopology& tensor_topology);
 
 }  // namespace tt::tt_metal

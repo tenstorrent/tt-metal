@@ -57,12 +57,7 @@ void TestContext::read_telemetry() {
 
                 std::vector<CoreCoord> cores = {eth_core};
                 fixture_->read_buffer_from_ethernet_cores(
-                    coord,
-                    cores,
-                    telemetry_addr,
-                    sizeof(LowResolutionBandwidthTelemetryResult),
-                    false,
-                    results[fabric_node_id]);
+                    coord, cores, telemetry_addr, sizeof(LowResolutionBandwidthTelemetryResult), false, results[fabric_node_id]);
             }
         }
     }
@@ -240,4 +235,86 @@ void TestContext::dump_raw_telemetry_csv(const TestConfig& config) {
         data_stream.close();
     }
     log_info(tt::LogTest, "Dumped raw telemetry to: {}", raw_telemetry_path.string());
+}
+
+// Converts vector of num_devices to a string representation eg. <2, 4> -> "[2, 4]"
+std::string TestContext::convert_num_devices_to_string(const std::vector<uint32_t>& num_devices) {
+    std::string num_devices_str = "[";
+    for (size_t i = 0; i < num_devices.size(); ++i) {
+        if (i > 0) {
+            num_devices_str += ",";
+        }
+        num_devices_str += std::to_string(num_devices[i]);
+    }
+    num_devices_str += "]";
+    return num_devices_str;
+}
+
+std::vector<GoldenCsvEntry>::iterator TestContext::fetch_corresponding_golden_entry(
+    const BandwidthResultSummary& test_result) {
+    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
+    auto golden_it =
+        std::find_if(golden_csv_entries_.begin(), golden_csv_entries_.end(), [&](const GoldenCsvEntry& golden) {
+            return golden.test_name == test_result.test_name && golden.ftype == test_result.ftype &&
+                   golden.ntype == test_result.ntype && golden.topology == test_result.topology &&
+                   golden.num_devices == num_devices_str && golden.num_links == test_result.num_links &&
+                   golden.packet_size == test_result.packet_size;
+        });
+    return golden_it;
+}
+
+ComparisonResult TestContext::create_comparison_result(
+    const BandwidthResultSummary& test_result, double test_result_avg_bandwidth) {
+    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
+    ComparisonResult comp_result;
+    comp_result.test_name = test_result.test_name;
+    comp_result.ftype = test_result.ftype;
+    comp_result.ntype = test_result.ntype;
+    comp_result.topology = test_result.topology;
+    comp_result.num_devices = num_devices_str;
+    comp_result.num_links = test_result.num_links;
+    comp_result.packet_size = test_result.packet_size;
+    comp_result.num_iterations = test_result.num_iterations;
+    comp_result.current_bandwidth_GB_s = test_result_avg_bandwidth;
+    return comp_result;
+}
+
+// Creates common CSV format string for any failure case
+std::string TestContext::generate_failed_test_format_string(const BandwidthResultSummary& test_result, double test_result_avg_bandwidth, double difference_percent, double acceptable_tolerance) {
+    std::ostringstream tolerance_stream;
+    tolerance_stream << std::fixed << std::setprecision(1) << acceptable_tolerance;
+    // Because statistics order may change, we need to find the index of average cycles and packets per second
+    double test_result_avg_cycles = -1;
+    auto cycles_stat_location = std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::CyclesMean);
+    if (cycles_stat_location == stat_order_.end()) {
+        log_warning(tt::LogTest, "Average cycles statistic not found, omitting it in failure report");
+    } else {
+        int cycles_stat_index = std::distance(stat_order_.begin(), cycles_stat_location);
+        test_result_avg_cycles = test_result.statistics_vector[cycles_stat_index];
+    }
+    double test_result_avg_packets_per_second = -1;
+    auto packets_per_second_stat_location =
+        std::find(stat_order_.begin(), stat_order_.end(), BandwidthStatistics::PacketsPerSecondMean);
+    if (packets_per_second_stat_location == stat_order_.end()) {
+        log_warning(tt::LogTest, "Average packets per second statistic not found, omitting it in failure report");
+    } else {
+        int packets_per_second_stat_index = std::distance(stat_order_.begin(), packets_per_second_stat_location);
+        test_result_avg_packets_per_second = test_result.statistics_vector[packets_per_second_stat_index];
+    }
+    std::string num_devices_str = convert_num_devices_to_string(test_result.num_devices);
+    std::string csv_format_string =
+        test_result.test_name + ","
+        + test_result.ftype + ","
+        + test_result.ntype + ","
+        + test_result.topology
+        + ",\"" + num_devices_str + "\","
+        + std::to_string(test_result.num_links) + ","
+        + std::to_string(test_result.packet_size) + ","
+        + std::to_string(test_result.num_iterations) + ","
+        + std::to_string(test_result_avg_cycles) + ","
+        + std::to_string(test_result_avg_bandwidth) + ","
+        + std::to_string(test_result_avg_packets_per_second) + ","
+        + std::to_string(difference_percent) + ","
+        + tolerance_stream.str();
+    return csv_format_string;
 }
