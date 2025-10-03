@@ -34,7 +34,7 @@ def strip_trailing_number(s: str) -> str:
     indirect=True,
 )
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("nr_forward_iterations", [2])
+@pytest.mark.parametrize("nr_forward_iterations", [15])
 @pytest.mark.parametrize("nr_e2e_iterations", [1])
 def test_perf_gemma_vision(mesh_device, batch_size, nr_forward_iterations, nr_e2e_iterations):
     profiler = BenchmarkProfiler()
