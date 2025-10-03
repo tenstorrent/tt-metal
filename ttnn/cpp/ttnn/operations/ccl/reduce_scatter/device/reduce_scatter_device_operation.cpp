@@ -43,12 +43,7 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(input_tensor.memory_config().buffer_type() == BufferType::L1, "DRAM block sharding is not supported");
     }
 
-    uint32_t axis = operation_attributes.cluster_axis.value();
-    log_debug(tt::LogOp, "axis: {}", axis);
-    TT_FATAL(axis == 0 || axis == 1, "axis must be 0 or 1");
-    auto mesh_view = input_tensor.device()->get_view();
-    uint32_t reduction_devices = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
-    log_debug(tt::LogOp, "reduction_devices: {}", reduction_devices);
+    uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
 
     if (tensor_args.optional_output_tensor.has_value()) {
         const auto& output_tensor = tensor_args.optional_output_tensor.value();
@@ -92,10 +87,10 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
         for (size_t i = 0; i < input_shape.size(); ++i) {
             if (i == operation_attributes.dim) {
                 TT_FATAL(
-                    output_shape[i] == input_shape[i] / reduction_devices,
+                    output_shape[i] == input_shape[i] / target_ring_size,
                     "Error, Output tensor shape at dimension {} should be {} but has {}",
                     i,
-                    input_shape[i] / reduction_devices,
+                    input_shape[i] / target_ring_size,
                     output_shape[i]);
             } else {
                 TT_FATAL(
@@ -131,8 +126,6 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_hit(
 ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    auto mesh_device = input_tensor.device();
-    auto mesh_view = mesh_device->get_view();
     auto inter_shape = input_tensor.tensor_spec().logical_shape();
 
     if (operation_attributes.topology == ::ttnn::ccl::Topology::Linear) {
@@ -140,14 +133,8 @@ ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::
     }
 
     auto output_shape = input_tensor.logical_shape();
-    uint32_t reduction_devices = mesh_view.num_devices();
-    if (operation_attributes.cluster_axis.has_value()) {
-        uint32_t axis = operation_attributes.cluster_axis.value();
-        log_debug(tt::LogOp, "axis: {}", axis);
-        TT_FATAL(axis == 0 || axis == 1, "axis must be 0 or 1");
-        reduction_devices = axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
-    }
-    output_shape[operation_attributes.dim] /= reduction_devices;
+    uint32_t target_ring_size = ::ttnn::ccl::get_topological_dimension(input_tensor, operation_attributes.cluster_axis);
+    output_shape[operation_attributes.dim] /= target_ring_size;
     // For now default to tt::tt_metal::BufferType::DRAM to prevent CB overflows.
     // TODO: add L1 estimation similar to the one in all_to_all_dispatch and choose to use L1 as an intermediate buffer
     // if enough space is available. L1 estimation has to be done outside the program cache
