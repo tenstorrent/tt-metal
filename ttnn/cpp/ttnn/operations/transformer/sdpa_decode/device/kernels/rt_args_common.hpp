@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/constants.hpp>
+#include <optional>
 #include <tuple>
 
 inline uint32_t nearest_n(uint32_t x, uint32_t n) { return ((x + n - 1) / n) * n; }
@@ -29,34 +30,72 @@ inline uint8_t nearest_pow_of_2_up_to_8(uint32_t x) {
     return (result > max) ? max : result;
 }
 
-inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_runtime_args(
-    int cur_pos, int cur_batch, int core_num, int num_cores_per_batch, uint32_t k_chunk_size) {
-    uint32_t valid_seq_len = nearest_n(cur_pos + 1, k_chunk_size);
-    uint32_t pst_value = valid_seq_len / tt::constants::TILE_HEIGHT;
-    uint32_t num_chunks_value = valid_seq_len / k_chunk_size;
+inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_runtime_args(
+    int cur_pos,
+    int cur_batch,
+    int core_num,
+    int num_cores_per_batch,
+    uint32_t k_chunk_size,
+    std::optional<uint32_t> sliding_window = std::nullopt) {
+    uint32_t window_start = 0;
+    uint32_t window_start_unaligned = 0;  // Keep track of the actual window start for masking
+    uint32_t valid_seq_len;
 
-    uint32_t k_chunk_start = 0;
-    uint32_t k_chunk_end = 0;
+    if (sliding_window.has_value() && sliding_window.value() > 0) {
+        // Calculate actual window bounds
+        uint32_t window_end = cur_pos + 1;  // exclusive end
+        window_start_unaligned = (window_end > sliding_window.value()) ? (window_end - sliding_window.value()) : 0;
 
-    if (num_cores_per_batch > int(num_chunks_value)) {
-        int chunks_per_core = 1;
-        if (core_num >= int(num_chunks_value)) {
-            chunks_per_core = 0;
-        }
-        k_chunk_start = (num_chunks_value - core_num - 1) * chunks_per_core;
-        k_chunk_end = (num_chunks_value - core_num) * chunks_per_core;
+        // Round window_start down to chunk boundary to ensure we capture the full window
+        uint32_t window_start_aligned = (window_start_unaligned / k_chunk_size) * k_chunk_size;
+
+        // Round window_end up to chunk boundary to ensure we capture the full window
+        uint32_t window_end_aligned = nearest_n(window_end, k_chunk_size);
+
+        // Calculate valid_seq_len based on the sliding window range
+        valid_seq_len = window_end_aligned;
+        window_start = window_start_aligned;  // Use aligned start for chunk calculations
     } else {
-        int chunks_per_core = num_chunks_value / num_cores_per_batch;
-        int residuals = num_chunks_value % num_cores_per_batch;
+        // Standard behavior: process from beginning up to cur_pos
+        valid_seq_len = nearest_n(cur_pos + 1, k_chunk_size);
+        window_start = 0;
+        window_start_unaligned = 0;
+    }
+
+    uint32_t pst_value = valid_seq_len / tt::constants::TILE_HEIGHT;
+    uint32_t window_start_chunk = window_start / k_chunk_size;
+    uint32_t total_chunks = valid_seq_len / k_chunk_size;
+    uint32_t active_chunks = total_chunks - window_start_chunk;
+
+    uint32_t k_chunk_start = window_start_chunk;
+    uint32_t k_chunk_end = window_start_chunk;
+
+    // Distribute active chunks among cores
+    if (num_cores_per_batch > int(active_chunks)) {
+        int chunks_per_core = (core_num < int(active_chunks)) ? 1 : 0;
+        k_chunk_start = window_start_chunk + (active_chunks - core_num - 1) * chunks_per_core;
+        k_chunk_end = window_start_chunk + (active_chunks - core_num) * chunks_per_core;
+    } else {
+        int chunks_per_core = active_chunks / num_cores_per_batch;
+        int residuals = active_chunks % num_cores_per_batch;
         int reversed_core_num = num_cores_per_batch - core_num - 1;
-        k_chunk_start = reversed_core_num * chunks_per_core + std::min(residuals, reversed_core_num);
+        k_chunk_start =
+            window_start_chunk + reversed_core_num * chunks_per_core + std::min(residuals, reversed_core_num);
         k_chunk_end = k_chunk_start + chunks_per_core;
         if (reversed_core_num < residuals) {
             k_chunk_end += 1;
         }
     }
-    return {pst_value, num_chunks_value, k_chunk_start, k_chunk_end};
+    return {pst_value, active_chunks, k_chunk_start, k_chunk_end, window_start_unaligned};
 }
+
+// Backward compatibility overload for compute kernel (no sliding window support)
+// inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_runtime_args(
+//     int cur_pos, int cur_batch, int core_num, int num_cores_per_batch, uint32_t k_chunk_size) {
+//     auto [pst_value, active_chunks, k_chunk_start, k_chunk_end, window_start_unaligned] =
+//         get_runtime_args(cur_pos, cur_batch, core_num, num_cores_per_batch, k_chunk_size, std::nullopt);
+//     return {pst_value, active_chunks, k_chunk_start, k_chunk_end};
+// }
 
 template <uint32_t Sk_chunk_t, uint32_t max_size>
 inline uint32_t get_dynamic_Sk_chunk_t(int cur_pos) {

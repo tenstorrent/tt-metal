@@ -36,8 +36,9 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
+    constexpr uint32_t sliding_window = get_compile_time_arg_val(25);
 
-    constexpr auto out_args = TensorAccessorArgs<25>();
+    constexpr auto out_args = TensorAccessorArgs<26>();
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -81,8 +82,13 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned] = get_runtime_args(
+        cur_pos,
+        cur_batch,
+        core_num_in_reduce,
+        num_cores_per_head,
+        k_chunk_size_dynamic,
+        sliding_window > 0 ? std::optional<uint32_t>(sliding_window) : std::nullopt);
 
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
@@ -118,6 +124,7 @@ void kernel_main() {
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_sliding_window_mask_in = tt::CBIndex::c_13;  // Separate buffer for sliding window mask
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
     constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
@@ -160,6 +167,12 @@ void kernel_main() {
     if constexpr (is_causal) {
         // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
+    }
+
+    // Generate sliding window mask if sliding window is enabled and window_start > 0
+    if (sliding_window > 0 && window_start_unaligned > 0) {
+        generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(
+            k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
     }
 
     noc_async_write_barrier();  // #19201 BH hang workaround
