@@ -2,8 +2,8 @@ import time
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.tt_exalens_lib import read_word_from_device
 
-# BASE_ADDRESS = 0x3380 #Wormohle
-BASE_ADDRESS = 0x33C0  # Blackhole
+BASE_ADDRESS = 0x3380  # Wormohle
+# BASE_ADDRESS = 0x33C0  # Blackhole
 
 SEM_PC_DICT = {
     1: "semaphore::MATH_PACK",
