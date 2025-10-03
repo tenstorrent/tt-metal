@@ -67,78 +67,63 @@ bool matches_start_end_config(const tracy::TTDeviceMarker& marker, const Analysi
                marker.marker_name_keyword_flags, start_end_config.marker_name_keywords);
 }
 
-DurationAnalysisResults parse_duration(
+AnalysisResults parse_duration(
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
     TT_FATAL(analysis_config.type == AnalysisType::OP_FIRST_TO_LAST_MARKER, "Unsupported analysis type");
 
-    std::unordered_map<uint64_t, DurationAnalysisResults::SingleResult> results_per_runtime_id;
-    std::unordered_map<uint64_t, std::unordered_set<CoreCoord>> fw_cores_per_runtime_id;
-    std::unordered_map<uint64_t, bool> start_end_timestamp_pair_found_per_runtime_id;
+    AnalysisResults analysis_results;
+    std::unordered_map<OpId, AnalysisResults::SingleResult, OpIdHasher>& results_per_op_id =
+        analysis_results.results_per_op_id;
 
     for (const auto& marker_ref : markers) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
+        if (results_per_op_id.find({marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}) ==
+            results_per_op_id.end()) {
+            results_per_op_id[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}] =
+                AnalysisResults::INVALID_SINGLE_RESULT;
+        }
+
         if (matches_start_end_config(marker, analysis_config.start_config)) {
-            if (results_per_runtime_id.find(marker.runtime_host_id) == results_per_runtime_id.end()) {
-                results_per_runtime_id[marker.runtime_host_id].start_timestamp = marker.timestamp;
-                results_per_runtime_id[marker.runtime_host_id].start_marker = marker_ref.get();
-                start_end_timestamp_pair_found_per_runtime_id[marker.runtime_host_id] = false;
-            } else if (start_end_timestamp_pair_found_per_runtime_id[marker.runtime_host_id]) {
-                // log_warning(tt::LogMetal, "");
+            if (results_per_op_id[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}] ==
+                AnalysisResults::INVALID_SINGLE_RESULT) {
+                results_per_op_id[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}].start_timestamp =
+                    marker.timestamp;
+                results_per_op_id[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}].start_marker =
+                    marker_ref.get();
             }
         }
         if (matches_start_end_config(marker, analysis_config.end_config)) {
-            if (results_per_runtime_id.find(marker.runtime_host_id) != results_per_runtime_id.end()) {
-                results_per_runtime_id[marker.runtime_host_id].end_timestamp = marker.timestamp;
-                results_per_runtime_id[marker.runtime_host_id].end_marker = marker_ref.get();
-                start_end_timestamp_pair_found_per_runtime_id[marker.runtime_host_id] = true;
+            if (results_per_op_id[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}] !=
+                AnalysisResults::INVALID_SINGLE_RESULT) {
+                results_per_op_id[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}].end_timestamp =
+                    marker.timestamp;
+                results_per_op_id[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}].end_marker =
+                    marker_ref.get();
             }
         }
+    }
 
-        if (marker
-                .marker_name_keyword_flags[static_cast<std::underlying_type_t<tracy::MarkerDetails::MarkerNameKeyword>>(
-                    tracy::MarkerDetails::MarkerNameKeyword::_FW)]) {
-            fw_cores_per_runtime_id[marker.runtime_host_id].emplace(marker.core_x, marker.core_y);
+    for (auto& [op_id, result] : results_per_op_id) {
+        log_info(
+            tt::LogMetal,
+            "Op ID: {}, Start Timestamp: {}, End Timestamp: {}",
+            op_id.runtime_id,
+            result.start_timestamp,
+            result.end_timestamp);
+
+        if (result != AnalysisResults::INVALID_SINGLE_RESULT) {
+            TT_ASSERT(result.start_timestamp <= result.end_timestamp);
+            result.duration = result.end_timestamp - result.start_timestamp;
         }
     }
 
-    DurationAnalysisResults duration_analysis_results;
-    for (auto& [runtime_id, result] : results_per_runtime_id) {
-        TT_ASSERT(result.start_timestamp <= result.end_timestamp);
+    analysis_results.results_config = analysis_config.results_config;
 
-        result.duration = result.end_timestamp - result.start_timestamp;
-        duration_analysis_results.addResultsForRuntimeId(runtime_id, result);
-
-        TT_ASSERT(result.start_marker.chip_id == result.end_marker.chip_id);
-        TT_ASSERT(result.start_marker.op_name == result.end_marker.op_name);
-        TT_ASSERT(fw_cores_per_runtime_id.find(runtime_id) != fw_cores_per_runtime_id.end());
-
-        const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        const tt_ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
-        const ARCH device_arch = cluster_desc->get_arch(result.start_marker.chip_id);
-
-        const uint8_t num_hw_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
-        const DispatchCoreConfig& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-        const CoreCoord compute_grid_size =
-            tt::get_compute_grid_size(result.start_marker.chip_id, num_hw_cqs, dispatch_core_config);
-        const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
-
-        duration_analysis_results.addMetaDataForRuntimeId(
-            runtime_id,
-            {.device_id = result.start_marker.chip_id,
-             .device_arch = device_arch,
-             .op_name = result.start_marker.op_name,
-             .num_fw_cores = fw_cores_per_runtime_id[runtime_id].size(),
-             .num_available_worker_cores = num_available_worker_cores});
-    }
-
-    duration_analysis_results.results_config = analysis_config.results_config;
-
-    return duration_analysis_results;
+    return analysis_results;
 }
 
-std::unique_ptr<AnalysisResults> generateAnalysisForDeviceMarkers(
+AnalysisResults generateAnalysisForDeviceMarkers(
     const AnalysisConfig& analysis_config,
     const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
     TT_ASSERT(std::is_sorted(
@@ -146,43 +131,114 @@ std::unique_ptr<AnalysisResults> generateAnalysisForDeviceMarkers(
     TT_FATAL(analysis_config.dimension == AnalysisDimension::OP, "Analysis config dimension must be across ops");
 
     switch (analysis_config.type) {
-        case AnalysisType::OP_FIRST_TO_LAST_MARKER:
-            return std::make_unique<DurationAnalysisResults>(parse_duration(analysis_config, device_markers));
+        case AnalysisType::OP_FIRST_TO_LAST_MARKER: return parse_duration(analysis_config, device_markers);
         default: TT_THROW("Invalid analysis type");
     }
 }
 
-void writeAnalysisResultsToCSV(
-    const std::vector<std::unique_ptr<const AnalysisResults>>& analysis_results,
-    const std::filesystem::path& report_path) {
-    std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->perf_ops_report_write_mutex);
+std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> getMetaDataForOps(
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& markers) {
+    std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> op_id_to_meta_data;
+    for (const auto& marker_ref : markers) {
+        const tracy::TTDeviceMarker& marker = marker_ref.get();
+        if (op_id_to_meta_data.find({marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}) ==
+            op_id_to_meta_data.end()) {
+            const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+            const tt_ClusterDescriptor* cluster_desc = cluster.get_cluster_desc();
+            const ARCH device_arch = cluster_desc->get_arch(marker.chip_id);
 
-    std::string header_string =
-        "GLOBAL CALL COUNT,DEVICE ID,DEVICE ARCH,OP NAME,CORE COUNT,AVAILABLE WORKER CORE COUNT";
+            const uint8_t num_hw_cqs =
+                tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
+            const DispatchCoreConfig& dispatch_core_config =
+                tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+            const CoreCoord compute_grid_size =
+                tt::get_compute_grid_size(marker.chip_id, num_hw_cqs, dispatch_core_config);
+            const uint32_t num_available_worker_cores = compute_grid_size.x * compute_grid_size.y;
 
-    for (const auto& analysis_result : analysis_results) {
-        header_string += "," + analysis_result->getStringifiedHeaders();
-    }
+            op_id_to_meta_data[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}] = {
+                .device_id = marker.chip_id,
+                .device_arch = device_arch,
+                .op_name = marker.op_name,
+                .num_fw_cores = 0,
+                .num_available_worker_cores = num_available_worker_cores,
+            };
+        }
 
-    std::map<uint64_t, std::string> results_string_per_runtime_id;
+        auto& it = op_id_to_meta_data[{marker.runtime_host_id, marker.trace_id, marker.trace_id_counter}];
 
-    for (const auto& analysis_result : analysis_results) {
-        for (const uint64_t runtime_id : analysis_result->getRuntimeIds()) {
-            if (results_string_per_runtime_id.find(runtime_id) == results_string_per_runtime_id.end()) {
-                const AnalysisResults::RuntimeIdMetaData meta_data =
-                    analysis_result->getMetaDataForRuntimeId(runtime_id);
-                results_string_per_runtime_id[runtime_id] =
-                    std::to_string(runtime_id) + "," + std::to_string(meta_data.device_id) + "," +
-                    arch_to_str(meta_data.device_arch) + "," + meta_data.op_name + "," +
-                    std::to_string(meta_data.num_fw_cores) + "," + std::to_string(meta_data.num_available_worker_cores);
-            }
+        TT_ASSERT(it.device_id == marker.chip_id);
+        TT_ASSERT(it.op_name == marker.op_name);
+
+        if (marker
+                .marker_name_keyword_flags[static_cast<std::underlying_type_t<tracy::MarkerDetails::MarkerNameKeyword>>(
+                    tracy::MarkerDetails::MarkerNameKeyword::_FW)]) {
+            it.num_fw_cores++;
         }
     }
 
-    for (const auto& analysis_result : analysis_results) {
-        for (const auto& [runtime_id, results_string] : results_string_per_runtime_id) {
-            results_string_per_runtime_id[runtime_id] +=
-                "," + analysis_result->getStringifiedResultsForRuntimeId(runtime_id);
+    return op_id_to_meta_data;
+}
+
+OpsPerfResults generatePerfResultsForOps(
+    const std::vector<AnalysisConfig>& analysis_configs,
+    const std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
+    ThreadPool& thread_pool) {
+    OpsPerfResults ops_perf_results;
+    std::map<OpId, OpsPerfResults::SingleOpPerfResults>& op_id_to_perf_results = ops_perf_results.op_id_to_perf_results;
+    std::vector<AnalysisResultsConfig>& analysis_results_configs = ops_perf_results.analysis_results_configs;
+
+    uint32_t i = 0;
+    std::vector<AnalysisResults> analysis_results(analysis_configs.size());
+    analysis_results_configs.resize(analysis_configs.size());
+    for (const auto& analysis_config : analysis_configs) {
+        thread_pool.enqueue([&analysis_config, &analysis_results_configs, &device_markers, &analysis_results, i]() {
+            analysis_results[i] = generateAnalysisForDeviceMarkers(analysis_config, device_markers);
+            analysis_results_configs[i] = analysis_results[i].results_config;
+        });
+        i++;
+    }
+
+    const std::map<OpId, OpsPerfResults::SingleOpPerfResults::OpMetaData> ops_meta_data =
+        getMetaDataForOps(device_markers);
+
+    thread_pool.wait();
+
+    for (const auto& [op_id, op_meta_data] : ops_meta_data) {
+        op_id_to_perf_results[op_id].op_meta_data = op_meta_data;
+        OpsPerfResults::SingleOpPerfResults& op_perf_results = op_id_to_perf_results[op_id];
+
+        for (const AnalysisResults& analysis_result : analysis_results) {
+            TT_ASSERT(analysis_result.results_per_op_id.find(op_id) != analysis_result.results_per_op_id.end());
+            const AnalysisResults::SingleResult& single_result = analysis_result.results_per_op_id.at(op_id);
+            op_perf_results.analysis_results.push_back(single_result);
+        }
+        TT_ASSERT(op_perf_results.analysis_results.size() == analysis_results_configs.size());
+    }
+
+    return ops_perf_results;
+}
+
+void writeOpsPerfResultsToCSV(const OpsPerfResults& ops_perf_results, const std::filesystem::path& report_path) {
+    std::scoped_lock lock(tt::tt_metal::MetalContext::instance().profiler_state_manager()->ops_perf_report_write_mutex);
+
+    std::map<OpId, std::string> results_string_per_op_id;
+
+    for (const auto& [op_id, op_perf_results] : ops_perf_results.op_id_to_perf_results) {
+        results_string_per_op_id[op_id] =
+            std::to_string(op_id.runtime_id) + "," + std::to_string(op_id.trace_id) + "," +
+            std::to_string(op_id.trace_id_counter) + "," + std::to_string(op_perf_results.op_meta_data.device_id) +
+            "," + arch_to_str(op_perf_results.op_meta_data.device_arch) + "," + op_perf_results.op_meta_data.op_name +
+            "," + std::to_string(op_perf_results.op_meta_data.num_fw_cores) + "," +
+            std::to_string(op_perf_results.op_meta_data.num_available_worker_cores);
+
+        for (uint32_t i = 0; i < op_perf_results.analysis_results.size(); i++) {
+            const AnalysisResults::SingleResult& analysis_result = op_perf_results.analysis_results[i];
+            const AnalysisResultsConfig& analysis_result_config = ops_perf_results.analysis_results_configs[i];
+            results_string_per_op_id[op_id] += "," + std::to_string(analysis_result.duration);
+            if (analysis_result_config.display_start_and_end_timestamps) {
+                results_string_per_op_id[op_id] += "," + std::to_string(analysis_result.start_timestamp) + "," +
+                                                   std::to_string(analysis_result.end_timestamp);
+            }
         }
     }
 
@@ -194,10 +250,26 @@ void writeAnalysisResultsToCSV(
         log_file_ofs.open(report_path, std::ios_base::app);
     } else {
         log_file_ofs.open(report_path);
+
+        std::string header_string =
+            "GLOBAL CALL COUNT,METAL TRACE ID,METAL TRACE REPLAY SESSION ID,DEVICE ID,DEVICE ARCH,OP NAME,CORE "
+            "COUNT,AVAILABLE WORKER CORE COUNT";
+
+        for (const auto& analysis_result_config : ops_perf_results.analysis_results_configs) {
+            header_string += "," + analysis_result_config.analysis_name;
+            if (analysis_result_config.display_start_and_end_timestamps) {
+                TT_FATAL(
+                    analysis_result_config.start_timestamp_header.has_value(), "Start timestamp header is not set");
+                TT_FATAL(analysis_result_config.end_timestamp_header.has_value(), "End timestamp header is not set");
+                header_string += "," + analysis_result_config.start_timestamp_header.value() + "," +
+                                 analysis_result_config.end_timestamp_header.value();
+            }
+        }
+
         log_file_ofs << header_string << std::endl;
     }
 
-    for (const auto& [_, results_string] : results_string_per_runtime_id) {
+    for (const auto& [_, results_string] : results_string_per_op_id) {
         log_file_ofs << results_string << std::endl;
     }
 
