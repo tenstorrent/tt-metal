@@ -147,9 +147,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
 
     // MeshBuffer-based IO
     Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
-    Dist::DeviceLocalBufferConfig dst_local{
-        .page_size = p.page_size,
-        .buffer_type = p.use_dram_dst ? tt::tt_metal::BufferType::DRAM : tt::tt_metal::BufferType::L1};
+    Dist::DeviceLocalBufferConfig dst_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     Dist::ReplicatedBufferConfig rcfg{.size = p.tensor_bytes};
     auto src_buf = Dist::MeshBuffer::create(rcfg, src_local, mesh.get());
     auto dst_buf = Dist::MeshBuffer::create(rcfg, dst_local, mesh.get());
@@ -163,6 +161,7 @@ PerfPoint run_all_gather_once(HelpersFixture* fixture, const PerfParams& p) {
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord2, /*blocking=*/true);
+    Dist::WriteShard(mcq, dst_buf, zeros, src_coord, /*blocking=*/true);
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
@@ -320,6 +319,53 @@ Notes:
     tt::tt_fabric::append_fabric_connection_rt_args(
         src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
 
+    tt::tt_metal::Program local_prog = tt::tt_metal::CreateProgram();
+
+    // Recreate the same CB on the same core for this program
+    {
+        const uint32_t CB_ID = tt::CBIndex::c_0;
+        auto cb_cfg_local = tt::tt_metal::CircularBufferConfig(8 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
+                                .set_page_size(CB_ID, p.page_size);
+        (void)tt::tt_metal::CreateCircularBuffer(local_prog, p.sender_core, cb_cfg_local);
+    }
+
+    // Reader (DRAM src_buf -> CB): same kernel/args as the sender's reader
+    std::vector<uint32_t> local_reader_cta;
+    tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(local_reader_cta);
+    local_reader_cta.push_back(1u /*SRC_IS_DRAM*/);
+    local_reader_cta.push_back(NUM_PAGES);
+    local_reader_cta.push_back(p.page_size);
+
+    auto local_reader_k = tt::tt_metal::CreateKernel(
+        local_prog,
+        std::string(KDIR) + "all_gather_tx_reader_to_cb.cpp",
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = local_reader_cta});
+    tt::tt_metal::SetRuntimeArgs(local_prog, local_reader_k, p.sender_core, {(uint32_t)src_buf->address()});
+
+    // Local writer (CB -> dst_buf on THIS chip via NoC)
+    std::vector<uint32_t> local_writer_cta;
+    tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(local_writer_cta);
+    local_writer_cta.push_back(NUM_PAGES);
+    local_writer_cta.push_back(p.page_size);
+
+    auto local_writer_k = tt::tt_metal::CreateKernel(
+        local_prog,
+        std::string(KDIR) + "all_gather_local_writer_cb_to_self.cpp",
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = local_writer_cta});
+    tt::tt_metal::SetRuntimeArgs(local_prog, local_writer_k, p.sender_core, {(uint32_t)dst_buf->address()});
+
+    // Wrap as a workload on the *source* device
+    auto local_workload = Dist::MeshWorkload();
+    local_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(local_prog));
+
     // -------------------------- end PROGRAM FACTORY --------------------------
 
     // Phase A: E/W branches to cover both receivers on the same row; N/S = 0.
@@ -368,13 +414,17 @@ Notes:
     auto t1 = std::chrono::steady_clock::now();
     Dist::ReleaseTrace(mesh.get(), trace_id);
 
+    Dist::EnqueueMeshWorkload(mcq, local_workload, /*blocking=*/true);
+
     // Read back and verify
     std::vector<uint32_t> rx1(n_words, 0u), rx2(n_words, 0u);
+    std::vector<uint32_t> rx_self(n_words, 0u);
     Dist::ReadShard(mcq, rx1, dst_buf, dst_coord, /*blocking=*/true);
     Dist::ReadShard(mcq, rx2, dst_buf, dst_coord2, /*blocking=*/true);
+    Dist::ReadShard(mcq, rx_self, dst_buf, src_coord, /*blocking=*/true);
     verify_payload_words(rx1, tx);
     verify_payload_words(rx2, tx);
-    ;
+    verify_payload_words(rx_self, tx);
 
     // Perf point
     const double e2e_sec_total = std::chrono::duration<double>(t1 - t0).count();
