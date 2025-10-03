@@ -357,7 +357,7 @@ def test_fold(act_shape, stride_h, stride_w, device):
     tt_out = ttnn.fold(tt_input, stride_h, stride_w)
     actual = tt2torch_tensor(tt_out)
 
-    torch.testing.assert_allclose(actual, expected)
+    assert torch.equal(actual, expected)
 
 
 def test_fold_sharded(device):
@@ -395,4 +395,4 @@ def test_fold_sharded(device):
         tt_out = ttnn.fold(tt_input, stride_h, stride_w)
         actual = tt2torch_tensor(tt_out)
 
-        torch.testing.assert_allclose(actual, expected)
+        assert torch.equal(actual, expected)
