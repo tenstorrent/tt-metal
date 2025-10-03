@@ -30,7 +30,6 @@
 #include <vector>
 
 #include "allocator.hpp"
-#include "allocator_types.hpp"
 #include <tt_stl/assert.hpp>
 #include "command_queue.hpp"
 #include "dispatch/command_queue_common.hpp"
@@ -193,9 +192,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(
         this->ethernet_cores_.insert({core.x, core.y});
     }
 
-    // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
+    // L1 Banking Allocator creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
     // This is the only allocator scheme supported because kernel APIs assume num L1 banks are power of 2
-    TT_ASSERT(this->allocator_scheme_ == MemoryAllocator::L1_BANKING);
     return std::make_unique<L1BankingAllocator>(config);
 }
 
