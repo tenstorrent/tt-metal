@@ -11,15 +11,28 @@ import torch
 def analyze_tensor_precision(tensor, operation_name, step_name=""):
     """Analyze and log tensor precision/diversity"""
     try:
+        import pdb; pdb.set_trace()
+        # Debug: Print tensor type for troubleshooting
+        tensor_type = type(tensor).__name__
+        tensor_module = type(tensor).__module__
+        print(f"🔍 [DEBUG] Tensor type: {tensor_module}.{tensor_type}")
+        
         # Convert to torch for analysis
-        if hasattr(tensor, 'storage_type'):
+        if hasattr(tensor, 'storage_type') and callable(getattr(tensor, 'storage_type')):
             # This is a TTNN tensor
+            print(f"🔍 [DEBUG] Detected TTNN tensor, using ttnn.to_torch()")
             torch_tensor = ttnn.to_torch(tensor).cpu()
-        elif hasattr(tensor, 'cpu'):
+        elif tensor_type == 'Tensor' and tensor_module == 'torch':
             # This is a PyTorch tensor
+            print(f"🔍 [DEBUG] Detected PyTorch tensor, using .cpu()")
+            torch_tensor = tensor.cpu()
+        elif hasattr(tensor, 'cpu'):
+            # This has a cpu method, assume PyTorch-like
+            print(f"🔍 [DEBUG] Has .cpu() method, using .cpu()")
             torch_tensor = tensor.cpu()
         else:
             # This is already a torch tensor or numpy array
+            print(f"🔍 [DEBUG] Using tensor as-is")
             torch_tensor = tensor
         
         # Flatten and get unique values
