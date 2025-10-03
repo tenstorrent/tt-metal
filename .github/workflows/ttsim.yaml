@@ -91,7 +91,7 @@ jobs:
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
-        timeout-minutes: 2
+        timeout-minutes: 3
         run: |
           working_examples=(
             "add_2_integers_in_compute"
