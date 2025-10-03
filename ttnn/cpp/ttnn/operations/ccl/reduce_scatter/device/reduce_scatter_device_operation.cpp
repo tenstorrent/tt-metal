@@ -27,7 +27,15 @@ void ReduceScatterDeviceOperation::validate_on_program_cache_miss(
         "page_size {} must be divisible by alignment {}",
         page_size,
         input_tensor.buffer()->alignment());
-    TT_FATAL(operation_attributes.dim == 3, "dim must be 3");
+    if (operation_attributes.topology == ::ttnn::ccl::Topology::Linear) {
+        TT_FATAL(
+            operation_attributes.dim == 3,
+            "reduce_scatter line topology implementation only supports scattering on dim 3");
+    } else if (operation_attributes.topology == ::ttnn::ccl::Topology::Ring) {
+        TT_FATAL(
+            operation_attributes.dim == 1 || operation_attributes.dim == 2 || operation_attributes.dim == 3,
+            "reduce_scatter ring topology implementation only supports scattering on dim 1, 2, or 3");
+    }
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "input_tensor must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "input_tensor must have a buffer");
     TT_FATAL(operation_attributes.num_links > 0, "num_links must be greater than 0");
