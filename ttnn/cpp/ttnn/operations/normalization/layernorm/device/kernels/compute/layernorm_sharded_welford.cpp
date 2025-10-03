@@ -104,12 +104,9 @@ void MAIN {
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
     const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
     const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
-    uint32_t first_stage_W = 0;
-    uint32_t second_stage_W = 0;
-    if (use_two_stage_reduce) {
-        first_stage_W = num_blocks_first_stage * tile_width;
-        second_stage_W = (num_blocks_first_stage - 1) * tile_width + last_tile_W;
-    }
+    uint32_t first_stage_W = use_two_stage_reduce ? num_blocks_first_stage * tile_width
+                                                  : (num_blocks_first_stage - 1) * tile_width + last_tile_W;
+    uint32_t second_stage_W = use_two_stage_reduce ? (num_blocks_first_stage - 1) * tile_width + last_tile_W : 0;
     uint32_t num_blocks_reduce;
     uint32_t combine_W;
     if (is_second_stage_reader) {
@@ -124,6 +121,13 @@ void MAIN {
         num_blocks_reduce = num_blocks_first_stage;
         combine_W = first_stage_W;
     }
+
+    DPRINT << "num_blocks_reduce: " << num_blocks_reduce << ENDL();
+    DPRINT << "combine_W: " << combine_W << ENDL();
+    DPRINT << "first_stage_W: " << first_stage_W << ENDL();
+    DPRINT << "second_stage_W: " << second_stage_W << ENDL();
+    DPRINT << "last_tile_W: " << last_tile_W << ENDL();
+    DPRINT << "W: " << W << ENDL();
 
     // Number of tiles for block_ht results (interleaved mean and var)
     const uint32_t num_block_ht_result_tiles = 2 * block_ht;
@@ -166,8 +170,6 @@ void MAIN {
 #endif
     constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-
-    DPRINT << "After init" << ENDL();
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
@@ -282,7 +284,7 @@ void MAIN {
                     last_tile_W);
 
                 DPRINT << "n_b: " << n_b << ENDL();
-                tt::compute::common::print_full_tile(cb_ex_external, 0, true);
+                // tt::compute::common::print_full_tile(cb_ex_external, 0, true);
 
                 const float na2 = static_cast<float>(n_a) / (n_a + n_b);
                 const float nb2 = static_cast<float>(n_b) / (n_a + n_b);
