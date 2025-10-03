@@ -15,6 +15,7 @@
 #include <tt_stl/overloaded.hpp>
 #include "tt_stl/small_vector.hpp"
 #include "tt_stl/span.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/storage.hpp"
 
 #include "tt-metalium/mesh_device_view.hpp"
@@ -243,58 +244,6 @@ Tensor Tensor::from_borrowed_data(
     return Tensor(HostBuffer(buffer, std::move(buffer_pin)), shape, convert_to_data_type<T>(), Layout::ROW_MAJOR, tile);
 }
 
-template <>
-Tensor Tensor::from_vector<float>(
-    std::vector<float>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    std::optional<ttnn::QueueId> cq_id,
-    float pad_value) {
-    ZoneScoped;
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::FLOAT32) {
-        // User `buffer` directly, when no type conversion is needed.
-        return create_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
-    }
-    return from_span(tt::stl::Span<const float>(buffer.data(), buffer.size()), spec, device, cq_id, pad_value);
-}
-
-template <>
-Tensor Tensor::from_vector<int32_t>(
-    std::vector<int32_t>&& buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    std::optional<ttnn::QueueId> cq_id,
-    int32_t pad_value) {
-    ZoneScoped;
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-
-    // Helper to convert and create tensor for other integer types
-    auto convert_and_create = [&]<typename TargetType>() {
-        std::vector<TargetType> converted_buffer;
-        converted_buffer.reserve(buffer.size());
-        for (auto val : buffer) {
-            converted_buffer.push_back(static_cast<TargetType>(val));
-        }
-        return create_tensor_from_row_major_data(
-            std::move(converted_buffer), spec, device, cq_id, static_cast<TargetType>(pad_value));
-    };
-
-    // Handle type conversion for all supported integer types
-    switch (spec.data_type()) {
-        case DataType::INT32:
-            return create_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
-        case DataType::UINT32: return convert_and_create.template operator()<uint32_t>();
-        case DataType::UINT16: return convert_and_create.template operator()<uint16_t>();
-        case DataType::UINT8: return convert_and_create.template operator()<uint8_t>();
-        default: TT_THROW("Unsupported data type for integer tensor: {}", spec.data_type());
-    }
-}
-
 template <typename T>
 Tensor Tensor::from_vector(
     std::vector<T>&& buffer,
@@ -306,12 +255,20 @@ Tensor Tensor::from_vector(
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    TT_FATAL(
-        spec.data_type() == convert_to_data_type<T>(),
-        "Unsupported data type: got {}, expected: {}",
-        spec.data_type(),
-        convert_to_data_type<T>());
-    return create_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
+    if (spec.data_type() == convert_to_data_type<T>()) {
+        return create_tensor_from_row_major_data(std::move(buffer), spec, device, cq_id, pad_value);
+    }
+    // Create host tensor with DataType matching buffer
+    auto buffer_dtype = convert_to_data_type<T>();
+    auto buffer_spec =
+        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+    auto res = create_tensor_from_row_major_data(std::move(buffer), buffer_spec, /*device=*/nullptr, cq_id, pad_value);
+    // Convert to datatype from original spec
+    res = ttnn::to_dtype(res, spec.data_type());
+    if (device) {
+        res = res.to_device(device, spec.memory_config(), cq_id);
+    }
+    return res;
 }
 
 template <>
@@ -448,7 +405,18 @@ template Tensor Tensor::from_vector<bfloat16>(
     distributed::MeshDevice* device,
     std::optional<ttnn::QueueId> cq_id,
     bfloat16 pad_value);
-// Note: from_vector<int32_t> is specialized, not explicitly instantiated
+template Tensor Tensor::from_vector<float>(
+    std::vector<float>&& buffer,
+    const TensorSpec& spec,
+    distributed::MeshDevice* device,
+    std::optional<ttnn::QueueId> cq_id,
+    float pad_value);
+template Tensor Tensor::from_vector<int32_t>(
+    std::vector<int32_t>&& buffer,
+    const TensorSpec& spec,
+    distributed::MeshDevice* device,
+    std::optional<ttnn::QueueId> cq_id,
+    int32_t pad_value);
 template Tensor Tensor::from_vector<uint8_t>(
     std::vector<uint8_t>&& buffer,
     const TensorSpec& spec,
