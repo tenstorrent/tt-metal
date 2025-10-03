@@ -9,6 +9,10 @@ namespace tt::tt_fabric {
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,
+    size_t num_used_sender_channels,
+    size_t num_used_receiver_channels,
+    size_t channel_buffer_size_bytes,
+    size_t available_channel_buffering_space,
     const std::vector<MemoryRegion>& memory_regions) :
     FabricChannelAllocator(topology, options, memory_regions) {
     std::array<size_t, builder_config::num_sender_channels> num_sender_buffer_slots = {0};
@@ -42,11 +46,9 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
-        num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + this->num_used_sender_channels, size_t{0});
+        num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + num_used_sender_channels, size_t{0});
     size_t total_receiver_slots = std::accumulate(
-        num_receiver_buffer_slots.begin(),
-        num_receiver_buffer_slots.begin() + this->num_used_receiver_channels,
-        size_t{0});
+        num_receiver_buffer_slots.begin(), num_receiver_buffer_slots.begin() + num_used_receiver_channels, size_t{0});
     std::size_t total_slot_count = total_sender_slots + total_receiver_slots;
     TT_FATAL(
         total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
@@ -56,35 +58,35 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
 
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
-    this->sender_channels_num_buffers = num_sender_buffer_slots;
-    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+    auto sender_channels_num_buffers = num_sender_buffer_slots;
+    for (uint32_t i = 0; i < num_used_sender_channels; i++) {
         this->sender_channels_size_bytes[i] = channel_buffer_size_bytes * num_sender_buffer_slots[i];
     }
     // set the remote sender channel sizes
-    this->remote_sender_channels_num_buffers = num_remote_sender_buffer_slots;
-    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+    auto remote_sender_channels_num_buffers = num_remote_sender_buffer_slots;
+    for (uint32_t i = 0; i < num_used_sender_channels; i++) {
         this->remote_sender_channels_size_bytes[i] = channel_buffer_size_bytes * num_remote_sender_buffer_slots[i];
     }
     // set the local receiver channel sizes
-    this->receiver_channels_num_buffers = num_receiver_buffer_slots;
-    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+    auto receiver_channels_num_buffers = num_receiver_buffer_slots;
+    for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
         this->receiver_channels_size_bytes[i] = channel_buffer_size_bytes * num_receiver_buffer_slots[i];
     }
     // set the remote receiver channel sizes
-    this->remote_receiver_channels_num_buffers = num_remote_receiver_buffer_slots;
-    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+    auto remote_receiver_channels_num_buffers = num_remote_receiver_buffer_slots;
+    for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
         this->remote_receiver_channels_size_bytes[i] = channel_buffer_size_bytes * num_remote_receiver_buffer_slots[i];
     }
 
     // set the base addresses for the local channels
     uint32_t sender_buffer_addr = buffer_region_start;
-    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+    for (uint32_t i = 0; i < num_used_sender_channels; i++) {
         this->sender_channels_base_address[i] = sender_buffer_addr;
         sender_buffer_addr += this->sender_channels_size_bytes[i];
         log_trace(tt::LogOp, "Sender {} channel_start: {}", i, this->sender_channels_base_address[i]);
     }
     uint32_t receiver_buffer_addr = sender_buffer_addr;
-    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+    for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
         this->receiver_channels_base_address[i] = receiver_buffer_addr;
         receiver_buffer_addr += this->receiver_channels_size_bytes[i];
         log_trace(tt::LogOp, "Receiver {} channel_start: {}", i, this->receiver_channels_base_address[i]);
@@ -92,13 +94,13 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     uint32_t buffer_addr_end = receiver_buffer_addr;
     // set the base addresses for the remote channels
     uint32_t remote_sender_buffer_addr = buffer_region_start;
-    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+    for (uint32_t i = 0; i < num_used_sender_channels; i++) {
         this->remote_sender_channels_base_address[i] = remote_sender_buffer_addr;
         remote_sender_buffer_addr += this->remote_sender_channels_size_bytes[i];
         log_trace(tt::LogOp, "Remote Sender {} channel_start: {}", i, this->remote_sender_channels_base_address[i]);
     }
     uint32_t remote_receiver_buffer_addr = remote_sender_buffer_addr;
-    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+    for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
         this->remote_receiver_channels_base_address[i] = remote_receiver_buffer_addr;
         remote_receiver_buffer_addr += this->remote_receiver_channels_size_bytes[i];
         log_trace(tt::LogOp, "Remote Receiver {} channel_start: {}", i, this->remote_receiver_channels_base_address[i]);
@@ -121,7 +123,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
                (idx != target_channel && idx != vc1_target_channel && has_tensix_extension);
     };
 
-    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
+    for (uint32_t i = 0; i < num_used_sender_channels; i++) {
         if (!skip_current_sender_channel(i)) {
             TT_FATAL(
                 this->sender_channels_size_bytes[i] > 0,
@@ -135,7 +137,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
                (idx == this->dateline_upstream_receiver_channel_skip_idx && is_dateline_upstream);
     };
 
-    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
+    for (uint32_t i = 0; i < num_used_receiver_channels; i++) {
         if (!skip_current_receiver_channel(i)) {
             TT_FATAL(
                 this->receiver_channels_size_bytes[i] > 0,
@@ -146,11 +148,11 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     TT_FATAL(
         std::accumulate(
             this->sender_channels_size_bytes.begin(),
-            this->sender_channels_size_bytes.begin() + this->num_used_sender_channels,
+            this->sender_channels_size_bytes.begin() + num_used_sender_channels,
             0ul) +
                 std::accumulate(
                     this->receiver_channels_size_bytes.begin(),
-                    this->receiver_channels_size_bytes.begin() + this->num_used_receiver_channels,
+                    this->receiver_channels_size_bytes.begin() + num_used_receiver_channels,
                     0ul) <=
             this->available_channel_buffering_space,
         "Internal error when computing channel sizes. Total channel size exceeds available space");

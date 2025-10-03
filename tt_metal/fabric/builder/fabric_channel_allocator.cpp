@@ -10,8 +10,11 @@
 namespace tt::tt_fabric {
 
 // Base FabricChannelAllocator implementation
-FabricChannelAllocator::FabricChannelAllocator(const std::vector<MemoryRegion>& memory_regions) :
-    memory_regions_(memory_regions) {
+FabricChannelAllocator::FabricChannelAllocator(
+    tt::tt_fabric::Topology topology,
+    const tt::tt_fabric::FabricEriscDatamoverOptions& options,
+    const std::vector<MemoryRegion>& memory_regions) :
+    topology_(topology), options_(options), memory_regions_(memory_regions) {
     TT_FATAL(!memory_regions_.empty(), "At least one memory region must be provided");
 
     // Validate that regions don't overlap
@@ -21,8 +24,8 @@ FabricChannelAllocator::FabricChannelAllocator(const std::vector<MemoryRegion>& 
             const auto& region2 = memory_regions_[j];
 
             // Check for overlap: regions overlap if one starts before the other ends
-            bool overlap =
-                (region1.start_address < region2.end_address) && (region2.start_address < region1.end_address);
+            bool overlap = (region1.start_address < region2.get_end_address()) &&
+                           (region2.start_address < region1.get_end_address());
             TT_FATAL(!overlap, "Memory regions {} and {} overlap", i, j);
         }
     }
@@ -37,13 +40,15 @@ size_t FabricChannelAllocator::get_total_available_memory() const {
 
 // StaticChannelsAllocator implementation
 StaticChannelsAllocator::StaticChannelsAllocator(
+    tt::tt_fabric::Topology topology,
+    const tt::tt_fabric::FabricEriscDatamoverOptions& options,
     const std::vector<MemoryRegion>& memory_regions,
     size_t num_sender_channels,
     size_t num_receiver_channels,
     size_t buffer_size_bytes,
     size_t buffers_per_sender_channel,
     size_t buffers_per_receiver_channel) :
-    FabricChannelAllocator(memory_regions),
+    FabricChannelAllocator(topology, options, memory_regions),
     num_sender_channels_(num_sender_channels),
     num_receiver_channels_(num_receiver_channels),
     buffer_size_bytes_(buffer_size_bytes),
@@ -90,7 +95,7 @@ void StaticChannelsAllocator::allocate_channels() {
         current_address += buffers_per_receiver_channel_ * buffer_size_bytes_;
     }
 
-    TT_FATAL(current_address <= region.end_address, "Channel allocation exceeded available memory in region");
+    TT_FATAL(current_address <= region.get_end_address(), "Channel allocation exceeded available memory in region");
 }
 
 void StaticChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {
@@ -127,11 +132,13 @@ size_t StaticChannelsAllocator::get_receiver_channel_base_address(size_t channel
 
 // ElasticChannelsAllocator implementation
 ElasticChannelsAllocator::ElasticChannelsAllocator(
+    tt::tt_fabric::Topology topology,
+    const tt::tt_fabric::FabricEriscDatamoverOptions& options,
     const std::vector<MemoryRegion>& memory_regions,
     size_t buffer_size_bytes,
     size_t min_buffers_per_channel,
     size_t max_buffers_per_channel) :
-    FabricChannelAllocator(memory_regions),
+    FabricChannelAllocator(topology, options, memory_regions),
     buffer_size_bytes_(buffer_size_bytes),
     min_buffers_per_channel_(min_buffers_per_channel),
     max_buffers_per_channel_(max_buffers_per_channel),

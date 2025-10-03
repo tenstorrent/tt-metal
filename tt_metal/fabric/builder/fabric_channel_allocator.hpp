@@ -78,6 +78,8 @@ public:
     }
 
 protected:
+    tt::tt_fabric::Topology topology_;
+    tt::tt_fabric::FabricEriscDatamoverOptions options_;
     std::vector<MemoryRegion> memory_regions_;
 };
 
@@ -97,6 +99,8 @@ public:
      * @param buffers_per_receiver_channel Number of buffers per receiver channel
      */
     StaticChannelsAllocator(
+        tt::tt_fabric::Topology topology,
+        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
         const std::vector<MemoryRegion>& memory_regions,
         size_t num_sender_channels,
         size_t num_receiver_channels,
@@ -147,6 +151,8 @@ public:
      * @param max_buffers_per_channel Maximum buffers per channel
      */
     ElasticChannelsAllocator(
+        tt::tt_fabric::Topology topology,
+        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
         const std::vector<MemoryRegion>& memory_regions,
         size_t buffer_size_bytes,
         size_t min_buffers_per_channel,
