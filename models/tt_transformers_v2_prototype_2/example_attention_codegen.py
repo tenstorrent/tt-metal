@@ -45,59 +45,6 @@ class AttentionConfig:
         return self.num_heads * self.head_dim
 
 
-def generate_optimized_source(func_name: str, args: list, func_def: ast.FunctionDef) -> str:
-    """Generate complete optimized source code"""
-
-    # Extract function body
-    body_lines = ast.unparse(func_def).split("\n")[1:]  # Skip def line
-    body = "\n".join(body_lines)
-
-    # Add the forward method with original function body
-    source_lines = [
-        [
-            f'    def {func_name}({", ".join(args)}):',
-            f'        """Generated from introspected function"""',
-        ]
-    ]
-
-    # Indent and add function body
-    for line in body.split("\n"):
-        if line.strip():
-            source_lines.append(f"        {line}")
-        else:
-            source_lines.append("")
-
-    return "\n".join(source_lines)
-
-
-def function_to_source(func: Callable, class_name: str = "GeneratedClass") -> str:
-    """
-    Convert a function to optimized source code by:
-    1. Extracting the original source
-    2. Analyzing for optimization opportunities
-    3. Generating enhanced source with context
-    """
-
-    # Get original source
-    original_source = inspect.getsource(func)
-
-    # Parse AST for analysis
-    tree = ast.parse(original_source)
-
-    # Extract function details
-    func_def = tree.body[0]
-    func_name = func_def.name
-    args = [arg.arg for arg in func_def.args.args]
-
-    # Analyze function body for TTNN operations
-    # ttnn_ops = find_ttnn_operations(func_def)
-
-    # Generate optimized source with full context
-    source = generate_optimized_source(func_name, args, func_def, ttnn_ops, class_name)
-
-    return source
-
-
 def forward_qkv_fused(x, *, mod_spec, hw_config, tensor_cache):
     qkv = ttnn.linear(
         x,
@@ -168,6 +115,59 @@ def forward_qkv_unfused(x, *, mod_spec, hw_config, tensor_cache):
     value_states = ttnn.reshape(value_states, target_shape)
 
     return query_states, key_states, value_states
+
+
+def generate_optimized_source(func_name: str, args: list, func_def: ast.FunctionDef) -> str:
+    """Generate complete optimized source code"""
+
+    # Extract function body
+    body_lines = ast.unparse(func_def).split("\n")[1:]  # Skip def line
+    body = "\n".join(body_lines)
+
+    # Add the forward method with original function body
+    source_lines = [
+        [
+            f'    def {func_name}({", ".join(args)}):',
+            f'        """Generated from introspected function"""',
+        ]
+    ]
+
+    # Indent and add function body
+    for line in body.split("\n"):
+        if line.strip():
+            source_lines.append(f"        {line}")
+        else:
+            source_lines.append("")
+
+    return "\n".join(source_lines)
+
+
+def function_to_source(func: Callable, class_name: str = "GeneratedClass") -> str:
+    """
+    Convert a function to optimized source code by:
+    1. Extracting the original source
+    2. Analyzing for optimization opportunities
+    3. Generating enhanced source with context
+    """
+
+    # Get original source
+    original_source = inspect.getsource(func)
+
+    # Parse AST for analysis
+    tree = ast.parse(original_source)
+
+    # Extract function details
+    func_def = tree.body[0]
+    func_name = func_def.name
+    args = [arg.arg for arg in func_def.args.args]
+
+    # Analyze function body for TTNN operations
+    # ttnn_ops = find_ttnn_operations(func_def)
+
+    # Generate optimized source with full context
+    source = generate_optimized_source(func_name, args, func_def, ttnn_ops, class_name)
+
+    return source
 
 
 class TTTv2AttentionCodeGen:
@@ -482,9 +482,6 @@ class TTTv2AttentionCodeGen:
     def generate_module_class(self) -> str:
         """Generate complete module class with initialization and forward"""
 
-        # Get the forward function
-        forward_src = self.generate_forward_function()
-
         # Build complete class
         class_lines = [
             f"class TTTv2Attention_{self.hw_config.device_name.replace('-', '_')}(nn.Module):",
@@ -596,6 +593,8 @@ class TTTv2AttentionCodeGen:
         )
 
         # Add the forward function (with proper indentation)
+        # Get the forward function
+        forward_src = self.generate_forward_function()
         forward_lines = forward_src.split("\n")
         for line in forward_lines:
             if line.strip():
@@ -608,7 +607,14 @@ class TTTv2AttentionCodeGen:
 
 # This is the main API to create a attention module instance based on attn_config (model spec) and hw_config
 def Attention(
-    attn_config: AttentionConfig, *, hw_config: Optional[HardwareConfig] = None, save_source: bool = False
+    attn_config: AttentionConfig,
+    *,
+    hw_config: Optional[HardwareConfig] = None,
+    # todo)) gen_format should be an enum
+    gen_format: str = "class",
+    # todo)) save_source should be a object that provides filename and etc
+    save_source: bool = False,
+    filename: str = "",
 ) -> Tuple[type, str]:
     """
     Main API to compile an attention module for specific hardware and configuration.
@@ -621,14 +627,18 @@ def Attention(
     """
 
     # Create code generator
-    codegen = TTTv2AttentionCodeGen(hw_config, attn_config)
+    codegen = TTTv2AttentionCodeGen(attn_config, hw_config)
 
     # Generate source code
-    source_code = codegen.generate_module_class()
+    if gen_format == "class":
+        source_code = codegen.generate_module_class()
+    elif gen_format == "function":
+        source_code = codegen.generate_forward_function()
+    else:
+        raise ValueError(f"Invalid generation format: {gen_format}")
 
     # Save source if requested
     if save_source:
-        filename = f"attention_{hw_config.device_name}_{attn_config.hidden_size}_{attn_config.num_heads}.py"
         with open(filename, "w") as f:
             f.write("# Auto-generated by TTTv2 CodeGen\n")
             f.write("import torch\n")
@@ -652,7 +662,7 @@ def Attention(
             module_class = obj
             break
 
-    return module_class, source_code
+    return module_class
 
 
 # Example usage and demonstration
@@ -680,98 +690,19 @@ if __name__ == "__main__":
         dropout=0.1,
     )
 
-    module_class, source = compile_attention_module(hw_config, attn_config, save_source=False)
+    module_class = Attention(
+        attn_config,
+        hw_config=hw_config,
+        gen_format="function",
+        save_source=True,
+        filename=f"attention_{hw_config.device_name}_{attn_config.hidden_size}_{attn_config.num_heads}.py",
+    )
 
     print(f"Generated class: {module_class}")
     print("\nGenerated forward function preview:")
     print("-" * 60)
     # Show first 30 lines of forward function
-    forward_start = source.find("def forward")
-    forward_lines = source[forward_start:].split("\n")[:30]
+    forward_start = module_class.source.find("def forward")
+    forward_lines = module_class.source[forward_start:].split("\n")[:30]
     print("\n".join(forward_lines))
     print("... [truncated]\n")
-
-    # Example 2: Different hardware, different optimization
-    print("\n=== Example 2: Mistral-style Sliding Window for Grayskull ===")
-
-    hw_config2 = HardwareConfig(
-        device_name="grayskull_e75",
-        grid_size=(9, 12),
-        l1_memory_size=512 * 1024,  # 512KB - smaller L1
-        supports_flash_attention=False,  # No flash on Grayskull
-        fp32_accumulation=False,
-        max_seq_len=1024,
-        shard_strategy="height",
-    )
-
-    attn_config2 = AttentionConfig(
-        hidden_size=2048,
-        num_heads=16,
-        head_dim=128,
-        use_rotary_embeddings=True,
-        use_sliding_window=True,
-        window_size=512,
-        dropout=0.0,
-    )
-
-    module_class2, source2 = compile_attention_module(hw_config2, attn_config2, save_source=False)
-
-    # Show key differences in generated code
-    print("Key differences in generated code:")
-    print(
-        "1. Memory layout:",
-        (
-            "BLOCK_SHARDED"
-            if "BLOCK_SHARDED" in source
-            else "HEIGHT_SHARDED"
-            if "HEIGHT_SHARDED" in source2
-            else "INTERLEAVED"
-        ),
-    )
-    print("2. Uses flash attention:", "flash_attention" in source)
-    print("3. Uses sliding window:", "sliding_window_mask" in source2)
-    print("4. Math fidelity:", "HiFi4" if hw_config.fp32_accumulation else "HiFi2")
-
-    # Example 3: Show how the same model config generates different code for different hardware
-    print("\n\n=== Example 3: Same Model, Different Hardware ===")
-
-    # Use same attention config
-    common_config = AttentionConfig(
-        hidden_size=2048,
-        num_heads=16,
-        head_dim=128,
-        use_rotary_embeddings=True,
-        use_sliding_window=False,
-        window_size=None,
-        dropout=0.0,
-    )
-
-    # But different hardware
-    hw_configs = [
-        HardwareConfig(
-            device_name="high_mem_device",
-            grid_size=(16, 16),
-            l1_memory_size=2 * 1024 * 1024,  # 2MB - can fuse QKV
-            supports_flash_attention=True,
-            fp32_accumulation=True,
-            max_seq_len=4096,
-            shard_strategy="block",
-        ),
-        HardwareConfig(
-            device_name="low_mem_device",
-            grid_size=(4, 4),
-            l1_memory_size=256 * 1024,  # 256KB - must separate Q,K,V
-            supports_flash_attention=False,
-            fp32_accumulation=False,
-            max_seq_len=512,
-            shard_strategy="height",
-        ),
-    ]
-
-    for hw in hw_configs:
-        _, src = compile_attention_module(hw, common_config, save_source=False)
-        print(f"\nDevice: {hw.device_name}")
-        print(f"  - QKV projection: {'Fused' if 'qkv_weight' in src else 'Separate'}")
-        print(f"  - Attention impl: {'Flash' if 'flash_attention' in src else 'Standard'}")
-        print(f"  - Memory layout: {hw.shard_strategy.upper()}_SHARDED")
-        print(f"  - Math precision: {'HiFi4' if hw.fp32_accumulation else 'HiFi2'}")
