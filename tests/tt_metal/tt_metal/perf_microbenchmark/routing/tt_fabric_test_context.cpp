@@ -318,3 +318,101 @@ std::string TestContext::generate_failed_test_format_string(const BandwidthResul
         + tolerance_stream.str();
     return csv_format_string;
 }
+
+void TestContext::organize_speedups_by_topology() {
+    // Go through each comparison result and add its speedup to the corresponding topology->packet_size and
+    // topology->ntype combination
+    for (const auto& result : comparison_results_) {
+        const std::optional<Topology> result_topology = enchantum::cast<Topology>(result.topology);
+        TT_FATAL(result_topology.has_value(), "Invalid topology in comparison result: {}", result.topology);
+        const double result_speedup = result.speedup;
+        speedups_per_topology_[result_topology.value()].speedups_by_packet_size[result.packet_size].push_back(
+            result_speedup);
+        std::optional<NocSendType> result_ntype = enchantum::cast<NocSendType>(result.ntype);
+        TT_FATAL(result_ntype.has_value(), "Invalid ntype in comparison result: {}", result.ntype);
+        speedups_per_topology_[result_topology.value()].speedups_by_ntype[result_ntype.value()].push_back(
+            result_speedup);
+    }
+}
+
+double TestContext::calculate_geomean_speedup(const std::vector<double>& speedups) {
+    double geomean_speedup = 1.0;
+    for (const auto& speedup : speedups) {
+        geomean_speedup *= speedup;
+    }
+    geomean_speedup = std::pow(geomean_speedup, 1.0 / speedups.size());
+    return geomean_speedup;
+}
+
+void TestContext::calculate_overall_geomean_speedup() {
+    std::vector<double> speedups(comparison_results_.size());
+    std::transform(
+        comparison_results_.begin(), comparison_results_.end(), speedups.begin(), [](const ComparisonResult& result) {
+            return result.speedup;
+        });
+    overall_geomean_speedup_ = calculate_geomean_speedup(speedups);
+    log_info(tt::LogTest, "Overall geomean speedup: {:.6f}", overall_geomean_speedup_);
+}
+
+std::vector<double> TestContext::concatenate_topology_speedups(const SpeedupsByTopology& topology_speedups) {
+    // Figure out how many speedups we have
+    int num_speedups = 0;
+    for (const auto& [packet_size, speedups] : topology_speedups.speedups_by_packet_size) {
+        num_speedups += speedups.size();
+    }
+    if (num_speedups == 0) {
+        return std::vector<double>();
+    }
+    std::vector<double> concatenated_speedups;
+    concatenated_speedups.reserve(num_speedups);
+    for (const auto& [packet_size, speedups] : topology_speedups.speedups_by_packet_size) {
+        concatenated_speedups.insert(concatenated_speedups.end(), speedups.begin(), speedups.end());
+    }
+    return concatenated_speedups;
+}
+
+void TestContext::calculate_geomean_speedup_by_topology() {
+    for (auto& [topology, topology_speedups] : speedups_per_topology_) {
+        // Calculate geomean speedup by packet size and ntype
+        for (const auto& [packet_size, speedups] : topology_speedups.speedups_by_packet_size) {
+            topology_speedups.geomean_speedup_by_packet_size[packet_size] = calculate_geomean_speedup(speedups);
+            log_info(
+                tt::LogTest,
+                "Topology: {}, Packet Size: {}, Geomean Speedup: {}",
+                topology,
+                packet_size,
+                topology_speedups.geomean_speedup_by_packet_size[packet_size]);
+        }
+        for (const auto& [ntype, speedups] : topology_speedups.speedups_by_ntype) {
+            topology_speedups.geomean_speedup_by_ntype[ntype] = calculate_geomean_speedup(speedups);
+            log_info(
+                tt::LogTest,
+                "Topology: {}, NType: {}, Geomean Speedup: {}",
+                topology,
+                ntype,
+                topology_speedups.geomean_speedup_by_ntype[ntype]);
+        }
+        // To calculate overall geomean speedup for this topology, we need to merge the speedups of one sub-category
+        const std::vector<double> concatenated_speedups = concatenate_topology_speedups(topology_speedups);
+        topology_speedups.topology_geomean_speedup = calculate_geomean_speedup(concatenated_speedups);
+        log_info(
+            tt::LogTest, "Topology: {}, Geomean Speedup: {}", topology, topology_speedups.topology_geomean_speedup);
+    }
+}
+
+void TestContext::generate_comparison_statistics() {
+    // This function calculates overall post-comparison statistics such as geomean speedup, etc.
+    // Per-test speedup was calculated in populate_comparison_result_bandwidth()
+    // Classify speedup values by topology
+    organize_speedups_by_topology();
+
+    // Calculate geometric mean speedup
+    calculate_overall_geomean_speedup();
+
+    // Calculate geometric mean speedup by topology, packet size, and ntype
+    calculate_geomean_speedup_by_topology();
+}
+
+void TestContext::generate_comparison_summary_csv() {
+    // TODO: Implement
+}

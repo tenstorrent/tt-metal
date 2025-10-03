@@ -158,6 +158,15 @@ struct ComparisonResult {
     std::string status;
 };
 
+struct SpeedupsByTopology {
+    Topology topology;
+    double topology_geomean_speedup{};
+    std::unordered_map<uint32_t, std::vector<double>> speedups_by_packet_size;
+    std::unordered_map<uint32_t, double> geomean_speedup_by_packet_size;
+    std::unordered_map<NocSendType, std::vector<double>> speedups_by_ntype;
+    std::unordered_map<NocSendType, double> geomean_speedup_by_ntype;
+};
+
 class TestContext {
 public:
     void init(std::shared_ptr<TestFixture> fixture, const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies) {
@@ -454,6 +463,13 @@ public:
 
         // Compare summary results with golden CSV
         compare_summary_results_with_golden();
+
+        // Generate statistics based on golden comparison
+        generate_comparison_statistics();
+
+        // Generate comparison statistics CSV file
+        generate_comparison_summary_csv();
+
         validate_against_golden();
     }
 
@@ -1458,6 +1474,20 @@ private:
         log_info(tt::LogTest, "Comparison diff CSV results appended to: {}", diff_csv_file_path_.string());
     }
 
+    void organize_speedups_by_topology();
+
+    double calculate_geomean_speedup(const std::vector<double>& speedups);
+
+    void calculate_overall_geomean_speedup();
+
+    std::vector<double> concatenate_topology_speedups(const SpeedupsByTopology& topology_speedups);
+
+    void calculate_geomean_speedup_by_topology();
+
+    void generate_comparison_statistics();
+
+    void generate_comparison_summary_csv();
+
     void validate_against_golden() {
         if (comparison_results_.empty()) {
             log_info(tt::LogTest, "No golden comparison performed (no golden file found)");
@@ -1517,4 +1547,8 @@ private:
     std::vector<std::string> all_failed_tests_;  // Accumulates all failed tests across test run
     std::filesystem::path diff_csv_file_path_;
     bool has_test_failures_ = false;  // Track if any tests failed validation
+
+    // Golden CSV comparison statistics
+    std::unordered_map<Topology, SpeedupsByTopology> speedups_per_topology_;
+    double overall_geomean_speedup_ = 1.0;
 };
