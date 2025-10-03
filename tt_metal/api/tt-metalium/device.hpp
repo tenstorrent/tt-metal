@@ -21,7 +21,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/allocator_types.hpp>
 
 #include <tt_stl/span.hpp>
 
@@ -217,8 +216,6 @@ public:
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
-
-    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
 
 }  // namespace tt_metal

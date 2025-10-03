@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/allocator_types.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
