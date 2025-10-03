@@ -9,8 +9,6 @@
 namespace ttnn::operations::experimental::cnn {
 
 static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Tensor& input_tensor) {
-    using namespace tt::constants;
-
     TT_FATAL(input_tensor.is_sharded(), "Input tensor must be sharded to infer output memory config");
 
     const auto& input_memory_config = input_tensor.memory_config();
