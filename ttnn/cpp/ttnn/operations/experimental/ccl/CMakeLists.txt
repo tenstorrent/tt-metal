@@ -19,6 +19,7 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
             all_broadcast_async/device/all_broadcast_async_op.hpp
+            broadcast/device/broadcast_op.hpp
             all_gather_async/all_gather_async.hpp
             all_gather_async/device/all_gather_async_op.hpp
             common.hpp
@@ -82,6 +83,9 @@ target_sources(
         all_broadcast_async/all_broadcast_async.cpp
         all_broadcast_async/device/all_broadcast_async_op.cpp
         all_broadcast_async/device/all_broadcast_async_program.cpp
+        broadcast/broadcast.cpp
+        broadcast/device/broadcast_op.cpp
+        broadcast/device/broadcast_program.cpp
         send_recv_async/send_async/send_async.cpp
         send_recv_async/send_async/device/send_async_op.cpp
         send_recv_async/send_async/device/send_async_program.cpp
