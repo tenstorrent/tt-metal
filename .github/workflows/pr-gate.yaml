@@ -182,11 +182,12 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v5
         with:
-          submodules: recursive
+          # submodules: recursive
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           fetch-depth: 500
           fetch-tags: true # Need tags for `git describe`
-          sparse-checkout: "tt-train"
+          sparse-checkout: |
+            tt-train
 
       - name: Build tt-train
         env:
