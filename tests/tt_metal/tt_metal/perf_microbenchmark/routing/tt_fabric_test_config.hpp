@@ -29,6 +29,7 @@
 
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
+#include <tt-metalium/hal.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -411,8 +412,23 @@ public:
 private:
     static constexpr uint32_t MIN_RING_TOPOLOGY_DEVICES = 4;
 
-    // Helper function to check if a test should be skipped based on topology and device count
+    // Helper function to check if a test should be skipped based on:
+    // 1. topology and device count
+    // 2. architecture or cluster type
     bool should_skip_test(const ParsedTestConfig& test_config) const {
+        // Skip if the test declares platforms to skip and this platform matches
+        if (test_config.skip.has_value()) {
+            // Determine current platform identifiers
+            auto arch_name = tt::tt_metal::hal::get_arch_name();
+            auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
+            std::string cluster_name = std::string(enchantum::to_string(cluster_type));
+            for (const auto& token : test_config.skip.value()) {
+                if (token == arch_name || token == cluster_name) {
+                    log_info(LogTest, "Skipping test '{}' on architecture or platform '{}'", test_config.name, token);
+                    return true;
+                }
+            }
+        }
         if (test_config.fabric_setup.topology == Topology::Ring) {
             uint32_t num_devices = device_info_provider_.get_local_node_ids().size();
             if (num_devices < MIN_RING_TOPOLOGY_DEVICES) {

@@ -885,7 +885,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
     this->print_routing_tables();
 }
 
-// order ethernet channels using noc0 coordinates
+// order ethernet channels using translated coordinates
 void ControlPlane::order_ethernet_channels() {
     for (auto& [fabric_node_id, eth_chans_by_dir] : this->router_port_directions_to_physical_eth_chan_map_) {
         for (auto& [_, eth_chans] : eth_chans_by_dir) {
@@ -893,9 +893,9 @@ void ControlPlane::order_ethernet_channels() {
             const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(phys_chip_id);
 
             std::sort(eth_chans.begin(), eth_chans.end(), [&soc_desc](const auto& a, const auto& b) {
-                auto noc0_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::NOC0);
-                auto noc0_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::NOC0);
-                return noc0_coords_a.x < noc0_coords_b.x;
+                auto translated_coords_a = soc_desc.get_eth_core_for_channel(a, CoordSystem::TRANSLATED);
+                auto translated_coords_b = soc_desc.get_eth_core_for_channel(b, CoordSystem::TRANSLATED);
+                return translated_coords_a.x < translated_coords_b.x;
             });
         }
     }
@@ -982,6 +982,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
     const auto& neighbor_hosts = physical_system_descriptor_->get_host_neighbors(my_host);
 
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
+        // run for all meshes. intra_mesh_connectivity.size() == number of meshes in the system
         // TODO: we can probably remove this check, in general should update these loops to iterate over local meshes
         MeshId mesh_id{mesh_id_val};
         if (!this->is_local_mesh(mesh_id)) {
@@ -1012,6 +1013,8 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                         tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
                             physical_chip_id);
 
+                    // If connected_chips_and_eth_cores contains physical_connected_chip_id then atleast one connection
+                    // exists to physical_connected_chip_id
                     bool connections_exist = connected_chips_and_eth_cores.find(physical_connected_chip_id) !=
                                              connected_chips_and_eth_cores.end();
                     TT_FATAL(
