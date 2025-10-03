@@ -1717,20 +1717,11 @@ void generateAnalysesForDeviceMarkers(
     const std::filesystem::path analysis_configs_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tools/tracy/cpp_device_analyses.json";
-    std::vector<AnalysisConfig> analysis_configs = loadAnalysisConfigsFromJSON(analysis_configs_path);
+    const std::vector<AnalysisConfig> analysis_configs = loadAnalysisConfigsFromJSON(analysis_configs_path);
 
-    uint32_t i = 0;
-    std::vector<std::unique_ptr<const AnalysisResults>> analysis_results(analysis_configs.size());
-    for (const auto& analysis_config : analysis_configs) {
-        thread_pool.enqueue([&analysis_config, &device_markers, &analysis_results, i]() {
-            analysis_results[i] = generateAnalysisForDeviceMarkers(analysis_config, device_markers);
-        });
-        i++;
-    }
+    const OpsPerfResults ops_perf_results = generatePerfResultsForOps(analysis_configs, device_markers, thread_pool);
 
-    thread_pool.wait();
-
-    writeAnalysisResultsToCSV(analysis_results, report_path);
+    writeOpsPerfResultsToCSV(ops_perf_results, report_path);
 #endif
 }
 
