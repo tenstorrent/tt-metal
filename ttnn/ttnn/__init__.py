@@ -12,6 +12,7 @@ from types import ModuleType
 
 from loguru import logger
 
+import ttnn._ttnn
 
 Config = ttnn._ttnn.core.Config
 CONFIG = ttnn._ttnn.CONFIG
