@@ -11,21 +11,16 @@ import torch
 def analyze_tensor_precision(tensor, operation_name, step_name=""):
     """Analyze and log tensor precision/diversity"""
     try:
-        import pdb; pdb.set_trace()
-        # Debug: Print tensor type for troubleshooting
         tensor_type = type(tensor).__name__
         tensor_module = type(tensor).__module__
-        print(f"🔍 [DEBUG] Tensor type: {tensor_module}.{tensor_type}")
 
         if tensor_type == 'Tensor' and tensor_module == 'torch':
-            # This is a PyTorch tensor
-            print(f"🔍 [DEBUG] Detected PyTorch tensor, using .cpu()")
             torch_tensor = tensor.cpu()
-        else:
-            # This is already a torch tensor or numpy array
-            print(f"🔍 [DEBUG] Using tensor as-is")
+        elif tensor_module == 'ttnn._ttnn.tensor':
             torch_tensor = ttnn.to_torch(tensor).cpu()
-        
+        else:
+            raise ValueError(f"🔍 [DEBUG] Unsupported tensor type: {tensor_module}.{tensor_type}")
+
         # Flatten and get unique values
         flat_tensor = torch_tensor.flatten()
         total_elements = flat_tensor.numel()
