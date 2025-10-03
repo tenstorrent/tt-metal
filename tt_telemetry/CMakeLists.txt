@@ -71,8 +71,6 @@ target_sources(
         server/collection_endpoint.cpp
         server/collection_clients.cpp
         topology/topology.cpp
-        telemetry/ethernet/chip_identifier.cpp
-        telemetry/ethernet/ethernet_endpoint.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
         telemetry/arc/arc_metrics.cpp

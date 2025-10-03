@@ -19,8 +19,6 @@
 #include <tt-logger/tt-logger.hpp>
 
 #include <hal/hal.hpp>
-#include <telemetry/ethernet/chip_identifier.hpp>
-#include <telemetry/ethernet/ethernet_endpoint.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 #include <telemetry/mock_telemetry_collector.hpp>
 #include <telemetry/telemetry_collector.hpp>
@@ -248,22 +246,23 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
  Main
 **************************************************************************************************/
 
-static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipIdentifier chip_id) {
-    const std::unordered_map<chip_id_t, uint64_t>& chip_to_unique_id =
-        cluster->get_cluster_description()->get_chip_unique_ids();
-    try {
-        return chip_to_unique_id.at(chip_id.id);
-    } catch (const std::out_of_range& e) {
-        log_error(tt::LogAlways, "No unique ASIC ID for chip {}", chip_id);
-    }
-    return 0;
-}
+// static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipIdentifier chip_id) {
+//     const std::unordered_map<chip_id_t, uint64_t>& chip_to_unique_id =
+//         cluster->get_cluster_description()->get_chip_unique_ids();
+//     try {
+//         return chip_to_unique_id.at(chip_id.id);
+//     } catch (const std::out_of_range& e) {
+//         log_error(tt::LogAlways, "No unique ASIC ID for chip {}", chip_id);
+//     }
+//     return 0;
+// }
 
 static void test_print_link_health() {
     std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
     std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
-    uint32_t link_up_addr = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
+    // uint32_t link_up_addr = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH,
+    // tt::tt_metal::HalL1MemAddrType::LINK_UP);
 
     std::cout << "Internal Connections" << std::endl << "--------------------" << std::endl;
 
@@ -272,43 +271,45 @@ static void test_print_link_health() {
         std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
         ethernet_connections = get_ordered_ethernet_connections(cluster);
 
-    for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
-        // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
-        const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+    // for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
+    //     // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
+    //     const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
 
-        // This chip...
-        tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
-        ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
-        std::cout << chip << std::endl;
+    //     // This chip...
+    //     tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
+    //     ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
+    //     std::cout << chip << std::endl;
 
-        // Iterate each channel and its remote endpoints
-        for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
-            // Remote chip...
-            tt::umd::chip_id_t remote_chip_id;
-            tt::umd::ethernet_channel_t remote_channel;
-            std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
-            tt::umd::TTDevice* remote_device = cluster->get_tt_device(remote_chip_id);
-            const tt_SocDescriptor& remote_soc_desc = cluster->get_soc_descriptor(remote_chip_id);
-            ChipIdentifier remote_chip = get_chip_identifier_from_umd_chip_id(remote_device, remote_chip_id);
+    //     // Iterate each channel and its remote endpoints
+    //     for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
+    //         // Remote chip...
+    //         tt::umd::chip_id_t remote_chip_id;
+    //         tt::umd::ethernet_channel_t remote_channel;
+    //         std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
+    //         tt::umd::TTDevice* remote_device = cluster->get_tt_device(remote_chip_id);
+    //         const tt_SocDescriptor& remote_soc_desc = cluster->get_soc_descriptor(remote_chip_id);
+    //         ChipIdentifier remote_chip = get_chip_identifier_from_umd_chip_id(remote_device, remote_chip_id);
 
-            // Local EthernetEndpoint
-            tt::umd::CoreCoord ethernet_core =
-                soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
-            EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
+    //         // Local EthernetEndpoint
+    //         tt::umd::CoreCoord ethernet_core =
+    //             soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
+    //         EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
 
-            // Remote EthernetEndpoint
-            tt::umd::CoreCoord remote_ethernet_core =
-                remote_soc_desc.get_eth_core_for_channel(remote_channel, tt::umd::CoordSystem::LOGICAL);
-            EthernetEndpoint remote_endpoint{
-                .chip = remote_chip, .ethernet_core = remote_ethernet_core, .channel = remote_channel};
+    //         // Remote EthernetEndpoint
+    //         tt::umd::CoreCoord remote_ethernet_core =
+    //             remote_soc_desc.get_eth_core_for_channel(remote_channel, tt::umd::CoordSystem::LOGICAL);
+    //         EthernetEndpoint remote_endpoint{
+    //             .chip = remote_chip, .ethernet_core = remote_ethernet_core, .channel = remote_channel};
 
-            // Print
-            std::cout << "  Channel " << channel << " -> [" << remote_chip << "], Channel " << remote_channel
-                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" : "DOWN")
-                      << '/' << (is_ethernet_endpoint_up(cluster, remote_endpoint, link_up_addr) ? "UP" : "DOWN") << ')'
-                      << std::endl;
-        }
-    }
+    //         // Print
+    //         std::cout << "  Channel " << channel << " -> [" << remote_chip << "], Channel " << remote_channel
+    //                   << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" :
+    //                   "DOWN")
+    //                   << '/' << (is_ethernet_endpoint_up(cluster, remote_endpoint, link_up_addr) ? "UP" : "DOWN") <<
+    //                   ')'
+    //                   << std::endl;
+    //     }
+    // }
 
     // Remote off-cluster links
     std::cout << std::endl << "External Connections" << std::endl << "--------------------" << std::endl;
@@ -318,32 +319,35 @@ static void test_print_link_health() {
         std::map<tt::umd::ethernet_channel_t, std::tuple<uint64_t, tt::umd::ethernet_channel_t>>>
         remote_ethernet_connections = get_ordered_ethernet_connections_to_remote_devices(cluster);
 
-    for (const auto& [chip_id, remote_chip_and_channel_by_channel] : remote_ethernet_connections) {
-        const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
+    // for (const auto& [chip_id, remote_chip_and_channel_by_channel] : remote_ethernet_connections) {
+    //     const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
 
-        // This chip...
-        tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
-        ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
-        std::cout << chip << " [id=" << fmt::format("0x{:016x}", get_unique_chip_id(cluster, chip)) << ']' << std::endl;
+    //     // This chip...
+    //     tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
+    //     ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
+    //     std::cout << chip << " [id=" << fmt::format("0x{:016x}", get_unique_chip_id(cluster, chip)) << ']' <<
+    //     std::endl;
 
-        // Iterate each channel and its remote endpoints
-        for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
-            // Remote chip...
-            uint64_t remote_chip_unique_id;
-            tt::umd::ethernet_channel_t remote_channel;
-            std::tie(remote_chip_unique_id, remote_channel) = remote_chip_and_channel;
+    //     // Iterate each channel and its remote endpoints
+    //     for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
+    //         // Remote chip...
+    //         uint64_t remote_chip_unique_id;
+    //         tt::umd::ethernet_channel_t remote_channel;
+    //         std::tie(remote_chip_unique_id, remote_channel) = remote_chip_and_channel;
 
-            // Local EthernetEndpoint
-            tt::umd::CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
-            EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
+    //         // Local EthernetEndpoint
+    //         tt::umd::CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel,
+    //         tt::umd::CoordSystem::LOGICAL); EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core,
+    //         .channel = channel};
 
-            // Print
-            std::cout << "  Channel " << channel << " -> [id=" << fmt::format("0x{:016x}", remote_chip_unique_id)
-                      << "], Channel " << remote_channel
-                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" : "DOWN")
-                      << ')' << std::endl;
-        }
-    }
+    //         // Print
+    //         std::cout << "  Channel " << channel << " -> [id=" << fmt::format("0x{:016x}", remote_chip_unique_id)
+    //                   << "], Channel " << remote_channel
+    //                   << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" :
+    //                   "DOWN")
+    //                   << ')' << std::endl;
+    //     }
+    // }
 }
 
 int main(int argc, char* argv[]) {

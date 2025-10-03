@@ -20,7 +20,6 @@
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
 
 #include <telemetry/metric.hpp>
-#include <telemetry/ethernet/ethernet_endpoint.hpp>
 
 namespace tt::scaleout_tools::fsd::proto {
 class FactorySystemDescriptor;
