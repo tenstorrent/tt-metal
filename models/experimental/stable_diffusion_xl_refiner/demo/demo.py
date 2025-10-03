@@ -8,8 +8,7 @@ import pytest
 from loguru import logger
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_unet import TtUNet2DConditionModel
 from diffusers import (
-    StableDiffusionXLPipeline,
-    StableDiffusionXLImg2ImgPipeline,
+    DiffusionPipeline,
     UNet2DConditionModel,
 )
 from PIL import Image
@@ -18,30 +17,31 @@ import numpy as np
 SDXL_L1_SMALL_SIZE = 14272
 
 
-torch.manual_seed(0)
+def setup_pipelines():
+    # Base pipeline
+    base_pipe = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+    )
+    # Refiner pipeline
+    refiner_pipe = DiffusionPipeline.from_pretrained(
+        "stabilityai/stable-diffusion-xl-refiner-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+    )
 
-# Base pipeline
-base_pipe = StableDiffusionXLPipeline.from_pretrained(
-    "stabilityai/stable-diffusion-xl-base-1.0",
-    torch_dtype=torch.float32,
-    use_safetensors=True,
-)
-# Refiner pipeline
-refiner_pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
-    "stabilityai/stable-diffusion-xl-refiner-1.0",
-    torch_dtype=torch.float32,
-    use_safetensors=True,
-)
+    # VAE, tokenizers, text encoders
+    vae = base_pipe.vae
+    tokenizer_1 = base_pipe.tokenizer
+    tokenizer_2 = base_pipe.tokenizer_2
+    text_encoder_1 = base_pipe.text_encoder
+    text_encoder_2 = base_pipe.text_encoder_2
 
-# VAE, tokenizers, text encoders
-vae = base_pipe.vae
-tokenizer_1 = base_pipe.tokenizer
-tokenizer_2 = base_pipe.tokenizer_2
-text_encoder_1 = base_pipe.text_encoder
-text_encoder_2 = base_pipe.text_encoder_2
+    return base_pipe, refiner_pipe, vae, tokenizer_1, tokenizer_2, text_encoder_1, text_encoder_2
 
 
-def get_refiner_conditioning(prompt: str, negative_prompt: str = ""):
+def get_refiner_conditioning(refiner_pipe, prompt: str, negative_prompt: str = ""):
     (
         prompt_embeds,
         negative_prompt_embeds,
@@ -68,7 +68,14 @@ def get_refiner_conditioning(prompt: str, negative_prompt: str = ""):
 
 
 def generate_with_refiner_compare(
-    device, prompt: str, negative_prompt: str = "", guidance_scale: float = 5.0, num_steps: int = 50
+    device,
+    base_pipe,
+    refiner_pipe,
+    vae,
+    prompt: str,
+    negative_prompt: str = "",
+    guidance_scale: float = 5.0,
+    num_steps: int = 50,
 ):
     """
     - generate latents using base model
@@ -108,7 +115,7 @@ def generate_with_refiner_compare(
     logger.info("Base model complete - generated base latents")
 
     # Get refiner conditioning
-    encoder_hidden_states, text_embeds, time_ids = get_refiner_conditioning(prompt, negative_prompt)
+    encoder_hidden_states, text_embeds, time_ids = get_refiner_conditioning(refiner_pipe, prompt, negative_prompt)
 
     # Hugging Face refiner output - baseline for comparison
     logger.info("Running refiner for baseline comparison (Torch)...")
@@ -198,7 +205,7 @@ def generate_with_refiner_compare(
     for t in timesteps:
         scaled_latents = scheduler.scale_model_input(latents, t)
 
-        torch_timestep_tensor = torch.tensor([t], dtype=torch.float32)
+        torch_timestep_tensor = torch.tensor([t], dtype=torch.bfloat16)
         ttnn_timestep_tensor = ttnn.from_torch(
             torch_timestep_tensor,
             dtype=ttnn.bfloat16,
@@ -285,8 +292,15 @@ def run_demo_inference(
     if is_ci_env:
         pytest.skip("Skipping demo test in CI environment")
 
+    torch.manual_seed(0)
+
+    base_pipe, refiner_pipe, vae, _, _, _, _ = setup_pipelines()
+
     hf_image, custom_image = generate_with_refiner_compare(
         device=device,
+        base_pipe=base_pipe,
+        refiner_pipe=refiner_pipe,
+        vae=vae,
         prompt=prompt,
         negative_prompt="",
     )
