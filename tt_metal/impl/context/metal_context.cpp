@@ -153,7 +153,12 @@ void MetalContext::initialize(
 
         // Create build env for this device, and build FW if it's not built already
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-        uint32_t fw_build_key = BuildEnvManager::get_instance().get_device_build_env(device_id).build_key;
+        // fw_build_key is a combination of build_key and fw_compile_hash
+        // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
+        uint64_t fw_build_key =
+            (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key) << 32) |
+            static_cast<uint64_t>(fw_compile_hash);
+
         if (!firmware_built_keys_.contains(fw_build_key)) {
             BuildEnvManager::get_instance().build_firmware(device_id);
             firmware_built_keys_.insert(fw_build_key);
