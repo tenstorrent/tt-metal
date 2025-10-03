@@ -120,9 +120,7 @@ autograd::TensorPtr rmsnorm_composite(
         none,
         none,
         none,
-        false,
-        /* fast_and_approximate_mode*/ true);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C] - Use approximate version due to
-                                               // issue #28961 when dealing with broadcasted tensors
+        false);  // [B,1,S,C] x [B,1,S,C] -> [B,1,S,C]
 
     auto out = autograd::create_tensor(out_tensor);
 
@@ -147,9 +145,7 @@ autograd::TensorPtr rmsnorm_composite(
             /*activations*/ none,
             /*input_tensor_a_activations*/ none,
             /*input_tensor_b_activations*/ none,
-            /*use_legacy*/ false,
-            /*fast_and_approximate_mode*/ true);  // [1,1,1,C] x [B,1,S,1] -> [B,1,S,C] (bcast) - Use approximate
-                                                  // version due to issue #28961 when dealing with broadcasted tensors
+            /*use_legacy*/ false);  // [1,1,1,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
 
         auto gained_dL_dout = ttnn::multiply(
             scaled_gain,
@@ -190,9 +186,7 @@ autograd::TensorPtr rmsnorm_composite(
         auto c_by_ms_a = ttnn::multiply(
             ms_a, c, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);  // [B,1,S,1] x [1] ->
                                                                                           // [B,1,S,1] (bcast)
-        // Note: Use fast_and_approximate_mode divide as
-        // fast_and_approximate_mode=true version does not work
-        // with row-col bcast (Issue #28961)
+
         auto rhs = ttnn::divide(
             scaled_outer,
             c_by_ms_a,
@@ -202,9 +196,7 @@ autograd::TensorPtr rmsnorm_composite(
             none,
             none,
             none,
-            false,
-            /*fast_and_approximate_mode*/ true);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast) - Use approximate
-                                                  // version due to issue #28961 when dealing with broadcasted tensors
+            false);  // [B,1,S,C] x [B,1,S,1] -> [B,1,S,C] (bcast)
 
         auto dL_da = ttnn::subtract(
             gained_dL_dout,
@@ -221,17 +213,7 @@ autograd::TensorPtr rmsnorm_composite(
         // dL_dgamma = (a / rms(a)) * dL_dout -> requires sum over batch due to broadcasting
         auto dL_dg_components = ttnn::multiply(
             dL_dout,
-            ttnn::divide(
-                a,
-                rms_a,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                none,
-                none,
-                none,
-                false,
-                true),  // Use approximate version due to issue #28961 when dealing with broadcasted tensors
+            ttnn::divide(a, rms_a, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
             std::nullopt,
             std::nullopt,
             std::nullopt,
