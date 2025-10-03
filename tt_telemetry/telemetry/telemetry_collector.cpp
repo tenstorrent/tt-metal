@@ -246,7 +246,8 @@ static void telemetry_thread(
             hal = create_hal(cluster);
             log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
 
-            create_ethernet_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
+            create_ethernet_metrics(
+                bool_metrics_, uint_metrics_, double_metrics_, cluster, fsd, topology_translation, hal);
             create_arc_metrics(bool_metrics_, uint_metrics_, double_metrics_, cluster, topology_translation, hal);
             log_info(tt::LogAlways, "Initialized metrics");
         }

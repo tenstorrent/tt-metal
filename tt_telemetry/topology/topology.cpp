@@ -14,7 +14,8 @@ static std::unordered_map<Value, Key> invert_map(const std::unordered_map<Key, V
 
 TopologyTranslation::TopologyTranslation(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor>& psd) {
+    const std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor>& psd) :
+    my_host_name(psd->my_host_name()) {
     // Get mapping of chip ID <-> ASIC unique ID. This is only valid for the local host!
     const std::unordered_map<chip_id_t, uint64_t>& chip_id_to_unique_id =
         cluster->get_cluster_description()->get_chip_unique_ids();

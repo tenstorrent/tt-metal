@@ -39,6 +39,8 @@ public:
         tt::tt_metal::ASICLocation asic_location, tt::tt_metal::TrayID tray_id);
     std::optional<tt::tt_metal::ASICDescriptor> get_asic_descriptor_for_local_chip(chip_id_t chip_id);
 
+    const std::string my_host_name;
+
 private:
     std::
         unordered_map<std::pair<tt::tt_metal::ASICLocation, tt::tt_metal::TrayID>, chip_id_t, ASICLocationAndTrayIDHash>

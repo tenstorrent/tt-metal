@@ -383,8 +383,10 @@ int main(int argc, char* argv[]) {
 
     // TODO: just for now, parse FSD
     if (result.count("fsd")) {
+        // TODO next: verify that the correct connections are being monitored
+        // TODO next: do we need to validate any aggregated information against complete FSD?
         process_fsd(result["fsd"].as<std::string>());
-        return 0;
+        // return 0;
     }
 
     bool use_mock_telemetry = result["mock-telemetry"].as<bool>();

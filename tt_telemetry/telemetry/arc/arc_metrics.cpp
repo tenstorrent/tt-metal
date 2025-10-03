@@ -120,6 +120,12 @@ void create_arc_metrics(
     log_info(tt::LogAlways, "Created ARC metrics using FirmwareInfoProvider");
 }
 
+static std::vector<std::string> arc_telemetry_path(
+    tt::tt_metal::TrayID tray_id, tt::tt_metal::ASICLocation asic_location, const std::string& metric_name) {
+    // Create path in format: tray{n}/chip{m}/metric_name
+    return {"tray" + std::to_string(*tray_id), "chip" + std::to_string(*asic_location), metric_name};
+}
+
 /**************************************************************************************************
 | ARCUintMetric Class
 **************************************************************************************************/
@@ -140,13 +146,7 @@ ARCUintMetric::ARCUintMetric(
 }
 
 const std::vector<std::string> ARCUintMetric::telemetry_path() const {
-    // Create path in format: tray_{n}/chip_{m}/metric_name
-    std::vector<std::string> path;
-    path.push_back("tray_" + std::to_string(*asic_descriptor_.tray_id));
-    path.push_back("chip_" + std::to_string(*asic_descriptor_.asic_location));
-    path.push_back(metric_name_);
-
-    return path;
+    return arc_telemetry_path(asic_descriptor_.tray_id, asic_descriptor_.asic_location, metric_name_);
 }
 
 void ARCUintMetric::update(
@@ -184,13 +184,7 @@ ARCDoubleMetric::ARCDoubleMetric(
 }
 
 const std::vector<std::string> ARCDoubleMetric::telemetry_path() const {
-    // Create path in format: tray_{n}/chip_{m}/metric_name
-    std::vector<std::string> path;
-    path.push_back("tray_" + std::to_string(*asic_descriptor_.tray_id));
-    path.push_back("chip_" + std::to_string(*asic_descriptor_.asic_location));
-    path.push_back(metric_name_);
-
-    return path;
+    return arc_telemetry_path(asic_descriptor_.tray_id, asic_descriptor_.asic_location, metric_name_);
 }
 
 void ARCDoubleMetric::update(
