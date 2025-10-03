@@ -72,7 +72,7 @@ public:
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear_h(uint32_t data_sizeB) {
         this->add_prefetch_relay_inline();
-        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB += sizeof(CQDispatchCmdLarge);
 
         if constexpr (flush_prefetch) {
             if constexpr (inline_data) {
