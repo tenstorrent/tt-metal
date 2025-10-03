@@ -373,7 +373,6 @@ class FastOperation:
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
 
-
         if cq_id is None:
             result = self.function(*function_args, **function_kwargs)
         else:
@@ -621,16 +620,15 @@ class Operation:
                 global_golden_function_output = []
                 output_tensors = []
 
-                try:
-                    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
+                try:
                     if cq_id is None:
                         output = decorated_function(*function_args, **function_kwargs)
                     else:
                         with command_queue(cq_id):
                             output = decorated_function(*function_args, **function_kwargs)
 
-                    captured_graph = ttnn.graph.end_graph_capture()
                 except Exception as e:
                     # Record error to database if reporting is enabled
                     if ttnn.CONFIG.report_path is not None:
@@ -690,18 +688,24 @@ class Operation:
                             if ttnn.CONFIG.enable_graph_report:
                                 ttnn.tracer.visualize(
                                     ttnn.tracer.GRAPH_STACK[-1],
-                                    file_name=ttnn.CONFIG.report_path / ttnn.database.GRAPHS_PATH / f"{operation_id}.svg",
+                                    file_name=ttnn.CONFIG.report_path
+                                    / ttnn.database.GRAPHS_PATH
+                                    / f"{operation_id}.svg",
                                 )
                                 # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
-                            if captured_graph is not None:
-                                ttnn.database.insert_captured_graph(ttnn.CONFIG.report_path, operation_id, captured_graph)
+
                 finally:
+                    captured_graph = ttnn.graph.end_graph_capture()
+
                     if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_path is not None:
                         ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
                         ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
                         ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id, devices)
                         if ttnn.CONFIG.enable_detailed_buffer_report:
                             ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id, devices)
+
+                        if captured_graph is not None:
+                            ttnn.database.insert_captured_graph(ttnn.CONFIG.report_path, operation_id, captured_graph)
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)
