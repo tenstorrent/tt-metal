@@ -322,9 +322,9 @@ void kernel_main() {
                                     noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_helper);
                                     noc_async_read_barrier();
                                     memcpy(
-                                        reinterpret_cast<void*>(l1_write_addr_in1),
-                                        reinterpret_cast<const void*>(l1_write_addr_helper),
-                                        in1_single_tile_size_bytes);
+                                        /*dst=*/reinterpret_cast<void*>(l1_write_addr_in1),
+                                        /*src=*/reinterpret_cast<const void*>(l1_write_addr_helper),
+                                        /*size=*/in1_single_tile_size_bytes);
 #endif  // INTERMEDIATE_CB_READ
                                 }
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
