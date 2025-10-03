@@ -13,6 +13,8 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
+    main_aerisc
+    subordinate_aerisc
     dm=0
 )
 set(TYPES

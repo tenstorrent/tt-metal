@@ -42,18 +42,21 @@ void bind_normalization_layernorm_operation(py::module& module) {
         module,
         ttnn::layer_norm,
         R"doc(
-            Compute layer norm over :attr:`input_tensor`.
-            See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
-            .. math::
+        ``ttnn.layer_norm(input_tensor: ttnn.Tensor, epsilon: float = 1e-12, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, residual_input_tensor: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, program_config: Optional[ttnn.ProgramConfig] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None) -> ttnn.Tensor``
 
-                \text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
+          Compute layer norm over :attr:`input_tensor`.
+          See `Layer Normalization <https://arxiv.org/abs/1607.06450>`_ for more details.
 
-            Where:
-                - :math:`\mu` is the mean of the input tensor. This is computed over the last dimension of the input tensor (W).
-                - :math:`\sigma^2` is the variance of the input tensor. This is computed over the last dimension of the input tensor (W) and is biased.
-                - :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively
-                - :math:`\epsilon` is a small constant
+          .. math::
+
+              \text{layer_norm}(x, \gamma, \beta, \epsilon) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \cdot \gamma + \beta
+
+          Where:
+              - :math:`\mu` is the mean of the input tensor. This is computed over the last dimension of the input tensor (W).
+              - :math:`\sigma^2` is the variance of the input tensor. This is computed over the last dimension of the input tensor (W) and is biased.
+              - :math:`\gamma` and :math:`\beta` are the learnable scale and shift parameters, respectively
+              - :math:`\epsilon` is a small constant
 
 
         Args:
@@ -112,16 +115,23 @@ void bind_normalization_layernorm_operation(py::module& module) {
 
                * - dtype
                  - layout
-               * - BFLOAT16, FLOAT32, BFLOAT8_B (typically matches input; PRE_ALL_GATHER produces BF16)
+               * - BFLOAT16, FLOAT32, BFLOAT8_B
                  - TILE
+
+            Output dtype typically matches input; PRE_ALL_GATHER produces BF16
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded (L1): Block sharded
 
         Limitations:
             - All input tensors must be on-device and have a rank >= 1.
             - Unsharded tensors must be interleaved, sharded tensors cannot be height sharded.
+            - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
             - If `residual_input_tensor` is provided, it must match the input's padded shape.
             - If TILE: `weight` and `bias` padded dim must match input's last padded dim; padded height must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
-            - If the input is sharded, the :attr:`output` and :attr:`residual_input_tensor` must have identical shard spec and memory config.
+
 
         Example:
             .. code-block:: python

@@ -417,9 +417,10 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
     return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
 }
 
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
-    for (int noc = 0; noc < NUM_NOCS; noc++) {
+    for (uint8_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
@@ -552,8 +553,9 @@ inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
         noc0_posted_writes_num_issued, noc1_posted_writes_num_issued);
 }
 
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
-    for (int noc = 0; noc < NUM_NOCS; noc++) {
+    for (int noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
         // Hide latency of NOC reg reads by reading first, writing second
         uint32_t reads_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
         uint32_t nonposted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
@@ -569,8 +571,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
     }
 }
 
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
 inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
-    for (uint32_t n = 0; n < NUM_NOCS; n++) {
+    for (uint32_t n = 0; n < MAX_NOCS_TO_INIT; n++) {
         while (!ncrisc_noc_reads_flushed(n));
         while (!ncrisc_noc_nonposted_writes_sent(n));
         while (!ncrisc_noc_nonposted_writes_flushed(n));
