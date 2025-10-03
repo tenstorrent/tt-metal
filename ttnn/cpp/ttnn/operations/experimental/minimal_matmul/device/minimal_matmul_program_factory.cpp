@@ -174,6 +174,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
 
+    tt::tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    // tt::tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    // tt::tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
@@ -200,9 +205,15 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
         auto in0_mcast_start = left_core_plus_one_physical;
         auto in0_mcast_end = right_core_physical;
+        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+            std::swap(in0_mcast_start, in0_mcast_end);
+        }
 
         auto in1_mcast_start = bottom_core_physical;
         auto in1_mcast_end = top_core_plus_one_physical;
+        if (in1_noc == tt::tt_metal::NOC::NOC_0) {
+            std::swap(in1_mcast_start, in1_mcast_end);
+        }
 
         if (in1_idx == 0) {
             // in0 sender
@@ -224,7 +235,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
                 core,
-                tt::tt_metal::ReaderDataMovementConfig(in0_sender_compile_time_args, defines));
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = in0_noc,
+                    .compile_args = in0_sender_compile_time_args,
+                    .defines = defines});
             reader_kernel_ids.push_back(in0_sender_kernels_id);
 
             std::vector<uint32_t> in0_sender_args = {
@@ -253,7 +268,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_receiver.cpp",
                 core,
-                tt::tt_metal::ReaderDataMovementConfig(in0_receiver_compile_time_args, defines));
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = in0_noc,
+                    .compile_args = in0_receiver_compile_time_args,
+                    .defines = defines});
             reader_kernel_ids.push_back(in0_receiver_kernels_id);
 
             std::vector<uint32_t> in0_receiver_args = {
@@ -285,7 +304,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
                 core,
-                tt::tt_metal::WriterDataMovementConfig(in1_sender_compile_time_args, defines));
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = in1_noc,
+                    .compile_args = in1_sender_compile_time_args,
+                    .defines = defines});
             writer_kernel_ids.push_back(in1_sender_kernels_id);
 
             std::vector<uint32_t> in1_sender_args = {
@@ -317,7 +340,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_receiver_out.cpp",
                 core,
-                tt::tt_metal::WriterDataMovementConfig(in1_receiver_compile_time_args, defines));
+                tt::tt_metal::DataMovementConfig{
+                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = in1_noc,
+                    .compile_args = in1_receiver_compile_time_args,
+                    .defines = defines});
             writer_kernel_ids.push_back(in1_receiver_kernels_id);
 
             std::vector<uint32_t> in1_receiver_args = {
@@ -327,6 +354,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             };
             SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
         }
+
         std::vector<uint32_t> compute_compile_time_args = {
             M_blocks_per_core * core.y,
             M_blocks_per_core * (core.y + 1) - 1,
