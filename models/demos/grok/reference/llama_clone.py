@@ -245,17 +245,39 @@ class Attention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self):
+    def __init__(self, hidden_dim=32768, dim=8192):
         super().__init__()
-        hidden_dim = 32768
-        dim = 8192
+        hidden_dim = hidden_dim
+        dim = dim
 
         self.w1 = ColumnParallelLinear(dim, hidden_dim, bias=False, gather_output=False, init_method=lambda x: x)
         self.w2 = RowParallelLinear(hidden_dim, dim, bias=False, input_is_parallel=True, init_method=lambda x: x)
         self.w3 = ColumnParallelLinear(dim, hidden_dim, bias=False, gather_output=False, init_method=lambda x: x)
 
     def forward(self, x):
+        # Note that the SGLang implementation uses the tanh approximation on the first element to gelu
         return self.w2(F.gelu(self.w1(x)) * self.w3(x))
+
+
+class MoE(nn.Module):
+    def __init__(self, num_experts=8, gate=False):
+        super().__init__()
+        self.experts = nn.ModuleList([FeedForward(hidden_dim=16384, dim=8192) for _ in range(num_experts)])
+        self.gate = nn.Linear(dim, num_experts, bias=False) if gate else None
+        self.top_k = 2
+
+    def forward(self, x):
+        if self.gate is not None:
+            gate_logits = self.gate(x)
+            weights, selected_experts = torch.topk(gate_logits, self.top_k, dim=-1)
+            weights = F.softmax(weights, dim=-1, dtype=torch.float).to(x.dtype)
+        else:
+            # always use all experts
+            weights = torch.ones((x.shape[0], self.num_experts, 1), dtype=torch.float, device=x.device)
+        results = torch.zeros_like(x)
+        for i, expert in enumerate(self.experts):
+            results += expert(x) * weights[:, i, None]
+        return results
 
 
 class TransformerBlock(nn.Module):

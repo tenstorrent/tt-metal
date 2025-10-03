@@ -50,6 +50,7 @@ class TtModelArgs:
         self.dim = 8192
         self.hidden_size = 8192
         self.intermediate_size = 32768
+        self.expert_intermediate_size = 16384
 
         # MoE hyperparameters
         self.num_local_experts = 8
@@ -141,50 +142,6 @@ class TtModelArgs:
         else:  # Convert the row major layout from embedding back to tile layout
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         return x
-
-    def matmul_1d_ring_config(
-        self,
-        B,
-        M,
-        K,
-        N,
-        num_cores,
-        untilize_out=False,
-    ):
-        M *= B  # Fuse batch always enabled
-
-        in0_block_h = M // ttnn.TILE_SIZE
-        in0_block_w = K // num_cores // ttnn.TILE_SIZE
-        out_block_h = M // ttnn.TILE_SIZE
-        out_block_w = N // num_cores // ttnn.TILE_SIZE
-
-        num_blocks_y = (M // ttnn.TILE_SIZE - 1) // out_block_h + 1
-        num_blocks_x = (N // ttnn.TILE_SIZE - 1) // out_block_w + 1
-        num_blocks_total = num_blocks_y * num_blocks_x
-
-        if num_blocks_total != num_cores:
-            assert False, f"num_blocks_total {num_blocks_total} != num_cores {num_cores}"
-
-        out_subblock_h = 1
-        out_subblock_w = 8
-        while out_block_w % out_subblock_w != 0:
-            out_subblock_w -= 1
-
-        grid = num_to_coregrid(num_cores)
-        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(grid.x, grid.y),
-            in0_block_w=in0_block_w,
-            out_subblock_h=out_subblock_h,
-            out_subblock_w=out_subblock_w,
-            per_core_M=out_block_h,
-            per_core_N=out_block_w,
-            fuse_batch=True,
-            fused_activation=None,
-            mcast_in0=False,
-            gather_in0=True,
-            untilize_out=untilize_out,
-        )
-        return program_config
 
     def load_weights_to_state_dict_no_experts(self, weights_path="/localdev/ricozhu/grok_2_weights/", fuse_qkv=True):
         """
@@ -535,6 +492,61 @@ class TtModelArgs:
             use_height_and_width_as_shard_shape=True,
         )
 
+        # Expert MLP configurations (adapted from Mixtral)
+        model_config["MLP_W_LAYOUT_TILE_EXPERTS"] = ttnn.TILE_LAYOUT
+        model_config["MLP_WEIGHTS_MEMCFG_EXPERTS"] = ttnn.DRAM_MEMORY_CONFIG
+        model_config["FF1_OUTPUT_MEMCFG_EXPERTS"] = ttnn.L1_MEMORY_CONFIG
+        model_config["FF2_OUTPUT_MEMCFG_EXPERTS"] = ttnn.L1_MEMORY_CONFIG
+        model_config["FF3_OUTPUT_MEMCFG_EXPERTS"] = ttnn.L1_MEMORY_CONFIG
+
+        # Expert MLP program configs (adapted from Mixtral for Grok dimensions)
+        model_config["FF1_OUTPUT_PROGCFG_EXPERTS"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=8,  # Adjusted for Grok's intermediate_size
+            fuse_batch=True,
+            fused_activation=ttnn.UnaryOpType.GELU,
+            mcast_in0=True,
+        )
+
+        model_config["FF3_OUTPUT_PROGCFG_EXPERTS"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=4,  # K = 8192 / TILE_WIDTH=32 / Grid_Size
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=8,  # Adjusted for Grok's intermediate_size
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+        model_config["FF2_OUTPUT_PROGCFG_EXPERTS"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=8,  # K = 32768 / TILE_WIDTH=32 / Grid_Size
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=4,  # Adjusted for Grok's hidden_size
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+        # MoE Gate configurations (adapted from Mixtral)
+        model_config["GATE_W_LAYOUT_TILE_EXPERTS"] = ttnn.TILE_LAYOUT
+        model_config["GATE_WEIGHTS_MEMCFG_EXPERTS"] = ttnn.DRAM_MEMORY_CONFIG
+        model_config["GATE_MM_OUTPUT_MEMCFG_EXPERTS"] = ttnn.L1_MEMORY_CONFIG
+
+        model_config["GATE_MM_OUTPUT_KERNEL_CONFIG_EXPERTS"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
         return model_config
 
     def load_experts_weights_to_state_dict(self, state_dict, weights_path="/localdev/ricozhu/grok_2_weights/"):
@@ -580,9 +592,8 @@ class TtModelArgs:
         layer_prefix = f"model.layers.{layer_num}" if layer_num is not None else ""
         module_map = {
             "MLP": ".mlp",
+            "ExpertMLP": ".block_sparse_moe",
             "Attention": ".self_attn",
-            "TtGrokMLP": ".mlp",
-            "TtGrokAttention": ".self_attn",
             "TtTransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
