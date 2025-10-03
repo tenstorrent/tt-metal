@@ -5,8 +5,6 @@
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
 import ttnn
-import torch
-from models.common.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -21,16 +19,12 @@ from models.common.utility_functions import skip_for_blackhole
     ),
 )
 @pytest.mark.parametrize(
-    "weights_dtype",
-    [None, ttnn.bfloat16],
-)
-@pytest.mark.parametrize(
     "output_dtype",
     [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "input_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32],
+    [ttnn.bfloat8_b, ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
@@ -44,7 +38,6 @@ from models.common.utility_functions import skip_for_blackhole
     "filter, padding",
     [
         [3, (1, 2, 2, 3)],
-        [1, 0],
         [5, (2, 4, 3, 5)],
     ],
 )
@@ -55,7 +48,6 @@ def test_conv_features(
     torch_tensor_map,
     math_fidelity,
     output_dtype,
-    weights_dtype,
     batch_size,
     output_channels,
     input_channels,
@@ -79,7 +71,7 @@ def test_conv_features(
         torch_tensor_map,
         math_fidelity,
         output_dtype,
-        weights_dtype,
+        None,
         batch_size,
         output_channels,
         input_channels,
