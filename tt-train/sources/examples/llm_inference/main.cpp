@@ -177,12 +177,10 @@ int main(int argc, char **argv) {
     std::cout << prompt;
 
     // Build mask (causal) for attention
-    std::vector<float> mask;
-    mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length));
+    std::vector<float> mask(max_sequence_length * max_sequence_length, 0.0F);
     for (uint32_t i = 0; i < max_sequence_length; ++i) {
-        for (uint32_t j = 0; j < max_sequence_length; ++j) {
-            mask.push_back(i >= j ? 1.0F : 0.0F);
-        }
+        auto start = mask.begin() + static_cast<size_t>(i * max_sequence_length);
+        std::fill(start + i, start + (max_sequence_length - i), 1.0F);
     }
 
     auto causal_mask_tensor = ttml::autograd::create_tensor(
