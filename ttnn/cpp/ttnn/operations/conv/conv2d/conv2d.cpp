@@ -44,7 +44,7 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
 
-ResultWithOptions result_to_result_with_options(
+static ResultWithOptions result_to_result_with_options(
     const Result& result, const bool return_output_dim, const bool return_weights_and_bias) {
     if (return_output_dim && return_weights_and_bias) {
         return std::make_tuple(

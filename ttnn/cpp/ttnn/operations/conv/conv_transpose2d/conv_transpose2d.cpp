@@ -6,6 +6,7 @@
 #include <optional>
 #include <utility>
 
+#include "conv2d/conv2d.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -24,7 +25,247 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv_transpose2d {
 
-Result conv_transpose2d(
+static ResultWithOptions result_to_result_with_options(
+    const Result& result, const bool return_output_dim, const bool return_weights_and_bias) {
+    if (return_output_dim && return_weights_and_bias) {
+        return std::make_tuple(
+            std::get<0>(result),
+            std::make_tuple(std::get<1>(result), std::get<2>(result)),
+            std::make_tuple(std::get<3>(result), std::get<4>(result)));
+    } else if (return_output_dim) {
+        return std::make_tuple(std::get<0>(result), std::make_tuple(std::get<1>(result), std::get<2>(result)));
+    } else if (return_weights_and_bias) {
+        return std::make_tuple(std::get<0>(result), std::make_tuple(std::get<3>(result), std::get<4>(result)));
+    }
+    return std::get<0>(result);
+}
+
+ResultWithOptions conv_transpose2d(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    bool mirror_kernel,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
+    if (dram_slice_config_.has_value()) {
+        if (dram_slice_config_.value().slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
+            return result_to_result_with_options(
+                conv_transpose2d_L1(
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    output_padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_,
+                    mirror_kernel),
+                return_output_dim,
+                return_weights_and_bias);
+        } else {
+            return result_to_result_with_options(
+                conv_transpose2d_DRAM(
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    output_padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_,
+                    dram_slice_config_,
+                    mirror_kernel),
+                return_output_dim,
+                return_weights_and_bias);
+        }
+    } else {
+        bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor);
+        if (input_is_on_device && input_tensor.memory_config().is_l1()) {
+            return result_to_result_with_options(
+                conv_transpose2d_L1(
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    output_padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_,
+                    mirror_kernel),
+                return_output_dim,
+                return_weights_and_bias);
+        }
+        return result_to_result_with_options(
+            conv_transpose2d_DRAM(
+                input_tensor,
+                weight_tensor,
+                device,
+                in_channels,
+                out_channels,
+                batch_size,
+                input_height,
+                input_width,
+                kernel_size,
+                stride,
+                padding,
+                output_padding,
+                dilation,
+                groups,
+                dtype,
+                bias_tensor,
+                conv_config_,
+                compute_config_,
+                memory_config_,
+                dram_slice_config_,
+                mirror_kernel),
+            return_output_dim,
+            return_weights_and_bias);
+    }
+};
+
+Result conv_transpose2d_DRAM(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t in_channels,
+    uint32_t out_channels,
+    uint32_t batch_size,
+    uint32_t input_height,
+    uint32_t input_width,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> padding,
+    std::array<uint32_t, 2> output_padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    bool mirror_kernel) {
+    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const DataType output_dtype = dtype.value_or(input_tensor.dtype());
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+    // Inverse of sliding_window.get_output_shape()
+    SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
+        .batch_size = batch_size,
+        .input_hw = {input_height, input_width},
+        .window_hw = {kernel_size[0], kernel_size[1]},
+        .stride_hw = {stride[0], stride[1]},
+        .padding = sliding_window::get_pair_n4_padding(padding),
+        .output_pad_hw = {output_padding[0], output_padding[1]},
+        .dilation_hw = {dilation[0], dilation[1]},
+        .is_transpose = true};
+
+    TT_FATAL(dram_slice_config_.has_value(), "DRAM slice config must be provided for conv_transpose2d_DRAM");
+    auto dram_slice_config = dram_slice_config_.value();
+    TT_FATAL(dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 in conv_transpose2d_DRAM");
+
+    uint32_t output_height, output_width;
+    std::tie(std::ignore, output_height, output_width, std::ignore) =
+        std::tuple_cat(sliding_window_config.get_output_shape().to_array_4D());
+    Tensor dram_output_tensor = tt_metal::create_device_tensor(
+        TensorSpec(
+            ttnn::Shape({batch_size, output_height, output_width, out_channels}),
+            tt_metal::TensorLayout(
+                output_dtype,
+                tt_metal::PageConfig(conv_config.output_layout),
+                MemoryConfig{
+                    TensorMemoryLayout::INTERLEAVED,
+                    BufferType::DRAM,
+                })),
+        device);
+    uint32_t slice_rounding_value = 1;
+    if (conv_config.output_layout == tt_metal::Layout::TILE &&
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+        // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+        slice_rounding_value = tt::constants::TILE_HEIGHT;
+    }
+    uint32_t width_rounding_value =
+        (conv_config.output_layout == tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
+
+    const uint32_t output_sliced_dim =
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+
+    bool first_run = true;
+    const uint32_t min_output_slice_size =
+        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+    const uint32_t output_slice_rem =
+        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
+
+    uint32_t slice_index = 0;
+    uint32_t output_slice_dim_start = 0;
+
+    uint32_t additional_padded_width = 0;
+
+    while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
+        const uint32_t output_slice_size =
+            slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
+        const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
+        const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
+        if (this_output_slice_dim == 0) {
+            continue;
+        }
+
+        first_run = false;
+        output_slice_dim_start += output_slice_size;
+        slice_index++;
+    }
+    return {dram_output_tensor, output_height, output_width, weight_tensor, bias_tensor};
+}
+Result conv_transpose2d_L1(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -44,9 +285,7 @@ Result conv_transpose2d(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
-    bool mirror_kernel,
-    bool return_output_dim,
-    bool return_weights_and_bias) {
+    bool mirror_kernel) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
@@ -68,10 +307,9 @@ Result conv_transpose2d(
     // The Conv2d u_op is then called with stride = 1, padding = 0.
     // SlidingWindowConfig has a is_transpose flag that is set to true to indicate that the Conv2d u_op & Halo u_op is
     // being called for ConvTranspose2d.
-    uint32_t output_height = ((input_height - 1) * stride[0]) - (2 * padding[0]) +
-                             (dilation[0] * (kernel_size[0] - 1)) + output_padding[0] + 1;
-    uint32_t output_width = ((input_width - 1) * stride[1]) - (2 * padding[1]) + (dilation[1] * (kernel_size[1] - 1)) +
-                            output_padding[1] + 1;
+    uint32_t output_height, output_width;
+    std::tie(std::ignore, output_height, output_width, std::ignore) =
+        std::tuple_cat(sliding_window_config.get_output_shape().to_array_4D());
 
     // Dimensions of Input to Conv u_op
     uint32_t full_input_height = output_height + (dilation[0] * (kernel_size[0] - 1));
@@ -262,17 +500,7 @@ Result conv_transpose2d(
         if (memory_config.has_value() && memory_config.value() != matmul_output.memory_config()) {
             matmul_output = ttnn::to_memory_config(matmul_output, memory_config.value(), std::nullopt);
         }
-        if (return_output_dim && return_weights_and_bias) {
-            return std::tuple(
-                matmul_output,
-                std::tuple(output_height, output_width),
-                std::tuple(weight_tensor_on_device, bias_tensor_on_device));
-        } else if (return_output_dim) {
-            return std::tuple(matmul_output, std::tuple(output_height, output_width));
-        } else if (return_weights_and_bias) {
-            return std::tuple(matmul_output, std::tuple(weight_tensor_on_device, bias_tensor_on_device));
-        }
-        return matmul_output;
+        return std::tuple(matmul_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device);
     }
     // call conv micro op
     auto conv_output = ttnn::operations::conv::conv2d::conv2d(
@@ -299,20 +527,11 @@ Result conv_transpose2d(
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }
-    if (return_output_dim && return_weights_and_bias) {
-        return std::tuple(
-            conv_output,
-            std::tuple(output_height, output_width),
-            std::tuple(weight_tensor_on_device, bias_tensor_on_device));
-    } else if (return_output_dim) {
-        return std::tuple(conv_output, std::tuple(output_height, output_width));
-    } else if (return_weights_and_bias) {
-        return std::tuple(conv_output, std::tuple(weight_tensor_on_device, bias_tensor_on_device));
-    }
-    return conv_output;
+
+    return std::tuple(conv_output, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device);
 }
 
-Result ConvTranpose2dOperation::invoke(
+ResultWithOptions ConvTranpose2dOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,
@@ -332,6 +551,7 @@ Result ConvTranpose2dOperation::invoke(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool mirror_kernel,
     bool return_output_dim,
     bool return_weights_and_bias) {
@@ -355,6 +575,7 @@ Result ConvTranpose2dOperation::invoke(
         conv_config_,
         compute_config_,
         memory_config,
+        dram_slice_config_,
         mirror_kernel,
         return_output_dim,
         return_weights_and_bias);

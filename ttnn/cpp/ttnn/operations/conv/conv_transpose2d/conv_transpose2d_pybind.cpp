@@ -99,9 +99,10 @@ void py_bind_conv_transpose2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
                bool mirror_kernel,
                const bool return_output_dim,
-               const bool return_weights_and_bias) -> Result {
+               const bool return_weights_and_bias) -> ResultWithOptions {
                 return self(
                     input_tensor,
                     weight_tensor,
@@ -122,6 +123,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                     conv_config,
                     compute_config,
                     memory_config,
+                    dram_slice_config_,
                     mirror_kernel,
                     return_output_dim,
                     return_weights_and_bias);
@@ -146,6 +148,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
+            py::arg("dram_slice_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
             py::arg("return_output_dim") = false,
             py::arg("return_weights_and_bias") = false});
@@ -174,6 +177,7 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
+        py::arg("dram_slice_config") = std::nullopt,
         py::arg("mirror_kernel") = true);
 
     module.def(
@@ -197,7 +201,8 @@ void py_bind_conv_transpose2d(py::module& module) {
         py::arg("input_dtype"),
         py::arg("output_dtype") = std::nullopt,
         py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
+        py::arg("compute_config") = std::nullopt,
+        py::arg("dram_slice_config") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::conv::conv_transpose2d
