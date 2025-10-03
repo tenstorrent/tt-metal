@@ -12,9 +12,14 @@ def analyze_tensor_precision(tensor, operation_name, step_name=""):
     """Analyze and log tensor precision/diversity"""
     try:
         # Convert to torch for analysis
-        if hasattr(tensor, 'cpu'):
+        if hasattr(tensor, 'storage_type'):
+            # This is a TTNN tensor
             torch_tensor = ttnn.to_torch(tensor).cpu()
+        elif hasattr(tensor, 'cpu'):
+            # This is a PyTorch tensor
+            torch_tensor = tensor.cpu()
         else:
+            # This is already a torch tensor or numpy array
             torch_tensor = tensor
         
         # Flatten and get unique values
