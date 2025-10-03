@@ -23,11 +23,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <tuple>                                                     // for get
-#include <umd/device/simulation/simulation_chip.hpp>
-#include <umd/device/soc_descriptor.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/tensix_soft_reset_options.hpp>
+#include <tuple>  // for get
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>

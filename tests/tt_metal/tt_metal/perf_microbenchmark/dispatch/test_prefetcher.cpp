@@ -63,7 +63,8 @@ constexpr uint32_t DRAM_EXEC_BUF_DEFAULT_LOG_PAGE_SIZE = 10;
 constexpr uint32_t DEFAULT_HUGEPAGE_ISSUE_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_HUGEPAGE_COMPLETION_BUFFER_SIZE = 256 * 1024 * 1024;
 constexpr uint32_t DEFAULT_PREFETCH_Q_ENTRIES = 1024;
-constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE = (128 * 1024) + (2 * sizeof(CQPrefetchCmd)) + (2 * sizeof(CQDispatchCmd));
+constexpr uint32_t DEFAULT_CMDDAT_Q_SIZE =
+    (128 * 1024) + (2 * sizeof(CQPrefetchCmd)) + (2 * sizeof(CQDispatchCmdLarge));
 constexpr uint32_t DEFAULT_SCRATCH_DB_SIZE = 16 * 1024;
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
@@ -493,7 +494,6 @@ void gen_dram_packed_read_cmd(
     int count = 0;
     uint32_t dram_data_base_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     for (auto length : lengths) {
-        TT_ASSERT(length <= num_dram_banks_g * page_size);
         TT_ASSERT((length & (MetalContext::instance().hal().get_alignment(HalMemType::DRAM) - 1)) == 0);
         CQPrefetchRelayPagedPackedSubCmd sub_cmd{};
         sub_cmd.start_page = 0;  // TODO: randomize?
@@ -1295,7 +1295,7 @@ void gen_smoke_test(
 
     dispatch_cmds.resize(0);
     gen_dispatcher_unicast_write_cmd(
-        device, dispatch_cmds, worker_core, device_data, dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+        device, dispatch_cmds, worker_core, device_data, dispatch_buffer_page_size_g - sizeof(CQDispatchCmdLarge));
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     dispatch_cmds.resize(0);
@@ -1304,7 +1304,11 @@ void gen_smoke_test(
 
     dispatch_cmds.resize(0);
     gen_dispatcher_unicast_write_cmd(
-        device, dispatch_cmds, worker_core, device_data, (2 * dispatch_buffer_page_size_g) - sizeof(CQDispatchCmd));
+        device,
+        dispatch_cmds,
+        worker_core,
+        device_data,
+        (2 * dispatch_buffer_page_size_g) - sizeof(CQDispatchCmdLarge));
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
 
     // Merge 4 commands in the FetchQ
@@ -1518,7 +1522,7 @@ void gen_smoke_test(
         cmd_sizes,
         device_data,
         worker_core,
-        dispatch_buffer_page_size_g - sizeof(CQDispatchCmd));
+        dispatch_buffer_page_size_g - sizeof(CQDispatchCmdLarge));
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, dispatch_buffer_page_size_g);
     gen_linear_read_cmd(
         device,
@@ -1526,7 +1530,7 @@ void gen_smoke_test(
         cmd_sizes,
         device_data,
         worker_core,
-        (2 * dispatch_buffer_page_size_g) - sizeof(CQDispatchCmd));
+        (2 * dispatch_buffer_page_size_g) - sizeof(CQDispatchCmdLarge));
     gen_linear_read_cmd(device, prefetch_cmds, cmd_sizes, device_data, worker_core, 2 * dispatch_buffer_page_size_g);
 
     // Test wait/stall
@@ -1796,6 +1800,19 @@ void write_prefetcher_cmd(
     nt_memcpy((uint8_t*)host_mem_ptr, (uint8_t*)&cmds[cmd_offset], cmd_size_bytes);
     cmd_offset += cmd_size_words;
     host_mem_ptr += cmd_size_words;
+    uint32_t pcie_alignment = MetalContext::instance().hal().get_alignment(HalMemType::HOST);
+    uintptr_t int_host_ptr = reinterpret_cast<uintptr_t>(host_mem_ptr);
+    if (tt::align(int_host_ptr, pcie_alignment) != int_host_ptr) {
+        auto prev_cmd_offset = cmd_offset - cmd_size_words;
+        auto prev_cmd = reinterpret_cast<CQPrefetchCmd&>(cmds[prev_cmd_offset]);
+        auto prev_cmd_id = prev_cmd.base.cmd_id;
+        fmt::println(
+            "PCIE unaligned increment into host hugepage, last command:{}, last size:{}, new ptr:{:#X}",
+            prev_cmd_id,
+            cmd_size_words,
+            int_host_ptr);
+        assert(0);
+    }
 
     // This updates FetchQ where each entry of type prefetch_q_entry_type is size in 16B.
     prefetch_q_writer.write(prefetch_q_dev_ptr, cmd_size16b);

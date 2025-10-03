@@ -3,12 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hal_1xx_common.hpp"
-#include <vector>
-#include <string>
-#include "hal.hpp"
-#include <fmt/format.h>
 #include "hal_types.hpp"
-#include <enchantum/enchantum.hpp>
 #include "impl/context/metal_context.hpp"
 #include "rtoptions.hpp"
 #include "tt_stl/assert.hpp"
@@ -59,6 +54,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             defines.push_back("COMPILE_FOR_ERISC");
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");
+            defines.push_back(fmt::format("COMPILE_FOR_AERISC={}", params.processor_id));
             break;
         }
         case HalProgrammableCoreType::IDLE_ETH: {
@@ -69,6 +65,15 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
         }
         default: TT_ASSERT(false, "Unsupported programmable core type {} to query defines", params.core_type); break;
     }
+
+    // Defines for the shared subordinate eth fw source
+    if (params.core_type == HalProgrammableCoreType::IDLE_ETH || params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+        defines.push_back(fmt::format(
+            "PROGRAMMABLE_CORE_TYPE={} ",
+            static_cast<int>(
+                tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(params.core_type))));
+    }
+
     return defines;
 }
 
@@ -120,7 +125,7 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                     break;
                 case 1:
                     if (params.is_fw) {
-                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_idle_erisc.cc");
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc");
                     } else {
                         srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisck.cc");
                     }

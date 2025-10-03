@@ -76,6 +76,17 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if not test_vector["keepdim"]:
         return True, "keepdim = false is not supported"
 
+    # Validate dim parameter for duplicate dimensions
+    dim = test_vector["dim"]
+    if isinstance(dim, (list, tuple)):
+        input_shape = test_vector["input_shape"]
+        normalized_dims = []
+        for d in dim:
+            normalized_d = d % len(input_shape)
+            if normalized_d in normalized_dims:
+                return True, f"Duplicate dimension {d} found in dim list"
+            normalized_dims.append(normalized_d)
+
     return False, None
 
 

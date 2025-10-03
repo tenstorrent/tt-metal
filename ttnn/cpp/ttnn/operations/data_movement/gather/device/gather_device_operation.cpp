@@ -61,17 +61,18 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         "Index tensor must be of type UINT32 or UINT16. Got: {}",
         tensor_args.input_index_tensor.dtype());
 
-    for (int i = 0; i < input_tensor_rank; ++i) {
-        if (i != attributes.dim) {
-            TT_FATAL(
-                input_index_tensor_shape[i] <= input_tensor_shape[i],
-                "Index tensor shape dimension {} must be less than or equal to input tensor shape dimension {}. Got "
-                "index tensor shape: {} and input tensor shape: {}",
-                i,
-                i,
-                input_index_tensor_shape[i],
-                input_tensor_shape[i]);
-        }
+    for (int i = 0; i < input_tensor_rank - 1; ++i) {
+        // Validate all dimensions except the last one, as the tensor has been transposed
+        // to move the gather dimension to the last position.
+        // Improvement idea: Consider removing transposition and handling arbitrary dimensions directly in the kernel.
+        TT_FATAL(
+            input_index_tensor_shape[i] <= input_tensor_shape[i],
+            "Index tensor shape dimension {} must be less than or equal to input tensor shape dimension {}. Got "
+            "index tensor shape: {} and input tensor shape: {}",
+            i,
+            i,
+            input_index_tensor_shape[i],
+            input_tensor_shape[i]);
     }
     TT_FATAL(
         attributes.output_mem_config.is_sharded() == false,

@@ -24,6 +24,7 @@ jobs:
       matrix:
         test-group: [
           { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 15, owner_id: UJ45FEC7M}, # Allan Liu
+          { name: "t3k ttnn multiprocess tests", arch: wormhole_b0, cmd: run_t3000_ttnn_multiprocess_tests, timeout: 5, owner_id: U013121KDH9}, #Austin Ho
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
