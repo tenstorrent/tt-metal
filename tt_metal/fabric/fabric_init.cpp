@@ -19,6 +19,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include <fmt/ranges.h>
 
 // hack for test_basic_fabric_apis.cpp
 // https://github.com/tenstorrent/tt-metal/issues/20000
@@ -247,11 +248,13 @@ void build_tt_fabric_program(
         active_fabric_eth_channels.insert({direction, active_eth_chans});
         log_debug(
             tt::LogMetal,
-            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans: {}",
+            "Building fabric router -> device (phys): {}, (logical): {}, direction: {}, active_eth_chans.size(): {}, "
+            "active_eth_chans: [{}]",
             device->id(),
             control_plane.get_fabric_node_id_from_physical_chip_id(device->id()).chip_id,
             direction,
-            active_eth_chans.size());
+            active_eth_chans.size(),
+            fmt::join(active_eth_chans, ", "));
     }
 
     if (active_fabric_eth_channels.empty()) {
