@@ -72,7 +72,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t de
             static_cast<size_t>(soc_d.worker_l1_size) /
             tt::get_storage_core_bank_size(device_id, num_hw_cqs, dispatch_core_config).value();
     }
-    const size_t num_l1_banks = num_compute_and_storage_cores + num_storage_only_cores * num_banks_per_storage_core;
+    const size_t num_l1_banks = num_compute_and_storage_cores + (num_storage_only_cores * num_banks_per_storage_core);
 
     bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
     bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
