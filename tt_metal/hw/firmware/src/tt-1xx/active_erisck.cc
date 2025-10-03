@@ -54,4 +54,7 @@ void _start() {
             ASSERT(erisc_info->channels[i].bytes_sent == 0);
         }
     }
+
+    // NOLINTNEXTLINE(hicpp-no-asm, hicpp-no-assembler)
+    asm volatile(".rept 256; nop; .endr");
 }
