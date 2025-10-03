@@ -212,20 +212,20 @@ class DeepLabV3PlusHead(nn.Module):
         # --- First Fusion Stage ---
         x = features[feature_keys[1]]
         proj_x = self.decoder[feature_keys[1]]["project_conv"](x)
-        y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
+        y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="nearest")
         y = torch.cat([proj_x, y_upsampled], dim=1)
         y = self.decoder[feature_keys[1]]["fuse_conv"](y)
 
         # --- Second Fusion Stage ---
         x = features[feature_keys[2]]
         proj_x = self.decoder[feature_keys[2]]["project_conv"](x)
-        y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
+        y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="nearest")
         y = torch.cat([proj_x, y_upsampled], dim=1)
         y = self.decoder[feature_keys[2]]["fuse_conv"](y)
         return y
 
     def losses(self, predictions, targets):
-        predictions = F.interpolate(predictions, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        predictions = F.interpolate(predictions, scale_factor=self.common_stride, mode="nearest")
         loss = self.loss(predictions, targets)
         losses = {"loss_sem_seg": loss * self.loss_weight}
         return losses
@@ -334,7 +334,7 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
             In inference, returns (CxHxW logits, {})
         """
         y = self.layers(features)
-        y = F.interpolate(y, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        y = F.interpolate(y, scale_factor=self.common_stride, mode="nearest")
         return y, {}
 
     def layers(self, features):
@@ -344,7 +344,7 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
         return y
 
     def losses(self, predictions, targets, weights=None):
-        predictions = F.interpolate(predictions, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        predictions = F.interpolate(predictions, scale_factor=self.common_stride, mode="nearest")
         loss = self.loss(predictions, targets, weights)
         losses = {"loss_sem_seg": loss * self.loss_weight}
         return losses

@@ -15,7 +15,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
     create_panoptic_deeplab_parameters,
     fuse_conv_bn_parameters,
 )
-from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
+from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab, create_resnet_dtype_config
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.common import get_panoptic_deeplab_config, PDL_L1_SMALL_SIZE
 from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
@@ -172,7 +172,9 @@ CITYSCAPES_CATEGORIES = [
 ]
 
 
-def preprocess_image(image_path: str, target_size: Tuple[int, int] = (512, 1024)) -> torch.Tensor:
+def preprocess_image(
+    image_path: str, target_size: Tuple[int, int] = (512, 1024), use_imagenet_norm: bool = True
+) -> torch.Tensor:
     """
     Preprocess image for Panoptic DeepLab inference.
 
@@ -196,6 +198,11 @@ def preprocess_image(image_path: str, target_size: Tuple[int, int] = (512, 1024)
 
     # Convert to tensor and normalize to [0, 1]
     image_tensor = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
+
+    if use_imagenet_norm:
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        image_tensor = (image_tensor - mean) / std
 
     # Add batch dimension
     image_tensor = image_tensor.unsqueeze(0)
@@ -304,7 +311,7 @@ def create_panoptic_visualization(
             agreement_ratio = semantic_counts[most_common_semantic] / len(semantic_at_mask)
 
             # Remove pixels that don't match the panoptic segment's class
-            if agreement_ratio < 0.98:  # Less than 98% semantic agreement
+            if agreement_ratio < 0.85:  # Relaxed from 98% to 85% semantic agreement
                 wrong_semantic_mask = mask & (semantic_classes != category_id)
                 cleaned_panoptic[wrong_semantic_mask] = 0  # Set wrong pixels to background
 
@@ -313,10 +320,10 @@ def create_panoptic_visualization(
 
     # Enable post-processing for TTNN to merge fragmented instances - use raw panoptic segmentation for PyTorch
     # Check if this is TTNN output (has more fragmentation) vs PyTorch (cleaner)
-    if len(np.unique(panoptic_seg)) > 10:  # Even lower threshold - be more aggressive
+    if len(np.unique(panoptic_seg)) > 15:  # Raised threshold to be less aggressive
         logger.info("Detected over-segmentation, applying post-processing to merge instances...")
 
-        panoptic_seg = merge_nearby_instances(panoptic_seg, max_distance=80)
+        panoptic_seg = merge_nearby_instances(panoptic_seg, max_distance=40)  # Reduced from 80 to 40 pixels
         logger.info(f"After merging: {len(np.unique(panoptic_seg))} unique segments")
 
     # Create segments_info from panoptic segmentation
@@ -447,6 +454,9 @@ def run_panoptic_deeplab_demo(
     weights_path: str,
     output_dir: str = "panoptic_deeplab_predictions",
     target_size: Tuple[int, int] = (512, 1024),
+    resnet_dtype_config: str = None,
+    center_threshold: float = 0.05,
+    use_imagenet_norm: bool = True,
 ):
     """
     Run Panoptic DeepLab inference on a single image.
@@ -475,7 +485,7 @@ def run_panoptic_deeplab_demo(
 
     # Preprocess image
     logger.info("Preprocessing image...")
-    input_tensor = preprocess_image(image_path, target_size)
+    input_tensor = preprocess_image(image_path, target_size, use_imagenet_norm)
 
     # Load original image for visualization
     original_image = cv2.imread(image_path)
@@ -512,7 +522,10 @@ def run_panoptic_deeplab_demo(
         model_configs = ModelOptimisations()
 
         # Create TTNN model
-        logger.info("Creating TTNN model...")
+        logger.info(f"Creating TTNN model with ResNet dtype config: {resnet_dtype_config}")
+        layer_dtypes = create_resnet_dtype_config(resnet_dtype_config)
+        logger.info(f"ResNet layer dtypes: {layer_dtypes}")
+
         ttnn_model = TtPanopticDeepLab(
             device=device,
             parameters=fused_parameters,
@@ -525,6 +538,7 @@ def run_panoptic_deeplab_demo(
             norm="",
             train_size=target_size,
             model_configs=model_configs,
+            resnet_layer_dtypes=layer_dtypes,
         )
 
     except FileNotFoundError:
@@ -556,11 +570,11 @@ def run_panoptic_deeplab_demo(
         center_np_ttnn,
         offset_np_ttnn,
         original_image,
-        center_threshold=0.4,  # Slightly higher to reduce initial fragments
-        score_threshold=0.4,  # Slightly higher to reduce initial fragments
-        stuff_area=100,  # Larger area threshold to filter small pieces
-        top_k=20,  # Fewer initial instances for cleaner merging
-        nms_kernel=17,  # Even larger NMS to reduce duplicates
+        center_threshold=center_threshold,  # Use parameter
+        score_threshold=center_threshold,  # Use same value for consistency
+        stuff_area=1,  # Match PyTorch defaults
+        top_k=1000,  # Match PyTorch defaults
+        nms_kernel=11,  # Match PyTorch defaults
     )
 
     # Save TTNN results
@@ -592,6 +606,9 @@ def run_panoptic_deeplab_batch_demo(
     output_dir: str = "panoptic_deeplab_predictions",
     target_size: Tuple[int, int] = (512, 1024),
     max_images: int = 10,
+    resnet_dtype_config: str = None,
+    center_threshold: float = 0.05,
+    use_imagenet_norm: bool = True,
 ):
     """
     Run Panoptic DeepLab inference on multiple images from a directory.
@@ -622,7 +639,16 @@ def run_panoptic_deeplab_batch_demo(
         image_path = os.path.join(input_dir, image_file)
 
         try:
-            run_panoptic_deeplab_demo(device, image_path, weights_path, output_dir, target_size)
+            run_panoptic_deeplab_demo(
+                device,
+                image_path,
+                weights_path,
+                output_dir,
+                target_size,
+                resnet_dtype_config,
+                center_threshold,
+                use_imagenet_norm,
+            )
         except Exception as e:
             logger.error(f"Failed to process {image_file}: {e}")
             continue
@@ -659,15 +685,59 @@ if __name__ == "__main__":
 
     parser.add_argument("--batch", action="store_true", help="Enable batch processing mode for directory of images")
 
+    parser.add_argument(
+        "--resnet-dtype-config",
+        default="all_bfloat16",
+        choices=[
+            "all_bfloat16",
+            "all_bfloat8",
+            "mixed_early_bf16",
+            "mixed_late_bf16",
+            "stem_only_bf16",
+            "res5_only_bf16",
+            "res4_only_bf16",
+        ],
+        help="ResNet layer dtype configuration. Options: all_bfloat16 (highest accuracy), all_bfloat8 (fastest), mixed_early_bf16, mixed_late_bf16, stem_only_bf16, res5_only_bf16, res4_only_bf16",
+    )
+
+    parser.add_argument(
+        "--center-threshold",
+        type=float,
+        default=0.05,
+        help="Center detection threshold (default: 0.05). Lower values detect more instances but may increase false positives.",
+    )
+
+    parser.add_argument(
+        "--no-imagenet-norm",
+        action="store_true",
+        help="Disable ImageNet normalization (use simple [0,1] normalization instead)",
+    )
+
     args = parser.parse_args()
 
     device = ttnn.open_device(device_id=0, l1_small_size=PDL_L1_SMALL_SIZE)
 
     try:
         if args.batch:
-            run_panoptic_deeplab_batch_demo(device, args.input_path, args.weights_path, args.output_dir)
+            run_panoptic_deeplab_batch_demo(
+                device,
+                args.input_path,
+                args.weights_path,
+                args.output_dir,
+                resnet_dtype_config=args.resnet_dtype_config,
+                center_threshold=args.center_threshold,
+                use_imagenet_norm=not args.no_imagenet_norm,
+            )
         else:
-            run_panoptic_deeplab_demo(device, args.input_path, args.weights_path, args.output_dir)
+            run_panoptic_deeplab_demo(
+                device,
+                args.input_path,
+                args.weights_path,
+                args.output_dir,
+                resnet_dtype_config=args.resnet_dtype_config,
+                center_threshold=args.center_threshold,
+                use_imagenet_norm=not args.no_imagenet_norm,
+            )
 
     finally:
         ttnn.close_device(device)

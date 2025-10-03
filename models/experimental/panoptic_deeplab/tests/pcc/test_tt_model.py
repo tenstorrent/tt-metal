@@ -115,7 +115,7 @@ def test_panoptic_deeplab(device, model_location_generator):
     ttnn_center_torch = ttnn.to_torch(ttnn_center).permute(0, 3, 1, 2)
     ttnn_offset_torch = ttnn.to_torch(ttnn_offset).permute(0, 3, 1, 2)
 
-    sem_passed, sem_msg = assert_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.96)
+    sem_passed, sem_msg = assert_with_pcc(pytorch_semantic, ttnn_semantic_torch, pcc=0.99)
     logger.info(f"Semantic PCC: {sem_msg}")
     assert sem_passed, f"Semantic segmentation PCC failed: {sem_msg}"
 
