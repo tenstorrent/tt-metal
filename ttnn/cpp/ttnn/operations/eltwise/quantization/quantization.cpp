@@ -221,17 +221,8 @@ Tensor QuantOp::invoke(
 
         const Tensor scale_full = reshape_per_channel_vector_args(*scale_p, input_shape, axis_v, a_dtype);
         const Tensor zero_point_full = reshape_per_channel_vector_args(*zero_point_p, input_shape, axis_v, a_dtype);
-        const Tensor input_scaled = ttnn::divide(
-            input_a,
-            scale_full,
-            a_dtype,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none,
-            false,
-            /*fast_and_approximate_mode*/ false);
+        const Tensor input_scaled =
+            ttnn::divide(input_a, scale_full, a_dtype, std::nullopt, std::nullopt, none, none, none, false);
         return ttnn::typecast(
             ttnn::add(
                 input_scaled,
@@ -284,17 +275,8 @@ Tensor QuantOp::invoke(
             },
             [&](const float scale, const Tensor& zero_point) {
                 check_per_tensor_zero_point(zero_point);
-                const Tensor input_scaled = ttnn::divide(
-                    input_a,
-                    scale,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    none,
-                    none,
-                    none,
-                    false,
-                    /*fast_and_approximate_mode*/ std::nullopt);
+                const Tensor input_scaled =
+                    ttnn::divide(input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
                 return ttnn::typecast(
                     ttnn::add(
                         input_scaled,
@@ -320,8 +302,7 @@ Tensor QuantOp::invoke(
                     none,
                     none,
                     none,
-                    false,
-                    std::nullopt);
+                    false);
                 return ttnn::typecast(
                     ttnn::add(
                         input_scaled,
@@ -416,16 +397,7 @@ Tensor RequantOp::invoke(
             expand_or_cast(*out_zero_point_p, out_zero_point_is_full_size, DataType::FLOAT32);
 
         const Tensor scale_recip_full = ttnn::divide(
-            in_scale_full,
-            out_scale_full,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            none,
-            none,
-            none,
-            false,
-            /*fast_and_approximate_mode*/ true);
+            in_scale_full, out_scale_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
         const Tensor in_zero_point_scaled_full = ttnn::multiply(
             in_zero_point_full, scale_recip_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
         const Tensor zero_point_full = ttnn::subtract(
@@ -484,7 +456,7 @@ Tensor RequantOp::invoke(
                     c_dtype,
                     memory_config,
                     optional_output_tensor,
-                    false,
+                    /*fast_and_approximate_mode*/ false,
                     none,
                     none,
                     post_activation);
