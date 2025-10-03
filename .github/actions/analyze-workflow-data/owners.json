@@ -226,6 +226,23 @@
     { "needle": "llama3.1-8b BH-LLMBox stress", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
     { "needle": "llama3.3-70b BH-LLMBox batch-32 performance", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
 
+    { "needle": "galaxy-demo-tests / Galaxy Llama3 demo tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "Galaxy Llama3 demo tests", "owner": { "id": "U053W15B6JF", "name": "Djordje Ivanovic" } },
+    { "needle": "galaxy-demo-tests / Galaxy Llama3 long context demo tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "Galaxy Llama3 long context demo tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "galaxy-demo-tests / Galaxy Llama3 evals tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "Galaxy Llama3 evals tests", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "galaxy-demo-tests / Galaxy Llama3 8B data-parallel demo tests", "owner": { "id": "U08BH66EXAL", "name": "Radoica Draskic" } },
+    { "needle": "Galaxy Llama3 8B data-parallel demo tests", "owner": { "id": "U08BH66EXAL", "name": "Radoica Draskic" } },
+    { "needle": "galaxy-demo-tests / Galaxy Llama3 70B data-parallel demo tests", "owner": { "id": "U08BH66EXAL", "name": "Radoica Draskic" } },
+    { "needle": "Galaxy Llama3 70B data-parallel demo tests", "owner": { "id": "U08BH66EXAL", "name": "Radoica Draskic" } },
+    { "needle": "galaxy-demo-tests / Galaxy Falcon7b demo tests", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
+    { "needle": "Galaxy Falcon7b demo tests", "owner": { "id": "U05RWH3QUPM", "name": "Salar Hosseini" } },
+    { "needle": "galaxy-demo-tests / Galaxy SentenceBert demo tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
+    { "needle": "Galaxy SentenceBert demo tests", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
+    { "needle": "galaxy-demo-tests / Galaxy Stable Diffusion 3.5 Large demo tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+    { "needle": "Galaxy Stable Diffusion 3.5 Large demo tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
+
     { "needle": "blackhole-multi-card-post-commit-tests / CCL APC test", "owner": { "id": "U0883RN6CRE", "name": "William Ly" } },
 
     { "needle": "t3000-fast-tests / t3k fabric tests", "owner": { "id": "UJ45FEC7M", "name": "Allan Liu" } },
