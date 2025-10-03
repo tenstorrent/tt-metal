@@ -26,6 +26,8 @@
 #include "impl/kernels/kernel_impl.hpp"
 #include "impl/program/program_impl.hpp"
 
+#include <tt-metalium/allocator.hpp>
+
 namespace tt::tt_metal {
 
 using namespace tt;
@@ -182,6 +184,59 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
     // The hashes should be different across two kernels due to the difference in unpack_to_dest_mode
     EXPECT_NE(hash_default, hash_fp32)
         << "unpack_to_dest_mode is not accounted for in computing ComputeKernel::config_hash()";
+}
+
+TEST_F(MeshDispatchFixture, TestCreateKernelFromBinary) {
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/compute/simple_add.cpp";
+    const std::string binary_kernel_path = "tests/tt_metal/tt_metal/api/simple_add_binaries";
+
+    for (const auto& mesh_device : this->devices_) {
+        CoreCoord core = {0, 0};
+        CoreCoord binary_core = {1, 1};
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord);
+        distributed::MeshWorkload workload;
+        distributed::MeshWorkload binary_workload;
+        Program program;
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+        auto device = mesh_device->get_devices()[0];
+
+        const uint32_t table_address = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        uint32_t input_a = 1;
+        uint32_t input_b = 2;
+
+        auto kernel_handle = CreateKernel(program_, kernel_file, core,  tt_metal::DataMovementConfig{ .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = { }});
+
+        SetRuntimeArgs(program_, kernel_handle, core, {table_address, input_a, input_b});
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+
+        std::vector<uint32_t> result;
+        tt_metal::detail::ReadFromDeviceL1(device, core, table_address, sizeof(uint32_t), result);
+        EXPECT_EQ(result[0], input_a + input_b);
+
+        Program binary_program;
+        binary_workload.add_program(device_range, std::move(binary_program));
+        auto& binary_program_ = binary_workload.get_programs().at(device_range);
+
+        auto binary_hash = tt_metal::experimental::ComputeKernelOriginalPathHash(kernel_file);
+        tt_metal::experimental::SetKernelBinaryPathPrefix(mesh_device.get(), binary_kernel_path);
+        auto kernel_handle_binary = tt_metal::experimental::CreateKernelFromBinary(binary_program_, kernel_file, binary_core, tt_metal::DataMovementConfig{ .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::NOC_0,
+            .compile_args = { }}, binary_hash);
+
+        input_a = 3;
+        input_b = 4;
+        SetRuntimeArgs(binary_program_, kernel_handle_binary, binary_core, {table_address, input_a, input_b});
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), binary_workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        tt_metal::detail::ReadFromDeviceL1(device, binary_core, table_address, sizeof(uint32_t), result);
+        EXPECT_EQ(result[0], input_a + input_b);
+
+    }
 }
 
 }  // namespace tt::tt_metal
