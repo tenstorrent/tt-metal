@@ -5,6 +5,7 @@
 
 #include "tt_stl/concepts.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -65,9 +66,9 @@ tt::tt_metal::HostStorage transform_storage(
                 constexpr bool row_major_input = false;
                 constexpr bool is_exp_a = false;
                 if constexpr (std::is_same_v<DstType, bfloat8_tag>) {
-                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a);
+                    return pack_as_bfp8_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
                 } else if constexpr (std::is_same_v<DstType, bfloat4_tag>) {
-                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a);
+                    return pack_as_bfp4_tiles(data, row_major_input, is_exp_a, input_tensor_spec.tile());
                 } else {
                     static_assert(ttsl::concepts::always_false_v<DstType>, "Unsupported data type");
                 }
@@ -141,12 +142,10 @@ Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& d
 
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::TensorLayout(
             dtype,
-            tt::tt_metal::PageConfig(layout),
-            MemoryConfig{},
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
+            tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile()),
+            input_tensor.tensor_spec().memory_config()));
 
     return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 };

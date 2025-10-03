@@ -163,56 +163,6 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_end();
 }
 
-template <>
-Tensor Tensor::from_span<float>(
-    tt::stl::Span<const float> buffer,
-    const TensorSpec& spec,
-    distributed::MeshDevice* device,
-    std::optional<ttnn::QueueId> cq_id,
-    float pad_value) {
-    ZoneScoped;
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    switch (spec.data_type()) {
-        case DataType::FLOAT32: return create_tensor_from_row_major_data(buffer, spec, device, cq_id, pad_value);
-        case DataType::BFLOAT16: {
-            return create_tensor_from_row_major_data(
-                std::vector<bfloat16>(buffer.begin(), buffer.end()),
-                spec,
-                device,
-                cq_id,
-                static_cast<bfloat16>(pad_value));
-        }
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B: {
-            TT_FATAL(
-                spec.tensor_layout().get_layout() == Layout::TILE,
-                "Tile layout is required for BFLOAT8_B and BFLOAT4_B");
-
-            // TODO: Implement `encode_tensor_data` in terms of a Span, avoid tilizing the data, as pack_fp32_vec_as_*
-            // support row-major input.
-            const auto& tile = spec.tensor_layout().get_page_config().get_tile();
-            auto physical_data = tensor_impl::encode_tensor_data(buffer, spec, pad_value);
-            std::vector<uint32_t> packed_block_floats =
-                spec.data_type() == DataType::BFLOAT8_B
-                    ? pack_as_bfp8_tiles(
-                          tt::stl::make_const_span(physical_data), /*row_major_input=*/false, /*is_exp_a=*/false, tile)
-                    : pack_as_bfp4_tiles(
-                          tt::stl::make_const_span(physical_data), /*row_major_input=*/false, /*is_exp_a=*/false, tile);
-
-            Tensor tensor(HostBuffer(std::move(packed_block_floats)), spec);
-            if (device != nullptr) {
-                tensor = tensor.to_device(device, spec.memory_config(), cq_id);
-            }
-            return tensor;
-        }
-        default: {
-            TT_THROW("Unsupported data type: {}", spec.data_type());
-        }
-    }
-}
-
 template <typename T>
 Tensor Tensor::from_span(
     tt::stl::Span<const T> buffer,
@@ -221,15 +171,7 @@ Tensor Tensor::from_span(
     std::optional<ttnn::QueueId> cq_id,
     T pad_value) {
     ZoneScoped;
-    size_t volume = spec.logical_shape().volume();
-    TT_FATAL(
-        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    TT_FATAL(
-        spec.data_type() == convert_to_data_type<T>(),
-        "Unsupported data type: got {}, expected: {}",
-        spec.data_type(),
-        convert_to_data_type<T>());
-    return create_tensor_from_row_major_data(buffer, spec, device, cq_id, pad_value);
+    return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, device, cq_id, pad_value);
 }
 
 template <typename T>
@@ -265,6 +207,8 @@ Tensor Tensor::from_vector(
     auto res = create_tensor_from_row_major_data(std::move(buffer), buffer_spec, /*device=*/nullptr, cq_id, pad_value);
     // Convert to datatype from original spec
     res = ttnn::to_dtype(res, spec.data_type());
+    auto tt = res.tensor_spec().page_config().get_tile();
+    (void)tt;  // suppress unused variable warning in release build
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
     }
@@ -345,6 +289,12 @@ template Tensor Tensor::from_span<bfloat16>(
     distributed::MeshDevice* device,
     std::optional<ttnn::QueueId> cq_id,
     bfloat16 pad_value);
+template Tensor Tensor::from_span<float>(
+    tt::stl::Span<const float> buffer,
+    const TensorSpec& spec,
+    distributed::MeshDevice* device,
+    std::optional<ttnn::QueueId> cq_id,
+    float pad_value);
 template Tensor Tensor::from_span<int32_t>(
     tt::stl::Span<const int32_t> buffer,
     const TensorSpec& spec,
