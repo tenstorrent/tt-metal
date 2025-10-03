@@ -990,8 +990,8 @@ jobs:
             SELECTED_OWNERS=""
           fi
 
-            # Check if we have any owners to ping
-            if [ -n "$SELECTED_OWNERS" ]; then
+          # Check if we have any owners to ping
+          if [ -n "$SELECTED_OWNERS" ]; then
               # Get full names for selected owners and build ping message
               PING_MESSAGE="Hi"
               IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
