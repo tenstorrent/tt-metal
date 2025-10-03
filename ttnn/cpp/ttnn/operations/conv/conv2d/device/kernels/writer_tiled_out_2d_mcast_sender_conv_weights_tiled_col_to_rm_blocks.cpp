@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 #include "conv_reader_common.hpp"
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -178,7 +178,11 @@ void kernel_main() {
                 cb_reserve_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 #endif
                 if (is_sender_core) {
+#ifdef SPLIT_READER_OVERLAPPED
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
+#else
+                    uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader);
+#endif
                     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                     read_activation_data<
                         sliced_inner_dim,
