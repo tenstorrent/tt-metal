@@ -28,6 +28,11 @@ Memory Config
    :template: function.rst
 
    ttnn.create_sharded_memory_config
+   ttnn.interleaved_to_sharded
+   ttnn.interleaved_to_sharded_partial
+   ttnn.reshard
+   ttnn.sharded_to_interleaved
+   ttnn.sharded_to_interleaved_partial
 
 
 Operations
@@ -52,6 +57,17 @@ Core
    ttnn.deallocate
    ttnn.reallocate
    ttnn.to_memory_config
+   ttnn.allocate_tensor_on_device
+   ttnn.allocate_tensor_on_host
+   ttnn.copy_device_to_host_tensor
+   ttnn.copy_host_to_device_tensor
+   ttnn.dequantize
+   ttnn.from_buffer
+   ttnn.move
+   ttnn.quantize
+   ttnn.requantize
+   ttnn.to_dtype
+   ttnn.typecast
 
 
 Tensor Creation
@@ -72,6 +88,10 @@ Tensor Creation
    ttnn.full
    ttnn.full_like
    ttnn.rand
+   ttnn.bernoulli
+   ttnn.complex_tensor
+   ttnn.sampling
+   ttnn.uniform
 
 Matrix Multiplication
 =====================
@@ -116,6 +136,8 @@ Pointwise Unary
    ttnn.bitwise_not
    ttnn.bitwise_left_shift
    ttnn.bitwise_right_shift
+   ttnn.bias_gelu
+   ttnn.bias_gelu_
    ttnn.cbrt
    ttnn.ceil
    ttnn.celu
@@ -150,6 +172,7 @@ Pointwise Unary
    ttnn.hardtanh
    ttnn.heaviside
    ttnn.i0
+   ttnn.i1
    ttnn.identity
    ttnn.isfinite
    ttnn.isinf
@@ -166,6 +189,8 @@ Pointwise Unary
    ttnn.log_sigmoid
    ttnn.logical_not
    ttnn.logical_not_
+   ttnn.logical_left_shift
+   ttnn.logical_right_shift
    ttnn.logit
    ttnn.ltz
    ttnn.mish
@@ -295,6 +320,7 @@ Pointwise Unary
    ttnn.conj
    ttnn.polar
    ttnn.alt_complex_rotate90
+   ttnn.plus_one
 
 Pointwise Binary
 ================
@@ -305,11 +331,17 @@ Pointwise Binary
    :template: function.rst
 
    ttnn.add
+   ttnn.add_
    ttnn.addalpha
+   ttnn.assign
    ttnn.subalpha
    ttnn.multiply
+   ttnn.multiply_
    ttnn.subtract
+   ttnn.subtract_
    ttnn.div
+   ttnn.divide
+   ttnn.divide_
    ttnn.div_no_nan
    ttnn.floor_div
    ttnn.remainder
@@ -321,18 +353,24 @@ Pointwise Binary
    ttnn.logical_xor_
    ttnn.rpow
    ttnn.rsub
+   ttnn.rsub_
    ttnn.ldexp
+   ttnn.ldexp_
    ttnn.logical_and
    ttnn.logical_or
    ttnn.logical_xor
    ttnn.bitwise_and
    ttnn.bitwise_or
    ttnn.bitwise_xor
+   ttnn.bcast
    ttnn.logaddexp
+   ttnn.logaddexp_
    ttnn.logaddexp2
+   ttnn.logaddexp2_
    ttnn.hypot
    ttnn.xlogy
    ttnn.squared_difference
+   ttnn.squared_difference_
    ttnn.gt
    ttnn.gt_
    ttnn.lt_
@@ -419,9 +457,12 @@ Reduction
    ttnn.mean
    ttnn.min
    ttnn.std
+   ttnn.std_hw
    ttnn.sum
    ttnn.var
+   ttnn.var_hw
    ttnn.argmax
+   ttnn.pearson_correlation_coefficient
    ttnn.prod
    ttnn.topk
    ttnn.cumsum
@@ -435,22 +476,42 @@ Data Movement
    :template: function.rst
 
    ttnn.concat
+   ttnn.chunk
+   ttnn.copy
+   ttnn.expand
+   ttnn.fill_implicit_tile_padding
+   ttnn.fold
    ttnn.nonzero
    ttnn.pad
+   ttnn.padded_slice
    ttnn.permute
    ttnn.reshape
+   ttnn.reshape_on_device
    ttnn.repeat
    ttnn.repeat_interleave
+   ttnn.roll
    ttnn.slice
+   ttnn.slice_write
+   ttnn.split
+   ttnn.squeeze
+   ttnn.stack
    ttnn.tilize
    ttnn.tilize_with_val_padding
+   ttnn.tilize_with_zero_padding
    ttnn.fill_rm
    ttnn.fill_ones_rm
+   ttnn.tosa_gather
+   ttnn.tosa_scatter
+   ttnn.transpose
    ttnn.untilize
    ttnn.untilize_with_unpadding
+   ttnn.unsqueeze
+   ttnn.unsqueeze_to_4D
    ttnn.indexed_fill
+   ttnn.index_fill
    ttnn.gather
    ttnn.sort
+   ttnn.view
 
 Normalization
 =============
@@ -462,7 +523,11 @@ Normalization
 
    ttnn.group_norm
    ttnn.layer_norm
+   ttnn.layer_norm_post_all_gather
+   ttnn.layer_norm_pre_all_gather
    ttnn.rms_norm
+   ttnn.rms_norm_post_all_gather
+   ttnn.rms_norm_pre_all_gather
    ttnn.batch_norm
    ttnn.softmax
    ttnn.scale_mask_softmax
@@ -492,6 +557,44 @@ Moreh Operations
    :template: function.rst
 
    ttnn.moreh_sum
+   ttnn.moreh_sum_backward
+   ttnn.moreh_abs_pow
+   ttnn.moreh_adam
+   ttnn.moreh_adamw
+   ttnn.moreh_arange
+   ttnn.moreh_bmm
+   ttnn.moreh_bmm_backward
+   ttnn.moreh_clip_grad_norm
+   ttnn.moreh_cumsum
+   ttnn.moreh_cumsum_backward
+   ttnn.moreh_dot
+   ttnn.moreh_dot_backward
+   ttnn.moreh_fold
+   ttnn.moreh_full
+   ttnn.moreh_full_like
+   ttnn.moreh_getitem
+   ttnn.moreh_group_norm
+   ttnn.moreh_group_norm_backward
+   ttnn.moreh_layer_norm
+   ttnn.moreh_layer_norm_backward
+   ttnn.moreh_linear
+   ttnn.moreh_linear_backward
+   ttnn.moreh_logsoftmax
+   ttnn.moreh_logsoftmax_backward
+   ttnn.moreh_matmul
+   ttnn.moreh_matmul_backward
+   ttnn.moreh_mean
+   ttnn.moreh_mean_backward
+   ttnn.moreh_nll_loss
+   ttnn.moreh_nll_loss_backward
+   ttnn.moreh_nll_loss_unreduced_backward
+   ttnn.moreh_norm
+   ttnn.moreh_norm_backward
+   ttnn.moreh_sgd
+   ttnn.moreh_softmax
+   ttnn.moreh_softmax_backward
+   ttnn.moreh_softmin
+   ttnn.moreh_softmin_backward
 
 Transformer
 ===========
@@ -508,6 +611,18 @@ Transformer
    ttnn.experimental.rotary_embedding
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.chunked_flash_mla_prefill
+   ttnn.transformer.chunked_scaled_dot_product_attention
+   ttnn.transformer.flash_mla_prefill
+   ttnn.transformer.flash_multi_latent_attention_decode
+   ttnn.transformer.joint_scaled_dot_product_attention
+   ttnn.transformer.paged_flash_multi_latent_attention_decode
+   ttnn.transformer.paged_scaled_dot_product_attention_decode
+   ttnn.transformer.ring_distributed_scaled_dot_product_attention
+   ttnn.transformer.ring_joint_scaled_dot_product_attention
+   ttnn.transformer.windowed_scaled_dot_product_attention
+   ttnn.moe
+   ttnn.moe_expert_token_remap
 
 CCL
 ===
@@ -516,6 +631,12 @@ CCL
    :toctree: api
    :nosignatures:
    :template: function.rst
+
+   ttnn.all_to_all_combine
+   ttnn.all_to_all_dispatch
+   ttnn.barrier
+   ttnn.mesh_partition
+   ttnn.point_to_point
 
 Embedding
 =========
@@ -562,6 +683,9 @@ Pooling
 
    ttnn.global_avg_pool2d
    ttnn.max_pool2d
+   ttnn.adaptive_avg_pool2d
+   ttnn.adaptive_max_pool2d
+   ttnn.avg_pool2d
 
 Vision
 ========
@@ -572,6 +696,7 @@ Vision
    :template: function.rst
 
    ttnn.upsample
+   ttnn.grid_sample
 
 KV Cache
 ========
@@ -583,6 +708,8 @@ KV Cache
 
    ttnn.kv_cache.fill_cache_for_user_
    ttnn.kv_cache.update_cache_for_token_
+   ttnn.fill_cache
+   ttnn.update_cache
 
 
 Model Conversion
