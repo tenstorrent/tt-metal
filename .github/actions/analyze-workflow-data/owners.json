@@ -220,8 +220,11 @@
     { "needle": "t3k sd35_large tests", "owner": { "id": "U03FJB5TM5Y", "name": "Colman Glagovich" } },
     { "needle": "t3000-frequent-tests / t3k mistral tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
     { "needle": "t3k mistral tests", "owner": { "id": "U0896VBAKFC", "name": "Pratikkumar Prajapati" } },
-    { "needle": "blackhole-multi-card-demo-tests / llama3.1-8b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
     { "needle": "blackhole-multi-card-demo-tests / llama3.3-70b", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "llama3.1-8b BH-LLMBox performance", "owner": { "id": "U08GELBB1AP", "name": "Ambrose Ling" } },
+    { "needle": "llama3.1-8b BH-LLMBox data-parallel", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "llama3.1-8b BH-LLMBox stress", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
+    { "needle": "llama3.3-70b BH-LLMBox batch-32 performance", "owner": { "id": "U03PUAKE719", "name": "Miguel Tairum" } },
 
     { "needle": "blackhole-multi-card-post-commit-tests / CCL APC test", "owner": { "id": "U0883RN6CRE", "name": "William Ly" } },
 
