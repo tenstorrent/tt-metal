@@ -256,6 +256,12 @@ MetalContext& MetalContext::instance(const std::string& root_dir) {
 MetalContext::MetalContext(const std::string& root_dir) {
     rtoptions_.set_root_dir(root_dir);
 
+    // If architecture cannot be detected (no hardware/simulator/mock), allow construction
+    // without initializing HAL/Cluster. This enables import-time construction in HW-less envs.
+    if (get_platform_architecture(rtoptions_) == tt::ARCH::Invalid) {
+        return;
+    }
+
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
