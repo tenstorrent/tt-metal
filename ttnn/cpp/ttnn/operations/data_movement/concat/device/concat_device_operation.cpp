@@ -149,7 +149,7 @@ Tensor concat_impl(
     const std::int64_t dim,
     const unsigned int groups,
     const MemoryConfig& output_mem_config) {
-    TT_FATAL(input_tensors.size() > 0, "need 1 or more tensors");
+    TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
     if (input_tensors.size() == 1) {
         return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
             input_tensors[0], output_mem_config)};

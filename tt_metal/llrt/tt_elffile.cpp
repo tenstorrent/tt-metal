@@ -4,7 +4,7 @@
 
 #include "tt_elffile.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>

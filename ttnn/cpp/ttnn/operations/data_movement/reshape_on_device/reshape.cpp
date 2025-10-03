@@ -48,7 +48,6 @@ static Tensor manual_insertion(
 }  // namespace detail
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
@@ -87,19 +86,17 @@ ttnn::Tensor ReshapeOperation::invoke(
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(queue_id, input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
+    return invoke(input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(queue_id, input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
+    return invoke(input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
 }
 
 }  // namespace ttnn::operations::data_movement

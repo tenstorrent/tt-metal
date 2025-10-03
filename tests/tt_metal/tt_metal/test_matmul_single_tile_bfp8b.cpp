@@ -10,7 +10,6 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -20,7 +19,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -66,7 +65,7 @@ int main(int argc, char** argv) {
 
         CoreCoord core = {0, 0};
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tt::DataFormat::Bfp8_b);
+        uint32_t single_tile_size = tt::tile_size(tt::DataFormat::Bfp8_b);
         TT_FATAL(single_tile_size == (256 * 4) + (16 * 4), "Error");
         uint32_t num_tiles = 1;
         uint32_t dram_buffer_size = single_tile_size * num_tiles;  // num_tiles of BFP8_B
@@ -151,7 +150,7 @@ int main(int argc, char** argv) {
         int num_float_in_tile = 32 * 32;
         std::vector<float> vec(num_float_in_tile, (float)0);
         for (int i = 0; i < 32; i++) {
-            vec.at(i * 32 + i) = (float)1;
+            vec.at((i * 32) + i) = (float)1;
         }
         std::vector<uint32_t> weights =
             pack_as_bfp8_tiles(tt::stl::make_const_span(vec), /*row_major_input=*/true, /*is_exp_a=*/false);

@@ -111,25 +111,25 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
     tensor_return_value_t result;
 
     if (tensor_args.param_out.has_value()) {
-        result.push_back(tensor_args.param_out.value());
+        result.push_back(tensor_args.param_out);
     } else {
         result.push_back(create_device_tensor(*output_specs[0], device));
     }
 
     if (tensor_args.exp_avg_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_out.value());
+        result.push_back(tensor_args.exp_avg_out);
     } else {
         result.push_back(create_device_tensor(*output_specs[1], device));
     }
 
     if (tensor_args.exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.exp_avg_sq_out.value());
+        result.push_back(tensor_args.exp_avg_sq_out);
     } else {
         result.push_back(create_device_tensor(*output_specs[2], device));
     }
 
     if (tensor_args.max_exp_avg_sq_out.has_value()) {
-        result.push_back(tensor_args.max_exp_avg_sq_out.value());
+        result.push_back(tensor_args.max_exp_avg_sq_out);
     } else if (output_specs[3].has_value()) {
         result.push_back(create_device_tensor(*output_specs[3], device));
     } else {

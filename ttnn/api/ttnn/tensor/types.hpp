@@ -72,6 +72,7 @@ enum class StorageType {
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
+tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
 
 static constexpr std::size_t MAX_NUM_DIMENSIONS = 8;
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,7 +24,7 @@ uint32_t num_tiles(const ttnn::Tensor& input_tensor) {
 
 uint32_t tile_size(const ttnn::Tensor& input_tensor) {
     auto dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    return tt::tt_metal::detail::TileSize(dataformat);
+    return tt::tile_size(dataformat);
 }
 
 ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
@@ -144,8 +144,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_tiled_invariant.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
@@ -400,8 +399,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     uint32_t compute_kernel_id = 0;
     if (swap_hw) {
@@ -441,8 +439,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_tiled_row_invariant.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, writer_named_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
     auto input_shape_view = input_shape.view();
 
@@ -753,8 +750,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_tiled_generic.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args = {};
 
@@ -801,8 +797,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_tiled_generic.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, writer_named_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
     auto input_shape_view = input_shape.view();
 

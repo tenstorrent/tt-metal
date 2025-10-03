@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -82,8 +82,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_rm_row_invariant.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {};
     std::unordered_map<std::string, uint32_t> writer_named_compile_time_args = {
@@ -94,8 +93,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_rm_row_invariant.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, writer_named_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
     std::vector<uint32_t> reader_runtime_args = {src_buffer->address(), 0, 0};
 
@@ -261,8 +259,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "reader_permute_interleaved_rm_blocked_generic.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_named_compile_time_args));
 
     std::vector<uint32_t> writer_compile_time_args = {};
 
@@ -290,8 +287,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/dataflow/"
         "writer_permute_interleaved_rm_blocked_generic.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, writer_named_compile_time_args));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_named_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args = {x_block_size, w_block_size};
     std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {

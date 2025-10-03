@@ -29,6 +29,10 @@ jobs:
           {name: "N300 WH B0", model-group: "cnn_javelin", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "other", timeout: 5, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          # Doesn't work on blackhole P150 {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
+          {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "P150 BH", model-group: "other", timeout: 5, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "P150 BH", model-group: "other_magic_env", timeout: 45, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
 
     name: "${{ matrix.test-info.model-group }} ${{ matrix.test-info.name }}"
@@ -47,7 +51,7 @@ jobs:
         -e GTEST_OUTPUT=xml:generated/test_reports/
         -e GITHUB_ACTIONS=true
         -e LOGURU_LEVEL=INFO
-        -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+        ${{ matrix.test-info.arch == 'wormhole_b0' && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
       PIPELINE: model-perf
     steps:
       - name: ⬇️ Checkout
@@ -55,19 +59,17 @@ jobs:
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
           name: ${{ inputs.wheel-artifact-name }}
-      - name: Enable Performance mode
-        run: sudo cpupower frequency-set -g performance
       - name: Run falcon7b model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
@@ -94,14 +96,8 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: ${{ env.DOCKER_OPTS }}
           install_wheel: true
-          run_args: pytest -n auto models/demos/wormhole/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
+          run_args: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
-      - name: Run covnet_mnist model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-        uses: ./.github/actions/single-card-perf-test
-        with:
-          commands: pytest -n auto models/demos/convnet_mnist/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
       - name: Run bert_tiny model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
@@ -120,13 +116,12 @@ jobs:
         with:
           commands: pytest -n auto models/demos/roberta/tests/test_performance.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other' }}
-      # issue: https://github.com/tenstorrent/tt-metal/issues/27745
-      # - name: Run yolov10x model_perf test
-      #   timeout-minutes: ${{ matrix.test-info.timeout }}
-      #   uses: ./.github/actions/single-card-perf-test
-      #   with:
-      #     commands: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
-      #  if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+      - name: Run yolov10x model_perf test
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+        uses: ./.github/actions/single-card-perf-test
+        with:
+          commands: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run sentence_bert model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
@@ -137,7 +132,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
         with:
-          commands: pytest -n auto models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
+          commands: pytest -n auto models/demos/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/resnet50/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run yolov11 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -251,7 +246,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/single-card-perf-test
         with:
-          commands: pytest -n auto models/experimental/yolov5x/tests/perf/ -m models_performance_bare_metal
+          commands: pytest -n auto models/demos/yolov5x/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Run vovnet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -293,7 +288,7 @@ jobs:
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
       #  with:
-      #    slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+      #    slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
       - name: Check perf report exists
         id: check-perf-report
         if: ${{ !cancelled() }}
@@ -315,6 +310,3 @@ jobs:
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
-      - name: Disable Performance mode
-        if: always()
-        run: sudo cpupower frequency-set -g ondemand

@@ -27,7 +27,7 @@
 namespace ttnn::operations::conv {
 namespace conv2d {
 
-Tensor optimized_conv_new(
+Tensor conv2d(
     const Tensor& a,
     const Tensor& b,
     std::optional<const Tensor> bias,
@@ -36,8 +36,8 @@ Tensor optimized_conv_new(
     uint32_t groups,
     bool untilize_out,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation,
-    const OptimizedConvParallelizationConfig& parallelization_config,
-    const OptimizedConvBlockConfig& block_config,
+    const Conv2dParallelizationConfig& parallelization_config,
+    const Conv2dBlockConfig& block_config,
     const MemoryConfig& memory_config,
     DataType dtype,
     std::array<std::uint32_t, 4> input_tensor_shape,
@@ -62,7 +62,7 @@ Tensor optimized_conv_new(
             .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
     }
 
-    auto optimized_conv_op = OptimizedConvNew(
+    auto conv_op = Conv2d(
         sliding_window_config,
         output_channels,
         groups,
@@ -83,12 +83,12 @@ Tensor optimized_conv_new(
         force_split_reader);
     IDevice* device = a.device();
 
-    optimized_conv_op.pre_op_l1_allocation_size_bytes =
+    conv_op.pre_op_l1_allocation_size_bytes =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    return tt::tt_metal::operation::run_without_autoformat(optimized_conv_op, {a, b}, {bias}).at(0);
+    return tt::tt_metal::operation::run_without_autoformat(conv_op, {a, b}, {bias}).at(0);
 }
 
-void OptimizedConvNew::validate(
+void Conv2d::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
@@ -124,7 +124,7 @@ void OptimizedConvNew::validate(
     }
 }
 
-std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+std::vector<TensorSpec> Conv2d::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a_shape = this->input_tensor_shape;
     uint32_t batch_size = input_tensor_a_shape[0];
 
@@ -168,7 +168,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
             dtype, tt::tt_metal::PageConfig(output_layout), memory_config, output_shape, padded_output_shape))};
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
+tt::tt_metal::operation::ProgramWithCallbacks Conv2d::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -199,7 +199,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         std::vector<sliding_window::ShardBoundary> shard_boundaries =
             ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
 
-        program_with_cbs = multi_core_optimized_conv_width_sharded_v2_impl(
+        program_with_cbs = multi_core_conv2d_width_sharded(
             program,
             input_tensor_a,
             input_tensor_b,
@@ -235,7 +235,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         std::vector<sliding_window::ShardBoundary> shard_boundaries =
             ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
 
-        program_with_cbs = multi_core_optimized_conv_sharded_v2_impl(
+        program_with_cbs = multi_core_conv2d_sharded(
             program,
             input_tensor_a,
             input_tensor_b,
@@ -321,7 +321,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     return program_with_cbs;
 }
 
-tt::tt_metal::operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
+tt::tt_metal::operation::OpPerformanceModel Conv2d::create_op_performance_model(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<Tensor>& output_tensors) const {
@@ -337,16 +337,11 @@ tt::tt_metal::operation::OpPerformanceModel OptimizedConvNew::create_op_performa
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 
-    const auto& t = output_tensors.at(0);
-    if (t.storage_type() != StorageType::DEVICE) {
-        log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
-    }
-
-    auto arch = t.storage_type() == StorageType::DEVICE
-                    ? t.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    const int num_cores = (arch == tt::ARCH::WORMHOLE_B0) ? 8 * 8 : 9 * 12;
-    const int tensix_mul_adds_per_cycle_lofi = (arch == tt::ARCH::WORMHOLE_B0) ? 4096 : 2048;
+    const CoreCoord compute_grid = output_tensors.at(0).device()->compute_with_storage_grid_size();
+    const int num_cores = compute_grid.x * compute_grid.y;
+    // The Wormhole/Blackhole matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
+    // This is 2*8*16*16 = 4096 muladds in a single cycle.
+    constexpr int tensix_mul_adds_per_cycle_lofi = 4096;
 
     // Calculate output dimensions: relevant for window/stride based OPs (conv, maxpool, downsample)
     auto [output_height, output_width] = calculate_output_image_size(
@@ -369,7 +364,7 @@ tt::tt_metal::operation::OpPerformanceModel OptimizedConvNew::create_op_performa
     tt::tt_metal::operation::OpPerformanceModel result(input_tensors, output_tensors, ideal_dev_clock_cycles);
 
 #if 0
-    log_info(tt::LogOp, "OptimizedConv PerfModel:");
+    log_info(tt::LogOp, "Conv2d PerfModel:");
     log_info(tt::LogOp, "\t Batch: {}", batch_size);
     log_info(tt::LogOp, "\t In (H, W, C): ({}, {}, {})", conv_activation_h, conv_activation_w, conv_activation_c);
     log_info(tt::LogOp, "\t Filter (H, W): ({}, {})", filter_h, filter_w);

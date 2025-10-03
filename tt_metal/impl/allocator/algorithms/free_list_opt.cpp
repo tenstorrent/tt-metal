@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -342,7 +342,8 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
             size_t block_index = free_blocks_segregated_by_size_[i][j];
             if (block_size_[block_index] >= alloc_size) {
                 addresses.push_back(
-                    {block_address_[block_index], block_address_[block_index] + block_size_[block_index]});
+                    {block_address_[block_index] + offset_bytes_,
+                     block_address_[block_index] + block_size_[block_index] + offset_bytes_});
             }
         }
     }
@@ -355,7 +356,8 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::allocated_addresses(
 
     for (size_t i = 0; i < block_address_.size(); i++) {
         if (meta_block_is_allocated_[i] && block_is_allocated_[i]) {
-            allocated_addresses.emplace_back(block_address_[i], block_address_[i] + block_size_[i]);
+            allocated_addresses.emplace_back(
+                block_address_[i] + offset_bytes_, block_address_[i] + block_size_[i] + offset_bytes_);
         }
     }
 

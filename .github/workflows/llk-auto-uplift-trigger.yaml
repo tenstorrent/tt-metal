@@ -7,7 +7,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 240
+        default: 480
       draft:
         description: 'Create PR as draft'
         required: false
@@ -24,7 +24,7 @@ on:
         description: 'Timeout for workflows in minutes'
         required: false
         type: number
-        default: 240
+        default: 480
       draft:
         description: 'Create PR as draft'
         required: false
@@ -41,7 +41,7 @@ on:
 env:
   BRANCH_NAME: llk-submodule-uplift
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
-  WORKFLOW_TIMEOUT: 240
+  WORKFLOW_TIMEOUT: 480
   MAX_RETRIES: 3
 
 permissions:
@@ -236,6 +236,9 @@ jobs:
           - workflow: "blackhole-post-commit.yaml"
             name: "Blackhole Post Commit"
             should-run: ${{ needs.update-submodule.outputs.should-run-blackhole }}
+          - workflow: "tt-metal-l2-nightly.yaml"
+            name: "TT-Metal L2 Nightly APC"
+            should-run: ${{ needs.update-submodule.outputs.should-run-wormhole }}
     steps:
       - name: Checkout
         if: matrix.should-run == 'true'
@@ -273,7 +276,7 @@ jobs:
                     gh pr comment "$PR_NUMBER" --body "✅ **$DISPLAY_NAME** passed: [View run]($run_url)" --repo "${{ github.repository }}"
                     return 0
                   else
-                    gh pr comment "$PR_NUMBER" --body "❌ **$DISPLAY_NAME** failed (attempt $((retries + 1))): [View run]($run_url)" --repo "${{ github.repository }}"
+                    gh pr comment "$PR_NUMBER" --body "❌ **$DISPLAY_NAME** failed (attempt $((retries + 1))): [View run]($run_url/attempts/$((retries + 1)))" --repo "${{ github.repository }}"
                     break
                   fi
                 fi
@@ -313,7 +316,12 @@ jobs:
 
           # Trigger workflow with appropriate inputs
           echo "Triggering $WORKFLOW..."
-          gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
+          # Special handling for tt-metal-l2-nightly.yaml to pass run_APC_cpp_tests parameter
+          if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
+            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}" -f run_APC_cpp_tests=true
+          else
+            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
+          fi
 
           # Wait for the new run to appear and ensure it's created after trigger time
           run_id=""
@@ -430,6 +438,13 @@ jobs:
               RESULTS+="- $(check_workflow "all-post-commit-workflows.yaml" "All Post Commit Workflows")"$'\n'
               ALL_PASSED=false
             fi
+
+            if check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC"; then
+              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
+            else
+              RESULTS+="- $(check_workflow "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC")"$'\n'
+              ALL_PASSED=false
+            fi
           fi
 
           if [ "$SHOULD_RUN_BH" = "true" ]; then
@@ -507,6 +522,18 @@ jobs:
             if [ "$WH_RUNS" != "empty" ]; then
               WH_URL=$(echo "$WH_RUNS" | jq -r '.url // ""')
               TEST_STATUS+="- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"$'\n'
+            fi
+
+            # Get TT-Metal L2 Nightly APC workflow results (filter by PR creation time if not recheck)
+            if [ "${{ inputs.recheck_tests }}" = "true" ]; then
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "${{ github.repository }}")
+            else
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "${{ github.repository }}")
+            fi
+
+            if [ "$L2_RUNS" != "empty" ]; then
+              L2_URL=$(echo "$L2_RUNS" | jq -r '.url // ""')
+              TEST_STATUS+="- ✅ **TT-Metal L2 Nightly APC** passed: [View run]($L2_URL)"$'\n'
             fi
           fi
 

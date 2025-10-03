@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <utility>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "device_impl.hpp"
@@ -30,6 +30,8 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal_profiler.hpp>
+#include "impl/profiler/profiler_state.hpp"
+#include "impl/profiler/profiler_state_manager.hpp"
 #include <tt-metalium/fabric.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -797,23 +799,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         mmio_devices_to_close.insert(mmio_device_id);
     }
 
-    // Global Sync across all devices that are being closed
-    // We need to ensure that commands sent to each device have been completed
-    // before closing any device + modifying routing info.
-    // If this is not done, non-blocking CCLs followed by a close will hang, since
-    // the main thread will modify device state while the CCL is running on device.
-    // On TG - this should not be done on MMIO mapped devices, since we don't run
-    // any workloads on them
-    if (!skip_synchronize) {
-        for (const auto& dev_id : devices_to_close) {
-            auto dev = tt::DevicePool::instance().get_active_device(dev_id);
-            if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and dev->is_mmio_capable()) {
-                continue;
-            }
-            Synchronize(dev);    // Synchronize device
-        }
-    }
-
     // TODO(MO): Remove when legacy non-mesh device is removed
     for (const chip_id_t device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
@@ -911,6 +896,14 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     }
 
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+
+    if (getDeviceProfilerState()) {
+        // Device profiling data is dumped here instead of MetalContext::teardown() because MetalContext::teardown() is
+        // called as a std::atexit() function, and ProfilerStateManager::cleanup_device_profilers() cannot be safely
+        // called from a std::atexit() function because it creates new threads, which is unsafe during program
+        // termination.
+        tt::tt_metal::MetalContext::instance().profiler_state_manager()->cleanup_device_profilers();
+    }
 
     return pass;
 }
