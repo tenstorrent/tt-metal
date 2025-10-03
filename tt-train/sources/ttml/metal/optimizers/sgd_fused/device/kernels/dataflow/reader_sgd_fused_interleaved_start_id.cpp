@@ -39,8 +39,8 @@ void kernel_main() {
     const uint32_t grad_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     const uint32_t momentum_in_addr = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
-    const uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t num_tiles_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t start_tile = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_size_bytes = get_tile_size(cb_param_in_idx);
 
@@ -54,31 +54,21 @@ void kernel_main() {
     const auto momentum_in_addr_gen = TensorAccessor(momentum_in_args, momentum_in_addr, tile_size_bytes);
 #endif
 
-    uint32_t end_row = start_row + num_rows_to_process;
-    for (uint32_t r = start_row; r < end_row; ++r) {
-        for (uint32_t c = 0; c < Wt; c += block_size) {
-            uint32_t row_tile_idx = (r * Wt) + c;
-            uint32_t current_block_size = (c + block_size <= Wt) ? block_size : (Wt - c);
+    uint32_t end_tile = start_tile + num_tiles_to_process;
+    for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {
+        uint32_t nth_tile_in_row = tile_idx % Wt;
+        uint32_t current_block_size = (nth_tile_in_row + block_size <= Wt) ? block_size : (Wt - nth_tile_in_row);
 
-            read_tiles(
-                cb_param_in_idx, param_in_addr_gen, row_tile_idx, block_size, current_block_size, tile_size_bytes);
-            read_tiles(cb_grad_idx, grad_addr_gen, row_tile_idx, block_size, current_block_size, tile_size_bytes);
-
+        read_tiles(cb_param_in_idx, param_in_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
+        read_tiles(cb_grad_idx, grad_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
 #if USE_MOMENTUM
-            read_tiles(
-                cb_momentum_in_idx,
-                momentum_in_addr_gen,
-                row_tile_idx,
-                block_size,
-                current_block_size,
-                tile_size_bytes);
+        read_tiles(cb_momentum_in_idx, momentum_in_addr_gen, tile_idx, block_size, current_block_size, tile_size_bytes);
 #endif
-            noc_async_read_barrier();
-            cb_push_back(cb_param_in_idx, block_size);
-            cb_push_back(cb_grad_idx, block_size);
+        noc_async_read_barrier();
+        cb_push_back(cb_param_in_idx, block_size);
+        cb_push_back(cb_grad_idx, block_size);
 #if USE_MOMENTUM
-            cb_push_back(cb_momentum_in_idx, block_size);
+        cb_push_back(cb_momentum_in_idx, block_size);
 #endif
-        }
     }
 }
