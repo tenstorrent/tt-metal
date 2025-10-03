@@ -20,10 +20,18 @@
 #include "dataflow_api.h"
 #endif
 
+constexpr size_t round_up_to_mult_of_4(size_t value) { return ((value + 3) / 4) * 4; }
+
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
 extern uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS];
 extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
+
+// These arrays are used to store the logical to virtual coordinate mapping. Only
+// defined in cores that need this information for NOC transactions (e.g. DM cores).
+// Round up to nearest multiple of 4 to ensure uint32_t alignment for L1 to local copies
+extern uint8_t logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)];
+extern uint8_t logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)];
 
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
 
@@ -49,6 +57,20 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
     l1_to_local_mem_copy((uint*)bank_to_dram_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes), dram_offsets_size_bytes >> 2);
     int32_t l1_offsets_size_bytes = sizeof(bank_to_l1_offset);
     l1_to_local_mem_copy((uint*)bank_to_l1_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes + dram_offsets_size_bytes), l1_offsets_size_bytes >> 2);
+}
+
+inline void noc_logical_to_virtual_map_init(uint64_t logical_to_virtual_map_addr) {
+    int32_t logical_col_to_virtual_col_size_bytes = sizeof(logical_col_to_virtual_col);
+    l1_to_local_mem_copy(
+        (uint*)logical_col_to_virtual_col,
+        (uint tt_l1_ptr*)(logical_to_virtual_map_addr),
+        logical_col_to_virtual_col_size_bytes >> 2);
+
+    int32_t logical_row_to_virtual_row_size_bytes = sizeof(logical_row_to_virtual_row);
+    l1_to_local_mem_copy(
+        (uint*)logical_row_to_virtual_row,
+        (uint tt_l1_ptr*)(logical_to_virtual_map_addr + logical_col_to_virtual_col_size_bytes),
+        logical_row_to_virtual_row_size_bytes >> 2);
 }
 
 FORCE_INLINE
