@@ -24,15 +24,13 @@ runs:
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
-    - uses: ./.github/actions/docker-run
+    - run: |
+        cd docker-job
+        set -x
+
+        ${{ inputs.commands }}
+        status=$?
+        env python3 models/perf/merge_perf_results.py REPORT
+        exit $status
+
       if: ${{ env.PIPELINE == 'model-perf' }}
-      with:
-        docker_image: ${{ env.DOCKER_IMAGE }}
-        docker_password: ${{ env.DOCKER_PASSWORD }}
-        docker_opts: ${{ env.DOCKER_OPTS }}
-        install_wheel: true
-        run_args: |
-          ${{ inputs.commands }}
-          status=$?
-          env python3 models/perf/merge_perf_results.py REPORT
-          exit $status
