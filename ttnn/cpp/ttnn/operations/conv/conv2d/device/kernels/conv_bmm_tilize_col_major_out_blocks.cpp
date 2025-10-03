@@ -280,6 +280,7 @@ void MAIN {
 #endif
 #else
     constexpr bool split_reader = false;
+    constexpr bool split_reader_overlapped = false;
     constexpr uint32_t in0_num_subblocks_read = reader_num_h_subblocks;
 #endif
 

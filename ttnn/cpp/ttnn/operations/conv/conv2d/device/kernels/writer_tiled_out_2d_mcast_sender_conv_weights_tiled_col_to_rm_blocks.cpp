@@ -179,8 +179,6 @@ void kernel_main() {
 #endif
                 if (is_sender_core) {
                     uint32_t l1_write_addr_act = get_write_ptr(cb_id_act_second_reader) + act_write_offset;
-                    DPRINT << "SECOND READER: CB ADDR " << get_write_ptr(cb_id_act_second_reader)
-                           << " ACT WRITE OFFSET " << act_write_offset << ENDL();
                     noc_async_read_one_packet_set_state(get_noc_addr(act_l1_read_addr), coalesced_read_bytes);
                     read_activation_data<
                         sliced_inner_dim,
@@ -199,13 +197,14 @@ void kernel_main() {
                         reader_idx,
                         act_l1_read_addr,
                         stride_h_bytes);
-                }
 #ifdef SPLIT_READER_OVERLAPPED
-                cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
-                get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
-                    base_write_addr + cb_ind_offset * act_block_size;
-                noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
-#else
+                    cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
+                    get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
+                        base_write_addr + cb_ind_offset * act_block_size;
+                    noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
+#endif
+                }
+#ifndef SPLIT_READER_OVERLAPPED
                 cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 #endif
                 if (skip_work) {
@@ -279,6 +278,9 @@ void kernel_main() {
             // Update reader index for next iteration (split reader increment)
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
 #endif
+            if (skip_work) {
+                continue;
+            }
 #ifdef FUSE_BIAS
             if (load_bias) {
                 cb_reserve_back(bias_cb_id, bias_ntiles);

@@ -140,13 +140,14 @@ void kernel_main() {
                         reader_idx,
                         act_l1_read_addr,
                         stride_h_bytes);
-                }
 #ifdef SPLIT_READER_OVERLAPPED
-                cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
-                get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
-                    base_write_addr + cb_ind_offset * act_block_size;
-                noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
-#else
+                    cb_ind_offset = (cb_ind_offset + read_ind_stride) % act_cb_block_cnt;
+                    get_local_cb_interface(cb_id_act_second_reader).fifo_wr_ptr =
+                        base_write_addr + cb_ind_offset * act_block_size;
+                    noc_semaphore_set(act_split_reader_sync_second_semaphore_addr_ptr, VALID);
+#endif
+                }
+#ifndef SPLIT_READER_OVERLAPPED
                 cb_push_back(cb_id_act_second_reader, act_block_num_tiles_split_last);
 #endif
 #endif
