@@ -4565,30 +4565,33 @@ def test_conv2d_ch_split_dram_panoptic(
     signpost(header=f"ch_slice_conv_{split_input_channels_factor}_{split_output_channels_factor}_end.")
 
 
-@pytest.mark.parametrize("batch_size, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, has_bias, kernel, stride, padding, dilation, groups, shard_layout, math_fidelity",
+@pytest.mark.parametrize("batch_size, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, has_bias, kernel, stride, padding, dilation, groups, shard_layout, math_fidelity, output_layout, act_block_h_override",
                         [
-                            [1, 3, 64, 384, 1280, ttnn.bfloat16, ttnn.bfloat16, False, (7, 7), (2, 2), (3, 3), (1, 1), 1, None, ttnn.MathFidelity.HiFi4],
+                            [1, 3, 64, 384, 1280, ttnn.bfloat8_b, ttnn.bfloat16, False, (7, 7), (2, 2), (3, 3), (1, 1), 1, None, ttnn.MathFidelity.HiFi4, ttnn.TILE_LAYOUT, 32 * 1],
+                            [1, 64,  64, 96, 320, ttnn.bfloat8_b, ttnn.bfloat16, False, (3, 3), (1, 1), (1, 1), (1, 1), 1, HS,   ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
+                            [1, 64, 128, 96, 320, ttnn.bfloat8_b, ttnn.bfloat16, False, (3, 3), (2, 2), (1, 1), (1, 1), 1, HS,   ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
 
-                            [1, 64, 128, 96, 320, ttnn.bfloat16, ttnn.bfloat16, False, (3, 3), (2, 2), (1, 1), (1, 1), 1, HS,   ttnn.MathFidelity.HiFi4],
-                            [1, 64,  64, 96, 320, ttnn.bfloat16, ttnn.bfloat16, False, (3, 3), (1, 1), (1, 1), (1, 1), 1, None, ttnn.MathFidelity.HiFi4],
+                            [1, 128, 128,  48, 160, ttnn.bfloat8_b, ttnn.bfloat16, False, (3, 3), (1, 1), (1, 1), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
+                            [1, 128, 256,  48, 160, ttnn.bfloat8_b, ttnn.bfloat16, False, (3, 3), (2, 2), (1, 1), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
+                            [1, 128, 256,  48, 160, ttnn.bfloat8_b, ttnn.bfloat16, True , (1, 1), (1, 1), (0, 0), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
 
-                            [1, 128, 128,  48, 160, ttnn.bfloat16, ttnn.bfloat16, False, (3, 3), (1, 1), (1, 1), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4],
-                            [1, 128, 256,  48, 160, ttnn.bfloat16, ttnn.bfloat16, False, (3, 3), (2, 2), (1, 1), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4],
-                            [1, 128, 256,  48, 160, ttnn.bfloat16, ttnn.bfloat16, True , (1, 1), (1, 1), (0, 0), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4],
+                            [1, 256, 256,  24,  80, ttnn.bfloat16, ttnn.bfloat16, True , (1, 1), (1, 1), (0, 0), (1, 1), 1, None, ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
+                            [1, 256, 256,  24,  80, ttnn.bfloat8_b, ttnn.bfloat16, False, (3, 3), (1, 1), (1, 1), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
+                            [1, 256, 512,  24,  80, ttnn.bfloat8_b, ttnn.bfloat16, False, (3, 3), (2, 2), (1, 1), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
 
-                            [1, 256, 256,  24,  80, ttnn.bfloat16, ttnn.bfloat16, True , (1, 1), (1, 1), (0, 0), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4],
-                            [1, 256, 256,  24,  80, ttnn.bfloat16, ttnn.bfloat16, False, (3, 3), (1, 1), (1, 1), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4],
-                            [1, 256, 512,  24,  80, ttnn.bfloat16, ttnn.bfloat16, False, (3, 3), (2, 2), (1, 1), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4],
-
-                            [1, 512, 256, 12, 40, ttnn.bfloat16, ttnn.bfloat16, True , (1, 1), (1, 1), (0, 0), (1, 1), 1, None, ttnn.MathFidelity.HiFi4],
-                            [1, 512, 512, 12, 40, ttnn.bfloat16, ttnn.bfloat16, False, (3, 3), (1, 1), (1, 1), (1, 1), 1, None, ttnn.MathFidelity.HiFi4],
-                            #encoder block
-                            [1, 1, 1, 159, 159, ttnn.bfloat16, ttnn.bfloat16, False, (5, 5), (1, 1), (2, 2), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4],
+                            [1, 512, 256, 12, 40, ttnn.bfloat16, ttnn.bfloat16, True , (1, 1), (1, 1), (0, 0), (1, 1), 1, None, ttnn.MathFidelity.HiFi4, ttnn.TILE_LAYOUT, 32 * 1],
+                            [1, 512, 512, 12, 40, ttnn.bfloat8_b, ttnn.bfloat16, False, (3, 3), (1, 1), (1, 1), (1, 1), 1, BS, ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1], #original orientation COL_MAJOR, here ROW_MAJOR
+                            # # #encoder block
+                            [1, 1, 1, 159, 159, ttnn.bfloat16, ttnn.bfloat16, False, (5, 5), (1, 1), (2, 2), (1, 1), 1, HS, ttnn.MathFidelity.HiFi4, ttnn.ROW_MAJOR_LAYOUT, 32 * 1],
                         ])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16*1024}], indirect=True)
 @run_for_blackhole("blackhole specific tests")
-def test_conv2d_oft(device, torch_tensor_map, batch_size, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, has_bias, kernel, stride, padding, dilation, groups, shard_layout, math_fidelity):
+def test_conv2d_oft(device, torch_tensor_map, batch_size, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, has_bias, kernel, stride, padding, dilation, groups, shard_layout, math_fidelity, output_layout, act_block_h_override):
     skip_if_not_blackhole_20_cores(device)
+    config = {
+        "act_block_h": act_block_h_override,
+    }
+
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,
@@ -4609,10 +4612,12 @@ def test_conv2d_oft(device, torch_tensor_map, batch_size, input_channels, output
         dilation_w=dilation[1],
         groups=groups,
         has_bias=has_bias,
-        config_override=None,
+        config_override=config,
         shard_layout=shard_layout,
+        output_layout=output_layout,
+        fp32_accum=True,
+        deallocate_activation=True,
     )
-
 
 @pytest.mark.parametrize(
     "input_dtype, input_layout",
