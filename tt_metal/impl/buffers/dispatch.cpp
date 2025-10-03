@@ -62,13 +62,12 @@ struct BufferWriteDispatchParams {
     bool issue_wait = false;
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
-    std::shared_ptr<PinnedMemory> pinned_memory = nullptr;
     bool use_pinned_transfer = false;
     uint32_t pinned_src_noc_xy = 0;
     uint32_t pinned_src_addr_lo = 0;
 
     BufferWriteDispatchParams() = default;
-    BufferWriteDispatchParams(uint32_t src_noc_xy, uint32_t src_addr_32B, bool src_pinned = true) :
+    BufferWriteDispatchParams(uint32_t src_noc_xy, uint32_t src_addr_32B, bool src_pinned = false) :
         pinned_src_noc_xy{src_noc_xy}, pinned_src_addr_lo{src_addr_32B}, use_pinned_transfer{src_pinned} {}
 
     void calculate_issue_wait() {
@@ -511,16 +510,17 @@ void populate_interleaved_buffer_write_dispatch_cmds(
         "Page offset needs to fit within range of uint16_t, bank_base_address was computed incorrectly!");
     const uint16_t start_page = uint16_t(dispatch_params.dst_page_index & CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX);
 
+    bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
+    TT_ASSERT(not use_pinned_transfer);
     const bool flush_prefetch = true;
-    command_sequence.add_dispatch_write_paged(  // todo: handle large buffer
+    command_sequence.add_dispatch_write_paged(
         flush_prefetch,
         is_dram,
         start_page,
         dispatch_params.address,
         dispatch_params.page_size_to_write,
-        dispatch_params.total_pages_to_write);
+        use_pinned_transfer ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn);
 
-    bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
     if (use_pinned_transfer) {
         const uint64_t data_size_bytes = (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
         command_sequence.add_prefetch_relay_linear(
@@ -641,18 +641,20 @@ void issue_buffer_dispatch_command_sequence(
     CoreType dispatch_core_type) {
     uint32_t num_worker_counters = sub_device_ids.size();
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
+    TT_ASSERT(not use_pinned_memory);
+    uint32_t num_pages_to_write =
+        use_pinned_memory ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn;
+    uint64_t data_size_bytes = uint64_t(num_pages_to_write) * dispatch_params.page_size_to_write;
 
     tt::tt_metal::DeviceCommandCalculator calculator;
     if constexpr (std::is_same_v<T, ShardedBufferWriteDispatchParams>) {
-        uint64_t data_size_bytes = uint64_t(dispatch_params.pages_per_txn) * dispatch_params.page_size_to_write;
         calculator.add_dispatch_write_linear<true, false>(data_size_bytes);
     } else {
-        calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, dispatch_params.total_pages_to_write);
+        calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, num_pages_to_write);
     }
     if (use_pinned_memory) {
         calculator.add_prefetch_relay_linear();
     } else {
-        uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
         calculator.add_data<false>(data_size_bytes);
     }
 
@@ -725,7 +727,7 @@ void write_interleaved_buffer_to_device(
     } else {
         // Prefetcher will read from hugepage in one or more iterations depending on transfer size
         while (dispatch_params.total_pages_to_write > 0) {
-            // Ensure page offset can fit in uint16_t, unnecessary for pinned host buffer
+            // Ensure page offset can fit in uint16_t
             if (dispatch_params.is_page_offset_out_of_bounds()) {
                 dispatch_params.update_params_to_be_within_bounds();
             }
@@ -821,7 +823,8 @@ void write_to_device_buffer(
     const bool has_pinned_inputs = (src != nullptr && pinned_memory != nullptr);
     uint32_t pinned_src_noc_xy = 0;
     uint32_t pinned_src_addr_lo = 0;
-    use_pinned_transfer = has_pinned_inputs && is_unpadded;
+    // sharded buffer pin memory is currently unsupported
+    use_pinned_transfer = has_pinned_inputs && is_unpadded && !is_sharded(buffer.buffer_layout());
     if (use_pinned_transfer) {
         auto device_id = buffer.device()->id();
         const auto& cluster = MetalContext::instance().get_cluster();
