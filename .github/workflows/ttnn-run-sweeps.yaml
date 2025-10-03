@@ -830,13 +830,11 @@ jobs:
         run: |
           BATCH="${{ matrix.batch }}"
 
-          # Set skip-on-timeout flag based on input (default to true for nightly runs, false for comprehensive runs)
+          # Set skip-on-timeout flag based on input (default to true for all scheduled runs)
           SKIP_ON_TIMEOUT_FLAG=""
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
-            # For scheduled runs: skip on timeout for nightly (Mon/Tue/Thu/Fri), but not for comprehensive (Wed/Sat)
-            if [[ "${{ github.event.schedule }}" == "0 4 * * 1,2,4,5" ]]; then
-              SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
-            fi
+            # For scheduled runs: skip on timeout for both nightly and comprehensive runs
+            SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
           elif [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
             # For manual dispatch: use the input parameter
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
