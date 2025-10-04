@@ -982,7 +982,7 @@ def pytest_timeout_set_timer(item, settings):
 
     if metal_timeout_enabled is not None or using_xdist:
         current_pid = os.getpid()
-        logger.info(f"Metal timeout {settings.timeout} seconds {current_pid} for {item.nodeid}")
+        logger.debug(f"Metal timeout {settings.timeout} seconds {current_pid} for {item.nodeid}")
 
         # Install handler (idempotent is fine)
         signal.signal(signal.SIGALRM, _metal_alarm_handler)
@@ -993,7 +993,7 @@ def pytest_timeout_set_timer(item, settings):
 
         # Provide a canceller for pytest-timeout
         def cancel():
-            logger.info("Cancelling timer")
+            logger.debug("Cancelling timer")
             # Disarm the timer
             signal.setitimer(signal.ITIMER_REAL, 0.0, 0.0)
 
