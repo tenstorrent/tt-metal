@@ -105,13 +105,6 @@ def attempt_get_env_var(env_var_name):
     return os.environ[env_var_name]
 
 
-def get_is_srcdir_build():
-    build_dir = CMakeBuild.get_working_dir()
-    assert build_dir.is_dir()
-    git_dir = build_dir / ".git"
-    return git_dir.exists()
-
-
 def get_metal_local_version_scheme(metal_build_config, version):
     if version.dirty:
         return f"+g{version.node}"
@@ -190,6 +183,7 @@ class EditableWheel(editable_wheel):
         WheelFile(os.path.join(self.dist_dir, wheel), mode="a").writestr(pth_filename, pth_content)
 
 
+<<<<<<< HEAD
 class CMakeBuild(build_ext):
     @staticmethod
     def get_build_env():
@@ -387,6 +381,8 @@ class CMakeBuild(build_ext):
         return self.inplace
 
 
+=======
+>>>>>>> db9051a337 (Use scikit for Wheel building)
 packages = find_packages(where="ttnn", exclude=["ttnn.examples", "ttnn.examples.*"])
 packages += find_packages("tools")
 
@@ -412,7 +408,7 @@ setup(
         "triage": "tools/triage",
     },
     ext_modules=ext_modules,
-    cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),
+    cmdclass=dict(editable_wheel=EditableWheel),
     zip_safe=False,
     long_description=readme,
     long_description_content_type="text/markdown",
