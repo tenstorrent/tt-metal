@@ -37,6 +37,12 @@ struct UniversalKernelConfig {
     std::vector<uint32_t> common_runtime_args;
 };
 
+struct GeneratedTileConstant {
+    std::string name;
+    tt::DataFormat data_format = tt::DataFormat::Float16_b;
+    std::string generator_code;
+};
+
 class UniversalKernelConfigBuilder {
 public:
     UniversalKernelConfigBuilder(MathConfig math_config = MathConfig{}) : math_config_(std::move(math_config)) {}
@@ -75,6 +81,10 @@ public:
         defines_.emplace(std::move(name), std::move(value));
         return *this;
     }
+    UniversalKernelConfigBuilder& add_generated_tile_constant(GeneratedTileConstant generated_tile_constant) {
+        generated_tile_constants_.push_back(std::move(generated_tile_constant));
+        return *this;
+    }
 
     UniversalKernelConfigBuilder& add_buffer(std::string name, const Buffer& buffer, tt::DataFormat data_format);
     UniversalKernelConfigBuilder& add_buffer(std::string name, const Buffer* buffer, tt::DataFormat data_format);
@@ -107,6 +117,7 @@ private:
     std::vector<std::pair<std::string, uint32_t>> common_runtime_args_;
     std::map<std::string, std::string> defines_;
     std::vector<std::pair<std::string, TensorData>> tensor_data_;
+    std::vector<GeneratedTileConstant> generated_tile_constants_;
     MathConfig math_config_;
 };
 

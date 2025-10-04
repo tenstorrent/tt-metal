@@ -98,11 +98,27 @@ UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
                        << name << "_page_size_bytes); ";
     }
 
+    std::stringstream init_reader_define_ss;
+    std::stringstream init_compute_define_ss;
+
+    for (size_t constant_idx = 0; constant_idx < generated_tile_constants_.size(); ++constant_idx) {
+        const auto& constant = generated_tile_constants_[constant_idx];
+        init_define_ss << "constexpr auto " << constant.name << "_cb = " << constant_idx + tensor_data_.size() << "; ";
+        init_define_ss << "constexpr auto " << constant.name << " = ConstantTile(" << constant.name << "_cb, 0); ";
+        init_reader_define_ss << constant.generator_code << "; ";
+        init_compute_define_ss << "cb_wait_front(" << constant.name << "_cb, 1); ";
+    }
+
     defines["INIT_ARGUMENTS"] = init_define_ss.str();
     defines["TOTAL_NUM_CIRCULAR_BUFFERS"] = std::to_string(tensor_data_.size());
 
-    ReaderDataMovementConfig reader_config(compile_time_args, defines);
-    WriterDataMovementConfig writer_config(compile_time_args, defines);
+    auto reader_defines = defines;
+    reader_defines["INIT_ARGUMENTS"] += init_reader_define_ss.str();
+    auto compute_defines = defines;
+    compute_defines["INIT_ARGUMENTS"] += init_compute_define_ss.str();
+
+    ReaderDataMovementConfig reader_config(compile_time_args, std::move(reader_defines));
+    WriterDataMovementConfig writer_config(compile_time_args, std::move(defines));
     ComputeConfig compute_config{
         .math_fidelity = math_config_.math_fidelity,
         .fp32_dest_acc_en = math_config_.fp32_dest_acc_en,
@@ -110,8 +126,8 @@ UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
         .unpack_to_dest_mode = math_config_.unpack_to_dest_mode,
         .bfp8_pack_precise = math_config_.bfp8_pack_precise,
         .math_approx_mode = math_config_.math_approx_mode,
-        .compile_args = compile_time_args,
-        .defines = defines,
+        .compile_args = std::move(compile_time_args),
+        .defines = std::move(compute_defines),
     };
     return {
         .reader_config = std::move(reader_config),
@@ -130,6 +146,13 @@ std::vector<CircularBufferConfig> UniversalKernelConfigBuilder::compute_circular
         circular_buffers.push_back(
             CircularBufferConfig(2 * tensor_data.page_size_bytes, {{tensor_idx, tensor_data.data_format}})
                 .set_page_size(tensor_idx, tensor_data.page_size_bytes));
+    }
+    for (size_t constant_idx = 0; constant_idx < generated_tile_constants_.size(); ++constant_idx) {
+        const auto& generated_tile_constant = generated_tile_constants_[constant_idx];
+        uint32_t cb_id = constant_idx + tensor_data_.size();
+        uint32_t tile_size = tt::tile_size(generated_tile_constant.data_format);
+        circular_buffers.push_back(CircularBufferConfig(tile_size, {{cb_id, generated_tile_constant.data_format}})
+                                       .set_page_size(cb_id, tile_size));
     }
     return circular_buffers;
 }

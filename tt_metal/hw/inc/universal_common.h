@@ -13,6 +13,7 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api.h"
 
 using namespace ckernel;
@@ -50,7 +51,7 @@ FORCE_INLINE void release_read_tile(uint32_t cb_id) {
 }
 
 struct ReadTile {
-    ReadTile(uint32_t cb_id, uint32_t id) : cb_id_(cb_id), id_(id) {}
+    constexpr ReadTile(uint32_t cb_id, uint32_t id) : cb_id_(cb_id), id_(id) {}
     ReadTile(const ReadTile&) = delete;
     ReadTile& operator=(const ReadTile&) = delete;
     ~ReadTile() { release_read_tile(cb_id_); }
@@ -58,7 +59,7 @@ struct ReadTile {
 #ifdef COMPILE_FOR_TRISC
         return id_ - popped_pages[cb_id_];
 #else
-        return 0;
+        return id_;
 #endif
     }
     uint32_t cb_id() const { return cb_id_; }
@@ -67,7 +68,15 @@ private:
     uint32_t cb_id_ = 0;
     uint32_t id_ = 0;
 };
-struct NopTile {};
+struct ConstantTile {
+    constexpr ConstantTile(uint32_t cb_id, uint32_t id) : cb_id_(cb_id), id_(id) {}
+    uint32_t local_id() const { return id_; }
+    uint32_t cb_id() const { return cb_id_; }
+
+private:
+    uint32_t cb_id_ = 0;
+    uint32_t id_ = 0;
+};
 
 template <typename Accessor>
 FORCE_INLINE auto read_tile_impl(
@@ -82,7 +91,7 @@ FORCE_INLINE auto read_tile_impl(
     offset_pages[cb_id] += 1;
     return ReadTile(cb_id, offset_pages[cb_id] - 1);
 #else
-    return NopTile();
+    return ConstantTile(0, 0);
 #endif
 }
 
@@ -112,10 +121,14 @@ FORCE_INLINE void write_tile_impl(
 #define write_tile(from_dst_idx, tensor, into_page_id) \
     universal_kernel::detail::write_tile_impl(from_dst_idx, tensor##_cb, into_page_id, tensor, tensor##_page_size_bytes)
 using ReadTile = universal_kernel::detail::ReadTile;
-using NopTile = universal_kernel::detail::NopTile;
+using ConstantTile = universal_kernel::detail::ConstantTile;
 
-FORCE_INLINE void add_tiles(const ReadTile& in0, const ReadTile& in1, uint32_t dst_idx) {
+template <typename TileA, typename TileB>
+FORCE_INLINE void add_tiles(const TileA& in0, const TileB& in1, uint32_t dst_idx) {
     add_tiles(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
 }
 
-FORCE_INLINE void add_tiles(NopTile, NopTile, uint32_t) {}
+template <typename TileA, typename TileB>
+FORCE_INLINE void reduce_tile(const TileA& in0, const TileB& in1, uint32_t dst_idx) {
+    reduce_tile(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
+}
