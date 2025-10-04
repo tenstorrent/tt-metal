@@ -93,6 +93,27 @@ auto get_default_value() {
     }
 }
 
+template <DataFormat data_format>
+auto get_value(void* ptr) {
+    // Check for supported datatypes
+    if constexpr (data_format == DataFormat::Float16_b) {
+        return *reinterpret_cast<uint16_t*>(ptr);
+    } else if constexpr (data_format == DataFormat::UInt16) {
+        return *reinterpret_cast<uint16_t*>(ptr);
+    } else if constexpr (data_format == DataFormat::Float32) {
+        return *reinterpret_cast<uint32_t*>(ptr);
+    } else if constexpr (data_format == DataFormat::Int32) {
+        return *reinterpret_cast<int32_t*>(ptr);
+    } else if constexpr (data_format == DataFormat::UInt32) {
+        return *reinterpret_cast<uint32_t*>(ptr);
+    } else {
+        // We need a value-dependent expression (gcc-12) that is not
+        // tautologically false (gcc-15)
+        static_assert(data_format == DataFormat::Float16_b, "Unsupported data format");
+    }
+}
+
+
 /**
  * @brief Helper function to calculate the index for argmax operations.
  *
@@ -191,6 +212,56 @@ void compare_values(
         static_assert(data_format == DataFormat::Float16_b, "Unsupported data format in compare_values");
     }
 }
+
+/**
+ * @brief Compares values from a circular buffer and updates the maximum value and its index for argmax operation.
+ *
+ * This template function reads a value from the specified circular buffer address and compares it with the current
+ * maximum value. If the new value is greater, it updates both the maximum value and its corresponding index.
+ * The comparison logic is specialized for different data formats using compile-time branching.
+ *
+ * @tparam data_format The data format type (Float16_b, Float32, UInt16, Int32, UInt32) that determines
+ *                     the value type and comparison method to use
+ *
+ * @param src_cb_addr Address of the source circular buffer containing the input values
+ * @param max_val Reference to the current maximum value that may be updated if a larger value is found
+ * @param max_idx Reference to the index of the current maximum value that may be updated
+ * @param i Index within the reduction dimension (inner-most index)
+ * @param j Index within the middle dimension
+ * @param k Index within the outer dimension
+ * @param red_dim_units Number of units in the reduction dimension
+ * @param reduce_all Flag indicating whether to reduce across all dimensions (affects index calculation)
+ * @param inner_dim_units Number of units in the inner dimension (used for multi-dimensional index calculation)
+ *
+ * @note The function uses specialized comparison functions (bfloat16_greater, float32_greater, etc.) for
+ *       floating-point and signed integer types to handle special cases like NaN values properly.
+ * @note When reduce_all is true, the index is calculated as a flattened multi-dimensional index,
+ *       otherwise only the reduction dimension index (i) is used.
+ */
+template <DataFormat data_format>
+void compare_values(
+    decltype(get_default_value<data_format>()) val,
+    uint32_t index,
+    decltype(get_default_value<data_format>())& max_val,
+    uint32_t& max_idx
+    ) {
+    if constexpr (data_format == DataFormat::Float16_b) {
+        update_max_if_greater(max_val, max_idx, val, index, bfloat16_greater);
+    } else if constexpr (data_format == DataFormat::Float32) {
+        update_max_if_greater(max_val, max_idx, val, index, float32_greater);
+    } else if constexpr (data_format == DataFormat::UInt16) {
+        update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
+    } else if constexpr (data_format == DataFormat::Int32) {
+        update_max_if_greater(max_val, max_idx, val, index, int32_greater);
+    } else if constexpr (data_format == DataFormat::UInt32) {
+        update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
+    } else {
+        // We need a value-dependent expression (gcc-12) that is not
+        // tautologically false (gcc-15)
+        static_assert(data_format == DataFormat::Float16_b, "Unsupported data format in compare_values");
+    }
+}
+
 
 /**
  * @brief Helper function template for processing a single core's data in argmax reduction.
