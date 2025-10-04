@@ -32,14 +32,14 @@ void MAIN {
     // c_0 + ((c_1 * value) * c_2) -> c_3
     const auto addcmul =
         // c_1 * value -> c_4
-        views::with_cb_tiles</*0*/ tt::c_1, /*1*/ tt::c_4>(
-            views::copy_tile<0 /*c_1*/>(0, 0) | views::mul_unary_tile(0, value) | views::pack_tile<1 /*c_4*/>(0)) |
+        views::with_cb_ids</*0*/ tt::c_1, /*1*/ tt::c_4>(
+            views::copy<0 /*c_1*/>(0, 0) | views::mul_unary(0, value) | views::pack<1 /*c_4*/>(0)) |
         // c_4 * c_2 -> c_4
-        views::with_cb_tiles</*0*/ tt::c_4, /*1*/ tt::c_2, /*2*/ tt::c_4>(
-            views::mul_tiles<0 /*c_4*/, 1 /*c_2*/>(0, 0, 0) | views::pack_tile<2 /*c_4*/>(0)) |
+        views::with_cb_ids</*0*/ tt::c_4, /*1*/ tt::c_2, /*2*/ tt::c_4>(
+            views::mul<0 /*c_4*/, 1 /*c_2*/>(0, 0, 0) | views::pack<2 /*c_4*/>(0)) |
         // c_0 + c_4 -> c_3
-        views::with_cb_tiles</*0*/ tt::c_0, /*1*/ tt::c_4, /*2*/ tt::c_3>(
-            views::add_tiles<0 /*c_0*/, 1 /*c_4*/>(0, 0, 0) | views::pack_tile<2 /*c_3*/>(0));
+        views::with_cb_ids</*0*/ tt::c_0, /*1*/ tt::c_4, /*2*/ tt::c_3>(
+            views::add<0 /*c_0*/, 1 /*c_4*/>(0, 0, 0) | views::pack<2 /*c_3*/>(0));
 
     view.compute_tiles(n_tiles, addcmul);
 }
