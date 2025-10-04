@@ -443,7 +443,7 @@ class ModelArgs:
             model_version = os.getenv("HF_MODEL")
             self.CKPT_DIR = model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
 
-            self.TOKENIZER_PATH = HF_MODEL
+            self.TOKENIZER_PATH = self.CKPT_DIR
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
@@ -465,7 +465,7 @@ class ModelArgs:
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
-        logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Tokenizer file: {os.path.join(self.TOKENIZER_PATH, 'tokenizer.model')}")
         logger.info(f"Cache directory: {self.CACHE_PATH}")
         logger.info(f"Model name: {self.model_name}")
 
@@ -474,8 +474,8 @@ class ModelArgs:
         self.model_cache_path = Path(self.CACHE_PATH)
 
         # Load weights and tokenizer
-        self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
+        self.consolidated_weights_path = os.path.join(self.CKPT_DIR, "consolidated.00.pth")
+        self.tokenizer_path = os.path.join(self.TOKENIZER_PATH, "tokenizer.model")
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
