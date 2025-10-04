@@ -1,0 +1,46 @@
+
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [1, 2] }
+  host_topology { dims: [1, 1] }
+  channels { count: 1 }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [1, 2] }
+  host_topology { dims: [1, 1] }
+  channels { count: 1 }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  # Relaxed (mesh-level)
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+
+  # Strict (device-level)
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 device_id: 1 } }
+    channels { count: 1 policy: STRICT }
+  }
+
+  # Mixed (device on one side, mesh on the other)
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 3 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
