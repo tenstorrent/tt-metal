@@ -1033,7 +1033,7 @@ def run_debug_script():
         extra_env = {
             "LD_LIBRARY_PATH": None,
         }
-        debug_result = run_process_and_get_result(f"python {debug_script_path} --active_cores", extra_env)
+        debug_result = run_process_and_get_result(f"python {debug_script_path} --active-cores", extra_env)
 
         logger.info(f"Debug script status: {debug_result.returncode}")
         if debug_result.stdout:
