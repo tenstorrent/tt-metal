@@ -50,6 +50,7 @@ struct Fold {
 
     struct MultiCore {
         struct shared_variables_t {
+            tt::tt_metal::KernelHandle reader_kernel_id;
             tt::tt_metal::KernelHandle writer_kernel_id;
             uint32_t stride_h;
             uint32_t stride_w;

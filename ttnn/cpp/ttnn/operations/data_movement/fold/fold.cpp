@@ -13,6 +13,8 @@
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
 
@@ -283,8 +285,46 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     return output_tensors;
 }
 
+// Each core needs to process multiple of (stride_h * input_width) rows to ensure that
+// the fold operation can be performed locally and do not need to read from remote cores.
+// This function checks if the current shard height is divisible by (stride_h * input_width).
+// If not, it calculates an optimal number of cores and corresponding shard height
+// to enable efficient fold computation across the tensor dimensions.
+Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uint32_t stride_w) {
+    ttnn::Shape input_shape = input.logical_shape();
+    uint32_t input_width = input_shape[2];
+    uint32_t pixels_per_compute_row = stride_h * input_width;
+    uint32_t current_shard_height = input.shard_spec().value().shape[0];
+    const CoreCoord& compute_grid_size = input.device()->compute_with_storage_grid_size();
+    if (current_shard_height % pixels_per_compute_row != 0) {
+        uint32_t max_cores = compute_grid_size.x * compute_grid_size.y;
+        uint32_t total_height = input_shape[0] * input_shape[1] * input_shape[2];
+
+        uint32_t num_cores = max_cores;
+        while (num_cores > 0 && (total_height / pixels_per_compute_row) % num_cores != 0) {
+            num_cores--;
+        }
+
+        TT_ASSERT(num_cores != 0, "Could not find suitable number of cores for resharing the input tensor");
+
+        uint32_t optimal_shard_height = tt::round_up(total_height / num_cores, pixels_per_compute_row);
+
+        auto new_shard_spec = input.shard_spec().value();
+        new_shard_spec.shape[0] = optimal_shard_height;
+
+        // Create new core range set using the calculated number of cores
+        CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
+        new_shard_spec.grid = new_core_range;
+
+        auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
+        // need to reshard
+        return ttnn::reshard(input, new_mem_config, std::nullopt);
+    }
+    return input;
+}
+
 Tensor FoldOperation::invoke(
-    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& input_tensor_,
     uint32_t stride_h,
     uint32_t stride_w,
     bool use_transpose_as_fold,
@@ -294,6 +334,7 @@ Tensor FoldOperation::invoke(
     uint32_t pad_w,
     const std::optional<CoreRangeSet>& core_grid,
     const std::optional<MemoryConfig>& override_memory_config) {
+    Tensor input_tensor = input_tensor_;
     if (use_transpose_as_fold) {
         if (input_tensor.is_sharded()) {
             if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -314,6 +355,16 @@ Tensor FoldOperation::invoke(
         } else {
             return fold_with_transpose_(input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w).at(0);
         }
+    }
+    if (input_tensor.memory_config().is_l1() && input_tensor.is_sharded()) {
+        if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+            TT_THROW("fold op does not support non height-sharding!");
+        }
+        if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
+            TT_THROW("Padding is not supported for L1 sharded folding");
+        }
+        auto sharded_input_tensor = reshard_if_needed(input_tensor, stride_h, stride_w);
+        return ttnn::prim::fold(sharded_input_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
     }
     if (input_tensor.memory_config().is_dram()) {
         if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
