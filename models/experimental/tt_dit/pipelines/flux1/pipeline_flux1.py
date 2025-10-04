@@ -601,7 +601,7 @@ class Flux1Pipeline:
 
                         tt_sigma_difference = ttnn.full(
                             # [1, 1],
-                            latents.shape,
+                            tt_initial_latents.shape,
                             fill_value=sigma_difference,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=ttnn.bfloat16,
