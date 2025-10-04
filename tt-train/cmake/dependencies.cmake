@@ -89,12 +89,22 @@ CPMAddPackage(
         "XTL_ENABLE_TESTS OFF"
 )
 
-CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.26.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtensor
+    GITHUB_REPOSITORY xtensor-stack/xtensor
+    GIT_TAG 0.26.0
+    PATCHES
+        xtensor.patch
+    OPTIONS
+        "XTENSOR_ENABLE_TESTS OFF"
+)
 
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
     GIT_TAG 0.22.0
+    PATCHES
+        xtensor-blas.patch
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
