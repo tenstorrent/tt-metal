@@ -56,13 +56,13 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     assert torch.equal(torch_output_tensor, output_tensor)
 
 
-def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype):
+def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout):
     torch.manual_seed(0)
 
     torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -77,9 +77,12 @@ def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, va
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 1))])
 @pytest.mark.parametrize("value", [0, 1])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
-def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout):
+    if layout == ttnn.TILE_LAYOUT and dtype != ttnn.bfloat16:
+        pytest.skip("tiled multicore pad only supported for bf16")
     for _ in range(2):
-        run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype)
+        run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -458,10 +461,13 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
 @pytest.mark.parametrize("shape", [[1, 1, 18, 13]])
 @pytest.mark.parametrize("padshape", [[1, 1, TILE_HEIGHT, TILE_WIDTH]])
 @pytest.mark.parametrize("use_multicore", [False, True])
-def test_pad_op(device, in_dtype, shape, padshape, use_multicore):
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout):
+    if layout == ttnn.TILE_LAYOUT and in_dtype != ttnn.bfloat16:
+        pytest.skip("tiled multicore pad only supported for bf16")
     torch_input = random_torch_tensor(in_dtype, shape)
 
-    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=layout)
     output_tt = ttnn.pad(ttnn_input, padshape, [0, 0, 0, 0], value=0, use_multicore=use_multicore)
     output_tt = ttnn.to_torch(output_tt)
     assert output_tt.shape == torch.Size(padshape)
