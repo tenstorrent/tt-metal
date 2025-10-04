@@ -28,7 +28,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
-    uint32_t HtWt = Ht * Wt;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(a.device()->arch(), compute_kernel_config);
@@ -57,7 +56,6 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             .set_defines(reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H))
             .add_compile_time_arg("Ht", Ht)
             .add_compile_time_arg("Wt", Wt)
-            .add_compile_time_arg("HtWt", HtWt)
             .add_compile_time_arg("row_chunk", chunk_size)
             .add_compile_time_arg("packed_scaler_value", packed_scaler_value)
             .add_runtime_arg("start_write_page_id", 0)
@@ -110,7 +108,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
         tt_metal::UpdateRuntimeArgs(program, core, [=](uint32_t* runtime_args) {
             runtime_args[start_write_page_id_idx] = num_cols_read;
-            runtime_args[col_start_tile_id_idx] = num_cols_read / Wt * HtWt + num_cols_read % Wt;
+            runtime_args[col_start_tile_id_idx] = num_cols_read / Wt * Wt * Ht + num_cols_read % Wt;
             runtime_args[curr_col_in_batch_idx] = num_cols_read % Wt;
         });
 

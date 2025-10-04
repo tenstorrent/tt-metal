@@ -21,24 +21,26 @@ KERNEL_MAIN {
     uint32_t w_chunk = curr_col_in_batch;
     for (uint32_t wt = 0; wt < num_cols; wt += row_chunk) {
         uint32_t chunk_end = std::min(wt + row_chunk, num_cols);
+        const uint32_t tiles_in_chunk = chunk_end - wt;
 
         // reduction for one chunk
         // accumulation of Ht results in separate DST indexes
         acquire_dst();
-        uint32_t final_col_start = col_start_chunk;
-        uint32_t final_w = w_chunk;
+        const uint32_t row_wrap_increment = (Ht - 1) * Wt + 1;
+        uint32_t w_row = w_chunk;
+        uint32_t col_start_row = col_start_chunk;
         for (uint32_t ht = 0; ht < Ht; ++ht) {
-            uint32_t w_row = w_chunk;
-            uint32_t col_start_row = col_start_chunk;
-            uint32_t curr_id_row = col_start_chunk + ht * Wt;
+            w_row = w_chunk;
+            col_start_row = col_start_chunk;
+            uint32_t curr_id_row = col_start_row + ht * Wt;
 
-            for (uint32_t i = wt; i < chunk_end; ++i) {
+            for (uint32_t k = 0; k < tiles_in_chunk; ++k) {
                 auto src_tile = read_tile(src0, curr_id_row);
-                reduce_tile(src_tile, scaler_tile, i - wt);
+                reduce_tile(src_tile, scaler_tile, k);
 
                 ++w_row;
                 if (w_row == Wt) {
-                    col_start_row = curr_id_row + (Ht - ht - 1) * Wt + 1;
+                    col_start_row += row_wrap_increment;
                     curr_id_row = col_start_row + ht * Wt;
                     w_row = 0;
                 } else {
@@ -46,16 +48,12 @@ KERNEL_MAIN {
                     ++col_start_row;
                 }
             }
-            if (ht == (Ht - 1)) {
-                final_col_start = col_start_row;
-                final_w = w_row;
-            }
         }
-        col_start_chunk = final_col_start;
-        w_chunk = final_w;
+        col_start_chunk = col_start_row;
+        w_chunk = w_row;
 
-        for (uint32_t i = wt; i < chunk_end; ++i) {
-            write_tile((i - wt), out, write_page_id++);
+        for (uint32_t k = 0; k < tiles_in_chunk; ++k) {
+            write_tile(k, out, write_page_id++);
         }
         release_dst();
     }
