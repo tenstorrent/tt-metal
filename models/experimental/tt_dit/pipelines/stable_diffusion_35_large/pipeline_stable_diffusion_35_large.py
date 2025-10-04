@@ -298,6 +298,7 @@ class StableDiffusion3Pipeline:
                     model_name="stable-diffusion-3.5-large",
                     subfolder="transformer",
                     parallel_config=self.dit_parallel_config,
+                    mesh_shape=tuple(submesh_device.shape),
                     dtype="bf16",
                 )
                 # create cache if it doesn't exist

@@ -281,6 +281,7 @@ def test_sd35_transformer2d_model(
             model_name="stable-diffusion-3.5-large",
             subfolder="transformer",
             parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
             dtype="bf16",
         )
         assert os.path.exists(
@@ -449,6 +450,7 @@ def test_sd35_transformer_model_caching(
         model_name="stable-diffusion-3.5-large",
         subfolder="transformer",
         parallel_config=parallel_config,
+        mesh_shape=tuple(mesh_device.shape),
         dtype="bf16",
     )
 
