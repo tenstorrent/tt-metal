@@ -360,31 +360,50 @@ def test_fold(act_shape, stride_h, stride_w, device):
     torch.testing.assert_allclose(actual, expected)
 
 
-def test_fold_sharded(device):
+@pytest.mark.parametrize(
+    "act_shape,stride_h,stride_w",
+    [
+        ((8, 224, 14, 8), 16, 1),
+        ((16, 224, 224, 16), 2, 2),
+        ((1, 16, 16, 8), 2, 2),
+        ((4, 64, 64, 24), 2, 2),
+        ((1, 21, 21, 16), 3, 7),
+        ((4, 21, 21, 16), 3, 7),
+        ((16, 42, 42, 64), 6, 6),
+        ((1, 8, 8, 16), 8, 8),
+        ((4, 14, 14, 256), 2, 2),
+        ((1, 33, 33, 16), 3, 11),
+    ],
+)
+def test_fold_sharded(device, act_shape, stride_h, stride_w):
     torch.manual_seed(0)
 
+    N, H, W, C = act_shape
+    shape = act_shape
     for run in range(2):
-        shape = (8, 224, 14, 64)
-        N, H, W, C = shape
-        stride_h = 16
-        stride_w = 1
-
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
         expected = fold_torch(torch_input, stride_h, stride_w)
         expected = expected.reshape(1, 1, -1, expected.shape[-1])
 
+        # Simple sharding: always try for maximum cores for best performance
+        total_elements = N * H * W
+
+        for grid_x, grid_y in [(8, 8), (4, 4), (2, 2), (1, 1)]:
+            n_cores = grid_x * grid_y
+            if total_elements % n_cores == 0:
+                break
+
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
                     ttnn.CoreCoord(0, 0),
-                    ttnn.CoreCoord(7, 0),
+                    ttnn.CoreCoord(grid_x - 1, grid_y - 1),
                 ),
             }
         )
-        n_cores = 8
 
-        shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
+        shard_spec = ttnn.ShardSpec(shard_grid, [total_elements // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
         tt_input = torch2tt_tensor(
             torch_input,
@@ -396,3 +415,5 @@ def test_fold_sharded(device):
         actual = tt2torch_tensor(tt_out)
 
         torch.testing.assert_allclose(actual, expected)
+        tt_input.deallocate()
+        tt_out.deallocate()
