@@ -350,6 +350,26 @@ void launch_operation_with_adapter(
 }
 
 template <DeviceOperationConcept device_operation_t>
+tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> get_final_placements(
+    const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
+    auto result = first_tensor.tensor_topology().placements();
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&result](const Tensor& tensor) {
+            const auto& tensor_placements = tensor.tensor_topology().placements();
+            for (size_t i = 0; i < tensor_placements.size(); i++) {
+                if (i >= result.size()) {
+                    result.push_back(tensor_placements[i]);
+                } else if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
+                               tensor_placements[i])) {
+                    result[i] = tensor_placements[i];
+                }
+            }
+        },
+        tensor_args);
+    return result;
+}
+
+template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
@@ -363,6 +383,19 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     auto mesh_device = first_tensor.device();
+    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> final_placements =
+        detail::get_final_placements<device_operation_t>(tensor_args, first_tensor);
+
+    tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
+        [&final_placements](const Tensor& output_tensor) {
+            auto topology = tt::tt_metal::TensorTopology(
+                output_tensor.tensor_topology().distribution_shape(),
+                final_placements,
+                output_tensor.tensor_topology().mesh_coords());
+            return output_tensor.with_tensor_topology(topology);
+        },
+        tensor_return_value);
+
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
     return tensor_return_value;
