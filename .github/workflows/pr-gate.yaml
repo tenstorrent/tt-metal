@@ -192,6 +192,11 @@ jobs:
           sparse-checkout: |
             tt-train
 
+      - name: Submodules
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive tt-train
+
       - name: Build tt-train
         run: |
           set -euo pipefail

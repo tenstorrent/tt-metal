@@ -84,7 +84,7 @@ CPMAddPackage(
     GITHUB_REPOSITORY xtensor-stack/xtl
     GIT_TAG 0.8.0
     PATCHES
-        cmake/xtl.patch
+        xtl.patch
     OPTIONS
         "XTL_ENABLE_TESTS OFF"
 )
