@@ -18,7 +18,6 @@
 #include <algorithm>
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
-#include "allocator_types.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
 #include "hal_types.hpp"

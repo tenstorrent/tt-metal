@@ -32,7 +32,6 @@
 #include "mesh_workload.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
-using tt::tt_metal::IDevice;
 using namespace tt::test_utils;
 using namespace tt::test::buffer::detail;
 using namespace tt::tt_metal;

@@ -18,7 +18,6 @@
 #include <utility>
 #include <vector>
 
-#include "allocator_types.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"

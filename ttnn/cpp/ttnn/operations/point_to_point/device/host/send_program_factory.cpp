@@ -10,8 +10,6 @@
 #include <tt-metalium/work_split.hpp>
 #include "point_to_point_device_op.hpp"
 
-using tt::tt_fabric::FabricNodeId;
-
 namespace ttnn::operations::point_to_point {
 
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(

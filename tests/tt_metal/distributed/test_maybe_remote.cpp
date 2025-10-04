@@ -17,9 +17,6 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 using ::testing::ElementsAre;
-using ::testing::Eq;
-using ::testing::Optional;
-using ::testing::UnorderedElementsAre;
 
 struct TestType {
     int value;

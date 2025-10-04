@@ -19,7 +19,6 @@
 namespace ttnn::distributed::test {
 namespace {
 
-using ::testing::ElementsAre;
 using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::HasSubstr;
