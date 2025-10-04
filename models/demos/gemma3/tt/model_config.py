@@ -441,7 +441,9 @@ class ModelArgs:
             assert False  # stojko temp - this should not be called FOR NOW
         elif HF_MODEL:
             model_version = os.getenv("HF_MODEL")
-            self.CKPT_DIR = model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+            self.CKPT_DIR = str(
+                model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
+            )
 
             self.TOKENIZER_PATH = self.CKPT_DIR
             if not self.CACHE_PATH:
@@ -479,6 +481,7 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
+        # stojko - TODO confirm this works for new paths over CI
         if any(keyword in self.CKPT_DIR.lower() for keyword in ("instruct", "it")):
             self.instruct = True
 
