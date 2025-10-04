@@ -5,6 +5,7 @@
 #pragma once
 
 #include <initializer_list>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -52,6 +53,19 @@ class GlobalSemaphore;
 // ==================================================
 //                  HOST API: Device management
 // ==================================================
+
+// clang-format off
+/**
+ * Sets the root directory for TT Metal meta data files like kernel sources.
+ *
+ * Return value: void
+ *
+ * | Argument  | Description                                 | Type                | Valid range | Required |
+ * |-----------|---------------------------------------------|---------------------|-------------|----------|
+ * | root_dir  | Path to the root directory                  | const std::string & |             | No, will fallback to TT_METAL_HOME Environment Variable     |
+ */
+// clang-format on
+void SetRootDir(const std::string& root_dir);
 
 /**
  * Returns number of Tenstorrent devices that can be targeted
