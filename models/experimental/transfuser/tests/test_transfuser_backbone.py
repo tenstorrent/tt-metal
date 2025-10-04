@@ -57,6 +57,7 @@ class TransfuserBackboneInfra:
             lidar_architecture=self.lidar_arch,
             use_velocity=self.use_velocity,
         )
+        torch_model.eval()
 
         # Preprocess parameters for TTNN
         parameters = preprocess_model_parameters(
@@ -69,29 +70,33 @@ class TransfuserBackboneInfra:
         self.torch_image_input = torch.randn(self.img_input_shape)
         self.torch_lidar_input = torch.randn(self.lidar_input_shape)
         self.torch_velocity_input = torch.randn(1, 1)
-        self.torch_image_output, self.torch_lidar_output = torch_model(
-            # self.torch_output_tensor = torch_model(
-            self.torch_image_input,
-            self.torch_lidar_input,
-            self.torch_velocity_input,
-        )
+        with torch.no_grad():
+            self.torch_image_output, self.torch_lidar_output = torch_model(
+                # self.torch_output_tensor = torch_model(
+                self.torch_image_input,
+                self.torch_lidar_input,
+                self.torch_velocity_input,
+            )
 
         # Convert input to TTNN format
         tt_image_input = ttnn.from_torch(
-            self.torch_image_input,
-            # self.torch_image_input.permute(0, 2, 3, 1),
+            # self.torch_image_input,
+            self.torch_image_input.permute(0, 2, 3, 1),
             dtype=ttnn.bfloat16,
             mesh_mapper=self.inputs_mesh_mapper,
         )
         tt_lidar_input = ttnn.from_torch(
-            self.torch_lidar_input,
+            self.torch_lidar_input.permute(0, 2, 3, 1),
+            # self.torch_lidar_input,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             mesh_mapper=self.inputs_mesh_mapper,
         )
         self.input_image_tensor = ttnn.to_device(tt_image_input, device)
+        # self.input_image_tensor = ttnn.permute(self.input_image_tensor, (0, 2, 3, 1))
         self.input_lidar_tensor = ttnn.to_device(tt_lidar_input, device)
+        # self.input_lidar_tensor = ttnn.permute(self.input_lidar_tensor, (0, 2, 3, 1))
 
         # Build TTNN model
         self.ttnn_model = TtTransfuserBackbone(

@@ -19,7 +19,7 @@ class TTRegNetBottleneck:
         self.downsample = downsample
         self.groups = groups
         self.model_config = model_config
-
+        print(parameters)
         # conv1: 1x1 convolution
         self.conv1 = TTConv2D(
             kernel_size=1,
@@ -151,6 +151,8 @@ class TTRegNetBottleneck:
         logger.info(f"reduce mean")
         # Global average pooling
         out = ttnn.reshape(out, shape_)
+        print("""""" """""" """""" "")
+        print(out.shape)
         se_out = ttnn.mean(out, dim=[1, 2], keepdim=True)
         shape_ = se_out.shape
 
@@ -160,6 +162,9 @@ class TTRegNetBottleneck:
         logger.info(f"SE fc2")
         se_out, shape_ = self.se_fc2(device, se_out, shape_)
         se_out = ttnn.sigmoid(se_out)
+        print("""""" """""" """""" "")
+        print(shape_)
+        print(se_out.shape)
 
         # Apply SE scaling
         out = ttnn.multiply(out, se_out)
@@ -185,6 +190,5 @@ class TTRegNetBottleneck:
         logger.info(f"Add out shape{out.shape =}")
         # out = ttnn.reshape(out, shape_)
         out = ttnn.relu(out)  # Final ReLU activation
-        logger.info(f"relu shape{out.shape =}")
 
         return out

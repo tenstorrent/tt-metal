@@ -48,12 +48,14 @@ class StageInfra:
             stage_name=stage_name,
             image_architecture="regnety_032",
         )
+        torch_model.eval()
 
         # Prepare golden inputs/outputs
         self.torch_input = torch.randn(self.input_shape)
-        self.torch_output = torch_model(
-            self.torch_input,
-        )
+        with torch.no_grad():
+            self.torch_output = torch_model(
+                self.torch_input,
+            )
 
         # Preprocess parameters for TTNN
         parameters = preprocess_model_parameters(
@@ -61,23 +63,24 @@ class StageInfra:
             custom_preprocessor=create_custom_mesh_preprocessor(self.weights_mesh_mapper),
             device=None,
         )
-        print(parameters)
-        # pytest.skip("Torch Inference Done!, Skipping stage tests. TODO: implement TTStage")
-        # Convert input to TTNN format
-        tt_input = ttnn.from_torch(
-            # self.torch_input,
-            self.torch_input.permute(0, 2, 3, 1),
-            dtype=ttnn.bfloat16,
-            mesh_mapper=self.inputs_mesh_mapper,
-        )
-        self.input_tensor = ttnn.to_device(tt_input, device)
-
         # Build TTNN model
         self.ttnn_model = Ttstages(
             parameters=parameters,
             stride=2,
             model_config=model_config,
         )
+
+        # Convert input to TTNN format
+        self.tt_input = ttnn.from_torch(
+            # self.torch_input.permute(0, 2, 3, 1),
+            self.torch_input,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=self.inputs_mesh_mapper,
+        )
+        # self.input_tensor = ttnn.to_device(tt_input, device)
+
+        self.tt_input = ttnn.to_device(self.tt_input, device)
+        self.tt_input = ttnn.permute(self.tt_input, (0, 2, 3, 1))
 
         # Run + validate
         self.run()
@@ -100,7 +103,7 @@ class StageInfra:
         return None, None, None
 
     def run(self):
-        self.output_tensor = self.ttnn_model(self.input_tensor, self.device)
+        self.output_tensor = self.ttnn_model(self.tt_input, self.device)
         return self.output_tensor
 
     def validate(self, model_config, output_tensor=None):
@@ -140,9 +143,10 @@ class StageInfra:
 
 # Default model config
 model_config = {
+    # "MATH_FIDELITY": ttnn.MathFidelity.HiFi4,
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
-    "WEIGHTS_DTYPE": ttnn.bfloat8_b,
-    "ACTIVATIONS_DTYPE": ttnn.bfloat8_b,
+    "WEIGHTS_DTYPE": ttnn.bfloat16,
+    "ACTIVATIONS_DTYPE": ttnn.bfloat16,
 }
 
 

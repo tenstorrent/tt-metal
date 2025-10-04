@@ -144,15 +144,21 @@ class TtTransfuserBackbone:
         # Process image input
         logger.info(f"image_encoder_conv1")
         image_x = self.normalize_imagenet_ttnn(image_x)
-        image_x = ttnn.permute(image_x, (0, 2, 3, 1))
+        print("///////////////////")
+        print(image_x.shape)
+        print(lidar_x.shape)
+        # image_x = ttnn.permute(image_x, (0, 2, 3, 1))
         image_out, image_shape = self.conv1(device, image_x, image_x.shape)
         # Reshape to spatial dimensions: 80 * 352 = 28160
         # out = ttnn.reshape(out, (1, 80, 352, 32))
         # out = ttnn.permute(out, (0, 3, 1, 2))
         logger.info(f"lidar_encoder_conv1")
         # Process lidar input
-        lidar_x = ttnn.permute(lidar_x, (0, 2, 3, 1))
+        # lidar_x = ttnn.permute(lidar_x, (0, 2, 3, 1))
         lidar_out, lidar_shape = self.lidar_conv1(device, lidar_x, lidar_x.shape)
+        print("..........................................")
+        print(lidar_shape)
+        print(image_shape)
 
         logger.info(f"image_encoder_layer1")
         image_out = ttnn.reshape(image_out, (1, 80, 352, 32))
