@@ -180,7 +180,7 @@ jobs:
           set -euo pipefail
           apt update
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-nn_*.deb ./pkgs/tt-nn-dev_*.deb
-          apt install -y git python3-dev python3-pip python3-venv
+          apt install -y git python3-dev python3-pip python3-venv python3-numpy
       - name: ⬇️ Checkout
         uses: actions/checkout@v5
         with:
