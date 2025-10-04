@@ -44,8 +44,10 @@ class LMHead(LightweightModule):
 
         # Split the output weights
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+        tt_output_bias = state_dict.get(f"{state_dict_prefix}output.bias", None)
 
         self.output_weights = []
+        self.output_bias = []
         if args.is_galaxy:
             cache_file_name = (
                 None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0"
@@ -73,13 +75,16 @@ class LMHead(LightweightModule):
             for i, split_size in enumerate(split_sizes):
                 # Create a list to store the split tensors for each device
                 device_splits = []
+                device_splits_bias = []
                 for device in range(self.num_devices):
                     start = device * size_per_device + sum(split_sizes[:i])
                     end = start + split_size
                     device_splits.append(torch_output_weights[:, start:end])
+                    device_splits_bias.append(tt_output_bias[start:end] if tt_output_bias is not None else None)
 
                 # Concatenate the splits from all devices
                 combined_split = torch.cat(device_splits, dim=-1)
+                combined_split_bias = torch.cat(device_splits_bias, dim=-1) if tt_output_bias is not None else None
 
                 cache_file_name = (
                     None
@@ -100,6 +105,16 @@ class LMHead(LightweightModule):
                         cache_file_name=cache_file_name,
                     )
                 )
+                self.output_bias.append(
+                    ttnn.as_tensor(
+                        combined_split_bias,
+                        device=mesh_device,
+                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=dtype,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                ) if tt_output_bias is not None else None
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -134,20 +149,23 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor):
         outputs = []
-        for weight, pc in zip(self.output_weights, self.program_configs):
+        bias_list = self.output_bias if len(self.output_bias) > 0 else [None] * len(self.output_weights)
+
+        for weight, bias, pc in zip(self.output_weights, bias_list, self.program_configs):
             output = ttnn.linear(
                 x,
                 weight,
+                # bias=bias,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
             )
-            outputs.append(
-                ttnn.sharded_to_interleaved(
-                    output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
-                )
-            )
+            output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if bias is not None:
+                bias = ttnn.sharded_to_interleaved(bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+                output = output + bias
+            outputs.append(output)
 
         # Concatenate the outputs
         output = ttnn.concat(

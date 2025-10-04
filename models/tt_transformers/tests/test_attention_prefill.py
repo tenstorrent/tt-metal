@@ -79,7 +79,7 @@ def test_attention_inference(
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_rot_mats(
-        head_dim=model_args.head_dim,
+        head_dim=int(model_args.head_dim * model_args.partial_rotary_factor),
         device=mesh_device,
         seq_len=max_seq_len,
         theta=model_args.rope_theta,
@@ -164,7 +164,7 @@ def test_attention_inference(
     tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
     positions = torch.LongTensor(range(max_seq_len))
     freqs_cis_i = precompute_freqs_cis(
-        model_args.head_dim,
+        int(model_args.head_dim * model_args.partial_rotary_factor),
         model_args.max_seq_len * 2,
         model_args.rope_theta,
         model_args.rope_scaling.factor if model_args.rope_scaling else None,

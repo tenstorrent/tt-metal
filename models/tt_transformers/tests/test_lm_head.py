@@ -46,6 +46,9 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     partial_state_dict = {
         "weight": state_dict[f"{state_dict_prefix}output.weight"],
     }
+    bias_key = f"{state_dict_prefix}output.bias"
+    if bias_key in state_dict:
+        partial_state_dict["bias"] = state_dict[bias_key]
 
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_lm_head()
@@ -64,6 +67,7 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     )
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+    torch_input = torch_input.to(next(reference_model.parameters()).dtype)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
