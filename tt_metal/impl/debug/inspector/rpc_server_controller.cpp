@@ -64,7 +64,7 @@ void RpcServerController::stop() {
         server_thread.join();
     }
 
-    log_info(tt::LogInspector, "Inspector RPC server stopped");
+    log_trace(tt::LogInspector, "Inspector RPC server stopped");
     is_running = false;
 }
 
@@ -99,7 +99,7 @@ void RpcServerController::run_server() {
             // in which case the port will be zero.
             log_info(tt::LogInspector, "Inspector RPC server listening on Unix socket: {}", this->address);
         } else {
-            log_info(tt::LogInspector, "Inspector RPC server listening on {}", port);
+            log_debug(tt::LogInspector, "Inspector RPC server listening on {}", port);
         }
 
         auto listenPromise = server.listen(*listener);
