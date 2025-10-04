@@ -50,6 +50,7 @@ install(
         sfpu_eltwise_chain
         custom_sfpi_add
         custom_sfpi_smoothstep
+        tests
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
     # /usr/share/doc on a default Docker image. Speculation: some dependency for

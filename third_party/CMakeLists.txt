@@ -71,6 +71,15 @@ CPMAddPackage(
         "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
 
+set_target_properties(
+    libprotobuf
+    PROPERTIES
+        CXX_VISIBILITY_PRESET
+            "hidden"
+        VISIBILITY_INLINES_HIDDEN
+            TRUE
+)
+
 ############################################################################################################################
 # yaml-cpp
 ############################################################################################################################
