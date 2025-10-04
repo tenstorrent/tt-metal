@@ -842,6 +842,8 @@ The following sections describe the TT-Fabric features for deadlock avoidance an
 
 ## 7.1 Dimension Ordered Routing <a id="dim_order_routing"></a>
 
+Intra-mesh routing tables in TT-Fabric are setup with dimension ordered routing to avoid cyclic dependency deadlocks. 
+
 Cyclic dependency deadlock happens when a set of nodes form a cyclic traffic pattern. Each node’s outgoing traffic is waiting on resources in the next hop to make progress. Since the traffic pattern is a cycle, all nodes end up waiting for the next hop’s resource and form a routing deadlock.
 
 Dimension ordered routing prevents cyclic dependency deadlocks by routing traffic in a way that does not form traffic cycles. In the routing table examples presented earlier in the document, we use X then Y dimension ordered routing when building routing tables.
@@ -869,23 +871,17 @@ Packet from D2 to D3 and D3 to D2 are routed in X direction first thus avoiding 
 
 TT-Fabric is not limited to just one kind of routing bias. Since routing tables are fully instantiated, any reasonable routing scheme can be devised and mapped onto fabric router tables.
 
-## 7.2 Edge Disjoint Routing <a id="disjoint_routing"></a>
+Inter-mesh traffic is still prone to this kind of dealock as senders spread over different meshes can still create cyclic traffic patterns over sparse exit nodes between meshes.
 
-Edge disjoint routing uses different entry/exit nodes on network edges for traffic that is incoming/outgoing from current network. In TT-Fabric, we can set up L1 routing tables such that cross traffic between meshes uses different exit nodes. Opposite traffic flows will go through different fabric routers which can reduce chances of resource contention.
+## 7.3 Dateline Virtual Channel <a id="fab_vcs"></a>
 
-## 7.3 Fabric Virtual Channels <a id="fab_vcs"></a>
-
-As stated earlier, FVCs guarantee independent progress of traffic relative to other FVCs. Traffic that is expected to contend for network or endpoint resources can be routed via unique FVCs so that one traffic stream does not get stuck behind other traffic that is stalled due to a stalled endpoint.
-
-## 7.4 Limitations <a id="limits"></a>
-
-TT-Fabric does not support end-to-end transmissions in case of dropped packets. The current fallback is to notify Control Plane and rely on host software managed mitigation. TT-Fabric can notify data senders of the dropped packets by sending a negative acknowledgement. Data retransmission is left to the TT-Fabric user’s discretion.
+As stated earlier, to avoid cyclic deadlocks on ring or torus topologies, TT-Fabric has an private dateline virtual channel. Packets crossing the dateline get switched to dateline virtual channel to avoid getting blocked by user worker traffic channel.
 
 # 8 TT-Fabric Roadmap <a id="roadmap"></a>
 
 The items below are on the TT-Fabric roadmap.
 
-#### 1.1.2.1 Fabric Node Status Mailbox<a id="statusqueue"></a>
+## 8.1 Fabric Node Status Mailbox<a id="statusqueue"></a>
 
 The control plane sets up a mailbox in SRAM of each fabric router. Fabric routers push status and error messages for control plane and user visibility. The control plane retrieves messages from the queues and takes appropriate action.
 
@@ -893,7 +889,7 @@ All the messages received by control plane are also saved to disk to keep a log 
 
 ## 8.1 Time To Live (TTL) <a id="ttl"></a>
 
-TT-Fabric may encounter packets that keep on circling the network and are not terminating. This can occur if the routing tables are misconfigured or corrupted. Such traffic can keep on living in the network forever and keep burning network resources. To avoid such patterns of traffic, TT-Fabric packets have a TTL parameter. On traffic initiating end or router, TTL is initialized to a conservative value that covers longest hop count any packet could encounter in TT-Fabric. At every network hop, fabric router decrements TTL by 1. Under normal conditions, a packet will reach its destination before TTL becomes 0 (expires). If for any reason a router sees a fabric packet with TTL parameter of 0, the packet is marked as expired, dropped, and drained from fabric. TT-Fabric also notifies Control Plane of the event.
+TT-Fabric may encounter packets that keep on circling the network and are not terminating. This can occur if the routing tables are misconfigured or corrupted. Such traffic can keep on living in the network forever and keep burning network resources. To avoid such patterns of traffic, TT-Fabric packets can have a TTL field. Data sender initializes TTL field to a conservative value that covers longest hop count any packet could encounter in TT-Fabric. At every network hop, fabric router decrements TTL by 1. Under normal conditions, a packet will reach its destination before TTL becomes 0 (expires). If for any reason a router sees a fabric packet with TTL parameter of 0, the packet is marked as expired, dropped, and drained from fabric. TT-Fabric also notifies Control Plane of the event.
 
 ![](images/image019.png)
 
@@ -919,16 +915,42 @@ With a TTL of 10 the packet hops are shown in the table below. As the packet loo
 
 ## 8.2 Timeout <a id="timeout"></a>
 
-Timeouts are TT-Fabric's last line of defense against deadlocks. Timeout is a detection mechanism rather than a prevention mechanism. Schemes mentioned in previous sections are meant to prevent or minimize deadlocks. If a routing deadlock slips through, TT-Fabric will detect it through timeout. If a packet head is not able to make progress through a fabric router within the specified timeout, it may indicate some deadlock due to resource contention, erroneous routing, stalled endpoint etc. Fabric router encountering routing timeout will drop the packet and drain its data from the fabric buffers. The Fabric router will also notify Control Plane of the event.
+Timeouts serve as TT-Fabric’s **last line of defense** against routing deadlocks.  
+Unlike the prevention and minimization schemes described in earlier sections, timeouts provide a **detection mechanism**.
+
+If a routing deadlock slips through preventive measures, TT-Fabric will detect it via timeout monitoring.  
+Specifically, if a **packet head** cannot make progress through a fabric router within the configured timeout interval, it indicates a potential deadlock condition.  
+Possible causes include:
+
+- Resource contention  
+- Erroneous routing  
+- Stalled endpoints  
+- Other unexpected failures  
+
+When a routing timeout occurs, the fabric router takes corrective action:
+
+1. Drops the affected packet  
+2. Drains buffered data from the fabric  
+3. Notifies the **Control Plane** of the event  
+
+1 and 2 are optional actions as it may be desirable, when debugging, to inspect the packets in router buffers to rootcause the erroneous behavior.
+
+3 is the minimum required response so that higher level software can respond to router's inability to forward traffic.
 
 ## 8.3 Reliability <a id="reliability"></a>
 ### 8.3.1 Automatic Traffic Rerouting <a id="rerouting"></a>
 
-TT-Fabric supports device meshes that can scale up to hundreds of thousands of devices. On such a large scale, the probability of some ethernet links going down is non-negligible. An interconnect that does not implement link redundancy and is not able to work around some broken ethernet links will face frequent work interruptions and require a lot of system management calls. We intend to build redundancy into TT-Fabric network stack such that if some ethernet links on a fabric node go down, fabric can automatically reroute blocked traffic over an available ethernet link. If there is at least 1 available link in the same direction as the broken link, TT-Fabric's redundancy implementation will be completely transparent to workloads running on the system. End user applications may notice a temporary pause and lower data rates but should not otherwise require any intervention. TT-Fabric will also notify Control Plane of the rerouting status so that appropriate action may be taken on the system management front to service the broken ethernet links. User workload will be able to reach its next checkpoint without network interruption at degraded data rates. At that point Control plane can update routing tables to take out broken links from routing network. System maintenance can also be performed to fix ethernet link issues before resuming user work.
+TT-Fabric supports device meshes that can scale to hundreds of thousands of devices. At this scale, the likelihood of some Ethernet links failing becomes significant. An interconnect that lacks link redundancy or cannot work around broken links will experience frequent interruptions and increased system management overhead.
 
-To support redundancy, each fabric router has an Ethernet Fallback Channel (EFC) that is brought into service by other fabric routers in a node when their dedicated ethernet links become unreliable or completely dysfunctional. EFC can be shared by multiple routers when multiple ethernet links lose connection. EFC is not virtualized and operates at Layer 2. When routers push data into EFC, special layer 2 headers are appended to traffic so that impacted fabric router’s native FVCs can be reliably connected to their receiver channels on either side of the broken ethernet links.
+To address this, TT-Fabric incorporates built-in redundancy in the network stack. The Fabric Control Plane continuously monitors link health and, upon detecting an unreliable or failed Ethernet link, puts the affected router into reroute mode. As long as at least one link remains functional in the same direction, this rerouting is completely transparent to running workloads. End-user applications may notice temporary pauses or reduced data rates but require no intervention.
 
-Fabric routers exchange credits with each for traffic flow control rather than the EFC so that EFC is available for all reroute traffic. Any FVC back pressure is kept within the fabric router buffers and does not propagate to EFC layer buffers.
+User workloads can continue to reach their next checkpoint without network interruption, albeit at degraded throughput. The Control Plane notifies system management to service the broken links.
+
+Users may choose to continue operating the system with a reduced number of Ethernet links, in which case the unavailable links are removed from the routing tables. Normal operation can resume once system maintenance has been completed.
+
+#### 8.3.1.1 Ethernet Fallback Channels (EFC)
+
+To enable redundancy, each fabric router maintains one or more Ethernet Fallback Channels (EFCs). The Control Plane assigns fallback channels and fallback routers whenever a router is put into reroute mode due to unreliable or failed Ethernet links. Each active virtual channel requires a dedicated fallback channel, ensuring reliable traffic rerouting and maintaining network continuity.
 
 The following diagram shows how traffic gets rerouted when Eth A link becomes inactive. Broken arrows show all the rerouted FVC traffic in both directions.
 
