@@ -219,11 +219,11 @@ struct boot_results_t {
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "dev_msgs.h"
 
-uint64_t get_next_link_status_check_timestamp() {
+FORCE_INLINE uint64_t get_next_link_status_check_timestamp() {
     return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp));
 }
 
-void update_next_link_status_check_timestamp() {
+FORCE_INLINE void update_next_link_status_check_timestamp() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
     uint64_t timestamp = eth_read_wall_clock() + (ETH_CLOCK_CYCLE_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
