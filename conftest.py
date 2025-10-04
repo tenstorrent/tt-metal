@@ -1021,7 +1021,7 @@ def run_debug_script():
         )
         return
 
-    debug_script_path = os.path.join(".", "tools", "triage", "tt-triage.py")
+    debug_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools", "tt-triage.py")
 
     if not os.path.exists(debug_script_path):
         logger.warning(f"Debug script not found at {debug_script_path}. Skipping debug collection.")
