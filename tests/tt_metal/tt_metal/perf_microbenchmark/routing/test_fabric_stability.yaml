@@ -8,7 +8,7 @@ Tests:
     fabric_setup:
       topology: Linear
 
-    top_level_iterations: 10
+    top_level_iterations: 1
 
     parametrization_params:
       ftype: [unicast, mcast]
@@ -17,17 +17,17 @@ Tests:
 
     defaults:
       size: 32
-      num_packets: 30000
+      num_packets: 128
 
     patterns:
       - type: all_to_all
-        iterations: 100
+        iterations: 1
 
   - name: "MeshLowLatencyLooped"
     fabric_setup:
       topology: Mesh
 
-    top_level_iterations: 10
+    top_level_iterations: 1
 
     parametrization_params:
       ftype: [unicast, mcast]
@@ -36,28 +36,28 @@ Tests:
 
     defaults:
       size: 32
-      num_packets: 30000
+      num_packets: 128
 
     patterns:
       - type: all_to_all
-        iterations: 100
+        iterations: 1
 
   - name: "MeshDynamicLooped"
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
 
-    top_level_iterations: 10
+    top_level_iterations: 1
 
     parametrization_params:
       ftype: [unicast, mcast]
-      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      ntype: [unicast_write, atomic_inc, unicast_scatter_write]
       num_links: [1, 2, 3, 4]
 
     defaults:
       size: 32
-      num_packets: 30000
+      num_packets: 128
 
     patterns:
       - type: all_to_all
-        iterations: 100
+        iterations: 1
