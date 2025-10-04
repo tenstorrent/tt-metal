@@ -114,8 +114,8 @@ FORCE_INLINE void write_tile_impl(
 using ReadTile = universal_kernel::detail::ReadTile;
 using NopTile = universal_kernel::detail::NopTile;
 
-// FORCE_INLINE void add_tiles(const ReadTile& in0, const ReadTile& in1, uint32_t dst_idx) {
-//     add_tiles(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
-// }
+FORCE_INLINE void add_tiles(const ReadTile& in0, const ReadTile& in1, uint32_t dst_idx) {
+    add_tiles(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
+}
 
-// FORCE_INLINE void add_tiles(NopTile, NopTile, uint32_t) {}
+FORCE_INLINE void add_tiles(NopTile, NopTile, uint32_t) {}
