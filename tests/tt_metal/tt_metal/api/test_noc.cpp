@@ -12,6 +12,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <memory>
 #include <string>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -21,13 +23,14 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "hostdevcommon/common_values.hpp"
+#include "mesh_workload.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>

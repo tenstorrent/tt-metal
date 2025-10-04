@@ -4,7 +4,29 @@
 
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
+#include <cstdint>
+#include <umd/device/types/core_coordinates.hpp>
+#include <cstddef>
+#include <array>
+#include <bit>
+#include <cstring>
+#include <tt-logger/tt-logger.hpp>
+#include <algorithm>
+#include <limits>
+#include <map>
+#include <filesystem>
+#include <fstream>
+#include <ios>
 #include <unordered_map>
+#include "context/metal_context.hpp"
+#include "hal.hpp"
+#include <vector>
+#include "routing/tt_fabric_test_common.hpp"
+#include "tt_align.hpp"
+#include "routing/tt_fabric_telemetry.hpp"
+#include "hostdevcommon/fabric_common.h"
+#include "tt_stl/assert.hpp"
+#include "mesh_coord.hpp"
 
 static double calc_bw_bytes_per_cycle(uint32_t total_words, uint64_t cycles) {
     constexpr uint32_t bytes_per_eth_word = 16;

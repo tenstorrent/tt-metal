@@ -7,14 +7,28 @@
 // then perform vector addition tile by tile. Because of sharding to L1, DRAM nor NoC is not involved.
 // Data copy is avoided and reader and writer kernels are not needed.
 
+#include <string>
+#include <iostream>
+#include <ostream>
+#include <cstdlib>
+#include <fmt/base.h>
+#include <algorithm>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "hostdevcommon/kernel_structs.h"
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/buffer_types.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/constants.hpp"
+#include "tt-metalium/mesh_buffer.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
+#include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/mesh_coord.hpp"
+#include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/mesh_command_queue.hpp"
 #include <tt-metalium/distributed.hpp>
 
 #include <cstddef>
@@ -22,6 +36,9 @@
 #include <memory>
 #include <random>
 #include <string_view>
+#include <variant>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 using namespace tt::tt_metal;

@@ -11,6 +11,7 @@
 #include <memory_reporter.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <semaphore.hpp>
+#include <span>
 #include <tt_align.hpp>
 #include <algorithm>
 #include <array>
@@ -31,6 +32,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -43,6 +45,8 @@
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
 #include "data_types.hpp"
+#include "hal.hpp"
+#include "hal/generated/dev_msgs.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
@@ -52,19 +56,20 @@
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
+#include "program_descriptors.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
 #include "tt-metalium/program.hpp"
+#include <fmt/format.h>
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
 #include "tile.hpp"
 #include "tt_memory.h"
+#include "tt_metal.hpp"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"

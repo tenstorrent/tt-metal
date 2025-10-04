@@ -5,6 +5,9 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <memory>
+#include <iostream>
+#include <ostream>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
@@ -18,9 +21,9 @@
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
+#include "mesh_workload.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/semaphore.hpp>

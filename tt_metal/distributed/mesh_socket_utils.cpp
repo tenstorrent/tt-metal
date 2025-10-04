@@ -3,13 +3,38 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "hal_types.hpp"
+#include "mesh_coord.hpp"
+#include "core_coord.hpp"
+#include "mesh_socket.hpp"
+#include "fabric_types.hpp"
+#include "routing_table_generator.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_device.hpp"
+#include "buffer_types.hpp"
+#include "distributed.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
+#include <cstdint>
+#include <algorithm>
+#include <cstdlib>
+#include <cstddef>
+#include <optional>
+#include <memory>
+#include <set>
+#include <tt-logger/tt-logger.hpp>
+#include <array>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <unordered_map>
+#include <vector>
+#include <utility>
+#include <unordered_set>
+#include <type_traits>
 #include "tt_metal/hw/inc/socket.h"
+#include "tt_stl/assert.hpp"
+#include "tt_stl/span.hpp"
 
 using namespace tt::tt_metal::distributed::multihost;
 

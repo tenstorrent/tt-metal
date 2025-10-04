@@ -4,7 +4,6 @@
 
 #include <tt-metalium/shape_base.hpp>
 #include <exception>
-#include <memory>
 
 #include "gtest/gtest.h"
 #include <tt_stl/span.hpp>

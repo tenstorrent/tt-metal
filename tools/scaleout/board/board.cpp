@@ -5,8 +5,15 @@
 #include "board.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstddef>
 #include <enchantum/enchantum.hpp>
+#include <umd/device/types/arch.hpp>
+#include <string>
+#include <ostream>
+#include <functional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <stdexcept>
 #include <tt-logger/tt-logger.hpp>

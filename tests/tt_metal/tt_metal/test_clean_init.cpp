@@ -7,17 +7,17 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <array>
 #include <exception>
 #include <map>
 #include <memory>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -29,6 +29,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_coord.hpp"
 #include <tt-metalium/distributed.hpp>
 
 namespace tt {

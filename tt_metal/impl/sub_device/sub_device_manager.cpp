@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include <cstdint>
+#include <atomic>
+#include <memory>
+#include <optional>
+#include <cstddef>
 #include <tt_stl/assert.hpp>
 #include <device.hpp>
 #include <host_api.hpp>
@@ -15,6 +20,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt_stl/strong_type.hpp>

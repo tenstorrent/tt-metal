@@ -12,7 +12,6 @@
 
 #include <tt_stl/assert.hpp>
 #include "fmt/base.h"
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include <umd/device/types/core_coordinates.hpp>

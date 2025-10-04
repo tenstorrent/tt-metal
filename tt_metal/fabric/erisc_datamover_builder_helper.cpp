@@ -2,16 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "core_coord.hpp"
+#include "data_types.hpp"
 #include "erisc_datamover_builder.hpp"
 #include "builder/fabric_core_placement.hpp"
+#include <algorithm>
+#include <optional>
+#include <cstddef>
+#include <tt-logger/tt-logger.hpp>
+#include <limits>
+#include <iterator>
+#include <cstdint>
+#include <array>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <vector>
+#include <utility>
+#include <umd/device/types/core_coordinates.hpp>
+#include <unordered_map>
 
+#include "fabric_edm_types.hpp"
+#include "fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/ccl/ccl_common.hpp"
 #include "erisc_datamover_builder_helper.hpp"
 #include "tt_metal/fabric/builder/fabric_core_placement.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_fabric {
 

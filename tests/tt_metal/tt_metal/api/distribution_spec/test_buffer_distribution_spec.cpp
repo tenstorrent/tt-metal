@@ -2,15 +2,33 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "buffer_page_mapping.hpp"
+#include "core_coord.hpp"
+#include "buffer_types.hpp"
+#include "dispatch/command_queue_common.hpp"
 #include "gtest/gtest.h"
+#include "shape.hpp"
+#include "shape2d.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_coord.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
+#include "tt_metal.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_stl/span.hpp"
 
+#include <cstdint>
+#include <cstddef>
+#include <memory>
+#include <set>
+#include <tt-logger/tt-logger.hpp>
+#include <cstring>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <vector>
+#include <tuple>
 
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)

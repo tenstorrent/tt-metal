@@ -4,13 +4,12 @@
 #include <map>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {

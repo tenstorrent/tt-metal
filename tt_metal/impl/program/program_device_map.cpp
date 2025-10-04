@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "program_device_map.hpp"
+#include <vector>
+#include "device.hpp"
+#include "core_coord.hpp"
+#include <umd/device/types/core_coordinates.hpp>
+#include <cstdint>
 
 namespace tt::tt_metal {
 

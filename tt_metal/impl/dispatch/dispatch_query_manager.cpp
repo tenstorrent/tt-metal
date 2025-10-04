@@ -4,17 +4,21 @@
 
 #include "dispatch_query_manager.hpp"
 
+#include <cstdint>
 #include <initializer_list>
+#include <mutex>
 #include <optional>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
+#include "core_coord.hpp"
 #include "core_descriptor.hpp"
+#include "dispatch_core_common.hpp"
+#include "data_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <vector>
 
 namespace {
 

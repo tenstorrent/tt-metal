@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <numeric>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -17,8 +18,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_workload.hpp"
+#include "distributed.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>

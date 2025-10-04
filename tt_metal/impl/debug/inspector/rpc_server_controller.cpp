@@ -8,6 +8,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <chrono>
 #include <thread>
+#include "impl/debug/inspector/rpc_server_generated.hpp"
 
 namespace tt::tt_metal::inspector {
 

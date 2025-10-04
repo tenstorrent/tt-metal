@@ -25,8 +25,14 @@
 #include "llvm_small_vector.hpp"
 
 #include "memory_alloc.hpp"
+#include <cstddef>
+#include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <cstring>
+#include <cstdlib>
 #include <stdexcept>
+#include <string>
 
 using namespace ttsl::detail::llvm;
 

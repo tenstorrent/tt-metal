@@ -7,12 +7,20 @@
 #include "impl/debug/inspector/data.hpp"
 #include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "impl/program/program_impl.hpp"
+#include "inspector/logger.hpp"
 #include "jit_build/jit_build_options.hpp"
+#include "mesh_coord.hpp"
 #include "mesh_device.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include "program.hpp"
+#include <exception>
+#include <cstdint>
+#include <chrono>
+#include <cstddef>
 #include <memory>
-#include <tt-logger/tt-logger.hpp>
+#include <stdexcept>
+#include <mutex>
+#include <optional>
 #include "impl/kernels/kernel_impl.hpp"
 
 namespace tt::tt_metal {

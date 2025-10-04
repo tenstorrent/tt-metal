@@ -3,9 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dm_common.hpp"
-#include "device_fixture.hpp"
+#include "core_coord.hpp"
+#include "device.hpp"
+#include <cstdint>
+#include <memory>
+#include "hal_types.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal::unit_tests::dm {
 

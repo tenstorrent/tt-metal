@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <tt-metalium/host_api.hpp>
@@ -14,7 +13,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
-#include <unordered_set>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -27,15 +26,14 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include "hal_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/test_utils/df/float32.hpp"
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "eth_test_common.hpp"
@@ -43,7 +41,6 @@
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 constexpr std::int32_t WORD_SIZE = 16;  // 16 bytes per eth send packet
 

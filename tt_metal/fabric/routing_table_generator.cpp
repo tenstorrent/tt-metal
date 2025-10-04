@@ -3,18 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "routing_table_generator.hpp"
+#include <fmt/base.h>
 
+#include <cstdint>
+#include <cstdlib>
 #include <enchantum/enchantum.hpp>
-#include <algorithm>
 #include <limits>
 #include <memory>
 #include <ostream>
 #include <queue>
+#include <string>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <sstream>
 #include <unordered_map>
-#include <unordered_set>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "mesh_graph.hpp"
+#include <vector>
+#include <utility>
 
 auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
     const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {

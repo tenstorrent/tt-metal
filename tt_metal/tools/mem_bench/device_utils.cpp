@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <optional>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <map>
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "context.hpp"
 #include "core_coord.hpp"

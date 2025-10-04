@@ -8,14 +8,21 @@
 #include <cstdio>
 #include <ctype.h>
 #include <iostream>
+#include <set>
+#include <map>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <tuple>
+#include <unordered_set>
+#include <string_view>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <metal_soc_descriptor.h>
 #include <tt-logger/tt-logger.hpp>

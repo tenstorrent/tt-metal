@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bits/posix1_lim.h>
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <set>
@@ -16,6 +18,8 @@
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include "tt_stl/assert.hpp"
+#include "tt_stl/span.hpp"
 
 namespace tt::tt_metal {
 

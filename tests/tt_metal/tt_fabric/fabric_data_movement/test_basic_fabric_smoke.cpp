@@ -9,9 +9,14 @@
 #include <chrono>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <memory>
+#include <map>
+#include <string>
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include "hostdevcommon/fabric_common.h"
+#include "fabric_edm_types.hpp"
+#include "hal_types.hpp"
+#include "fabric_types.hpp"
+#include "erisc_datamover_builder.hpp"
 #include <vector>
 #include "tt_metal/fabric/fabric_context.hpp"
 
@@ -20,12 +25,8 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "fabric_fixture.hpp"
-#include "utils.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_graph.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/fabric.hpp>

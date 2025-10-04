@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <mesh_event.hpp>
+#include <ostream>
 
+#include "mesh_coord.hpp"
 #include "mesh_device.hpp"
 
 namespace tt::tt_metal::distributed {

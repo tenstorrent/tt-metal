@@ -4,11 +4,12 @@
 
 #include <gtest/gtest.h>
 #include <stdlib.h>
+#include <memory>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <map>
+#include <utility>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <variant>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "mesh_coord.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>

@@ -6,20 +6,23 @@
 
 #include <fmt/base.h>
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
-#include <optional>
+#include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <stdlib.h>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "core_coord.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -29,8 +32,8 @@
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <vector>
 
 namespace tt::tt_metal::distributed::test::utils {
 

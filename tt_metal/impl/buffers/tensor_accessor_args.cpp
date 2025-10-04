@@ -2,9 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <cstddef>
+#include <memory>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-metalium/device.hpp>
+#include "hostdevcommon/tensor_accessor/arg_config.hpp"
+#include <vector>
+#include "tt_stl/assert.hpp"
+#include "mesh_buffer.hpp"
 
 namespace tt::tt_metal {
 

@@ -7,7 +7,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -16,6 +15,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
+#include "mesh_workload.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>

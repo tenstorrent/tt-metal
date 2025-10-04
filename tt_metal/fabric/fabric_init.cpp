@@ -2,12 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "cluster.hpp"
+#include "data_types.hpp"
 #include "fabric.hpp"
 
 #include <umd/device/types/arch.hpp>
 #include <variant>
+#include <vector>
 
 #include "erisc_datamover_builder.hpp"
+#include "fabric_types.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"

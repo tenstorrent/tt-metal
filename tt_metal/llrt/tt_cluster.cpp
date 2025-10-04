@@ -3,9 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_cluster.hpp"
+#include "cluster.hpp"
+#include "data_types.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include "llrt/rtoptions.hpp"
 
+#include <bit>
 #include <core_coord.hpp>
+#include <optional>
+#include <set>
+#include <map>
+#include <limits>
 #include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
 #include <algorithm>
@@ -38,7 +46,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/cluster_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <unistd.h>
+#include <vector>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;

@@ -5,18 +5,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <memory>
 #include <numeric>
 #include <string>
+#include <vector>
 
 #include "blackhole/bh_hal.hpp"
+#include <fmt/format.h>
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include "hal_1xx_common.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace {
 

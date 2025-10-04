@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <map>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device_pool.hpp>

@@ -4,6 +4,7 @@
 
 #include "tt_metal/impl/event/dispatch.hpp"
 
+#include <cstdint>
 #include <tt_stl/span.hpp>
 #include <tt_align.hpp>
 #include <utility>
@@ -12,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "device.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/command_queue_common.hpp"
@@ -19,7 +21,6 @@
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/strong_type.hpp>
 #include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"

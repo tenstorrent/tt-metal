@@ -4,13 +4,14 @@
 
 // This file contains dispatch tests that are (generally) dispatch mode agnostic
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <set>
 #include <tt-metalium/allocator.hpp>
 #include <map>
 #include <memory>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 

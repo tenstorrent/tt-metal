@@ -4,6 +4,8 @@
 
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"
+#include <cstdint>
+#include <mutex>
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <atomic>
@@ -21,12 +23,12 @@
 #include "memcpy.hpp"
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
-#include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_io.hpp>
+#include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
 

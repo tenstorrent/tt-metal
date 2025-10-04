@@ -10,12 +10,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
 #include <iostream>
-#include <map>
 #include <memory>
 #include <string>
 #include <thread>
 #include <tuple>
-#include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -36,7 +35,6 @@
 #include "hal.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"

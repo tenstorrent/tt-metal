@@ -5,6 +5,8 @@
 #include "hal_1xx_common.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_metal::hal_1xx {
 

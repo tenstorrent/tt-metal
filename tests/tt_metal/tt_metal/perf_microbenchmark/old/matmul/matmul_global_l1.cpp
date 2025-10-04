@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <optional>
@@ -24,25 +23,24 @@
 #include <set>
 #include <string>
 #include <tuple>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
+#include "mesh_buffer.hpp"
+#include "mesh_coord.hpp"
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"

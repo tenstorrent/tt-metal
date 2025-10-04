@@ -4,16 +4,16 @@
 
 #include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <algorithm>
 #include <cmath>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
+#include <vector>
+#include "host_buffer.hpp"
+#include <utility>
 #include "ttnn/decorators.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -24,8 +24,8 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 

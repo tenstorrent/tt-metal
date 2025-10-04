@@ -2,7 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <vector>
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include <memory>
+#include <tt-logger/tt-logger.hpp>
+#include "circular_buffer_config.hpp"
+#include <utility>
+#include <gtest/gtest.h>
+#include <umd/device/types/arch.hpp>
 #include "device_fixture.hpp"
+#include "tt_backend_api_types.hpp"
+#include "mesh_device.hpp"
+#include "mesh_workload.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "distributed.hpp"
+#include "tt_align.hpp"
 #include "tt_metal.hpp"
 #include "dm_common.hpp"
 

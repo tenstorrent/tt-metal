@@ -2,14 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/ostream.h>
+#include <fmt/base.h>
 #include <cstdint>
+#include <memory>
+#include <exception>
 #include <random>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "tt-metalium/mesh_command_queue.hpp"
+#include "tt-metalium/constants.hpp"
+#include "tt-metalium/mesh_buffer.hpp"
+#include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/mesh_coord.hpp"
+#include "tt-metalium/core_coord.hpp"
+#include <vector>
+#include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/data_types.hpp"
+#include <utility>
+#include "tt_stl/assert.hpp"
 
 // This example demonstrates a simple data copy from DRAM into L1(SRAM) and to another place in DRAM.
 // The general flow is as follows:

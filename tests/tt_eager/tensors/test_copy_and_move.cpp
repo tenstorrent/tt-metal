@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
+#include <algorithm>
 #include <errno.h>
 #include <fmt/base.h>
 #include <stdint.h>
@@ -17,14 +17,16 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
+#include "host_buffer.hpp"
+#include <vector>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 

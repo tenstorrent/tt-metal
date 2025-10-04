@@ -5,6 +5,9 @@
 
 #include "tt_metal/lite_fabric/build.hpp"
 
+#include <array>
+#include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <sstream>
 #include <tt-logger/tt-logger.hpp>
@@ -12,6 +15,7 @@
 #include <string>
 #include <fmt/format.h>
 #include "tt_cluster.hpp"
+#include "tt_stl/assert.hpp"
 
 // TODO: Cleanup this file
 // https://github.com/tenstorrent/tt-metal/issues/28324

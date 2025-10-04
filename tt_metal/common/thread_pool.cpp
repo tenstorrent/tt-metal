@@ -3,11 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <exception>
 #include <future>
-#include <type_traits>
+#include <thread>
+#include <tt-logger/tt-logger.hpp>
+#include <optional>
+#include <memory>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include <pthread.h>
+#include <bits/pthreadtypes.h>
 #include <sched.h>         // Needed for setting process priorities
 #include <sys/resource.h>  // Needed for setting process priorities
 #include <numa.h>
@@ -15,6 +25,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/common/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_metal {
 

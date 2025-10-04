@@ -6,9 +6,15 @@
 
 #include <cstdint>
 
+#include <string>
+#include <optional>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "kernel_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include <vector>
 
 namespace tt::tt_fabric {
 

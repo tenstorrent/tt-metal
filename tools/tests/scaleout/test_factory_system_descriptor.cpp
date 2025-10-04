@@ -4,13 +4,18 @@
 
 #include <gtest/gtest.h>
 #include <enchantum/enchantum.hpp>
+#include <enchantum/generators.hpp>
 #include <fstream>
 #include <filesystem>
 #include <google/protobuf/text_format.h>
 
 #include <cabling_generator/cabling_generator.hpp>
 #include <factory_system_descriptor/utils.hpp>
+#include <iostream>
 #include <node/node_types.hpp>
+#include <string>
+#include <stdexcept>
+#include <ostream>
 
 // Include generated protobuf headers
 #include "protobuf/deployment.pb.h"

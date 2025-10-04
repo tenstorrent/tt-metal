@@ -5,12 +5,20 @@
 #include <chrono>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <string>
+#include <memory>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <numeric>
+#include <optional>
+#include <tt-logger/tt-logger.hpp>
+#include <stdexcept>
+#include <cstdlib>
+#include <utility>
+#include <cstddef>
 #include <vector>
-#include <algorithm>
 #include <unordered_map>
 #include <string_view>
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -18,12 +26,18 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "fabric_edm_types.hpp"
 #include "fabric_fixture.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
+#include "fabric_types.hpp"
+#include "hal_types.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {

@@ -2,19 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <memory>
+#include <cstddef>
+#include <concepts>
+#include <atomic>
 #include <tt_stl/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
-#include <array>
 #include <optional>
 #include <stack>
 #include <type_traits>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
+#include "buffer_page_mapping.hpp"
+#include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "dispatch.hpp"
+#include "core_coord.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -33,6 +41,8 @@
 #include <tracy/Tracy.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <vector>
+#include <variant>
 
 namespace tt::tt_metal {
 namespace buffer_dispatch {

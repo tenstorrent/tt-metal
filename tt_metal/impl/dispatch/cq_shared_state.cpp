@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "cq_shared_state.hpp"
+#include "sub_device_types.hpp"
+#include <cstdint>
+#include <optional>
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_metal {
 void CQOwnerState::take_ownership(SubDeviceId id, uint32_t cq_id) {

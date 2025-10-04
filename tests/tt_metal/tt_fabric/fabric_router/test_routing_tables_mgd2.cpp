@@ -4,19 +4,20 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <cstddef>
+#include <optional>
+#include <cstdint>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <filesystem>
 #include <memory>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
 #include "fabric_fixture.hpp"
-#include "t3k_mesh_descriptor_chip_mappings.hpp"
-#include "utils.hpp"
+#include "routing_table_generator.hpp"
 #include <tt-metalium/fabric_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_metal.hpp>
 
 namespace {
 

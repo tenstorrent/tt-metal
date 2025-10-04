@@ -3,17 +3,38 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_coord.hpp"
+#include <common/TracyColor.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
+#include "core_descriptor.hpp"
 #include "device_pool.hpp"
+#include "dispatch_core_common.hpp"
+#include "dispatch/system_memory_manager.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include "llrt/hal.hpp"
+#include "thread_pool.hpp"
+#include "mesh_coord.hpp"
+#include "profiler_optional_metadata.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
+#include <fstream>
+#include <functional>
+#include <exception>
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
+#include <map>
+#include <iterator>
+#include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
+#include <sstream>
+#include <set>
+#include <queue>
+#include <nlohmann/json_fwd.hpp>
+#include <optional>
 #include <stack>
+#include <string>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -31,6 +52,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
 #include "profiler.hpp"
+#include <stdint.h>
+#include <fmt/format.h>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "profiler_state_manager.hpp"
@@ -39,11 +62,17 @@
 #include "tt-metalium/profiler_types.hpp"
 #include "tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tuple>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/arch/wormhole_implementation.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include <variant>
+#include <utility>
 #include "tt_cluster.hpp"
 
 namespace tt {

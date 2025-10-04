@@ -4,9 +4,13 @@
 
 #include <kernel_types.hpp>
 #include <stdint.h>
+#include "data_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include <map>
+#include <string>
+#include <unordered_map>
 #include <utility>
-
+#include <vector>
 
 namespace tt::tt_metal {
 

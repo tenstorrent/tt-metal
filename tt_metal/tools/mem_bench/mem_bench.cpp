@@ -4,6 +4,8 @@
 
 #include <benchmark/benchmark.h>
 #include <stdint.h>
+#include <exception>
+#include <stdlib.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -14,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <vector>
 
 #include <tt_stl/assert.hpp>

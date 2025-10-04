@@ -4,15 +4,22 @@
 
 #include "relay_mux.hpp"
 #include "context/metal_context.hpp"
+#include "core_coord.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "dispatch_core_common.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
 #include <bit>
+#include <cstdint>
+#include <memory>
+#include <cstddef>
 #include <tt-logger/tt-logger.hpp>
+#include "host_api.hpp"
 #include "tt_align.hpp"
 #include "tt_metal.hpp"
+#include "tt_stl/assert.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <algorithm>
 #include <tt-metalium/fabric.hpp>

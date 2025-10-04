@@ -2,16 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <memory>
+#include <cstdint>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <fmt/format.h>
 #include <gtest/gtest.h>
+#include "data_types.hpp"
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
+#include "mesh_workload.hpp"
 #include <fmt/base.h>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace tt;

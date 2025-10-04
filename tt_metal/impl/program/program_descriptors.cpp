@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tile.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <utility>
 
-#include "tt_stl/overloaded.hpp"
+#include "core_coord.hpp"
 
 namespace tt::tt_metal {
 

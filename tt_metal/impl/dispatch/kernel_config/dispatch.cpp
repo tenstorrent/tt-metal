@@ -4,15 +4,17 @@
 
 #include "dispatch.hpp"
 
+#include <cstdint>
 #include <host_api.hpp>
 #include <tt_metal.hpp>
-#include <array>
 #include <map>
 #include <string>
+#include <umd/device/types/core_coordinates.hpp>
 #include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include "core_coord.hpp"
 #include "dispatch/command_queue_common.hpp"
 #include "device.hpp"
 #include "dispatch/kernel_config/fd_kernel.hpp"
@@ -20,10 +22,11 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
+#include "fabric.hpp"
 #include "hal_types.hpp"
+#include "kernel_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
-#include "rtoptions.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 

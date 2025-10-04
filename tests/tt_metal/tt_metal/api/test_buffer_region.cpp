@@ -8,6 +8,7 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
+#include "mesh_buffer.hpp"
 #include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {

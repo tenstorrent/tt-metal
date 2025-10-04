@@ -9,16 +9,14 @@
 #include <stdlib.h>
 #include <time.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <algorithm>
 #include <cstring>
 #include <exception>
 #include <optional>
-#include <ratio>
 #include <string>
 #include <tuple>
 #include <vector>

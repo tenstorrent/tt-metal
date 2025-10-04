@@ -7,6 +7,8 @@
 #include <circular_buffer_constants.h>
 #include <data_format.hpp>
 #include <stdint.h>
+#include <fstream>
+#include <sstream>
 #include <tt_backend_api_types.hpp>
 #include <cstddef>
 #include <filesystem>
@@ -16,6 +18,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <umd/device/types/arch.hpp>
 #include <utility>
 #include <vector>
 
@@ -25,7 +28,6 @@
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel_impl.hpp"
 
 enum class UnpackToDestMode : uint8_t;

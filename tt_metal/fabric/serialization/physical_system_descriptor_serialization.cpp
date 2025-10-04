@@ -9,9 +9,18 @@
 #include <umd/device/cluster.hpp>
 
 #include <google/protobuf/text_format.h>
-#include <google/protobuf/io/zero_copy_stream_impl.h>
+#include <cstdint>
+#include <cstddef>
 #include <fstream>
-#include <sstream>
+#include <memory>
+#include <optional>
+#include <iostream>
+#include <ostream>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <vector>
+#include <utility>
+#include <string>
+#include <stdexcept>
 
 namespace tt::tt_metal {
 

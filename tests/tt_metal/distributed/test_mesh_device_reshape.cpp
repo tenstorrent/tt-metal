@@ -5,8 +5,6 @@
 #include <gtest/gtest.h>
 #include <stdlib.h>
 #include <tt_stl/indestructible.hpp>
-#include <algorithm>
-#include <cstddef>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -16,17 +14,12 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "gmock/gmock.h"
-#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
-#include <tt-metalium/maybe_remote.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tests/tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {

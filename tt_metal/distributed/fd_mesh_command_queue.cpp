@@ -4,6 +4,12 @@
 
 #include "fd_mesh_command_queue.hpp"
 
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <bit>
+#include <exception>
+#include <stdexcept>
 #include <tracy/Tracy.hpp>
 
 #include <mesh_device.hpp>
@@ -15,25 +21,35 @@
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <tuple>
 #include <type_traits>
+#include <unordered_map>
+#include <umd/device/types/core_coordinates.hpp>
+#include <unordered_set>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include "buffer_types.hpp"
+#include "core_coord.hpp"
 #include "device.hpp"
+#include "dispatch/cq_shared_state.hpp"
+#include "distributed/mesh_command_queue_base.hpp"
+#include "dispatch/ringbuffer_cache.hpp"
+#include "distributed/mesh_trace.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
+#include "mesh_buffer.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
+#include "mesh_trace_id.hpp"
 #include "mesh_workload.hpp"
 #include "mesh_workload_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
+#include "sub_device_types.hpp"
 #include "tt-metalium/program.hpp"
-#include "shape2d.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
@@ -45,9 +61,11 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
+#include "vector_aligned.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/graph_tracking.hpp>
-#include <tt_stl/overloaded.hpp>
+#include <vector>
+#include <variant>
 
 namespace tt {
 namespace tt_metal {

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <numeric>
 
@@ -11,6 +12,8 @@
 #include "core_assignment.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <vector>
+#include "core_coord.hpp"
 
 namespace tt {
 namespace tt_metal {

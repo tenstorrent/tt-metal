@@ -4,11 +4,17 @@
 
 #include "circular_buffer_config.hpp"
 
-#include <unordered_map>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <array>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
-#include <tt-logger/tt-logger.hpp>
+#include "program_descriptors.hpp"
+#include "circular_buffer_constants.h"
+#include "tile.hpp"
+#include <unordered_set>
 
 namespace tt {
 enum class DataFormat : uint8_t;

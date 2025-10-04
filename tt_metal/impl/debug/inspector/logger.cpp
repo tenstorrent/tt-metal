@@ -4,9 +4,17 @@
 
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/debug/inspector/types.hpp"
-#include "impl/context/metal_context.hpp"
+#include <filesystem>
+#include <exception>
+#include <fstream>
+#include <ctime>
+#include <cstddef>
+#include "program/program_impl.hpp"
+#include "mesh_coord.hpp"
 #include <iomanip>
 #include <chrono>
+#include <string_view>
+#include <ios>
 
 namespace tt::tt_metal::inspector {
 

@@ -5,7 +5,13 @@
 // Driver to execute sfpi execution tests.
 
 #include "command_queue_fixture.hpp"
+#include "hal_types.hpp"
+#include "mesh_workload.hpp"
+#include "mesh_coord.hpp"
 
+#include <memory>
+#include <cstdint>
+#include <cstdlib>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -19,6 +25,8 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/distributed.hpp>
+#include <vector>
+#include <utility>
 
 namespace {
 

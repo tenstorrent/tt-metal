@@ -3,7 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
+#include <base_types_generated.h>
+#include <array>
+#include <cstdint>
+#include <flatbuffers/stl_emulation.h>
 #include <tt_stl/assert.hpp>
+#include "data_types.hpp"
+#include "base_types.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tile.hpp"
 
 namespace tt::tt_metal {
 

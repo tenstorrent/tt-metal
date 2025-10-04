@@ -11,16 +11,18 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <random>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "bank_manager.hpp"
+#include "core_descriptor.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"

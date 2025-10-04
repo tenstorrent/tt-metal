@@ -10,14 +10,11 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -37,7 +34,9 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
+#include "mesh_buffer.hpp"
+#include "mesh_workload.hpp"
+#include "mesh_coord.hpp"
 #include "tests_common/sfpu_helper/sfpu_helper.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"

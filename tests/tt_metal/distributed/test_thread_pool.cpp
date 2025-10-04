@@ -3,8 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <cstdint>
+#include <atomic>
+#include <thread>
+#include <chrono>
+#include <cstddef>
+#include <exception>
 #include "tt_metal/common/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {

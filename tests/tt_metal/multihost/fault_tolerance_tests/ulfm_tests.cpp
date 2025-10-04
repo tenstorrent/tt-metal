@@ -1,10 +1,15 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <chrono>
+#include <csignal>
+#include <cstddef>
 #include <tt-metalium/distributed_context.hpp>
 #include <gtest/gtest.h>
+#include <signal.h>
 #include "common/multihost_test_tools.hpp"
 #include <thread>
+#include <vector>
 
 using tt::tt_metal::distributed::multihost::Color;
 using tt::tt_metal::distributed::multihost::DistributedContext;

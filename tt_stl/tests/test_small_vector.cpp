@@ -21,12 +21,16 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <type_traits>
 
 #include <tt_stl/small_vector.hpp>
+#include <utility>
+#include <vector>
 
 namespace tt::stl {
 namespace {

@@ -4,6 +4,7 @@
 
 #include "noc_logging.hpp"
 
+#include <fmt/format.h>
 #include <stdint.h>
 #include <array>
 #include <filesystem>
@@ -16,8 +17,11 @@
 #include "hostdevcommon/dprint_common.h"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <vector>
 
 using namespace tt::tt_metal;
 

@@ -9,7 +9,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <exception>
-#include <map>
 #include <utility>
 #include <variant>
 #include <vector>

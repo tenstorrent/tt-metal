@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <thread>
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
@@ -14,7 +14,6 @@
 #include <optional>
 #include <random>
 #include <set>
-#include <string>
 #include <tuple>
 #include <unordered_map>
 #include <utility>

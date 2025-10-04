@@ -5,19 +5,26 @@
 #include "control_plane.hpp"
 #include "fabric_host_utils.hpp"
 
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <cstddef>
+#include <string>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/assert.hpp>
+#include <tuple>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
-#include <tt-metalium/metal_soc_descriptor.h>
+#include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
-#include "erisc_datamover_builder.hpp"
 #include <set>
+#include <utility>
 #include <vector>
 #include <algorithm>
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include "fabric_context.hpp"
+#include "mesh_graph.hpp"
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>

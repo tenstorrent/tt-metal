@@ -3,13 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <memory>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
 #include <set>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -25,6 +28,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include "mesh_workload.hpp"
 #include <umd/device/types/arch.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////

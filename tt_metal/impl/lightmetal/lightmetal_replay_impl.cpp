@@ -3,23 +3,42 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "lightmetal_replay_impl.hpp"
+#include <program_types_generated.h>
+#include <flatbuffers/verifier.h>
+#include <buffer_types_generated.h>
 
+#include <cstdint>
+#include <cstddef>
+#include <exception>
+#include <algorithm>
 #include <iostream>
+#include "kernel_types.hpp"
+#include "circular_buffer_config.hpp"
+#include "dispatch_core_common.hpp"
+#include "hostdevcommon/common_values.hpp"
+#include "buffer_types.hpp"
 #include "light_metal_binary_generated.h"
 #include "command_generated.h"
+#include <memory>
+#include <optional>
 #include <tt-logger/tt-logger.hpp>
 
 #include <host_api.hpp>
 #include "env_lib.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include "lightmetal_binary.hpp"
 #include "trace/trace_buffer.hpp"
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
-#include "flatbuffer/base_types_from_flatbuffer.hpp"
+#include <utility>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <vector>
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
 
 #include "impl/program/program_impl.hpp"
+#include "tt_stl/assert.hpp"
+#include "tt_stl/span.hpp"
 
 namespace tt::tt_metal {
 

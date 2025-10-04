@@ -3,19 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <optional>
+#include <memory>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/distributed_context.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <algorithm>
 #include <cstddef>
-#include <unordered_set>
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "mesh_config.hpp"
+#include "maybe_remote.hpp"
+#include "fabric_types.hpp"
 #include "mesh_coord.hpp"
+#include "routing_table_generator.hpp"
 #include "shape_base.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
@@ -24,6 +26,8 @@
 
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include <vector>
+#include <utility>
 
 namespace tt::tt_metal::distributed {
 namespace {

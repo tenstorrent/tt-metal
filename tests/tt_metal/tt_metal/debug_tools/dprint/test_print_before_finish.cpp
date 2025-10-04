@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <functional>
+#include <memory>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -20,6 +23,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
+#include "mesh_workload.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking that the finish command can wait for the last dprint.

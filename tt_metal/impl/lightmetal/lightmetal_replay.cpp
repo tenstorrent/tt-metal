@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <memory>
 #include <tt-metalium/lightmetal_replay.hpp>
 #include <utility>
 
