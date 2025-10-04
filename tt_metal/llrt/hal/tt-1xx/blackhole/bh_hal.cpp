@@ -74,10 +74,10 @@ public:
         if (params.is_fw) {
             // Needed to setup gp, sp, etc. for all processors which are launched with assert/deassert PC method
             // For 2 erisc, erisc0 is launched from base firmware so it's not needed
-            if (!(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
-                  blackhole::is_2_erisc_mode())) {
-                objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
-            }
+            // if (!(params.core_type == HalProgrammableCoreType::ACTIVE_ETH && params.processor_id == 0 &&
+            //       blackhole::is_2_erisc_mode())) {
+            objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
+            // }
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
@@ -141,10 +141,10 @@ public:
             case 0:
                 if (params.is_fw) {
                     srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
-                    if (blackhole::is_2_erisc_mode()) {
-                        // not tmu-crt0
-                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
-                    }
+                    // if (blackhole::is_2_erisc_mode()) {
+                    //     // not tmu-crt0
+                    //     srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                    // }
                 } else {
                     srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
                 }

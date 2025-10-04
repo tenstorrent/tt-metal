@@ -42,10 +42,14 @@ void print_aerisc_training_status(chip_id_t device_id, const CoreCoord& virtual_
         device_id, virtual_core, retrain_count_addr, sizeof(uint32_t))[0];
     uint32_t rx_link_up = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
+    const auto logical_core =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_logical_ethernet_core_from_virtual(
+            device_id, virtual_core);
     log_critical(
         tt::LogMetal,
-        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        "Device {}: Logical core {}, Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
         device_id,
+        logical_core.str(),
         virtual_core.str(),
         port_status,
         retrain_count,

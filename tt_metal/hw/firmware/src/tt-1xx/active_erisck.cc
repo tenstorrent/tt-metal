@@ -55,6 +55,6 @@ void _start() {
         }
     }
 
-    // NOLINTNEXTLINE(hicpp-no-asm, hicpp-no-assembler)
-    asm volatile(".rept 256; nop; .endr");
+    // // NOLINTNEXTLINE(hicpp-no-asm, hicpp-no-assembler)
+    // asm volatile(".rept 256; nop; .endr");
 }

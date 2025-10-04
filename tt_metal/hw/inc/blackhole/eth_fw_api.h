@@ -231,7 +231,7 @@ void update_next_link_status_check_timestamp() {
 }
 
 void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
         ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + (4 * interrupt_number));
     *reg_ptr = mode_val;
@@ -239,7 +239,7 @@ void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
 }
 
 void disable_interrupts() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0
     for (uint32_t i = 0; i < ETH_RISC_NUM_INTERRUPT_VECS; i++) {
         eth_set_interrupt_mode(i, 0);
     }
@@ -304,20 +304,20 @@ static void service_eth_msg() {
 }
 
 static void update_boot_results_eth_link_status_check() {
-#if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
-    uint64_t curr_timestamp = eth_read_wall_clock();
-    uint64_t next_timestamp = get_next_link_status_check_timestamp();
-    // Debounce to only be called at every interval
-    // wrap-around safe comparison. calling this too many times can result in link
-    // instability
-    if ((curr_timestamp - next_timestamp) < (UINT64_MAX / 2)) {
-        invalidate_l1_cache();
-        reinterpret_cast<void (*)(uint32_t)>(
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    // #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
+    //     uint64_t curr_timestamp = eth_read_wall_clock();
+    //     uint64_t next_timestamp = get_next_link_status_check_timestamp();
+    //     // Debounce to only be called at every interval
+    //     // wrap-around safe comparison. calling this too many times can result in link
+    //     // instability
+    //     if ((curr_timestamp - next_timestamp) < (UINT64_MAX / 2)) {
+    //         invalidate_l1_cache();
+    //         reinterpret_cast<void (*)(uint32_t)>(
+    //             (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
 
-        update_next_link_status_check_timestamp();
-    }
-#endif
+    //         update_next_link_status_check_timestamp();
+    //     }
+    // #endif
 }
 
 #endif

@@ -111,7 +111,7 @@ int __attribute__((noinline)) main(void) {
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
     disable_interrupts();
-    update_next_link_status_check_timestamp();
+    // update_next_link_status_check_timestamp();
 
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
@@ -121,10 +121,10 @@ int __attribute__((noinline)) main(void) {
 
 #if defined(ENABLE_2_ERISC_MODE)
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+    // mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 #endif
 
-    set_deassert_addresses();
+    // set_deassert_addresses();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
@@ -133,9 +133,9 @@ int __attribute__((noinline)) main(void) {
     ncrisc_noc_full_sync();
 
 #if defined(ENABLE_2_ERISC_MODE)
-    deassert_all_reset();
+    // deassert_all_reset();
 #endif
-    wait_subordinate_eriscs();
+    // wait_subordinate_eriscs();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -154,7 +154,6 @@ int __attribute__((noinline)) main(void) {
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
-                return 0;
             } else if (
                 go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
                 // Set the rd_ptr on workers to specified value
@@ -166,7 +165,7 @@ int __attribute__((noinline)) main(void) {
                     internal_::notify_dispatch_core_done(dispatch_addr);
                 }
             } else {
-                internal_::risc_context_switch();
+                // internal_::risc_context_switch();
             }
         }
         WAYPOINT("GD");
@@ -186,7 +185,7 @@ int __attribute__((noinline)) main(void) {
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
-            run_subordinate_eriscs(enables);
+            // run_subordinate_eriscs(enables);
 
             constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
@@ -202,7 +201,7 @@ int __attribute__((noinline)) main(void) {
                 WAYPOINT("D");
             }
 
-            wait_subordinate_eriscs();
+            // wait_subordinate_eriscs();
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
