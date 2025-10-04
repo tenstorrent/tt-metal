@@ -170,9 +170,11 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
     ) -> None:
         self._stride = stride
         self._padding = padding
+        self._dtype = dtype
 
         self._in_channels = parameters.in_channels
         self._out_channels = parameters.out_channels
@@ -188,10 +190,12 @@ class TtConv2d:
         self._weight_slices = []
         self._bias_slices = []
 
-    def _get_conv_config(self) -> ttnn.Conv2dConfig:
+    def _get_conv_config(self, weights_dtype: ttnn.DataType = None) -> ttnn.Conv2dConfig:
         """Create default conv2d configuration"""
+        if weights_dtype is None:
+            weights_dtype = self._dtype
         return ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat8_b,
+            weights_dtype=weights_dtype,
             shard_layout=None,
             deallocate_activation=False,
             enable_act_double_buffer=False,
@@ -210,8 +214,8 @@ class TtConv2d:
         """Create LoFi compute kernel configuration for optimal performance"""
         return ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=False,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
 
@@ -316,7 +320,7 @@ class TtConv2d:
                 return_weights_and_bias=True,
                 conv_config=conv_config,
                 memory_config=memory_config,
-                dtype=ttnn.bfloat8_b,
+                dtype=self._dtype,
                 compute_config=self._get_compute_kernel_config(),
                 slice_config=ttnn.Conv2dL1FullSliceConfig,
             )
@@ -376,7 +380,7 @@ class TtConv2d:
             conv_config=conv_config,
             memory_config=memory_config,
             slice_config=spatial_slice_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=self._dtype,
             compute_config=self._get_compute_kernel_config(),
         )
 
@@ -451,10 +455,11 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
     ) -> "TtConv2d":
         """Create TtConv2d with channel slicing configuration."""
         parameters.slice_config = SliceConfig(mode=SliceMode.CHANNEL, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding)
+        return cls(parameters, stride=stride, padding=padding, dtype=dtype)
 
     @classmethod
     def create_with_height_slicing(
@@ -464,10 +469,11 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
     ) -> "TtConv2d":
         """Create TtConv2d with height slicing configuration."""
         parameters.slice_config = SliceConfig(mode=SliceMode.HEIGHT, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding)
+        return cls(parameters, stride=stride, padding=padding, dtype=dtype)
 
     @classmethod
     def create_with_width_slicing(
@@ -477,10 +483,11 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
     ) -> "TtConv2d":
         """Create TtConv2d with width slicing configuration."""
         parameters.slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=num_slices)
-        return cls(parameters, stride=stride, padding=padding)
+        return cls(parameters, stride=stride, padding=padding, dtype=dtype)
 
     @classmethod
     def create(
@@ -489,7 +496,8 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
     ) -> "TtConv2d":
         """Create TtConv2d without any slicing."""
         parameters.slice_config = SliceConfig(mode=SliceMode.NONE)
-        return cls(parameters, stride=stride, padding=padding)
+        return cls(parameters, stride=stride, padding=padding, dtype=dtype)

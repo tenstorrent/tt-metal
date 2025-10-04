@@ -117,12 +117,9 @@ class PanopticDeepLabInsEmbedHead(DeepLabV3PlusHead):
         """
         center, offset = self.layers(features)
 
-        center = F.interpolate(center, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        center = F.interpolate(center, scale_factor=self.common_stride, mode="nearest")
 
-        offset = (
-            F.interpolate(offset, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
-            * self.common_stride
-        )
+        offset = F.interpolate(offset, scale_factor=self.common_stride, mode="nearest") * self.common_stride
 
         return center, offset, {}, {}
 

@@ -30,7 +30,7 @@ class TtBottleneck(LightweightModule):
         self,
         parameters,
         device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.bfloat16,
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
         has_shortcut: bool = False,
         stride: int = 1,
         dilation: int = 1,
@@ -57,17 +57,19 @@ class TtBottleneck(LightweightModule):
             TtConv2dParameters.from_preprocessed_parameters(conv1_params, device=device, dtype=dtype),
             stride=(1, 1),
             padding=(0, 0),
+            dtype=dtype,
         )
 
         # For conv2, use architecture parameters and update dilation
         conv2_tt_params = TtConv2dParameters.from_preprocessed_parameters(conv2_params, device=device, dtype=dtype)
         conv2_tt_params.dilation = conv2_dilation
-        self.conv2 = TtConv2d(conv2_tt_params, stride=conv2_stride, padding=conv2_padding)
+        self.conv2 = TtConv2d(conv2_tt_params, stride=conv2_stride, padding=conv2_padding, dtype=dtype)
 
         self.conv3 = TtConv2d(
             TtConv2dParameters.from_preprocessed_parameters(conv3_params, device=device, dtype=dtype),
             stride=(1, 1),
             padding=(0, 0),
+            dtype=dtype,
         )
 
         # Initialize shortcut if needed
@@ -86,6 +88,7 @@ class TtBottleneck(LightweightModule):
                 ),
                 stride=shortcut_stride_tuple,
                 padding=(0, 0),
+                dtype=dtype,
             )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:

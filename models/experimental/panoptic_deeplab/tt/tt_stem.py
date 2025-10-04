@@ -31,7 +31,7 @@ class TtStem(LightweightModule):
         self,
         parameters,
         device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.bfloat16,
+        dtype: ttnn.DataType = ttnn.bfloat8_b,
         channel_slice_factor: int = 4,
     ):
         super().__init__()
@@ -67,6 +67,7 @@ class TtStem(LightweightModule):
             ),
             stride=stride,
             padding=(1, 1),
+            dtype=dtype,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
