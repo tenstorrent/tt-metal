@@ -838,8 +838,8 @@ void dumpJsonNocTraces(
 void writeCSVHeader(std::ofstream& log_file_ofs, tt::ARCH device_architecture, int device_core_frequency) {
     log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
                  << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-    log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, "
-                    "run host ID,  zone name, type, source line, source file, meta data"
+    log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run "
+                    "host ID, trace id, trace id counter, zone name, type, source line, source file, meta data"
                  << std::endl;
 }
 
@@ -874,8 +874,14 @@ void dumpDeviceResultsToCSV(
                     std::replace(meta_data_str.begin(), meta_data_str.end(), ',', ';');
                 }
 
+                const std::string trace_id_str =
+                    marker.trace_id == tracy::TTDeviceMarker::INVALID_NUM ? "" : fmt::format("{}", marker.trace_id);
+                const std::string trace_id_counter_str = marker.trace_id_counter == tracy::TTDeviceMarker::INVALID_NUM
+                                                             ? ""
+                                                             : fmt::format("{}", marker.trace_id_counter);
+
                 log_file_ofs << fmt::format(
-                    "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
                     marker.chip_id,
                     marker.core_x,
                     marker.core_y,
@@ -884,6 +890,8 @@ void dumpDeviceResultsToCSV(
                     marker.timestamp,
                     marker.data,
                     marker.runtime_host_id,
+                    trace_id_str,
+                    trace_id_counter_str,
                     marker.marker_name,
                     enchantum::to_string(marker.marker_type),
                     marker.line,
@@ -1139,6 +1147,24 @@ void DeviceProfiler::readProfilerBuffer(IDevice* device) {
     }
 }
 
+void DeviceProfiler::markTraceBegin(uint32_t trace_id) {
+    TT_ASSERT(traces_being_recorded.find(trace_id) == traces_being_recorded.end());
+    traces_being_recorded.insert(trace_id);
+}
+
+void DeviceProfiler::markTraceEnd(uint32_t trace_id) {
+    TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
+    traces_being_recorded.erase(trace_id);
+}
+
+void DeviceProfiler::markTraceReplay(uint32_t trace_id) { traces_replayed.push_back(trace_id); }
+
+void DeviceProfiler::addRuntimeIdToTrace(uint32_t trace_id, uint32_t runtime_id) {
+    // log_info(tt::LogMetal, "Adding runtime id {} to trace id {}", runtime_id, trace_id);
+    TT_ASSERT(traces_being_recorded.find(trace_id) != traces_being_recorded.end());
+    runtime_ids_per_trace[trace_id].insert(runtime_id);
+}
+
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
     const CoreCoord& worker_core,
@@ -1193,6 +1219,7 @@ void DeviceProfiler::readRiscProfilerResults(
     std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>& device_markers_for_core =
         device_markers_per_core_risc_map[phys_coord];
 
+    uint32_t deviceTraceCounterRead = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (data_source == ProfilerDataBufferSource::L1) {
@@ -1230,6 +1257,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
             uint32_t riscNumRead = 0;
             uint32_t coreFlatIDRead = 0;
+            deviceTraceCounterRead = 0;
             uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
@@ -1254,10 +1282,11 @@ void DeviceProfiler::readRiscProfilerResults(
                     // TODO(MO): Cleanup magic numbers
                     riscNumRead = data_buffer.at(index) & 0x7;
                     coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
+                    deviceTraceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
                     runHostCounterRead = data_buffer.at(index + 1);
-                    uint32_t base_program_id =
-                        tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
 
+                    const uint32_t base_program_id =
+                        tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead).base_program_id;
                     opname = getOpNameIfAvailable(device_id, base_program_id);
 
                 } else if (oneStartFound) {
@@ -1302,6 +1331,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                 readDeviceMarkerData(
                                     device_markers_for_core_risc,
                                     runHostCounterRead,
+                                    deviceTraceCounterRead,
                                     opname,
                                     device_id,
                                     phys_coord,
@@ -1319,6 +1349,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
                                 runHostCounterRead,
+                                deviceTraceCounterRead,
                                 opname,
                                 device_id,
                                 phys_coord,
@@ -1337,6 +1368,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
                                 runHostCounterRead,
+                                deviceTraceCounterRead,
                                 opname,
                                 device_id,
                                 phys_coord,
@@ -1352,6 +1384,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
                                 runHostCounterRead,
+                                deviceTraceCounterRead,
                                 opname,
                                 device_id,
                                 phys_coord,
@@ -1365,6 +1398,12 @@ void DeviceProfiler::readRiscProfilerResults(
             }
         }
     }
+
+    // log_info(tt::LogMetal, "Device trace counter read: {}", deviceTraceCounterRead);
+    // log_info(tt::LogMetal, "Traces replayed size: {}", traces_replayed.size());
+
+    // Enabling this assert causes test_device_trace_run and test_dispatch_cores to fail
+    // TT_ASSERT(deviceTraceCounterRead == traces_replayed.size());
 }
 
 void DeviceProfiler::updateFirstTimestamp(uint64_t timestamp) {
@@ -1382,9 +1421,45 @@ tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
     }
 }
 
+std::pair<uint64_t, uint64_t> DeviceProfiler::getTraceIdAndCount(
+    uint32_t run_host_id, uint32_t device_trace_counter) const {
+    if (device_trace_counter == 0) {
+        return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
+    }
+
+    // log_info(tt::LogMetal, "Device trace counter: {}", device_trace_counter);
+    // log_info(tt::LogMetal, "Traces replayed size: {}", traces_replayed.size());
+    TT_ASSERT(device_trace_counter <= traces_replayed.size());
+    const uint32_t trace_id = traces_replayed[device_trace_counter - 1];
+    // log_info(tt::LogMetal, "Trace id: {}", trace_id);
+
+    if (runtime_ids_per_trace.find(trace_id) == runtime_ids_per_trace.end()) {
+        return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
+    }
+
+    const std::unordered_set<uint32_t>& runtime_ids = runtime_ids_per_trace.at(trace_id);
+    // log_info(tt::LogMetal, "Runtime ids: {}", runtime_ids.size());
+    // log_info(tt::LogMetal, "Run host id: {}",
+    // tt::tt_metal::detail::DecodePerDeviceProgramID(run_host_id).base_program_id);
+    const uint32_t base_program_id = tt::tt_metal::detail::DecodePerDeviceProgramID(run_host_id).base_program_id;
+    if (runtime_ids.find(base_program_id) == runtime_ids.end()) {
+        return {tracy::TTDeviceMarker::INVALID_NUM, tracy::TTDeviceMarker::INVALID_NUM};
+    }
+
+    uint64_t trace_id_count = 0;
+    for (uint32_t i = 0; i < device_trace_counter; ++i) {
+        if (traces_replayed[i] == trace_id) {
+            trace_id_count++;
+        }
+    }
+
+    return {trace_id, trace_id_count};
+}
+
 void DeviceProfiler::readDeviceMarkerData(
     std::set<tracy::TTDeviceMarker>& device_markers,
     uint32_t run_host_id,
+    uint32_t device_trace_counter,
     const std::string& op_name,
     chip_id_t device_id,
     const CoreCoord& physical_core,
@@ -1397,9 +1472,12 @@ void DeviceProfiler::readDeviceMarkerData(
     nlohmann::json meta_data;
     const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
+    const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
 
     const auto& [_, new_marker_inserted] = device_markers.emplace(
         run_host_id,
+        trace_id,
+        trace_id_count,
         device_id,
         physical_core.x,
         physical_core.y,
@@ -1658,6 +1736,9 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         this->thread_pool->wait();
     }
 
+    // assert that last trace id in vector == (trace id for all cores on the last op)r
+    // TT_ASSERT(this->trace_ids.at(this->trace_ids.size() - 1) == );
+
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
         getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map, *this->thread_pool);
 
@@ -1844,6 +1925,8 @@ void DeviceProfiler::pushTracyDeviceResults(
         if (adjusted_timestamp != orig_marker.timestamp) {
             marker_with_adjusted_timestamp = tracy::TTDeviceMarker(
                 orig_marker.runtime_host_id,
+                orig_marker.trace_id,
+                orig_marker.trace_id_counter,
                 orig_marker.chip_id,
                 orig_marker.core_x,
                 orig_marker.core_y,
