@@ -79,9 +79,9 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     size_t buffer_addresses_start_idx = universal_config_base.buffer_addresses_start_runtime_arg_idx();
 
     auto universal_config_group_1 = universal_config_base;
-    universal_config_group_1.add_compile_time_arg("num_cols_per_core_group", num_cols_per_core_group_1);
+    universal_config_group_1.add_compile_time_arg("num_cols", num_cols_per_core_group_1);
     auto universal_config_group_2 = universal_config_base;
-    universal_config_group_2.add_compile_time_arg("num_cols_per_core_group", num_cols_per_core_group_2);
+    universal_config_group_2.add_compile_time_arg("num_cols", num_cols_per_core_group_2);
 
     tt_metal::CreateKernel(
         program,

@@ -37,8 +37,8 @@ KERNEL_MAIN {
     uint32_t write_page_id = start_write_page_id;
     uint32_t col_start_chunk = col_start_tile_id;
     uint32_t w_chunk = curr_col_in_batch;
-    for (uint32_t wt = 0; wt < Wt; wt += row_chunk) {
-        uint32_t chunk_end = std::min(wt + row_chunk, Wt);
+    for (uint32_t wt = 0; wt < num_cols; wt += row_chunk) {
+        uint32_t chunk_end = std::min(wt + row_chunk, num_cols);
         int reduce_dst_idx = 0;
 
         // reduction for one chunk
