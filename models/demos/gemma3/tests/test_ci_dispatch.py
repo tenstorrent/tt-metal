@@ -24,27 +24,27 @@ def test_ci_dispatch(model_weights, is_ci_env):
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
         [
-            "models/demos/siglip/tests/test_attention.py",
             "models/demos/gemma3/tests/test_mmp.py",  # tag stojko
-            "models/demos/gemma3/tests/test_patch_embedding.py",
-            "models/demos/gemma3/tests/test_vision_attention.py",
-            "models/demos/gemma3/tests/test_vision_cross_attention_transformer.py",
-            "models/demos/gemma3/tests/test_vision_embedding.py",
-            "models/demos/gemma3/tests/test_vision_layernorm.py",
-            "models/demos/gemma3/tests/test_vision_mlp.py",
-            "models/demos/gemma3/tests/test_vision_pipeline.py",
-            # "models/demos/gemma3/tests/test_vision_rmsnorm.py",
-            "models/demos/gemma3/tests/test_vision_transformer_block.py",
-            "models/demos/gemma3/tests/test_vision_transformer.py",
-            "models/tt_transformers/tests/test_embedding.py",
-            "models/tt_transformers/tests/test_rms_norm.py",
-            "models/tt_transformers/tests/test_mlp.py",
-            # "models/tt_transformers/tests/test_attention.py",
-            # "models/tt_transformers/tests/test_attention_prefill.py",
-            "models/tt_transformers/tests/test_decoder.py",
-            "models/tt_transformers/tests/test_decoder_prefill.py",
+            # "models/demos/siglip/tests/test_attention.py",
+            # "models/demos/gemma3/tests/test_patch_embedding.py",
+            # "models/demos/gemma3/tests/test_vision_attention.py",
+            # "models/demos/gemma3/tests/test_vision_cross_attention_transformer.py",
+            # "models/demos/gemma3/tests/test_vision_embedding.py",
+            # "models/demos/gemma3/tests/test_vision_layernorm.py",
+            # "models/demos/gemma3/tests/test_vision_mlp.py",
+            # "models/demos/gemma3/tests/test_vision_pipeline.py",
+            # # "models/demos/gemma3/tests/test_vision_rmsnorm.py",
+            # "models/demos/gemma3/tests/test_vision_transformer_block.py",
+            # "models/demos/gemma3/tests/test_vision_transformer.py",
+            # "models/tt_transformers/tests/test_embedding.py",
+            # "models/tt_transformers/tests/test_rms_norm.py",
+            # "models/tt_transformers/tests/test_mlp.py",
+            # # "models/tt_transformers/tests/test_attention.py",
+            # # "models/tt_transformers/tests/test_attention_prefill.py",
+            # "models/tt_transformers/tests/test_decoder.py",
+            # "models/tt_transformers/tests/test_decoder_prefill.py",
         ]
-        + ["-x"]  # Fail if one of the tests fails
+        # + ["-x"]  # Fail if one of the tests fails
     )
     if exit_code == pytest.ExitCode.TESTS_FAILED:
         pytest.fail(

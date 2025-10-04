@@ -441,7 +441,7 @@ class ModelArgs:
             assert False  # stojko temp - this should not be called FOR NOW
         elif HF_MODEL:
             model_version = os.getenv("HF_MODEL")
-            self.CKPT_DIR = model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1200)
+            self.CKPT_DIR = model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
 
             self.TOKENIZER_PATH = HF_MODEL
             if not self.CACHE_PATH:
