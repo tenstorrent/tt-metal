@@ -386,7 +386,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly conv tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations -xv -m "not disable_fast_runtime_mode" -k panoptic --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest -n auto tests/ttnn/nightly/unit_tests/operations -v -m "not disable_fast_runtime_mode" -k "panoptic or _oft" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
