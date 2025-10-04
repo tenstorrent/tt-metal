@@ -1,4 +1,4 @@
-name: "[internal] profiler tests impl"
+name: "[internal] Galaxy profiler tests impl"
 
 on:
   workflow_call:
@@ -19,7 +19,7 @@ on:
       topology:
         required: false
         type: string
-        default: "config-t3000"
+        default: "topology-6u"
 
 jobs:
   profiler-tests:
