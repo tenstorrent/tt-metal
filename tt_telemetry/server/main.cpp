@@ -2,12 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// TODO next: verify that the correct connections are being monitored
+// TODO next: do we need to validate any aggregated information against complete FSD?
 /*
  * main.cpp
  * tt-telemetry main server app.
+ *
+ * MPI Run Instructions
+ * --------------------
+ * 1. Create a hosts.txt on e.g. metal-wh-13 containing:
+ *
+ *  metal-wh-13 slots=1
+ *  metal-wh-14 slots=1
+ *
+ * 2. Make sure binaries are in the same place on both machines.
+ * 3. Use mpirun:
+ *
+ *  mpirun -x TT_METAL_HOME -hostfile hosts.txt \
+ *  /home/btrzynadlowski/tt-metal/build/tt_telemetry/tt_telemetry_server \
+ *  --fsd=/home/btrzynadlowski/factory_system_descriptor_16_n300_lb.textproto
  */
 
- #include <algorithm>
+#include <algorithm>
 #include <fmt/format.h>
 #include <iostream>
 #include <optional>
@@ -15,21 +31,39 @@
 
 #include <boost/functional/hash.hpp>
 #include <cxxopts.hpp>
+#include <google/protobuf/text_format.h>
 
 #include <tt-logger/tt-logger.hpp>
+#include "protobuf/factory_system_descriptor.pb.h"
 
 #include <hal/hal.hpp>
-#include <telemetry/ethernet/chip_identifier.hpp>
-#include <telemetry/ethernet/ethernet_endpoint.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 #include <telemetry/mock_telemetry_collector.hpp>
 #include <telemetry/telemetry_collector.hpp>
 #include <server/web_server.hpp>
 #include <server/collection_endpoint.hpp>
+#include <utils/hex.hpp>
 
 /**************************************************************************************************
  Utility Functions
 **************************************************************************************************/
+
+static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_fsd(const std::string& fsd_filename) {
+    tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd;
+    std::ifstream fsd_file(fsd_filename);
+    if (!fsd_file.is_open()) {
+        throw std::runtime_error("Failed to open FSD file: " + fsd_filename);
+    }
+
+    std::string fsd_content((std::istreambuf_iterator<char>(fsd_file)), std::istreambuf_iterator<char>());
+    fsd_file.close();
+
+    if (!google::protobuf::TextFormat::ParseFromString(fsd_content, &fsd)) {
+        throw std::runtime_error("Failed to parse FSD protobuf from file: " + fsd_filename);
+    }
+
+    return fsd;
+}
 
 /**
  * Split a comma-separated string into a vector of trimmed strings.
@@ -58,11 +92,11 @@ std::vector<std::string> split_comma_separated(const std::string& input) {
  Main
 **************************************************************************************************/
 
-static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, ChipIdentifier chip_id) {
+static uint64_t get_unique_chip_id(const std::unique_ptr<tt::umd::Cluster>& cluster, chip_id_t chip_id) {
     const std::unordered_map<chip_id_t, uint64_t>& chip_to_unique_id =
         cluster->get_cluster_description()->get_chip_unique_ids();
     try {
-        return chip_to_unique_id.at(chip_id.id);
+        return chip_to_unique_id.at(chip_id);
     } catch (const std::out_of_range& e) {
         log_error(tt::LogAlways, "No unique ASIC ID for chip {}", chip_id);
     }
@@ -73,7 +107,8 @@ static void test_print_link_health() {
     std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
     std::unique_ptr<tt::umd::Cluster> cluster = std::make_unique<tt::umd::Cluster>();
     std::unique_ptr<tt::tt_metal::Hal> hal = create_hal(cluster);
-    uint32_t link_up_addr = hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
+    uint32_t link_up_addr =
+        hal->get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
 
     std::cout << "Internal Connections" << std::endl << "--------------------" << std::endl;
 
@@ -83,13 +118,8 @@ static void test_print_link_health() {
         ethernet_connections = get_ordered_ethernet_connections(cluster);
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : ethernet_connections) {
-        // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
-        const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
-
         // This chip...
-        tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
-        ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
-        std::cout << chip << std::endl;
+        std::cout << "Chip " << chip_id << std::endl;
 
         // Iterate each channel and its remote endpoints
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
@@ -97,26 +127,16 @@ static void test_print_link_health() {
             tt::umd::chip_id_t remote_chip_id;
             tt::umd::ethernet_channel_t remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
-            tt::umd::TTDevice* remote_device = cluster->get_tt_device(remote_chip_id);
-            const tt_SocDescriptor& remote_soc_desc = cluster->get_soc_descriptor(remote_chip_id);
-            ChipIdentifier remote_chip = get_chip_identifier_from_umd_chip_id(remote_device, remote_chip_id);
-
-            // Local EthernetEndpoint
-            tt::umd::CoreCoord ethernet_core =
-                soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
-            EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
-
-            // Remote EthernetEndpoint
-            tt::umd::CoreCoord remote_ethernet_core =
-                remote_soc_desc.get_eth_core_for_channel(remote_channel, tt::umd::CoordSystem::LOGICAL);
-            EthernetEndpoint remote_endpoint{
-                .chip = remote_chip, .ethernet_core = remote_ethernet_core, .channel = remote_channel};
 
             // Print
-            std::cout << "  Channel " << channel << " -> [" << remote_chip << "], Channel " << remote_channel
-                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" : "DOWN")
-                      << '/' << (is_ethernet_endpoint_up(cluster, remote_endpoint, link_up_addr) ? "UP" : "DOWN") << ')'
-                      << std::endl;
+            std::cout << "  Channel " << channel << " -> Chip " << remote_chip_id << ", Channel " << remote_channel
+                      << " (Link Status: "
+                      << (is_ethernet_endpoint_up(cluster, chip_id, channel, link_up_addr, false) ? "UP" : "DOWN")
+                      << '/'
+                      << (is_ethernet_endpoint_up(cluster, remote_chip_id, remote_channel, link_up_addr, false)
+                              ? "UP"
+                              : "DOWN")
+                      << ')' << std::endl;
         }
     }
 
@@ -129,12 +149,10 @@ static void test_print_link_health() {
         remote_ethernet_connections = get_ordered_ethernet_connections_to_remote_devices(cluster);
 
     for (const auto& [chip_id, remote_chip_and_channel_by_channel] : remote_ethernet_connections) {
-        const tt_SocDescriptor& soc_desc = cluster->get_soc_descriptor(chip_id);
-
         // This chip...
-        tt::umd::TTDevice* device = cluster->get_tt_device(chip_id);
-        ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
-        std::cout << chip << " [id=" << fmt::format("0x{:016x}", get_unique_chip_id(cluster, chip)) << ']' << std::endl;
+        std::cout << "Chip " << chip_id
+                  << " [unique_id=" << fmt::format("0x{:016x}", get_unique_chip_id(cluster, chip_id)) << ']'
+                  << std::endl;
 
         // Iterate each channel and its remote endpoints
         for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
@@ -143,14 +161,10 @@ static void test_print_link_health() {
             tt::umd::ethernet_channel_t remote_channel;
             std::tie(remote_chip_unique_id, remote_channel) = remote_chip_and_channel;
 
-            // Local EthernetEndpoint
-            tt::umd::CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
-            EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
-
             // Print
-            std::cout << "  Channel " << channel << " -> [id=" << fmt::format("0x{:016x}", remote_chip_unique_id)
-                      << "], Channel " << remote_channel
-                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, endpoint, link_up_addr) ? "UP" : "DOWN")
+            std::cout << "  Channel " << channel << " -> [unique_id=" << fmt::format("0x{:016x}", remote_chip_unique_id)
+                      << "], Channel " << remote_channel << " (Link Status: "
+                      << (is_ethernet_endpoint_up(cluster, chip_id, channel, link_up_addr, false) ? "UP" : "DOWN")
                       << ')' << std::endl;
         }
     }
@@ -167,6 +181,7 @@ int main(int argc, char* argv[]) {
         "print-link-health",
         "Print link health to terminal at startup",
         cxxopts::value<bool>()->default_value("false"))(
+        "fsd", "Factory system descriptor file in .textproto file", cxxopts::value<std::string>())(
         "p,port", "Port for the web server", cxxopts::value<int>()->default_value("8080"))(
         "collector-port",
         "Port for collection endpoint when in collector mode (default). Aggregators connect to this.",
@@ -252,8 +267,12 @@ int main(int argc, char* argv[]) {
         mock_telemetry.run();
     } else {
         // Real telemetry
+        TT_FATAL(result.count("fsd") > 0, "Factory system descriptor must be provided to collect telemetry");
         log_info(tt::LogAlways, "Using real hardware telemetry data");
-        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints);
+        auto rtoptions = tt::llrt::RunTimeOptions();
+        std::string fsd_filepath = result["fsd"].as<std::string>();
+        tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd = load_fsd(result["fsd"].as<std::string>());
+        run_telemetry_collector(telemetry_enabled, subscribers, aggregate_endpoints, rtoptions, fsd);
     }
 
     // Run until finished

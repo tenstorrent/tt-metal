@@ -70,8 +70,7 @@ target_sources(
         server/web_server.cpp
         server/collection_endpoint.cpp
         server/collection_clients.cpp
-        telemetry/ethernet/chip_identifier.cpp
-        telemetry/ethernet/ethernet_endpoint.cpp
+        topology/topology.cpp
         telemetry/ethernet/ethernet_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
         telemetry/arc/arc_metrics.cpp
@@ -84,6 +83,7 @@ target_include_directories(
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${CMAKE_BINARY_DIR}/tools/scaleout # For generated protobuf headers
 )
 target_link_libraries(
     tt_telemetry_server
@@ -94,4 +94,6 @@ target_link_libraries(
         websocketpp # Link websocketpp for WebSocket functionality
         asio # Standalone asio for websocketpp
         cxxopts::cxxopts
+        TT::ScaleoutTools # Add scaleout tools for protobuf headers
+        protobuf::libprotobuf # Add protobuf library for compatibility
 )
