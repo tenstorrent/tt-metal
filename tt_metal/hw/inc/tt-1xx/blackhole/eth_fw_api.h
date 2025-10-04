@@ -70,7 +70,7 @@ struct chip_info_t {
 
 struct serdes_rx_bist_results_t {
     uint32_t bist_mode;
-    uint32_t test_time; // Test time in cycles for bist mode 0 and ms for bist mode 1
+    uint32_t test_time;  // Test time in cycles for bist mode 0 and ms for bist mode 1
     uint32_t error_cnt_nt[NUM_SERDES_LANES];
     uint32_t error_cnt_55t32_nt[NUM_SERDES_LANES];
     uint32_t error_cnt_overflow_nt[NUM_SERDES_LANES];
@@ -81,7 +81,7 @@ struct eth_status_t {
     uint32_t postcode;
     port_status_e port_status;
     link_train_status_e train_status;
-    uint32_t train_speed;   // Actual resulting speed from training
+    uint32_t train_speed;  // Actual resulting speed from training
 
     uint32_t spare[28 - 4];
 
@@ -93,7 +93,7 @@ struct serdes_results_t {
     uint32_t postcode;
     uint32_t serdes_inst;
     uint32_t serdes_lane_mask;
-    uint32_t target_speed;       // Target speed from the boot params
+    uint32_t target_speed;  // Target speed from the boot params
     uint32_t data_rate;
     uint32_t data_width;
     uint32_t spare_main[8 - 6];
@@ -104,7 +104,7 @@ struct serdes_results_t {
 
     // BIST
     uint32_t bist_mode;
-    uint32_t bist_test_time; // Test time in cycles for bist mode 0 and ms for bist mode 1
+    uint32_t bist_test_time;  // Test time in cycles for bist mode 0 and ms for bist mode 1
     uint32_t bist_err_cnt_nt[NUM_SERDES_LANES];
     uint32_t bist_err_cnt_55t32_nt[NUM_SERDES_LANES];
     uint32_t bist_err_cnt_overflow_nt[NUM_SERDES_LANES];
@@ -145,7 +145,7 @@ struct macpcs_results_t {
 
 struct eth_live_status_t {
     uint32_t retrain_count;
-    uint32_t rx_link_up;     // MAC/PCS RX Link Up
+    uint32_t rx_link_up;  // MAC/PCS RX Link Up
 
     uint32_t spare[8 - 2];
 
@@ -215,7 +215,7 @@ struct boot_results_t {
 #define MEM_SYSENG_ETH_LIVE_STATUS (MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, eth_live_status))
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "tt_metal/hw/inc/risc_common.h"
+#include "tt_metal/hw/inc/tt-1xx/risc_common.h"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "dev_msgs.h"
 
