@@ -236,19 +236,19 @@ bool fabric_set_unicast_route(
     volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id = MAX_NUM_MESHES) {
-    tt_l1_ptr intra_mesh_routing_path_t<2, true>* routing_info =
-        reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(MEM_TENSIX_ROUTING_PATH_BASE_2D);
-    tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+    auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
+#if !defined(COMPILE_FOR_ERISC)
+    // ACTIVE_ETH doesn't have information yet
+    auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (routing_table->my_mesh_id != dst_mesh_id) {
         // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
         // inter-mesh routing: update dst_dev_id to be exit node dev id for the target mesh
         // ASSERT(dst_mesh_id < MAX_NUM_MESHES); // dst_mesh_id must be valid if specified
         // tt_l1_ptr exit_node_table_t* exit_node_table =
-        //     reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
+        //     reinterpret_cast<tt_l1_ptr exit_node_table_t*>(ROUTING_TABLE_BASE);
         // dst_dev_id = exit_node_table->nodes[dst_mesh_id];
     }
-
+#endif
     bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
 
     packet_header->routing_fields.hop_index = 0;
@@ -262,11 +262,22 @@ bool fabric_set_unicast_route(
     uint8_t turn_point = compressed_route.get_turn_point();
 
     if (ns_hops > 0 && ew_hops > 0) {
+        // 2D routing: turn from NS to EW at turn_point
         if (ew_direction) {
             packet_header->routing_fields.branch_east_offset = turn_point;  // turn to EAST after NS
         } else {
             packet_header->routing_fields.branch_west_offset = turn_point;  // turn to WEST after NS
         }
+    } else if (ns_hops == 0 && ew_hops > 0) {
+        // East/West only routing: branch offset is set at position 1 (start_hop + 1)
+        if (ew_direction) {
+            packet_header->routing_fields.branch_east_offset = 1;  // East only: branch at hop 1
+        } else {
+            packet_header->routing_fields.branch_west_offset = 1;  // West only: branch at hop 1
+        }
+    } else if (ns_hops == 0 && ew_hops == 0) {
+        // NOTE: this is not needed from functionality perspective, but just to follow original behavior
+        packet_header->routing_fields.branch_west_offset = 1;
     }
 
     return ok;
@@ -285,11 +296,13 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
             return decode_route_to_buffer_by_hops(target_num, (volatile uint8_t*)&packet_header->routing_fields.value);
         }
     } else {
-        tt_l1_ptr intra_mesh_routing_path_t<1, compressed>* routing_info =
-            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(MEM_TENSIX_ROUTING_PATH_BASE_1D);
+#if defined(COMPILE_FOR_ERISC)
+        static_assert(!target_as_dev, "ACTIVE_ETH doesn't support device id based routing yet");
+#endif
+        auto* routing_info =
+            reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<1, compressed>*>(ROUTING_PATH_BASE_1D);
+        auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
         if constexpr (target_as_dev) {
-            tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-                reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
             uint16_t my_device_id = routing_table->my_device_id;
             uint16_t hops = my_device_id > target_num ? my_device_id - target_num : target_num - my_device_id;
             return routing_info->decode_route_to_buffer(hops, (volatile uint8_t*)&packet_header->routing_fields.value);
@@ -299,5 +312,4 @@ bool fabric_set_unicast_route(volatile tt_l1_ptr LowLatencyPacketHeader* packet_
         }
     }
 }
-
 }  // namespace tt::tt_fabric
