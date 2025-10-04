@@ -511,7 +511,6 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     const uint16_t start_page = uint16_t(dispatch_params.dst_page_index & CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX);
 
     bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
-    TT_ASSERT(not use_pinned_transfer);
     const bool flush_prefetch = true;
     command_sequence.add_dispatch_write_paged(
         flush_prefetch,
@@ -641,7 +640,6 @@ void issue_buffer_dispatch_command_sequence(
     CoreType dispatch_core_type) {
     uint32_t num_worker_counters = sub_device_ids.size();
     bool use_pinned_memory = dispatch_params.use_pinned_transfer;
-    TT_ASSERT(not use_pinned_memory);
     uint32_t num_pages_to_write =
         use_pinned_memory ? dispatch_params.total_pages_to_write : dispatch_params.pages_per_txn;
     uint64_t data_size_bytes = uint64_t(num_pages_to_write) * dispatch_params.page_size_to_write;
@@ -971,7 +969,7 @@ void issue_read_buffer_dispatch_command_sequence(
     // Precompute whether pinned direct write is feasible, and derive dst noc params
     const bool is_unpadded = (buffer.page_size() == dispatch_params.padded_page_size);
     const bool has_pinned_inputs = (dispatch_params.dst != nullptr && dispatch_params.pinned_memory != nullptr);
-    const uint32_t xfer_bytes = dispatch_params.pages_per_txn * dispatch_params.padded_page_size;
+    const uint64_t xfer_bytes = uint64_t(dispatch_params.pages_per_txn) * dispatch_params.padded_page_size;
     bool use_pinned_transfer = false;
     uint32_t pinned_dst_noc_xy = 0;
     uint32_t pinned_dst_addr_lo = 0;
