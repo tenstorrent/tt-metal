@@ -80,70 +80,17 @@ int main(int argc, char** argv) {
         distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
         distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
 
-        // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
-        // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
-        // kernel. Each circular buffer is made up of 2 tiles. Thus when one tile is pushed and being used by the receiving end, the
-        // sending end can get the next piece of data ready to be pushed. Overlapping the operations. Leading to better performance.
-        // However there is a trade off, The more tiles in a circular buffer, the more memory is used. And Circular buffers are
-        // backed by L1(SRAM) memory and L1 is a precious resource.
-        // The hardware supports up to 32 circular buffers and they all act the same.
-        constexpr uint32_t tiles_per_cb = 2;
-        tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
-        CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/tiles_per_cb * tile_size_bytes,                    // The total size of the circular buffer in bytes
-            /*data_format_spec=*/{{src0_cb_index, tt::DataFormat::Float16_b}})// The circular buffer index and data format it'll hold
-            .set_page_size(src0_cb_index, tile_size_bytes));                  // Since we will be sending one tile at a time, we set
-                                                                              // the page size to the tile size (and thus
-                                                                              // total_size / page_size = tiles_per is the number of
-                                                                              // entries in the circular buffer)
-        tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
-        CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/tiles_per_cb * tile_size_bytes,
-            /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src1_cb_index, tile_size_bytes));
-        tt::CBIndex dst_cb_index = tt::CBIndex::c_16;
-        CreateCircularBuffer(program, core, CircularBufferConfig(
-            /*total_size=*/tiles_per_cb * tile_size_bytes,
-            /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(dst_cb_index, tile_size_bytes));
+        auto universal_config = UniversalKernelConfigBuilder({.math_fidelity = MathFidelity::HiFi4})
+            .add_runtime_arg("n_tiles", n_tiles)
+            .add_buffer("in0", src0_dram_buffer, tt::DataFormat::Float16_b)
+            .add_buffer("in1", src1_dram_buffer, tt::DataFormat::Float16_b)
+            .add_buffer("out", dst_dram_buffer, tt::DataFormat::Float16_b);
 
-        // Create the reader, writer and compute kernels. The kernels do the following:
-        // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
-        // * Compute: Waits for data to be available in the circular buffer, pops it, adds the two inputs together and pushes the result
-        //   into the output circular buffer.
-        // * Writer: Waits for data to be available in the output circular buffer, pops it and writes it back into DRAM.
-        // These kernels work together to form a pipeline. The reader reads data from the DRAM buffer and makes them available in the
-        // compute kernel. The compute kernel does math and pushes the result into the writer kernel. The writer kernel writes the result
-        // back to DRAM.
-        std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
-        auto reader = CreateKernel(
+        CreateKernel(
             program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/read_tiles.cpp",
+            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
-        std::vector<uint32_t> writer_compile_time_args;
-        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
-        auto writer = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/dataflow/write_tile.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
-        auto compute = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
-            core,
-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
-                                                                // that trade off performance for accuracy. HiFi4 is the most accurate
-                                                                // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The
-                                                                // difference between them is the number of bits used during computation.
-
-        // Set the runtime arguments for the kernels. This also registers
-        // the kernels with the program.
-        SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, writer, core, {dst_dram_buffer->address(), n_tiles});
-        SetRuntimeArgs(program, compute, core, {n_tiles});
+            universal_config);
 
         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates
         // to Metalium that the operation is non-blocking. The function is allowed to return upon the kernel being queued. We must

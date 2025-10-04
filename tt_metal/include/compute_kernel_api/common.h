@@ -6,6 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #include "compute_kernel_api/reg_api.h"
+
+#ifdef COMPILE_FOR_TRISC
 #include "compute_kernel_api/pack.h"
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/cb_api.h"
@@ -133,3 +135,5 @@ inline uint8_t get_relative_logical_y() {
     extern uint8_t my_relative_y_;  // Set in FW
     return my_relative_y_;
 }
+
+#endif

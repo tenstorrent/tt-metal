@@ -4,10 +4,12 @@
 
 #pragma once
 
+#ifdef COMPILE_FOR_TRISC
 #include "debug/fw_debug.h"
 #include "ckernel.h"
 #include "ckernel_gpr_map.h"
 #include "llk_param_structs.h"
+#endif
 
 using namespace ckernel;
 
