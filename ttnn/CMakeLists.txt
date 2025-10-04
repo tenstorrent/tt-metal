@@ -621,7 +621,7 @@ if(WITH_PYTHON_BINDINGS)
             TT::Metalium
     )
     if(TT_INSTALL)
-        install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
+        install(TARGETS ttnn EXPORT TT-NN LIBRARY LIBRARY COMPONENT ttnn-runtime)
     endif()
 
     # Install .so into src files for pybinds implementation
