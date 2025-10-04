@@ -35,6 +35,7 @@ class TtModelArgs:
         self.mesh_device = mesh_device
         self.num_devices = mesh_device.get_num_devices()
         self.galaxy_num_links = 4
+        self.model_cache_path = "/localdev/ricozhu/tt-metal/model_cache_grok/"
 
         self.vocab_size = 128 * 1024
 
@@ -451,6 +452,13 @@ class TtModelArgs:
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
+        model_config["SHARDED_ATTN_INPUT_MEMCFG_SINGLE_EXPERT"] = ttnn.create_sharded_memory_config(
+            shape=(256, nearest_32(self.hidden_size // (8 * lm_head_num_rows) // 4)),
+            core_grid=ttnn.CoreGrid(y=lm_head_num_rows, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
 
         # Attention-specific configs for TG
         model_config["XQKV_DECODE_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -582,6 +590,9 @@ class TtModelArgs:
         )
 
         return model_config
+
+    def weight_cache_path(self, dtype):
+        return self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
 
     def load_experts_weights_to_state_dict(self, state_dict, weights_path="/localdev/ricozhu/grok_2_weights/"):
         # --- experts (3 matrices, 8 shards each) ---

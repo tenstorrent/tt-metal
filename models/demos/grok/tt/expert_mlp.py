@@ -44,7 +44,9 @@ class ExpertMLP(LightweightModule):
             cache_name = lambda _: None
         else:
             # Use a simple cache path structure for Grok
-            cache_name = lambda name: None  # Simplified for minimal implementation
+            cache_name = lambda name: args.weight_cache_path(dtypes[name]) / (
+                f"model.layers.{layer_num}.feed_forward_multidevice_unsqueezed.experts.{name}"
+            )
 
         # Convert torch weights to ttnn tensors
         as_tensor = lambda name: ttnn.as_tensor(
@@ -56,7 +58,7 @@ class ExpertMLP(LightweightModule):
             ),
             layout=self.model_config["MLP_W_LAYOUT_TILE_EXPERTS"],
             memory_config=self.model_config["MLP_WEIGHTS_MEMCFG_EXPERTS"],
-            # cache_file_name=cache_name(name),
+            cache_file_name=cache_name(name),
         )
 
         # Initialize weight tensors
@@ -80,31 +82,29 @@ class ExpertMLP(LightweightModule):
         pc_2 = self.model_config["FF2_TG_PROGCFG_SINGLE_EXPERT"]
         pc_3 = self.model_config["FF1_3_TG_PROGCFG_SINGLE_EXPERT"]
 
-        breakpoint()
-
         # Decode mode memory config
         memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-        w1_out = ttnn.linear(
-            x,
-            self.w1,
-            dtype=ttnn.bfloat8_b,  # TG=True
-            core_grid=None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
-            memory_config=memory_config,
-        )
+        # w1_out = ttnn.linear(
+        #     x,
+        #     self.w1,
+        #     dtype=ttnn.bfloat8_b,  # TG=True
+        #     core_grid=None,
+        #     compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+        #     program_config=pc_1,
+        #     memory_config=memory_config,
+        # )
+        w1_out = ttnn.matmul(x, self.w1)
 
-        breakpoint()
-
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            dtype=ttnn.bfloat8_b,
-            core_grid=None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=memory_config,
-        )
+        # w3_out = ttnn.linear(
+        #     x,
+        #     self.w3,
+        #     dtype=ttnn.bfloat8_b,
+        #     core_grid=None,
+        #     compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+        #     program_config=pc_3,
+        #     memory_config=memory_config,
+        # )
+        w3_out = ttnn.matmul(x, self.w3)
         ttnn.deallocate(x)
 
         input_mem_cfg = w1_out.memory_config()
@@ -124,8 +124,6 @@ class ExpertMLP(LightweightModule):
             num_buffers_per_channel=2,
         )
 
-        breakpoint()
-
         w3_out = ttnn.experimental.reduce_scatter_minimal_async(
             w3_out,
             persistent_output_buffers=None,
@@ -141,8 +139,6 @@ class ExpertMLP(LightweightModule):
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
-
-        breakpoint()
 
         w2_in = ttnn.mul(
             w1_out,
@@ -174,15 +170,16 @@ class ExpertMLP(LightweightModule):
         w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.args.compute_kernel_config_hifi2
-        w2_out = ttnn.linear(
-            w2_in,
-            self.w2,
-            compute_kernel_config=li_ff2_compute_kernel_cfg,
-            dtype=self.args.ccl_dtype,  # TG=True
-            program_config=pc_2,
-            memory_config=memory_config,
-            core_grid=None,
-        )
+        # w2_out = ttnn.linear(
+        #     w2_in,
+        #     self.w2,
+        #     compute_kernel_config=li_ff2_compute_kernel_cfg,
+        #     dtype=self.args.ccl_dtype,  # TG=True
+        #     program_config=pc_2,
+        #     memory_config=memory_config,
+        #     core_grid=None,
+        # )
+        w2_out = ttnn.matmul(w2_in, self.w2)
         ttnn.deallocate(w2_in)
 
         w2_out_reduced = tt_all_reduce(
@@ -202,13 +199,15 @@ class ExpertMLP(LightweightModule):
 
         # Ensure dim 0 and 1 are 1
         original_shape = w2_out_reduced.shape
-        w2_out_reduced = ttnn.reshape(
-            w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-        )
+        # w2_out_reduced = ttnn.reshape(
+        #     w2_out_reduced, (1, original_shape[-2], original_shape[-4] * original_shape[-3], original_shape[-1])
+        # )
+        # breakpoint()
         # Always decode mode
-        w2_out_reduced = ttnn.to_memory_config(
-            w2_out_reduced,
-            self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-        )
+        # w2_out_reduced = ttnn.to_memory_config(
+        #     w2_out_reduced,
+        #     self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+        # )
+        # breakpoint()
 
         return w2_out_reduced

@@ -86,17 +86,18 @@ def test_grok_mlp_inference(mesh_device):
 
     logger.info("Run Grok MLP")
     tt_output = tt_model(tt_input)
-    breakpoint()
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=model_args.cluster_shape),
     )
 
-    tt_output_torch = tt_output_torch[:, :1, :, :]
+    tt_output_torch = tt_output_torch[:1, :, :, :]
+    tt_out_reduced = torch.sum(tt_output_torch, dim=1, keepdim=True)
+    breakpoint()
 
     pcc_required = 0.99
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+    passing, pcc_message = comp_pcc(reference_output, tt_out_reduced, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")

@@ -275,9 +275,11 @@ class MoE(nn.Module):
         else:
             # always use all experts
             weights = torch.ones((x.shape[0], self.num_experts, 1), dtype=torch.float, device=x.device)
-        results = torch.zeros_like(x)
+        # results = torch.zeros_like(x)
+        results = []
         for i, expert in enumerate(self.experts):
-            results += expert(x) * weights[:, i, None]
+            # results += expert(x) * weights[:, i, None]
+            results.append(expert(x))
         return results
 
 
