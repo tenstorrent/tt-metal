@@ -6,6 +6,8 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
 
+#include <umd/device/cluster.hpp>
+
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <fstream>
@@ -52,6 +54,24 @@ ExitNodeConnection proto_to_exit_node_connection(const tt::fabric::proto::ExitNo
     exit_conn.dst_exit_node = AsicID{proto_conn.dst_exit_node()};
     exit_conn.eth_conn = proto_to_eth_connection(proto_conn.eth_conn());
     return exit_conn;
+}
+
+// Convert EthernetMetrics to protobuf
+void ethernet_metrics_to_proto(const EthernetMetrics& metrics, tt::fabric::proto::EthernetMetrics* proto_metrics) {
+    proto_metrics->set_retrain_count(metrics.retrain_count);
+    proto_metrics->set_crc_error_count(metrics.crc_error_count);
+    proto_metrics->set_corrected_codeword_count(metrics.corrected_codeword_count);
+    proto_metrics->set_uncorrected_codeword_count(metrics.uncorrected_codeword_count);
+}
+
+// Convert protobuf to EthernetMetrics
+EthernetMetrics proto_to_ethernet_metrics(const tt::fabric::proto::EthernetMetrics& proto_metrics) {
+    EthernetMetrics metrics;
+    metrics.retrain_count = proto_metrics.retrain_count();
+    metrics.crc_error_count = proto_metrics.crc_error_count();
+    metrics.corrected_codeword_count = proto_metrics.corrected_codeword_count();
+    metrics.uncorrected_codeword_count = proto_metrics.uncorrected_codeword_count();
+    return metrics;
 }
 
 // Convert AsicTopology to protobuf
@@ -187,12 +207,32 @@ void physical_system_descriptor_to_proto(
             exit_node_connection_to_proto(exit_conn, proto_table->add_exit_connections());
         }
     }
+
+    // Set mock cluster flag
+    proto_desc->set_mock_cluster(descriptor.is_using_mock_cluster());
+
+    // Convert ethernet metrics
+    for (const auto& [asic_id, channel_metrics] : descriptor.get_ethernet_metrics()) {
+        auto* proto_asic_metrics = proto_desc->add_ethernet_metrics();
+        proto_asic_metrics->set_asic_id(*asic_id);
+
+        for (const auto& [channel, metrics] : channel_metrics) {
+            auto* proto_channel_metrics = proto_asic_metrics->add_channel_metrics();
+            proto_channel_metrics->set_channel(channel);
+            ethernet_metrics_to_proto(metrics, proto_channel_metrics->mutable_metrics());
+        }
+    }
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
 std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     const tt::fabric::proto::PhysicalSystemDescriptor& proto_desc) {
-    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(false);  // Don't run discovery
+    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
+        PhysicalSystemDescriptor::null_cluster,
+        nullptr,
+        nullptr,
+        proto_desc.mock_cluster(),
+        false);  // Don't run discovery
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -246,6 +286,20 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         exit_node_connection_table[proto_table.host_name()] = std::move(exit_connections);
     }
 
+    // Convert ethernet metrics
+    auto& ethernet_metrics = descriptor->get_ethernet_metrics();
+    for (const auto& proto_asic_metrics : proto_desc.ethernet_metrics()) {
+        AsicID asic_id{proto_asic_metrics.asic_id()};
+        std::unordered_map<uint8_t, EthernetMetrics> channel_metrics;
+
+        for (const auto& proto_channel_metrics : proto_asic_metrics.channel_metrics()) {
+            uint8_t channel = static_cast<uint8_t>(proto_channel_metrics.channel());
+            channel_metrics[channel] = proto_to_ethernet_metrics(proto_channel_metrics.metrics());
+        }
+
+        ethernet_metrics[asic_id] = std::move(channel_metrics);
+    }
+
     return descriptor;
 }
 
@@ -293,7 +347,23 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc));
+    return *proto_to_physical_system_descriptor(proto_desc);
 }
 
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
+    const std::string& text_proto_file) {
+    std::ifstream gsd_file(text_proto_file);
+    if (!gsd_file.is_open()) {
+        throw std::runtime_error("Failed to open file for reading: " + text_proto_file);
+    }
+
+    std::string text_proto((std::istreambuf_iterator<char>(gsd_file)), std::istreambuf_iterator<char>());
+    gsd_file.close();
+    tt::fabric::proto::PhysicalSystemDescriptor physical_system_descriptor;
+    if (!google::protobuf::TextFormat::ParseFromString(text_proto, &physical_system_descriptor)) {
+        throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from text proto file: " + text_proto_file);
+    }
+
+    return *proto_to_physical_system_descriptor(physical_system_descriptor);
+}
 }  // namespace tt::tt_metal
