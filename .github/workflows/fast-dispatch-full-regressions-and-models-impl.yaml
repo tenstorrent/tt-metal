@@ -194,6 +194,7 @@ jobs:
             ${{ matrix.test-config.model == 'stable_diffusion' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
+          # stojko - tag -> gemma is here               pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
           run_args: |
             if [[ "${{ matrix.test-config.model }}" == *"ttt"* ]]; then
               pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model }}

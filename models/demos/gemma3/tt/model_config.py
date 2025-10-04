@@ -386,6 +386,7 @@ class ModelArgs:
     def __init__(
         self,
         mesh_device,
+        model_location_generator,
         instruct=False,
         dummy_weights=False,
         max_batch_size=1,
@@ -437,8 +438,11 @@ class ModelArgs:
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # May be overridden by config
+            assert False  # stojko temp - this should not be called FOR NOW
         elif HF_MODEL:
-            self.CKPT_DIR = HF_MODEL
+            model_version = os.getenv("HF_MODEL")
+            self.CKPT_DIR = model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1200)
+
             self.TOKENIZER_PATH = HF_MODEL
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
@@ -1773,6 +1777,7 @@ class ModelArgs:
                 state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
             state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
+            assert False  # stojko temp - i prefer if this is not called
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
