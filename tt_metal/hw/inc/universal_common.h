@@ -13,7 +13,6 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api.h"
 
 using namespace ckernel;
