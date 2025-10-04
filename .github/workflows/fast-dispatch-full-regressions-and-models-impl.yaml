@@ -190,6 +190,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+            -e TT_GH_CI_INFRA
             ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
             ${{ matrix.test-config.model == 'stable_diffusion' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
