@@ -27,6 +27,34 @@ public:
 
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
 
+    /**
+     * Get the number of slots for a specific sender channel.
+     * @param channel_id Channel ID
+     * @return Number of slots
+     */
+    size_t get_sender_channel_number_of_slots(size_t channel_id) const;
+
+    /**
+     * Get the base address for a specific sender channel.
+     * @param channel_id Channel ID
+     * @return Base address
+     */
+    size_t get_sender_channel_base_address(size_t channel_id) const;
+
+    /**
+     * Get the number of slots for a specific receiver channel.
+     * @param channel_id Channel ID
+     * @return Number of slots
+     */
+    size_t get_receiver_channel_number_of_slots(size_t channel_id) const;
+
+    /**
+     * Get the base address for a specific receiver channel.
+     * @param channel_id Channel ID
+     * @return Base address
+     */
+    size_t get_receiver_channel_base_address(size_t channel_id) const;
+
 private:
     void configure_buffer_slots_helper(
         tt::tt_fabric::Topology topology,

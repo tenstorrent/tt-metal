@@ -58,7 +58,8 @@ public:
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique
     // connections than available will result in an error.
-    tt::tt_fabric::SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction direction);
+    // tt::tt_fabric::SenderWorkerAdapterSpec uniquely_connect_worker(tt::tt_metal::IDevice* device, Direction
+    // direction);
 
     // builds the ethernet kernels for all EDMs in the "fabric"
     void build_kernels() const;

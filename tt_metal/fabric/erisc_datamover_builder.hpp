@@ -20,8 +20,10 @@
 #include <array>
 #include <cstddef>
 #include <variant>
+#include <memory>
 #include "builder/fabric_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 
 namespace tt::tt_fabric {
 
@@ -378,19 +380,6 @@ private:
     std::array<bool, builder_config::num_receiver_channels> is_receiver_channel_serviced_{};
 };
 
-struct SenderWorkerAdapterSpec {
-    size_t edm_noc_x = 0;
-    size_t edm_noc_y = 0;
-    size_t edm_buffer_base_addr = 0;
-    size_t num_buffers_per_channel = 0;
-    size_t edm_l1_sem_addr = 0;
-    size_t edm_connection_handshake_addr = 0;
-    size_t edm_worker_location_info_addr = 0;  // The EDM's location for `EDMChannelWorkerLocationInfo`
-    size_t buffer_size_bytes = 0;
-    size_t buffer_index_semaphore_id = 0;  // the semaphore ID on the EDM, not the worker
-    eth_chan_directions edm_direction = eth_chan_directions::EAST;
-};
-
 struct edm_termination_info_t {
     uint32_t distance = 0;
     uint32_t edm_noc_x = 0;
@@ -521,15 +510,19 @@ public:
     size_t handshake_address = 0;
     size_t channel_buffer_size = 0;
 
-    std::array<size_t, builder_config::num_sender_channels> sender_channels_num_buffers = {};
+    std::array<
+        std::optional<tt::tt_fabric::ChannelConnectionWriterAdapter>,
+        FabricEriscDatamoverConfig::max_downstream_edms>
+        to_downstream_adapters = {};
+    std::array<std::optional<tt::tt_fabric::>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_allocators =
+        {};
+    // std::array<std::unique_ptr<tt::tt_fabric::ChannelConnectionWriterAdapter>, builder_config::num_receiver_channels>
+    // to_downstream_adapters = {};
+
     std::array<size_t, builder_config::num_receiver_channels> receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_num_buffers = {};
-
-    std::array<size_t, builder_config::num_sender_channels> local_sender_channels_buffer_address = {};
     std::array<size_t, builder_config::num_receiver_channels> local_receiver_channels_buffer_address = {};
-    std::array<size_t, builder_config::num_sender_channels> remote_sender_channels_base_address = {};
     std::array<size_t, builder_config::num_receiver_channels> remote_receiver_channels_base_address = {};
-    std::array<size_t, builder_config::num_downstream_sender_channels> downstream_sender_channels_num_buffers = {};
 
     std::array<size_t, builder_config::num_sender_channels> local_sender_channels_connection_info_addr = {};
 
@@ -552,14 +545,15 @@ public:
     std::array<size_t, FabricEriscDatamoverConfig::max_downstream_edms> receiver_channels_local_buffer_index_address =
         {};
 
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_x = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_y = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-        downstream_edm_vcs_buffer_base_address = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-        downstream_edm_vcs_worker_registration_address = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-        downstream_edm_vcs_worker_location_info_address = {};
+    // Universal to all types -- moved to ChannelConnectionWriterAdapter
+    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_x = {};
+    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_y = {};
+    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    //     downstream_edm_vcs_buffer_base_address = {};
+    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    //     downstream_edm_vcs_worker_registration_address = {};
+    // std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    //     downstream_edm_vcs_worker_location_info_address = {};
     std::array<size_t, builder_config::num_sender_channels> downstream_vcs_sender_channel_buffer_index_semaphore_id =
         {};
 

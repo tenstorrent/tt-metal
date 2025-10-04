@@ -65,60 +65,6 @@ protected:
 };
 
 /**
- * Static channels allocator implementation.
- * Allocates fixed-size channels with predetermined buffer counts.
- */
-class StaticChannelsAllocator : public FabricChannelAllocator {
-public:
-    /**
-     * Constructor for static channels allocator.
-     * @param memory_regions Available memory regions
-     * @param num_sender_channels Number of sender channels to allocate
-     * @param num_receiver_channels Number of receiver channels to allocate
-     * @param buffer_size_bytes Size of each buffer in bytes
-     * @param buffers_per_sender_channel Number of buffers per sender channel
-     * @param buffers_per_receiver_channel Number of buffers per receiver channel
-     */
-    StaticChannelsAllocator(
-        tt::tt_fabric::Topology topology,
-        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
-        const std::vector<MemoryRegion>& memory_regions,
-        size_t num_sender_channels,
-        size_t num_receiver_channels,
-        size_t buffer_size_bytes,
-        size_t buffers_per_sender_channel,
-        size_t buffers_per_receiver_channel);
-
-    void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
-
-    /**
-     * Get the base address for a specific sender channel.
-     * @param channel_id Channel ID
-     * @return Base address
-     */
-    size_t get_sender_channel_base_address(size_t channel_id) const;
-
-    /**
-     * Get the base address for a specific receiver channel.
-     * @param channel_id Channel ID
-     * @return Base address
-     */
-    size_t get_receiver_channel_base_address(size_t channel_id) const;
-
-private:
-    size_t num_sender_channels_;
-    size_t num_receiver_channels_;
-    size_t buffer_size_bytes_;
-    size_t buffers_per_sender_channel_;
-    size_t buffers_per_receiver_channel_;
-
-    std::vector<size_t> sender_channel_base_addresses_;
-    std::vector<size_t> receiver_channel_base_addresses_;
-
-    void allocate_channels();
-};
-
-/**
  * Elastic channels allocator implementation.
  * Dynamically allocates channels based on available memory and demand.
  */
@@ -134,65 +80,9 @@ public:
     ElasticChannelsAllocator(
         tt::tt_fabric::Topology topology,
         const tt::tt_fabric::FabricEriscDatamoverOptions& options,
-        const std::vector<MemoryRegion>& memory_regions,
-        size_t buffer_size_bytes,
-        size_t min_buffers_per_channel,
-        size_t max_buffers_per_channel);
+        const std::vector<MemoryRegion>& memory_regions);
 
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
-
-    /**
-     * Allocate channels dynamically based on available memory.
-     * @param num_sender_channels Number of sender channels to allocate
-     * @param num_receiver_channels Number of receiver channels to allocate
-     * @return True if allocation successful, false otherwise
-     */
-    bool allocate_channels(size_t num_sender_channels, size_t num_receiver_channels);
-
-    /**
-     * Get the number of buffers allocated for a sender channel.
-     * @param channel_id Channel ID
-     * @return Number of buffers
-     */
-    size_t get_sender_channel_buffer_count(size_t channel_id) const;
-
-    /**
-     * Get the number of buffers allocated for a receiver channel.
-     * @param channel_id Channel ID
-     * @return Number of buffers
-     */
-    size_t get_receiver_channel_buffer_count(size_t channel_id) const;
-
-    /**
-     * Get the base address for a specific sender channel.
-     * @param channel_id Channel ID
-     * @return Base address
-     */
-    size_t get_sender_channel_base_address(size_t channel_id) const;
-
-    /**
-     * Get the base address for a specific receiver channel.
-     * @param channel_id Channel ID
-     * @return Base address
-     */
-    size_t get_receiver_channel_base_address(size_t channel_id) const;
-
-private:
-    size_t buffer_size_bytes_;
-    size_t min_buffers_per_channel_;
-    size_t max_buffers_per_channel_;
-
-    size_t num_sender_channels_;
-    size_t num_receiver_channels_;
-
-    std::vector<size_t> sender_channel_buffer_counts_;
-    std::vector<size_t> receiver_channel_buffer_counts_;
-    std::vector<size_t> sender_channel_base_addresses_;
-    std::vector<size_t> receiver_channel_base_addresses_;
-
-    bool allocation_successful_;
-
-    size_t calculate_optimal_buffers_per_channel(size_t total_channels, size_t available_memory) const;
 };
 
 }  // namespace tt::tt_fabric

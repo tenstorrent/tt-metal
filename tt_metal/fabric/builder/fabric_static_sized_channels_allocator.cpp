@@ -16,6 +16,26 @@
 
 namespace tt::tt_fabric {
 
+size_t FabricStaticSizedChannelsAllocator::get_sender_channel_base_address(size_t channel_id) const {
+    TT_FATAL(channel_id < sender_channels_base_address.size(), "Sender channel ID {} out of bounds", channel_id);
+    return sender_channels_base_address[channel_id];
+}
+
+size_t FabricStaticSizedChannelsAllocator::get_sender_channel_number_of_slots(size_t channel_id) const {
+    TT_FATAL(channel_id < sender_channels_num_buffers.size(), "Sender channel ID {} out of bounds", channel_id);
+    return sender_channels_num_buffers[channel_id];
+}
+
+size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(size_t channel_id) const {
+    TT_FATAL(channel_id < receiver_channels_num_buffers.size(), "Receiver channel ID {} out of bounds", channel_id);
+    return receiver_channels_num_buffers[channel_id];
+}
+
+size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(size_t channel_id) const {
+    TT_FATAL(channel_id < receiver_channels_base_address.size(), "Receiver channel ID {} out of bounds", channel_id);
+    return receiver_channels_base_address[channel_id];
+}
+
 FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
     tt::tt_fabric::Topology topology,
     const FabricEriscDatamoverOptions& options,
