@@ -262,6 +262,7 @@ class FeedForward(nn.Module):
 class MoE(nn.Module):
     def __init__(self, num_experts=8, gate=False):
         super().__init__()
+        self.num_experts = num_experts
         self.experts = nn.ModuleList([FeedForward(hidden_dim=16384, dim=8192) for _ in range(num_experts)])
         self.gate = nn.Linear(dim, num_experts, bias=False) if gate else None
         self.top_k = 2
