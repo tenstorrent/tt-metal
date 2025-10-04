@@ -73,12 +73,12 @@ HalCoreInfoType create_tensix_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LOCAL)] =
         MEM_TRISC_LOCAL_SIZE;  // TRISC, BRISC, or NCRISC?
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = MEM_BANK_TO_NOC_SIZE;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_TENSIX_ROUTING_TABLE_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_TABLE)] = MEM_ROUTING_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS)] =
         MEM_TENSIX_FABRIC_CONNECTIONS_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_1D)] = ROUTING_PATH_SIZE_1D;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_ROUTING_PATH_2D)] = COMPRESSED_ROUTING_PATH_SIZE_2D;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_EXIT_NODE_TABLE)] = MEM_TENSIX_EXIT_NODE_TABLE_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TENSIX_EXIT_NODE_TABLE)] = MEM_EXIT_NODE_TABLE_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)] =
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
 
