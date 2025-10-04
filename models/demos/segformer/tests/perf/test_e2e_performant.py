@@ -27,7 +27,6 @@ def run_segformer_trace_2cqs_inference(
         _ = segformer_trace_2cq.run(torch_input_tensor)
     ttnn.synchronize_device(device)
     t1 = time.time()
-
     segformer_trace_2cq.release_segformer_trace_2cqs_inference()
     inference_time_avg = round((t1 - t0) / inference_iter_count, 6)
     logger.info(

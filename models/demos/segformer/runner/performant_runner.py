@@ -2,15 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 import ttnn
 from models.demos.segformer.runner.performant_runner_infra import create_test_infra
-
-try:
-    pass
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
 
 
 class SegformerTrace2CQ:
