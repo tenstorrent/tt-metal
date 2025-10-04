@@ -154,23 +154,23 @@ def run_reduce_scatter_impl(
     tt_reduce_scatter_output_list = []
 
     def run_op(i):
-        tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
+        tt_reduce_scatter_output_tensor = ttnn.reduce_scatter(
             tt_input_tensor_mesh_list[i],
-            persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
-            if use_persistent_buffers
-            else None,
+            # persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]]
+            # if use_persistent_buffers
+            # else None,
             dim=dim,
-            multi_device_global_semaphore=ccl_semaphore_handles[i],
-            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
+            # multi_device_global_semaphore=ccl_semaphore_handles[i],
+            # barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
             num_links=num_links,
             memory_config=mem_config_rs,
-            intermediate_memory_config=mem_config_intermediate,
+            # intermediate_memory_config=mem_config_intermediate,
             topology=rs_topology,
             subdevice_id=worker_sub_device_id,
             cluster_axis=cluster_axis,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
+            # chunks_per_sync=chunks_per_sync,
+            # num_workers_per_link=num_workers_per_link,
+            # num_buffers_per_channel=num_buffers_per_channel,
         )
 
         return tt_reduce_scatter_output_tensor
