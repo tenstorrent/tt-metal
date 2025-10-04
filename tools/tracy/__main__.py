@@ -276,7 +276,7 @@ def main():
                 captureProcess.terminate()
                 captureProcess.communicate()
                 logger.error(
-                    f"No profiling data could be captured. Please make sure you are on the correct build. Use build_metal.sh --enable-profiler to build if you are not sure."
+                    f"No profiling data could be captured. Please make sure you are on a Tracy-enabled build (default)."
                 )
                 sys.exit(1)
 
