@@ -20,15 +20,14 @@ KERNEL_MAIN {
     uint32_t col_start_chunk = col_start_tile_id;
     uint32_t w_chunk = curr_col_in_batch;
     for (uint32_t wt = 0; wt < num_cols; wt += row_chunk) {
-        uint32_t chunk_end = std::min(wt + row_chunk, num_cols);
-        const uint32_t tiles_in_chunk = chunk_end - wt;
+        const uint32_t tiles_in_chunk = std::min(wt + row_chunk, num_cols) - wt;
+        const uint32_t row_wrap_increment = (Ht - 1) * Wt + 1;
+        uint32_t w_row = w_chunk;
+        uint32_t col_start_row = col_start_chunk;
 
         // reduction for one chunk
         // accumulation of Ht results in separate DST indexes
         acquire_dst();
-        const uint32_t row_wrap_increment = (Ht - 1) * Wt + 1;
-        uint32_t w_row = w_chunk;
-        uint32_t col_start_row = col_start_chunk;
         for (uint32_t ht = 0; ht < Ht; ++ht) {
             w_row = w_chunk;
             col_start_row = col_start_chunk;
