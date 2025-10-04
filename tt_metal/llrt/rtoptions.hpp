@@ -16,8 +16,9 @@
 #include <map>
 #include <set>
 #include <string>
-#include <utility>
 #include <vector>
+#include <functional> 
+
 
 #include "llrt/hal.hpp"
 #include "core_coord.hpp"
@@ -54,6 +55,31 @@ enum RunTimeDebugClass {
 
 extern const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount];
 extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
+class RunTimeOptions;
+enum class EnvVarParserType {
+    BoolFlag,         // presence => true (getenv != nullptr)
+    Bool01,           // first char '0' or '1' (legacy strict)
+    Bool01Inverted,   // first char '0' or '1' (legacy strict) inverted
+    Bool01WithInspectorFallback,    // Bool01 but defaults to inspector state
+    String,           // raw string
+    StringWithSuffix, // raw string, append suffix in parser (e.g., "/")
+    Int,
+    UInt,
+    Float,
+    Complex           // custom function (hooked up later)
+};
+using EnvParserFn = void(*)(RunTimeOptions* opts, const char* raw);
+
+struct EnvVarDescriptor {
+    const char* env_var_name;
+    EnvVarParserType parser_type;
+
+    EnvParserFn parser_func;
+    
+    const char* description;     // docs/help (for future --help-env)
+    const char* default_value;   // documentation only for now
+    const char* examples;        // documentation only for now
+};
 
 // TargetSelection stores the targets for a given debug feature. I.e. for which chips, cores, harts
 // to enable the feature.
@@ -87,8 +113,10 @@ struct InspectorSettings {
     bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
-    std::string rpc_server_address = "localhost:50051";
-    bool rpc_server_enabled = true;
+       //
+       std::string rpc_server_host = "localhost";
+       uint16_t rpc_server_port = 50051;
+       bool rpc_server_enabled = true;
 };
 
 class RunTimeOptions {
@@ -188,6 +216,17 @@ class RunTimeOptions {
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
 
+
+    bool force_reinit = false;
+    
+    // Comma-separated list of device IDs to make visible to the runtime
+    std::string visible_devices = "";
+    
+    // Sets the architecture name (only necessary during simulation)  
+    std::string arch_name = "";
+    
+    // Forces Tracy profiler pushes during execution for real-time profiling
+    bool tracy_mid_run_push = false;
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
@@ -257,6 +296,10 @@ public:
     void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
     bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
     void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
+    // 
+    bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
+    const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
+    uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
     bool get_watcher_noc_sanitize_linked_transaction() const {
         return watcher_settings.noc_sanitize_linked_transaction;
     }
@@ -284,10 +327,6 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    const std::string& get_inspector_rpc_server_address() const { return inspector_settings.rpc_server_address; }
-    void set_inspector_rpc_server_address(const std::string& address) { inspector_settings.rpc_server_address = address; }
-    bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
-    void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
 
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
@@ -298,7 +337,7 @@ public:
         return feature_targets[feature].cores;
     }
     void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<CoreCoord>> cores) {
-        feature_targets[feature].cores = std::move(cores);
+        feature_targets[feature].cores = cores;
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_cores(RunTimeDebugFeatures feature, CoreType core_type, int all_cores) {
@@ -320,7 +359,7 @@ public:
         return feature_targets[feature].chip_ids;
     }
     void set_feature_chip_ids(RunTimeDebugFeatures feature, std::vector<int> chip_ids) {
-        feature_targets[feature].chip_ids = std::move(chip_ids);
+        feature_targets[feature].chip_ids = chip_ids;
     }
     // An alternative to setting cores by range, a flag to enable all.
     void set_feature_all_chips(RunTimeDebugFeatures feature, bool all_chips) {
@@ -331,11 +370,11 @@ public:
         return feature_targets[feature].processors;
     }
     void set_feature_processors(RunTimeDebugFeatures feature, tt_metal::HalProcessorSet processors) {
-        feature_targets[feature].processors = processors;
+        feature_targets[feature].processors = std::move(processors);
     }
     std::string get_feature_file_name(RunTimeDebugFeatures feature) const { return feature_targets[feature].file_name; }
     void set_feature_file_name(RunTimeDebugFeatures feature, std::string file_name) {
-        feature_targets[feature].file_name = std::move(file_name);
+        feature_targets[feature].file_name = file_name;
     }
     bool get_feature_one_file_per_risc(RunTimeDebugFeatures feature) const {
         return feature_targets[feature].one_file_per_risc;
@@ -351,7 +390,7 @@ public:
     }
     TargetSelection get_feature_targets(RunTimeDebugFeatures feature) const { return feature_targets[feature]; }
     void set_feature_targets(RunTimeDebugFeatures feature, TargetSelection targets) {
-        feature_targets[feature] = std::move(targets);
+        feature_targets[feature] = targets;
     }
 
     bool get_record_noc_transfers() const { return record_noc_transfer_data; }
@@ -424,6 +463,10 @@ public:
     bool get_clear_dram() const { return clear_dram; }
     void set_clear_dram(bool clear) { clear_dram = clear; }
 
+    std::string get_visible_devices() const { return visible_devices; }
+    std::string get_arch_name() const { return arch_name; }
+    bool get_tracy_mid_run_push() const { return tracy_mid_run_push; }
+    
     bool get_skip_loading_fw() const { return skip_loading_fw; }
     bool get_skip_reset_cores_on_init() const { return skip_reset_cores_on_init; }
 
@@ -508,13 +551,9 @@ public:
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
 
     // Target device accessor
-    TargetDevice get_target_device() const { return runtime_target_device_; }
+    inline TargetDevice get_target_device() const { return runtime_target_device_; }
 
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
-
-    // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
-    // TODO: This will be removed after MGD 1.0 is deprecated
-    bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
@@ -534,6 +573,17 @@ private:
     void ParseFeatureOneFilePerRisc(RunTimeDebugFeatures feature, const std::string& env_var);
     void ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feature, const std::string& env_var);
 
+    void InitializeFromTable();  // iterates the descriptors and applies parsers
+    static const std::vector<EnvVarDescriptor>& GetEnvVarTable();
+    void VerifyTableDrivenParsing(); 
+    void ParseBoolFlag(const char* env_var, bool& target);
+    void ParseBool01(const char* env_var, bool& target);
+    void ParseString(const char* env_var, std::string& target, const char* suffix = nullptr, bool* was_set = nullptr);
+    void ParseInt(const char* env_var, int& target);
+    void ParseUInt(const char* env_var, unsigned& target);
+    void ParseFloat(const char* env_var, float& target);
+    void ParseComplex(const char* env_var, std::function<void(const char*)>& parser);
+
     // Helper function to parse watcher-specific environment variables.
     void ParseWatcherEnv();
 
@@ -547,6 +597,8 @@ private:
     const std::string watcher_stack_usage_str = "STACK_USAGE";
     const std::string watcher_dispatch_str = "DISPATCH";
     const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
+    const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
+    const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
     std::set<std::string> watcher_disabled_features;
     bool watcher_feature_disabled(const std::string& name) const {
         return watcher_disabled_features.find(name) != watcher_disabled_features.end();
