@@ -25,6 +25,7 @@
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
+#ifndef COMPILE_FOR_TRISC
 // clang-format off
 /**
  * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
@@ -77,6 +78,8 @@ inline uint8_t get_relative_logical_y() {
     return my_relative_y_;
 }
 
+#endif
+
 // clang-format off
 /**
  * Helper function to check if an address is in L1 memory space (not register space).
@@ -84,6 +87,8 @@ inline uint8_t get_relative_logical_y() {
  */
 // clang-format on
 bool is_l1_address(uint64_t addr) { return ((addr & 0xFFFFFFFF) < NOC_REG_SPACE_START_ADDR); }
+
+#ifndef COMPILE_FOR_TRISC
 
 // clang-format off
 /**
@@ -267,6 +272,8 @@ constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
 
 #endif
 
+#endif
+
 // clang-format off
 /**
  * Returns a pointer to the beginning of a memory block previously reserved
@@ -310,6 +317,8 @@ uint32_t get_read_ptr(uint32_t operand) {
     uint32_t rd_ptr_bytes = get_local_cb_interface(operand).fifo_rd_ptr;
     return rd_ptr_bytes;
 }
+
+#ifndef COMPILE_FOR_TRISC
 
 inline void wait_for_sync_register_value(uint32_t addr, int32_t val) {
     volatile tt_reg_ptr uint32_t* reg_ptr = (volatile uint32_t*)addr;
@@ -458,6 +467,8 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
     } while (pages_received < num_pages);
     WAYPOINT("CWFD");
 }
+
+#endif
 
 // #######################################################################################
 // #################################### NOC transfers ####################################

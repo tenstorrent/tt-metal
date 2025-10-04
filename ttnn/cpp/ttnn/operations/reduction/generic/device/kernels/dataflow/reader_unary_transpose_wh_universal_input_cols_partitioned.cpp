@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -24,9 +23,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    constexpr uint32_t scalar = get_compile_time_arg_val(4);
-    generate_reduce_scaler(cb_id_in2, scalar);
+    // Scaler tile is now generated in compute; no need to generate here.
 
     constexpr auto tensor_args = TensorAccessorArgs<5>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);

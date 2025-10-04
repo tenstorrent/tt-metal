@@ -1300,6 +1300,16 @@ void SetRuntimeArgs(
     std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
 }
 
+void UpdateRuntimeArgs(
+    const Program& program, const CoreCoord& core_coord, const std::function<void(uint32_t*)>& updater_fn) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
+        auto kernel = program.impl().get_kernel(kernel_id);
+        if (kernel->is_on_logical_core(core_coord)) {
+            updater_fn(kernel->runtime_args_data(core_coord).rt_args_data);
+        }
+    }
+}
+
 void SetRuntimeArgs(
     const Program& program,
     KernelHandle kernel_id,

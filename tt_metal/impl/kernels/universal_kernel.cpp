@@ -38,6 +38,24 @@ UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
     return add_buffer(std::move(name), buffer.get(), data_format);
 }
 
+size_t UniversalKernelConfigBuilder::get_runtime_arg_idx(const char* name) const {
+    for (size_t i = 0; i < runtime_args_.size(); ++i) {
+        if (runtime_args_[i].first == name) {
+            return i;
+        }
+    }
+    TT_THROW("Runtime argument {} not found", name);
+}
+size_t UniversalKernelConfigBuilder::get_common_runtime_arg_idx(const char* name) const {
+    for (size_t i = 0; i < common_runtime_args_.size(); ++i) {
+        if (common_runtime_args_[i].first == name) {
+            return i;
+        }
+    }
+    TT_THROW("Common runtime argument {} not found", name);
+}
+size_t UniversalKernelConfigBuilder::buffer_addresses_start_runtime_arg_idx() const { return runtime_args_.size(); }
+
 UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
     std::map<std::string, std::string> defines = defines_;
     std::vector<uint32_t> runtime_args;

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <cstdint>
 
 #ifdef COMPILE_FOR_TRISC
@@ -7,6 +9,13 @@
 #include "dataflow_api_common.h"
 #include "accessor/tensor_accessor.h"
 #endif
+
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api.h"
+
+using namespace ckernel;
 
 #ifdef COMPILE_FOR_TRISC
 #define KERNEL_MAIN       \
@@ -78,7 +87,7 @@ FORCE_INLINE auto read_tile_impl(
 }
 
 template <typename Accessor>
-FORCE_INLINE void write_packed_tile_impl(
+FORCE_INLINE void write_tile_impl(
     const uint32_t from_dst_idx,
     const uint32_t cb_id,
     const uint32_t into_page_id,
@@ -100,14 +109,13 @@ FORCE_INLINE void write_packed_tile_impl(
 
 #define read_tile(tensor, id) \
     universal_kernel::detail::read_tile_impl(tensor##_cb, id, tensor, tensor##_page_size_bytes)
-#define write_packed_tile(from_dst_idx, tensor, into_page_id) \
-    universal_kernel::detail::write_packed_tile_impl(         \
-        from_dst_idx, tensor##_cb, into_page_id, tensor, tensor##_page_size_bytes)
+#define write_tile(from_dst_idx, tensor, into_page_id) \
+    universal_kernel::detail::write_tile_impl(from_dst_idx, tensor##_cb, into_page_id, tensor, tensor##_page_size_bytes)
 using ReadTile = universal_kernel::detail::ReadTile;
 using NopTile = universal_kernel::detail::NopTile;
 
-FORCE_INLINE void add_tiles(const ReadTile& in0, const ReadTile& in1, uint32_t dst_idx) {
-    add_tiles(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
-}
+// FORCE_INLINE void add_tiles(const ReadTile& in0, const ReadTile& in1, uint32_t dst_idx) {
+//     add_tiles(in0.cb_id(), in1.cb_id(), in0.local_id(), in1.local_id(), dst_idx);
+// }
 
-FORCE_INLINE void add_tiles(NopTile, NopTile, uint32_t) {}
+// FORCE_INLINE void add_tiles(NopTile, NopTile, uint32_t) {}

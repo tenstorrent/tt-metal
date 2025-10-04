@@ -26,7 +26,7 @@ KERNEL_MAIN {
         tile_regs_commit();
         tile_regs_wait();
 
-        write_packed_tile(dst_idx, out, i);
+        write_tile(dst_idx, out, i);
 
         tile_regs_release();
     }

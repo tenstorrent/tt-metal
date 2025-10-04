@@ -87,6 +87,10 @@ public:
     UniversalKernelConfigBuilder& add_buffer(
         std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer, tt::DataFormat data_format);
 
+    size_t get_runtime_arg_idx(const char* name) const;
+    size_t get_common_runtime_arg_idx(const char* name) const;
+    size_t buffer_addresses_start_runtime_arg_idx() const;
+
     UniversalKernelConfig build() const;
     std::vector<CircularBufferConfig> compute_circular_buffers() const;
 

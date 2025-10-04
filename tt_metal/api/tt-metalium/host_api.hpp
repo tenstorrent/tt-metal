@@ -477,6 +477,9 @@ void SetRuntimeArgs(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     stl::Span<const uint32_t> runtime_args);
 
+void UpdateRuntimeArgs(
+    const Program& program, const CoreCoord& core_coord, const std::function<void(uint32_t*)>& updater_fn);
+
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
