@@ -17,6 +17,7 @@
 #include "ttnn-pybind/fabric.hpp"
 #include "ttnn-pybind/global_circular_buffer.hpp"
 #include "ttnn-pybind/global_semaphore.hpp"
+#include "ttnn-pybind/isocket.hpp"
 #include "ttnn-pybind/mesh_socket.hpp"
 #include "ttnn-pybind/operations/copy.hpp"
 #include "ttnn-pybind/operations/core.hpp"
@@ -24,6 +25,7 @@
 #include "ttnn-pybind/operations/trace.hpp"
 #include "ttnn-pybind/profiler.hpp"
 #include "ttnn-pybind/program_descriptors.hpp"
+#include "ttnn-pybind/pytensor.hpp"
 #include "ttnn-pybind/tensor_accessor_args.hpp"
 #include "ttnn-pybind/reports.hpp"
 #include "ttnn-pybind/tensor.hpp"
@@ -259,6 +261,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
     ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
+    ttnn::distributed::py_isocket_module_types(m_multi_device);
 
     // FUNCTIONS / OPERATIONS
     ttnn::tensor::tensor_mem_config_module(m_tensor);
