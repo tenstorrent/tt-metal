@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_gelu.h"
+#include "ckernel_sfpu_gelu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -16,7 +17,7 @@ namespace ckernel {
  */
 template <bool fast_and_approx = true>
 ALWI void gelu_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_gelu_init<fast_and_approx>()));
+    MATH(SFPU_INIT_KERNEL_CALL(gelu, sfpu::gelu_init, fast_and_approx));
 }
 
 // clang-format off
@@ -36,7 +37,9 @@ ALWI void gelu_tile_init() {
 // clang-format on
 template <bool fast_and_approx = true>
 ALWI void gelu_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_gelu<fast_and_approx>(idst)));
+    MATH(SFPU_UNARY_NO_PARAM_KERNEL(gelu, RC, fast_and_approx, idst));
 }
+
+// TODO: Add gelu_derivative
 
 }  // namespace ckernel
