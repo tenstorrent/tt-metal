@@ -400,3 +400,19 @@ jobs:
           owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
+      - name: ttnn nightly bos group_norm tests
+        timeout-minutes: ${{ inputs.timeout }}
+        run: pytest -n auto tests/ttnn/unit_tests/operations/fused -v -m "not disable_fast_runtime_mode" -k _oft --timeout=${{ env.TEST_BUDGET_SECONDS }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        # Only notify during failed scheduled runs
+        # if: ${{ failure() && github.event_name == 'schedule' }}
+        # with:
+        #   slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+        #   owner: U052J2QDDKQ # Pavle Josipovic
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
