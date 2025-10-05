@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <optional>
 #include <random>
+#include <string>
+#include <cstdlib>
 
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
@@ -105,8 +107,18 @@ public:
         const auto& topology = fabric_setup.topology;
         const auto& routing_type = fabric_setup.routing_type.value();
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
-        const auto reliability_mode = fabric_setup.fabric_reliability_mode.value_or(
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+
+        // Fabric Reliability Mode
+        // Default to STRICT; if runtime option (from rtoptions) is set, it takes precedence over
+        // fabric_setup.fabric_reliability_mode
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        auto reliability_mode_override = tt::tt_metal::MetalContext::instance().rtoptions().get_reliability_mode();
+        if (reliability_mode_override.has_value()) {
+            reliability_mode = reliability_mode_override.value();
+        } else if (fabric_setup.fabric_reliability_mode.has_value()) {
+            reliability_mode = fabric_setup.fabric_reliability_mode.value();
+        }
 
         FabricConfig new_fabric_config;
         if (topology == Topology::Torus) {
@@ -135,6 +147,7 @@ public:
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
+            log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
             open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode);
 
             topology_ = topology;
@@ -151,7 +164,7 @@ public:
 
     void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program program) {
         MeshCoordinateRange device(mesh_coord, mesh_coord);
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(*mesh_workload_, std::move(program), device);
+        mesh_workload_->add_program(device, std::move(program));
     }
 
     void run_programs() {
@@ -771,7 +784,7 @@ public:
 
         auto num_forward_hops = 0;
         auto num_backward_hops = 0;
-        uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
+        uint32_t full_hop_count = (2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1)) - 1;
 
         if (pattern_type == HighLevelTrafficPattern::FullRing) {
             num_forward_hops = full_hop_count;

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -13,6 +13,6 @@ autograd::TensorPtr sample_op(
     const autograd::TensorPtr& logits,
     float temperature,
     uint32_t seed,
-    const autograd::TensorPtr& logits_padding_mask);
+    const autograd::TensorPtr& logits_padding_mask = nullptr);
 
 }  // namespace ttml::ops

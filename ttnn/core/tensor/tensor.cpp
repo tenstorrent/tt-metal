@@ -572,23 +572,6 @@ Tensor create_device_tensor(
 }
 
 void memcpy(
-    CommandQueue& queue, void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
-    ZoneScoped;
-    TT_FATAL(is_device_tensor(src), "memcpy: src tensor must be on device");
-
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    if (!region.has_value()) {
-        EnqueueReadBuffer(queue, *src.buffer(), dst, blocking);
-    } else {
-        EnqueueReadSubBuffer(queue, *src.buffer(), dst, region.value(), blocking);
-    }
-}
-
-void memcpy(
     distributed::MeshCommandQueue& queue,
     void* dst,
     const Tensor& src,
@@ -613,22 +596,6 @@ void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& reg
     memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
 }
 
-void memcpy(CommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    TT_FATAL(is_device_tensor(dst), "memcpy: memcpy to non-device tensor is not supported!");
-
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    if (!region.has_value()) {
-        EnqueueWriteBuffer(queue, *dst.buffer(), src, false);
-    } else {
-        EnqueueWriteSubBuffer(queue, *dst.buffer(), src, region.value(), false);
-    }
-}
-
 void memcpy(
     distributed::MeshCommandQueue& queue, Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
@@ -647,27 +614,6 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
     auto mesh_device = dst.device();
     TT_FATAL(mesh_device, "Tensor must be on device");
     memcpy(mesh_device->mesh_command_queue(), dst, src, region);
-}
-
-void memcpy(CommandQueue& queue, Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
-    ZoneScoped;
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (TT_METAL_SLOW_DISPATCH_MODE != nullptr) {
-        TT_THROW("SLOW_DISPATCH is not supported for memcpy!");
-    }
-
-    TT_ASSERT(dst.dtype() == src.dtype());
-    TT_ASSERT(dst.layout() == src.layout());
-
-    if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        auto dst_buffer = host_buffer::get_host_buffer(dst);
-        memcpy(queue, dst_buffer.view_bytes().data(), src, region);
-    } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        auto src_buffer = host_buffer::get_host_buffer(src);
-        memcpy(queue, dst, src_buffer.view_bytes().data(), region);
-    } else {
-        TT_THROW("Unsupported memcpy");
-    }
 }
 
 void memcpy(
@@ -707,9 +653,15 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
         coords.push_back(coord);
     }
-    DeviceStorage device_storage(std::move(mesh_buffer), std::move(coords));
+    DeviceStorage device_storage(std::move(mesh_buffer), coords);
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(std::move(device_storage), tensor_spec, TensorTopology{});
+    ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
+    for (size_t i = 0; i < device->shape().dims(); i++) {
+        placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    }
+
+    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
+    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {

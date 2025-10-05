@@ -19,7 +19,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/utils.hpp>
 
 using namespace tt;
 

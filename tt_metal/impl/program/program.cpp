@@ -47,6 +47,7 @@
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
+#include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
@@ -73,8 +74,6 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "util.hpp"
-#include "utils.hpp"
 #include "host_api.hpp"
 #include "kernels/kernel_impl.hpp"
 
@@ -458,7 +457,7 @@ KernelGroup::KernelGroup(
         if (programmable_core_type_index == hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
             // The code below sets the brisc_noc_id for use by the device firmware
             // Use 0 if neither brisc nor ncrisc specify a noc
-            if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
+            if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                 noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                 // Use brisc's noc if brisc specifies a noc
                 kernel_config.brisc_noc_id() = std::get<DataMovementConfig>(kernel->config()).noc;
@@ -466,7 +465,7 @@ KernelGroup::KernelGroup(
                 if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                     kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                 }
-            } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
+            } else if (class_id == ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                 noc_modes.insert(std::get<DataMovementConfig>(kernel->config()).noc_mode);
                 // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
                 // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
@@ -508,7 +507,7 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
         return nullptr;
     }
     uint8_t index = core_to_kernel_group_index_table_[programmable_core_type_index].at(
-        core.y * grid_extent_[programmable_core_type_index].x + core.x);
+        (core.y * grid_extent_[programmable_core_type_index].x) + core.x);
     return (index == core_to_kernel_group_invalid_index) ? nullptr
                                                          : kernel_groups_[programmable_core_type_index].at(index).get();
 }
@@ -544,7 +543,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         std::vector<std::set<KernelHandle>> grid(grid_size);
         for (const auto& [id, kernel] : handle_to_kernel) {
             for (auto core : kernel->logical_cores()) {
-                int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
+                int core_index = (core.y * grid_extent_[programmable_core_type_index].x) + core.x;
                 valid[core_index] = true;
                 grid[core_index].insert(id);
             }
@@ -554,7 +553,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         std::map<std::set<KernelHandle>, std::set<CoreRange>> map;
         for (auto y = base.y; y < grid_extent_[programmable_core_type_index].y; y++) {
             for (auto x = base.x; x < grid_extent_[programmable_core_type_index].x; x++) {
-                int index = y * grid_extent_[programmable_core_type_index].x + x;
+                int index = (y * grid_extent_[programmable_core_type_index].x) + x;
                 if (valid[index]) {
                     // grid is not used any more. Avoid copy construction by moving.
                     auto [it, inserted] = map.try_emplace(std::move(grid[index]));
@@ -584,7 +583,8 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 for (auto y = range.start_coord.y; y <= range.end_coord.y; y++) {
                     for (auto x = range.start_coord.x; x <= range.end_coord.x; x++) {
                         core_to_kernel_group_index_table_[programmable_core_type_index]
-                                                         [y * grid_extent_[programmable_core_type_index].x + x] = index;
+                                                         [(y * grid_extent_[programmable_core_type_index].x) + x] =
+                                                             index;
 
                         if (not hal.get_supports_cbs(programmable_core_type_index)) {
                             continue;
@@ -1066,7 +1066,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
         return dst_noc_unicast_info;
     };
 
-    // Circular Buffer Configs handled in EnqueueProgram
+    // Circular Buffer Configs handled in progrm_dispatch::update_program_dispatch_commands
 
     // Assume here and in command queue that kg_buffers is populated with multicast buffers first then unicast buffers
     // Program Binaries and Go Signals
@@ -1199,8 +1199,6 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     }
 
     this->program_transfer_info.num_active_cores = num_active_cores;
-
-    return;
 }
 
 ProgramConfig& detail::ProgramImpl::get_program_config(uint32_t programmable_core_type_index) {
@@ -1461,7 +1459,7 @@ void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; 
 void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
 
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
-    HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
+    HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + this->get_program_config(
                                MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
@@ -1469,7 +1467,7 @@ uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*log
 }
 
 uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
-    HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
+    HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
     return base_addr + this->get_program_config(
                                MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
