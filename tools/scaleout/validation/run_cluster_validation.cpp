@@ -348,7 +348,15 @@ void dump_link_stats(
                 uint32_t num_mismatched = 0;
                 for (size_t i = 0; i < result_vec.size(); ++i) {
                     if (result_vec[i] != inputs[i]) {
-                        TT_FATAL(false, "Got {} expected {}", result_vec[i], inputs[i]);
+                        TT_FATAL(
+                            false,
+                            "Got {} expected {} channel: {} host: {} tray: {} asic_location: {}",
+                            result_vec[i],
+                            inputs[i],
+                            +src_chan,
+                            host_name,
+                            asic_descriptors.at(asic_id).tray_id,
+                            asic_descriptors.at(asic_id).asic_location);
                         num_mismatched++;
                     }
                 }
