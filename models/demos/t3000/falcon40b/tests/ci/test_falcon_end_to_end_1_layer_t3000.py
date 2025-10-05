@@ -8,6 +8,7 @@ import ttnn
 from models.common.utility_functions import disable_persistent_kernel_cache
 from models.demos.t3000.falcon40b.tests.test_falcon_end_to_end import run_test_FalconCausalLM_end_to_end
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config
+from models.tt_transformers.tt.common import get_hf_tt_cache_path
 
 
 @pytest.mark.parametrize("num_devices", (8,), ids=["8chips"])
@@ -69,7 +70,6 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     request,
     data_type,
     memcfg,
-    get_tt_cache_path,
     t3k_mesh_device,
 ):
     model_config_str = f"{data_type}-{memcfg}"
@@ -89,9 +89,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    tt_cache_path = get_tt_cache_path(
-        model_version, model_subdir="Falcon", default_dir=model_config["DEFAULT_CACHE_PATH"]
-    )
+    tt_cache_path = get_hf_tt_cache_path(model_version)
 
     disable_persistent_kernel_cache()
 
