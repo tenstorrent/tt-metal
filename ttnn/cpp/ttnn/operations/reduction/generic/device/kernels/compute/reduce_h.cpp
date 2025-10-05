@@ -6,6 +6,10 @@
 
 #include "compute_kernel_api/reduce.h"
 
+#ifdef DO_NEGATE
+#include "compute_kernel_api/eltwise_unary/negative.h"
+#endif
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -15,6 +19,9 @@ void MAIN {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
     reduce_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_3);
+#ifdef DO_NEGATE
+    negative_tile_init();
+#endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader
 
@@ -47,6 +54,9 @@ void MAIN {
                 }
             }
             for (uint32_t i = wt; i < chunk_end; ++i) {
+#ifdef DO_NEGATE
+                negative_tile(i - wt);
+#endif
                 cb_reserve_back(tt::CBIndex::c_3, onetile);
                 pack_tile((i - wt), tt::CBIndex::c_3);
                 cb_push_back(tt::CBIndex::c_3, onetile);
