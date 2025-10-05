@@ -32,7 +32,7 @@
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <thread>
 #include "impl/context/metal_context.hpp"
-
+#include <tt-metalium/hal.hpp>
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
 #include <enchantum/enchantum.hpp>
@@ -683,9 +683,9 @@ int main(int argc, char** argv) {
     //     "Unsupported benchmark {} specified, check BenchmarkType enum for supported values",
     //     benchmark_type);
 
-    constexpr uint32_t packet_size_bytes = 16;
+    constexpr uint32_t packet_size_bytes = 64;
     constexpr uint32_t packet_size_words = packet_size_bytes >> 4;
-    constexpr uint32_t data_size = 256 * packet_size_bytes;
+    constexpr uint32_t data_size = 155648;
 
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     std::vector<chip_id_t> ids(num_devices, 0);
