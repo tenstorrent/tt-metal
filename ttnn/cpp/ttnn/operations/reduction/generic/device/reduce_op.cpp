@@ -99,13 +99,15 @@ operation::ProgramWithCallbacks Reduce::create_program(
 
     switch (parallelization_strategy) {
         case ReduceOpParallelizationStrategy::MULTI_CORE_H:
-            return reduce_multi_core_h(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+            return reduce_multi_core_h(
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->do_negate);
         case ReduceOpParallelizationStrategy::MULTI_CORE_W:
-            return reduce_multi_core_w(input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+            return reduce_multi_core_w(
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->do_negate);
         case ReduceOpParallelizationStrategy::MULTI_CORE_HW:
         case ReduceOpParallelizationStrategy::SINGLE_CORE_HW:
             return reduce_single_core_hw(
-                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler);
+                input_tensor, output_tensor, this->math_op, compute_kernel_config, this->scaler, this->do_negate);
         default: TT_THROW("Unsupported parallelization strategy");
     }
 }
@@ -141,11 +143,9 @@ Tensor reduce_min(
     if (input.layout() == Layout::ROW_MAJOR && input.storage_type() == StorageType::DEVICE) {
         input = ttnn::operations::unary_backward::change_layout_to_tile(input, output_mem_config);
     }
-    Tensor n_input_tensor = ttnn::neg(input, output_mem_config);
-    Tensor max_reduce = reduce(
-        n_input_tensor, ReduceOpMath::MAX, reduce_dim, scaler, output_mem_config, std::nullopt, compute_kernel_config);
-    Tensor min_tensor = ttnn::neg(max_reduce, output_mem_config);
-    return min_tensor;
+    // Tensor n_input_tensor = ttnn::neg(input, output_mem_config);
+    return reduce(
+        input, ReduceOpMath::MAX, reduce_dim, scaler, output_mem_config, std::nullopt, compute_kernel_config, true);
 }
 
 Tensor reduce(
@@ -155,13 +155,15 @@ Tensor reduce(
     float scaler,
     const MemoryConfig& output_mem_config,
     const std::optional<DataType>& output_dtype,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const bool do_negate) {
     if (reduce_math == ReduceOpMath::MIN) {
         return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
     }
 
     auto parallelization_strategy =
-        Reduce{reduce_math, reduce_dim, scaler, output_mem_config}.get_parallelization_strategy({input_tensor});
+        Reduce{reduce_math, reduce_dim, scaler, do_negate, output_mem_config}.get_parallelization_strategy(
+            {input_tensor});
     auto is_multicore_hw = parallelization_strategy == ReduceOpParallelizationStrategy::MULTI_CORE_HW;
     float pad_value = reduce_math == ReduceOpMath::MAX ? -std::numeric_limits<float>::infinity() : 0;
 
@@ -198,6 +200,7 @@ Tensor reduce(
                                              reduce_math,
                                              ReduceOpDim::W,
                                              1.0,
+                                             do_negate,
                                              output_mem_config,
                                              output_dtype.value_or(input_tensor.dtype()),
                                              config},
@@ -208,6 +211,7 @@ Tensor reduce(
                        reduce_math,
                        ReduceOpDim::H,
                        scaler,
+                       do_negate,
                        output_mem_config,
                        output_dtype.value_or(input_tensor.dtype()),
                        config},
@@ -219,6 +223,7 @@ Tensor reduce(
                        reduce_math,
                        reduce_dim,
                        scaler,
+                       do_negate,
                        output_mem_config,
                        output_dtype.value_or(input_tensor.dtype()),
                        config},
