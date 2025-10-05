@@ -34,7 +34,7 @@ constexpr uint32_t page_size = get_compile_time_arg_val(3);
 constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(4);
 constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(5);
 constexpr uint32_t ring_size = get_compile_time_arg_val(6);
-constexpr uint32_t num_batches = get_compile_time_arg_val(7);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(7);
 constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(8);
 constexpr bool is_forward = get_compile_time_arg_val(9);
 constexpr bool is_first_device_in_direction = get_compile_time_arg_val(10);
@@ -65,9 +65,10 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
 constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
     ccl_routing_utils::get_line_multicast_route_info_from_args<32 + ccl_routing_utils::num_line_unicast_args>();
 
-constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
-constexpr uint32_t intermediate_num_pages = batch_num_pages * num_batches;
-constexpr uint32_t intermediate_full_offset = is_forward ? 0 : intermediate_num_pages;
+constexpr uint32_t input_batch_num_pages = batch_slice_num_pages * ring_size;
+constexpr uint32_t input_num_pages = input_batch_num_pages * input_tensor_B;
+constexpr uint32_t intermediate_full_offset = is_forward ? 0 : input_num_pages;
+constexpr uint32_t output_batch_num_pages = batch_slice_num_pages;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -250,22 +251,21 @@ void kernel_main() {
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
 
     uint32_t chunk_count = 0;
-    for (uint32_t b = 0; b < num_batches; b++) {
+    for (uint32_t b = 0; b < input_tensor_B; b++) {
         int slice_idx = is_forward ? ring_size - 1 : 0;
 
-        uint32_t batch_slice_offset = batch_slice_num_pages * b;
-        uint32_t batch_offset = batch_num_pages * b;
+        uint32_t batch_offset = input_batch_num_pages * b;
         for (uint32_t iter = 0; iter < num_targets_in_direction; ++iter) {
             chunk_count = 0;
 
             constexpr uint32_t cb_output_id = is_first_device_in_direction ? cb_reader_output_id : cb_compute_output_id;
 
-            uint32_t pages_read_in_row = start_pages_read_in_row;
-            uint32_t row_offset = start_row_offset;
+            uint32_t intermediate_tile_id_start = slice_idx * slice_Wt + intermediate_full_offset + batch_offset;
+            uint32_t intermediate_pages_read_in_row = start_pages_read_in_row;
+            uint32_t intermediate_row_offset = start_row_offset;
+
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
-
-            uint32_t input_tile_id_start = intermediate_full_offset + batch_offset + slice_idx * slice_Wt;
 
             // Write to remote intermediate buffer
             while (tiles_read < tiles_to_read) {
@@ -277,14 +277,15 @@ void kernel_main() {
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t num_pages_to_write = std::min(contig_pages_advanced, num_pages_to_read - j);
 
-                    uint32_t first_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                    uint32_t first_tile_id =
+                        intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
                     auto noc_address0 =
                         tt::tt_fabric::linear::addrgen_detail::get_noc_address(intermediate_addrgen, first_tile_id, 0);
 
-                    pages_read_in_row++;
-                    if (pages_read_in_row == slice_Wt) {
-                        row_offset += input_tensor_Wt;
-                        pages_read_in_row -= slice_Wt;
+                    intermediate_pages_read_in_row++;
+                    if (intermediate_pages_read_in_row == slice_Wt) {
+                        intermediate_row_offset += input_tensor_Wt;
+                        intermediate_pages_read_in_row -= slice_Wt;
                     }
 
                     uint32_t payload_size;
@@ -296,12 +297,13 @@ void kernel_main() {
                             NocUnicastCommandHeader{noc_address0});
                         l1_read_addr += page_size;
                     } else if (num_pages_to_write == 2) {
-                        uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                        uint32_t second_tile_id =
+                            intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
 
-                        pages_read_in_row++;
-                        if (pages_read_in_row == slice_Wt) {
-                            row_offset += input_tensor_Wt;
-                            pages_read_in_row -= slice_Wt;
+                        intermediate_pages_read_in_row++;
+                        if (intermediate_pages_read_in_row == slice_Wt) {
+                            intermediate_row_offset += input_tensor_Wt;
+                            intermediate_pages_read_in_row -= slice_Wt;
                         }
 
                         auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
@@ -354,7 +356,7 @@ void kernel_main() {
             // Write output
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
-            uint32_t tile_id_start = batch_slice_offset;
+            uint32_t output_tile_id_start = b * output_batch_num_pages;
             while (tiles_read < tiles_to_read) {
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                 uint32_t num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
@@ -362,7 +364,7 @@ void kernel_main() {
                 cb_wait_front(cb_compute_output_id, tile_granularity);
                 size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
-                    uint32_t tile_id = tile_id_start + tiles_read;
+                    uint32_t tile_id = output_tile_id_start + tiles_read;
                     uint64_t local_noc_addr = get_noc_addr(tile_id, output_addrgen);
                     noc_async_write(l1_read_addr, local_noc_addr, page_size);
                     l1_read_addr += page_size;
