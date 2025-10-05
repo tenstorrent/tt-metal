@@ -199,6 +199,20 @@ class CCLManager:
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
 
+    def all_gather_persistent_buffer(self, tensor, dim, mesh_axis):
+        """
+        Helper function to all-gather a tensor with a persistent output buffer.
+        """
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            persistent_output_buffer=self.get_ag_ping_pong_buffer(tensor.shape, dim, mesh_axis),
+            dim=dim,
+            multi_device_global_semaphore=self.get_ag_ping_pong_semaphore(mesh_axis),
+            num_links=self.num_links,
+            topology=self.topology,
+            cluster_axis=mesh_axis,
+        )
+
     def get_ag_hyperparams(self, shape):
         if shape[2] > 512:
             return {

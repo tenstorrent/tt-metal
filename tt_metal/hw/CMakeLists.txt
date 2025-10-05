@@ -13,6 +13,8 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
+    main_aerisc
+    subordinate_aerisc
     dm=0
 )
 set(TYPES
@@ -318,6 +320,7 @@ target_sources(
             inc/blackhole/cfg_defines.h
             inc/blackhole/core_config.h
             inc/blackhole/dev_mem_map.h
+            inc/blackhole/eth_fw_api.h
             inc/blackhole/eth_chan_noc_mapping.h
             inc/blackhole/eth_fw_api.h
             inc/blackhole/eth_l1_address_map.h

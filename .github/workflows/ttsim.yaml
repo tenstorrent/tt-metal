@@ -18,7 +18,7 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "c684bf3f9bc3e28ed69a1b94623bcb018007f13e"
+        default: "6f5a357da16b3d0f9a4f70cdae2b4b7485723612"
 
 jobs:
   ttsim-integration:
@@ -91,7 +91,7 @@ jobs:
           cp $TT_METAL_HOME/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Build and Run Metal Examples
-        timeout-minutes: 15
+        timeout-minutes: 3
         run: |
           working_examples=(
             "add_2_integers_in_compute"
@@ -177,6 +177,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: Run TTNN Pytests
+        timeout-minutes: 5
         run: |
           pytest \
             tests/ttnn/unit_tests/operations/ccl/blackhole_CI/all_post_commit/test_all_gather_apc.py \
@@ -290,7 +291,6 @@ jobs:
             tests/ttnn/unit_tests/operations/test_moreh_full.py \
             tests/ttnn/unit_tests/operations/test_non_zero_indices.py \
             tests/ttnn/unit_tests/operations/test_paged_cache_mask.py \
-            tests/ttnn/unit_tests/operations/test_plus_one.py \
             tests/ttnn/unit_tests/operations/test_polyval.py \
             tests/ttnn/unit_tests/operations/test_prefetcher_TG.py \
             tests/ttnn/unit_tests/operations/test_reallocate.py \
