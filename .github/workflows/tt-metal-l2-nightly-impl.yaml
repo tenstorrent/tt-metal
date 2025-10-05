@@ -398,8 +398,8 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U052J2QDDKQ # Pavle Josipovic
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
-        if: always()
+      # - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      #   if: always()
       - name: ttnn nightly bos group_norm tests
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest -n auto tests/ttnn/unit_tests/operations/fused -v -m "not disable_fast_runtime_mode" -k _oft --timeout=${{ env.TEST_BUDGET_SECONDS }}
