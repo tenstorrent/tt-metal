@@ -27,15 +27,12 @@ constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(7);
 constexpr uint32_t ring_size = get_compile_time_arg_val(8);
 constexpr uint32_t num_batches = get_compile_time_arg_val(9);
 constexpr uint32_t fuse_op = get_compile_time_arg_val(10);
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(11);
-constexpr bool is_forward = get_compile_time_arg_val(12);
-constexpr bool is_first_device_in_direction = get_compile_time_arg_val(13);
-constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(14);
-constexpr uint32_t num_intermediate_reduction_steps = get_compile_time_arg_val(15);
-constexpr bool do_final_reduction = get_compile_time_arg_val(16);
-constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(17);
-constexpr bool sync_with_other_direction = get_compile_time_arg_val(18);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(19);
+constexpr bool is_forward = get_compile_time_arg_val(11);
+constexpr bool is_first_device_in_direction = get_compile_time_arg_val(12);
+constexpr uint32_t num_targets_in_direction = get_compile_time_arg_val(13);
+constexpr bool do_final_reduction = get_compile_time_arg_val(14);
+constexpr bool sync_with_other_direction = get_compile_time_arg_val(15);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(16);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -52,7 +49,7 @@ void kernel_main() {
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
     uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
-    constexpr uint32_t ct_idx = 20;
+    constexpr uint32_t ct_idx = 17;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset_one = 7;
