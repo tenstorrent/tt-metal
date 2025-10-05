@@ -977,12 +977,12 @@ int main(int argc, char* argv[]) {
 
     // Create physical system descriptor and discover the system
     auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
-    // Set output path for the YAML file
-    std::string gsd_yaml_path = input_args.output_path / "global_system_descriptor.yaml";
-    // Dump the discovered system to YAML
-    physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
 
     if (*distributed_context.rank() == 0) {
+        // Set output path for the YAML file
+        std::string gsd_yaml_path = input_args.output_path / "global_system_descriptor.yaml";
+        // Dump the discovered system to YAML
+        physical_system_descriptor.dump_to_yaml(gsd_yaml_path);
         log_output_rank0(
             "Validating Factory System Descriptor (Golden Representation) against Global System Descriptor");
         tt::scaleout_tools::validate_fsd_against_gsd(
