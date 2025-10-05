@@ -23,24 +23,28 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_single_core_hw(
     Tensor& output_tensor,
     ReduceOpMath reduce_math,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f);
+    float scaler = 1.0f,
+    bool do_negate = false);
 tt::tt_metal::operation::ProgramWithCallbacks reduce_multi_core_h(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     ReduceOpMath reduce_math,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f);
+    float scaler = 1.0f,
+    bool do_negate = false);
 tt::tt_metal::operation::ProgramWithCallbacks reduce_multi_core_w(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     ReduceOpMath reduce_math,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config,
-    float scaler = 1.0f);
+    float scaler = 1.0f,
+    bool do_negate = false);
 
 struct Reduce {
     const ReduceOpMath math_op;
     const ReduceOpDim dim;
     const float scaler;
+    const bool do_negate;
     const MemoryConfig output_mem_config;
     const DataType output_dtype;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
@@ -59,7 +63,8 @@ Tensor reduce(
     float scaler = 1.0f,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     const std::optional<DataType>& output_dtype = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const bool do_negate = false);
 
 }  // namespace tt_metal
 
