@@ -12,19 +12,7 @@ import ttnn
 
 
 def update_model_config(config, batch_size, sequence_size):
-    wh_core_grid_y = 10
-
-    # In case of < 6 cores per batch, we need to do move in attention to remove defragmentation
     should_reallocate_in_attention = True
-    # if batch_size <= wh_core_grid_y:
-    #     grid_y = batch_size
-    #     grid_x = 12  ## it can be 4 or 3, for higher core utilization but less latency
-    # else:
-    #     grid_y = 10
-    #     batch_per_y_core = batch_size // wh_core_grid_y
-    #     batch_size = grid_y * batch_per_y_core
-    #     grid_x = 8
-    #     should_reallocate_in_attention = True
 
     if batch_size == 1:
         grid_y = 8
@@ -465,13 +453,13 @@ def vit_attention(
 
     """
 
-    print("context_layer.shape()", context_layer.shape)
+    # print("context_layer.shape()", context_layer.shape)
 
     context_layer = ttnn.transformer.concatenate_heads(
         context_layer,
         # memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
     )
-    print("context_layer.padded_shape", context_layer.padded_shape, context_layer.shape)
+    # print("context_layer.padded_shape", context_layer.padded_shape, context_layer.shape)
 
     block_sharded_config_64_cores = ttnn.create_sharded_memory_config(
         context_layer.padded_shape,
@@ -575,6 +563,7 @@ def vit_layer(
         parameters=parameters.attention,
     )
 
+    multi_head_attention_output = ttnn.unsqueeze(multi_head_attention_output, 1)
     multi_head_attention_output = ttnn.add(
         multi_head_attention_output,
         hidden_states,
