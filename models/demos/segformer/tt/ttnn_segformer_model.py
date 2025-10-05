@@ -42,15 +42,29 @@ class TtSegformerModel:
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         parameters=None,
+        min_channels=8,
     ) -> Union[Tuple, TtBaseModelOutput]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        N, C, H, W = pixel_values.shape
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(pixel_values, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+            padded = True
+        else:
+            nchw = pixel_values
+            padded = False
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
+        if padded:
+            ttnn.deallocate(nchw)
+        ttnn.deallocate(pixel_values)
+        nhwc = ttnn.reallocate(nhwc)
         encoder_outputs = self.encoder(
             device,
-            pixel_values,
+            nhwc,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
