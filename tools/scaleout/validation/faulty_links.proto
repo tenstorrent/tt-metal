@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package tt.scaleout.validation;
+
+message TestParams {
+    uint32 packet_size_bytes = 1;
+    uint32 data_size = 2;
+}
+
+message RetrainFailure {
+    uint32 retrain_count = 1;
+    TestParams test_params = 2;
+}
+
+message CrcErrorFailure {
+    uint32 crc_error_count = 1;
+    TestParams test_params = 2;
+}
+
+message UncorrectedCodewordFailure {
+    uint32 uncorrected_codeword_count = 1;
+    TestParams test_params = 2;
+}
+
+message DataMismatchFailure {
+    uint32 num_mismatched_words = 1;
+    TestParams test_params = 2;
+}
+
+message LinkFailure {
+    RetrainFailure retrain_failure = 1;
+    CrcErrorFailure crc_error_failure = 2;
+    UncorrectedCodewordFailure uncorrected_codeword_failure = 3;
+    DataMismatchFailure data_mismatch_failure = 4;
+}
+
+message EthChannelIdentifier {
+    string host = 1;
+    uint64 asic_id = 2;
+    uint64 tray_id = 3;
+    uint64 asic_location = 4;
+    uint32 channel = 5;
+}
+
+message FaultyLink {
+    EthChannelIdentifier channel_identifier = 1;
+    LinkFailure link_failure = 2;
+}
+
+message FaultyLinksList {
+    repeated FaultyLink faulty_links = 1;
+}

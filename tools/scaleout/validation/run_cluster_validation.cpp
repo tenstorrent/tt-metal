@@ -29,6 +29,8 @@
 #include <tt-metalium/hal.hpp>
 #include <algorithm>
 #include <random>
+#include "tools/scaleout/validation/faulty_links.hpp"
+#include "tools/scaleout/validation/faulty_links_serialization.hpp"
 
 template <typename T1, typename T2>
 constexpr std::common_type_t<T1, T2> align_down(T1 value, T2 alignment) {
@@ -36,6 +38,12 @@ constexpr std::common_type_t<T1, T2> align_down(T1 value, T2 alignment) {
     static_assert(std::is_integral<T2>::value, "align_down() requires integral types");
     using T = std::common_type_t<T1, T2>;
     return static_cast<T>(value) & ~(static_cast<T>(alignment) - 1);
+}
+
+void log_output_rank0(const std::string& message) {
+    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
+        log_info(tt::LogDistributed, "{}", message);
+    }
 }
 
 // Captures current list of supported inputargs
@@ -72,22 +80,10 @@ struct ConnectionInfo {
     tt::tt_metal::EthernetMetrics metrics;
 };
 
-struct FaultyLink {
-    // Link Identifier
-    std::string host;
-    tt::tt_metal::AsicID asic_id;
-    tt::tt_metal::TrayID tray_id;
-    tt::tt_metal::ASICLocation asic_location;
-    uint8_t channel;
-
-    // Metrics Upon Fault Detection
+struct TestResults {
     tt::tt_metal::EthernetMetrics metrics;
-    uint32_t num_bytes_xfered;
-    uint32_t packet_size_bytes;
-
-    // Failure tracking
-    bool data_mismatch;
-    uint32_t iteration;
+    TestParams test_params;
+    uint32_t num_mismatched_words = 0;
 };
 
 void configure_local_kernels(
@@ -264,17 +260,67 @@ void execute_workloads(
     }
 }
 
-bool link_unhealthy(const tt::tt_metal::EthernetMetrics& metrics) { return metrics.retrain_count > 0; }
+bool link_unhealthy(const std::vector<TestResults>& link_stats, LinkFailure& failure_mode) {
+    auto retrain_count_increasing = [&](const std::vector<TestResults>& link_stats) {
+        uint32_t prev_retrain_count = 0;
+        for (const auto& dumped_stat : link_stats) {
+            const auto& metric = dumped_stat.metrics;
+            if (metric.retrain_count > prev_retrain_count) {
+                failure_mode.retrain_failure.retrain_count = metric.retrain_count;
+                failure_mode.retrain_failure.test_params = dumped_stat.test_params;
+                return true;
+            }
+            prev_retrain_count = metric.retrain_count;
+        }
+        return false;
+    };
 
-void validate_links(
+    auto crc_error_reported = [&](const std::vector<TestResults>& link_stats) {
+        return std::any_of(link_stats.begin(), link_stats.end(), [&](const TestResults& dumped_stat) {
+            if (dumped_stat.metrics.crc_error_count > 0) {
+                failure_mode.crc_error_failure.crc_error_count = dumped_stat.metrics.crc_error_count;
+                failure_mode.crc_error_failure.test_params = dumped_stat.test_params;
+                return true;
+            }
+            return false;
+        });
+    };
+
+    auto uncorrected_codewords_detected = [&](const std::vector<TestResults>& link_stats) {
+        return std::any_of(link_stats.begin(), link_stats.end(), [&](const TestResults& dumped_stat) {
+            if (dumped_stat.metrics.uncorrected_codeword_count > 0) {
+                failure_mode.uncorrected_codeword_failure.uncorrected_codeword_count =
+                    dumped_stat.metrics.uncorrected_codeword_count;
+                failure_mode.uncorrected_codeword_failure.test_params = dumped_stat.test_params;
+                return true;
+            }
+            return false;
+        });
+    };
+
+    auto data_mismatch = [&](const std::vector<TestResults>& link_stats) {
+        return std::any_of(link_stats.begin(), link_stats.end(), [&](const TestResults& dumped_stat) {
+            if (dumped_stat.num_mismatched_words > 0) {
+                failure_mode.data_mismatch_failure.num_mismatched_words = dumped_stat.num_mismatched_words;
+                failure_mode.data_mismatch_failure.test_params = dumped_stat.test_params;
+                return true;
+            }
+            return false;
+        });
+    };
+
+    return retrain_count_increasing(link_stats) || crc_error_reported(link_stats) ||
+           uncorrected_codewords_detected(link_stats) || data_mismatch(link_stats);
+}
+
+void dump_link_stats(
     std::vector<uint32_t>& inputs,
     PhysicalSystemDescriptor& physical_system_descriptor,
     std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
     size_t data_size,
     size_t packet_size_bytes,
-    std::vector<FaultyLink>& faulty_links,
-    uint32_t iteration) {
+    std::unordered_map<EthChannelIdentifier, std::vector<TestResults>>& test_results) {
     const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     const auto& host_name = physical_system_descriptor.my_host_name();
@@ -295,24 +341,30 @@ void validate_links(
                     src_eth_l1_byte_address,
                     data_size);
 
-                bool has_data_mismatch = (result_vec != inputs);
-                bool has_retrain =
-                    link_unhealthy(physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan));
-
-                if (has_data_mismatch || has_retrain) {
-                    faulty_links.push_back(FaultyLink{
-                        .host = host_name,
-                        .asic_id = asic_descriptors.at(asic_id).unique_id,
-                        .tray_id = asic_descriptors.at(asic_id).tray_id,
-                        .asic_location = asic_descriptors.at(asic_id).asic_location,
-                        .channel = src_chan,
-                        .metrics = physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan),
-                        .num_bytes_xfered = data_size,
-                        .packet_size_bytes = packet_size_bytes,
-                        .data_mismatch = has_data_mismatch,
-                        .iteration = iteration,
-                    });
+                // Count mismatched words
+                uint32_t num_mismatched = 0;
+                for (size_t i = 0; i < result_vec.size(); ++i) {
+                    if (result_vec[i] != inputs[i]) {
+                        num_mismatched++;
+                    }
                 }
+
+                test_results[EthChannelIdentifier{
+                                 .host = host_name,
+                                 .asic_id = asic_descriptors.at(asic_id).unique_id,
+                                 .tray_id = asic_descriptors.at(asic_id).tray_id,
+                                 .asic_location = asic_descriptors.at(asic_id).asic_location,
+                                 .channel = src_chan,
+                             }]
+                    .push_back(TestResults{
+                        .metrics = physical_system_descriptor.get_ethernet_metrics().at(asic_id).at(src_chan),
+                        .test_params =
+                            TestParams{
+                                .packet_size_bytes = packet_size_bytes,
+                                .data_size = data_size,
+                            },
+                        .num_mismatched_words = num_mismatched,
+                    });
             }
         }
     }
@@ -336,11 +388,65 @@ std::vector<ValueType> generate_uniform_random_vector(
     return results;
 }
 
+void forward_faulty_link_list_to_controller(std::vector<FaultyLink>& faulty_links) {
+    constexpr uint32_t CONTROLLER_RANK = 0;
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto my_rank = *distributed_context.rank();
+
+    std::vector<uint8_t> serialized_faulty_link_list;
+    std::size_t serialized_faulty_link_list_size = 0;
+
+    if (my_rank != CONTROLLER_RANK) {
+        serialized_faulty_link_list = tt::scaleout::validation::serialize_faulty_links_to_bytes(faulty_links);
+        serialized_faulty_link_list_size = serialized_faulty_link_list.size();
+        distributed_context.send(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&serialized_faulty_link_list_size),
+                sizeof(serialized_faulty_link_list_size)),
+            tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
+            tt::tt_metal::distributed::multihost::Tag{0});
+        distributed_context.send(
+            tt::stl::as_writable_bytes(
+                tt::stl::Span<uint8_t>(serialized_faulty_link_list.data(), serialized_faulty_link_list.size())),
+            tt::tt_metal::distributed::multihost::Rank{CONTROLLER_RANK},
+            tt::tt_metal::distributed::multihost::Tag{0});
+    } else {
+        for (auto peer_rank = 0; peer_rank < *distributed_context.size(); peer_rank++) {
+            if (peer_rank == CONTROLLER_RANK) {
+                continue;
+            }
+            distributed_context.recv(
+                tt::stl::Span<std::byte>(
+                    reinterpret_cast<std::byte*>(&serialized_faulty_link_list_size),
+                    sizeof(serialized_faulty_link_list_size)),
+                tt::tt_metal::distributed::multihost::Rank{peer_rank},
+                tt::tt_metal::distributed::multihost::Tag{0});
+            serialized_faulty_link_list.resize(serialized_faulty_link_list_size);
+            std::cout << "Receiving faulty link list from controller" << std::endl;
+            distributed_context.recv(
+                tt::stl::as_writable_bytes(
+                    tt::stl::Span<uint8_t>(serialized_faulty_link_list.data(), serialized_faulty_link_list.size())),
+                tt::tt_metal::distributed::multihost::Rank{peer_rank},
+                tt::tt_metal::distributed::multihost::Tag{0});
+            std::cout << "Deserializing faulty link list from controller" << std::endl;
+            std::vector<FaultyLink> remote_faulty_links =
+                tt::scaleout::validation::deserialize_faulty_links_from_bytes(serialized_faulty_link_list);
+            faulty_links.insert(faulty_links.end(), remote_faulty_links.begin(), remote_faulty_links.end());
+        }
+    }
+}
+
 std::vector<FaultyLink> send_traffic_and_validate_links(
     PhysicalSystemDescriptor& physical_system_descriptor, const InputArgs& input_args) {
     uint32_t packet_size_bytes = input_args.packet_size_bytes;
     uint32_t packet_size_words = input_args.packet_size_bytes >> 4;
     uint32_t data_size = input_args.data_size;
+    uint32_t num_iterations = input_args.num_iterations;
+
+    log_output_rank0(
+        "Sending traffic across detected links. Num Iterations: " + std::to_string(num_iterations) +
+        " Packet Size (Bytes): " + std::to_string(packet_size_bytes) +
+        " Total Data Size: (Bytes): " + std::to_string(data_size));
 
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
@@ -361,8 +467,9 @@ std::vector<FaultyLink> send_traffic_and_validate_links(
         asic_id_to_chip_id[asic_id] = chip_id;
     }
 
+    std::unordered_map<EthChannelIdentifier, std::vector<TestResults>> test_results;
     std::vector<FaultyLink> faulty_links;
-    for (int i = 0; i < input_args.num_iterations; i++) {
+    for (int i = 0; i < num_iterations; i++) {
         std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
         auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, data_size / sizeof(uint32_t));
 
@@ -388,23 +495,29 @@ std::vector<FaultyLink> send_traffic_and_validate_links(
 
         execute_workloads(programs, devices);
 
-        validate_links(
+        dump_link_stats(
             inputs,
             physical_system_descriptor,
             devices,
             asic_id_to_chip_id,
             data_size,
             packet_size_bytes,
-            faulty_links,
-            i);
+            test_results);
     }
-    return faulty_links;
-}
 
-void log_output_rank0(const std::string& message) {
-    if (*tt::tt_metal::MetalContext::instance().global_distributed_context().rank() == 0) {
-        log_info(tt::LogDistributed, "{}", message);
+    for (const auto& [channel_identifier, link_stats] : test_results) {
+        LinkFailure failure_mode;
+        if (link_unhealthy(link_stats, failure_mode)) {
+            faulty_links.push_back(FaultyLink{
+                .channel_identifier = channel_identifier,
+                .link_failure = failure_mode,
+            });
+        }
     }
+    std::cout << "Forwarding faulty link list to controller" << std::endl;
+    forward_faulty_link_list_to_controller(faulty_links);
+    std::cout << "Faulty link list forwarded to controller" << std::endl;
+    return faulty_links;
 }
 
 std::filesystem::path generate_output_dir() {
@@ -683,61 +796,128 @@ void log_unexpected_statuses(const std::string& unexpected_status_log) {
 }
 
 void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::filesystem::path& output_path) {
-    if (faulty_links.empty()) {
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+
+    if (*distributed_context.rank() != 0) {
         return;
     }
 
-    // Helper function to determine failure type string
-    auto get_failure_type = [](const FaultyLink& link) -> std::string {
-        bool has_retrain = link.metrics.retrain_count > 0;
-        bool has_data_mismatch = link.data_mismatch;
+    if (faulty_links.empty()) {
+        log_output_rank0("All Detected Links are healthy");
+        return;
+    }
 
-        if (has_data_mismatch && has_retrain) {
-            return "Data+Retrain";
-        } else if (has_data_mismatch) {
-            return "Data Mismatch";
-        } else if (has_retrain) {
-            return "Link Retrain";
-        } else {
-            return "Unknown";
-        }
+    log_output_rank0(
+        "Generating Faulty Link Report (Only Pinging Detected Links). Num Faulty Links: " +
+        std::to_string(faulty_links.size()));
+
+    struct FailureRow {
+        EthChannelIdentifier channel_id;
+        std::string failure_type;
+        TestParams test_params;
+        uint32_t retrain_count;
+        uint32_t crc_error_count;
+        uint32_t uncorrected_codeword_count;
+        uint32_t num_mismatched_words;
     };
+
+    // Expand each link into separate rows per failure type
+    std::vector<FailureRow> failure_rows;
+    for (const auto& link : faulty_links) {
+        if (link.link_failure.retrain_failure.retrain_count > 0) {
+            failure_rows.push_back(
+                {link.channel_identifier,
+                 "Retrain",
+                 link.link_failure.retrain_failure.test_params,
+                 link.link_failure.retrain_failure.retrain_count,
+                 0,
+                 0,
+                 0});
+        }
+        if (link.link_failure.crc_error_failure.crc_error_count > 0) {
+            failure_rows.push_back(
+                {link.channel_identifier,
+                 "CRC Error",
+                 link.link_failure.crc_error_failure.test_params,
+                 0,
+                 link.link_failure.crc_error_failure.crc_error_count,
+                 0,
+                 0});
+        }
+        if (link.link_failure.uncorrected_codeword_failure.uncorrected_codeword_count > 0) {
+            failure_rows.push_back(
+                {link.channel_identifier,
+                 "Uncorrected CW",
+                 link.link_failure.uncorrected_codeword_failure.test_params,
+                 0,
+                 0,
+                 link.link_failure.uncorrected_codeword_failure.uncorrected_codeword_count,
+                 0});
+        }
+        if (link.link_failure.data_mismatch_failure.num_mismatched_words > 0) {
+            failure_rows.push_back(
+                {link.channel_identifier,
+                 "Data Mismatch",
+                 link.link_failure.data_mismatch_failure.test_params,
+                 0,
+                 0,
+                 0,
+                 link.link_failure.data_mismatch_failure.num_mismatched_words});
+        }
+    }
 
     // Print console table
     std::cout << std::endl;
-    std::cout << "==================================== FAULTY LINKS REPORT ===================================="
+    std::cout << "╔═══════════════════════════════════════════════════════════════════════════════════════════════════╗"
               << std::endl;
-    std::cout << "Total Faulty Link Occurrences: " << faulty_links.size() << std::endl << std::endl;
+    std::cout << "║                              FAULTY LINKS REPORT                                                  ║"
+              << std::endl;
+    std::cout << "╚═══════════════════════════════════════════════════════════════════════════════════════════════════╝"
+              << std::endl;
+    std::cout << "Total Faulty Link Occurrences: " << faulty_links.size() << std::endl;
+    std::cout << "Total Failure Instances: " << failure_rows.size() << std::endl << std::endl;
 
     // Table header
-    std::cout << std::left << std::setw(18) << "Host" << std::setw(6) << "Tray" << std::setw(14) << "ASIC Location"
-              << std::setw(5) << "Ch" << std::setw(6) << "Iter" << std::setw(12) << "Unique ID" << std::setw(10)
-              << "Retrains" << std::setw(12) << "CRC Err" << std::setw(14) << "Corrected CW" << std::setw(16)
-              << "Uncorrected CW" << std::setw(12) << "Data Xfer" << std::setw(13) << "Packet Size" << std::setw(18)
-              << "Failure Type" << std::endl;
+    std::cout << std::left << std::setw(20) << "Host" << std::setw(6) << "Tray" << std::setw(6) << "ASIC"
+              << std::setw(5) << "Ch" << std::setw(14) << "Unique ID" << std::setw(12) << "Retrains" << std::setw(14)
+              << "CRC Err" << std::setw(18) << "Uncorrected CW" << std::setw(16) << "Mismatch Words" << std::setw(18)
+              << "Failure Type" << std::setw(12) << "Pkt Size" << std::setw(12) << "Data Size" << std::endl;
 
-    std::cout << std::string(156, '-') << std::endl;
+    std::cout << std::string(153, '-') << std::endl;
 
     // Table rows
-    for (const auto& link : faulty_links) {
-        std::cout << std::left << std::setw(18) << link.host << std::setw(6) << *link.tray_id << std::setw(14)
-                  << *link.asic_location << std::setw(5) << static_cast<int>(link.channel) << std::setw(6)
-                  << link.iteration;
+    for (const auto& row : failure_rows) {
+        std::cout << std::left << std::setw(20) << row.channel_id.host << std::setw(6) << *row.channel_id.tray_id
+                  << std::setw(6) << *row.channel_id.asic_location << std::setw(5)
+                  << static_cast<int>(row.channel_id.channel);
 
         // Print Unique ID in hex
-        std::cout << "0x" << std::hex << std::setw(10) << std::setfill('0') << *link.asic_id << std::setfill(' ')
-                  << std::dec;
+        std::stringstream uid_stream;
+        uid_stream << "0x" << std::hex << std::setfill('0') << std::setw(10) << *row.channel_id.asic_id;
+        std::cout << std::left << std::setw(14) << uid_stream.str();
 
-        std::cout << std::setw(10) << link.metrics.retrain_count << "0x" << std::hex << std::setw(10)
-                  << link.metrics.crc_error_count << std::dec << "0x" << std::hex << std::setw(12)
-                  << link.metrics.corrected_codeword_count << std::dec << "0x" << std::hex << std::setw(14)
-                  << link.metrics.uncorrected_codeword_count << std::dec << std::setw(12)
-                  << (std::to_string(link.num_bytes_xfered) + " B") << std::setw(13)
-                  << (std::to_string(link.packet_size_bytes) + " B") << std::setw(18) << get_failure_type(link)
-                  << std::endl;
+        // Retrains
+        std::cout << std::dec << std::setfill(' ') << std::left << std::setw(12) << row.retrain_count;
+
+        // CRC errors
+        std::stringstream crc_stream;
+        crc_stream << "0x" << std::hex << row.crc_error_count;
+        std::cout << std::left << std::setw(14) << crc_stream.str();
+
+        // Uncorrected codewords
+        std::stringstream uncorr_stream;
+        uncorr_stream << "0x" << std::hex << row.uncorrected_codeword_count;
+        std::cout << std::left << std::setw(18) << uncorr_stream.str();
+
+        // Mismatched words
+        std::cout << std::dec << std::left << std::setw(16) << row.num_mismatched_words;
+
+        std::cout << std::left << std::setw(18) << row.failure_type << std::setw(12)
+                  << (std::to_string(row.test_params.packet_size_bytes) + " B") << std::setw(12)
+                  << (std::to_string(row.test_params.data_size) + " B") << std::endl;
     }
 
-    std::cout << std::endl;
+    std::cout << std::string(153, '-') << std::endl << std::endl;
 
     // Write CSV file
     std::filesystem::path csv_path = output_path / "faulty_links_report.csv";
@@ -745,25 +925,26 @@ void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::fi
 
     if (csv_file.is_open()) {
         // CSV header
-        csv_file << "Host,Tray,ASIC,Channel,Iteration,Unique_ID,Retrain_Count,CRC_Errors,Corrected_Codewords,"
-                 << "Uncorrected_Codewords,Data_Transferred_Bytes,Packet_Size_Bytes,Failure_Type" << std::endl;
+        csv_file << "Host,Tray,ASIC,Channel,Unique_ID,Failure_Type,"
+                 << "Packet_Size_Bytes,Data_Size_Bytes,"
+                 << "Retrain_Count,CRC_Error_Count,Uncorrected_Codeword_Count,Mismatched_Words" << std::endl;
 
         // CSV rows
-        for (const auto& link : faulty_links) {
-            csv_file << link.host << "," << *link.tray_id << "," << *link.asic_location << ","
-                     << static_cast<int>(link.channel) << "," << link.iteration << ","
-                     << "0x" << std::hex << *link.asic_id << std::dec << "," << link.metrics.retrain_count << ","
-                     << "0x" << std::hex << link.metrics.crc_error_count << std::dec << ","
-                     << "0x" << std::hex << link.metrics.corrected_codeword_count << std::dec << ","
-                     << "0x" << std::hex << link.metrics.uncorrected_codeword_count << std::dec << ","
-                     << link.num_bytes_xfered << "," << link.packet_size_bytes << "," << get_failure_type(link)
-                     << std::endl;
+        for (const auto& row : failure_rows) {
+            csv_file << row.channel_id.host << "," << *row.channel_id.tray_id << "," << *row.channel_id.asic_location
+                     << "," << static_cast<int>(row.channel_id.channel) << ","
+                     << "0x" << std::hex << *row.channel_id.asic_id << std::dec << "," << row.failure_type << ","
+                     << row.test_params.packet_size_bytes << "," << row.test_params.data_size << ","
+                     << row.retrain_count << ","
+                     << "0x" << std::hex << row.crc_error_count << std::dec << ","
+                     << "0x" << std::hex << row.uncorrected_codeword_count << std::dec << ","
+                     << row.num_mismatched_words << std::endl;
         }
 
         csv_file.close();
-        std::cout << "Detailed report written to: " << csv_path << std::endl << std::endl;
+        std::cout << "✓ Detailed report written to: " << csv_path << std::endl << std::endl;
     } else {
-        std::cerr << "Warning: Could not open CSV file for writing: " << csv_path << std::endl;
+        std::cerr << "✗ Warning: Could not open CSV file for writing: " << csv_path << std::endl;
     }
 }
 
@@ -810,17 +991,8 @@ int main(int argc, char* argv[]) {
     }
 
     if (input_args.send_traffic) {
-        log_output_rank0(
-            "Sending traffic across all links. Num Iterations: " + std::to_string(input_args.num_iterations) +
-            " Packet Size (Bytes): " + std::to_string(input_args.packet_size_bytes) +
-            " Total Data Size: (Bytes): " + std::to_string(input_args.data_size));
         auto faulty_links = send_traffic_and_validate_links(physical_system_descriptor, input_args);
-        if (faulty_links.size() > 0) {
-            log_output_rank0("Generating Faulty Link Report. Num Faulty Links: " + std::to_string(faulty_links.size()));
-            log_faulty_links(faulty_links, input_args.output_path);
-        } else {
-            log_output_rank0("All links are healthy");
-        }
+        log_faulty_links(faulty_links, input_args.output_path);
     }
 
     if (*distributed_context.rank() == 0) {

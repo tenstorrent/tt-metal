@@ -15,7 +15,9 @@ void kernel_main() {
 
     if (corrupt_data) {
         volatile tt_l1_ptr uint32_t* data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_eth_l1_src_addr);
-        *(data_ptr) = *(data_ptr) + 1;
+        for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
+            *(data_ptr + i) = *(data_ptr + i) + 1;
+        }
     }
 
     eth_send_bytes(

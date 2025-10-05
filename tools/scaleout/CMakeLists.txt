@@ -1,5 +1,8 @@
 project(scaleout_tools)
 
+# Validation library
+add_library(validation_serialization OBJECT validation/faulty_links_serialization.cpp)
+
 add_executable(run_cluster_validation validation/run_cluster_validation.cpp)
 
 # Library target
@@ -12,6 +15,7 @@ set(PROTO_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/node_config.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_descriptor/schemas/cluster_config.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/deployment_descriptor/schemas/deployment.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/validation/faulty_links.proto
 )
 
 set(GENERATED_PROTO_SRCS)
@@ -46,7 +50,13 @@ target_sources(
 target_include_directories(scaleout_tools PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(scaleout_tools SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
+target_include_directories(validation_serialization PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(validation_serialization SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(validation_serialization PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
+
 target_include_directories(run_cluster_validation PRIVATE "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>")
+target_include_directories(run_cluster_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(run_cluster_validation SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     scaleout_tools
@@ -61,9 +71,17 @@ target_link_libraries(
 )
 
 target_link_libraries(
+    validation_serialization
+    PRIVATE
+        protobuf::libprotobuf
+        tt_metal
+)
+
+target_link_libraries(
     run_cluster_validation
     PRIVATE
         TT::ScaleoutTools
+        validation_serialization
         enchantum::enchantum
         protobuf::libprotobuf
         tt_metal
