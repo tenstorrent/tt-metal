@@ -196,8 +196,6 @@ def test_vit_attention(device, model_name, batch_size, sequence_size, hidden_siz
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    print("hidden_states.shape", hidden_states.shape)
-    print("config.core_grid_BLOCK_SHARDED", config.core_grid_BLOCK_SHARDED)
     encoder_input = ttnn.to_memory_config(
         hidden_states,
         memory_config=ttnn.create_sharded_memory_config(
@@ -296,9 +294,9 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
 
 
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
-@pytest.mark.parametrize("batch_size", [1])
+@pytest.mark.parametrize("batch_size", [1, 4, 8])
 @pytest.mark.parametrize("sequence_size", [1024, 2048, 3072])  # , 2048, 3072])
-@pytest.mark.parametrize("hidden_size", [512, 1024, 1536, 2304])
+@pytest.mark.parametrize("hidden_size", [512, 1024, 1152, 1536, 2304])
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 0}],
@@ -321,6 +319,8 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, m
     config.intermediate_size = hidden_size * 4
     config.num_attention_heads = 16
     if config.hidden_size >= 2048:
+        config.num_attention_heads = 12
+    elif config.hidden_size == 1152:
         config.num_attention_heads = 12
     config.num_hidden_layers = 12
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, sequence_size)
