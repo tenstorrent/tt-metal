@@ -348,6 +348,7 @@ void dump_link_stats(
                 uint32_t num_mismatched = 0;
                 for (size_t i = 0; i < result_vec.size(); ++i) {
                     if (result_vec[i] != inputs[i]) {
+                        TT_FATAL(false, "Got {} expected {}", result_vec[i], inputs[i]);
                         num_mismatched++;
                     }
                 }
