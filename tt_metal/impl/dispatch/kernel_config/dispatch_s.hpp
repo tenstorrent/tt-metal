@@ -25,6 +25,7 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> first_stream_used;
     std::optional<uint32_t> max_num_worker_sems;
     std::optional<uint32_t> max_num_go_signal_noc_data_entries;
+    std::optional<uint32_t> dispatch_shared_region;
 };
 
 struct dispatch_s_dependent_config_t {
