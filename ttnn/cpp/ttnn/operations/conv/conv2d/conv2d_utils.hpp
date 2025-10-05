@@ -192,6 +192,13 @@ shard_or_reshard_tensor_if_required(
     bool is_mm_conv,
     bool auto_shard);
 
+bool auto_enable_kernel_folding(
+    std::optional<bool> enable_folding_,
+    bool is_dram,
+    std::array<uint32_t, 2>& kernel_size,
+    std::array<uint32_t, 2>& stride,
+    std::array<uint32_t, 4>& padding_n4);
+
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,
     MeshDevice* device,

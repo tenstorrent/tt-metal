@@ -1113,7 +1113,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
     bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     auto orig_stride = stride;
     const bool is_conv1d = is_1d_conv(kernel_size[1], input_width);
-
+    conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
+        conv_config.enable_kernel_stride_folding, input_memory_config.is_dram(), kernel_size, stride, padding_n4);
     if (conv_config.enable_kernel_stride_folding) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);
