@@ -401,6 +401,7 @@ jobs:
       # - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
       #   if: always()
       - name: ttnn nightly bos group_norm tests
+        if: always()
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest -n auto tests/ttnn/unit_tests/operations/fused -v -m "not disable_fast_runtime_mode" -k _oft --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
