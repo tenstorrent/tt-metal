@@ -781,7 +781,43 @@ def test_demo_text(
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
         device_sampling_params = SamplingParams(
-            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+            # temperature=[sampling_params["temperature"]]*batch_size, top_k=[32]*batch_size, top_p=[sampling_params["top_p"]]*batch_size
+            temperature=[
+                0.0,
+                0.03225806,
+                0.06451613,
+                0.09677419,
+                0.12903226,
+                0.16129032,
+                0.19354839,
+                0.22580645,
+                0.25806452,
+                0.29032258,
+                0.32258065,
+                0.35483871,
+                0.38709677,
+                0.41935484,
+                0.4516129,
+                0.48387097,
+                0.51612903,
+                0.5483871,
+                0.58064516,
+                0.61290323,
+                0.64516129,
+                0.67741935,
+                0.70967742,
+                0.74193548,
+                0.77419355,
+                0.80645161,
+                0.83870968,
+                0.87096774,
+                0.90322581,
+                0.93548387,
+                0.96774194,
+                1.0,
+            ],
+            top_k=[32] * batch_size,
+            top_p=[sampling_params["top_p"]] * batch_size,
         )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")

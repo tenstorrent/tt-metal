@@ -366,13 +366,28 @@ class Generator:
             "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
-            if sampling_params.temperature == 0:  # argmax
-                sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
-            self.model.tt_sampling.reset_params(
-                k=[sampling_params.top_k] * 32,
-                p=[sampling_params.top_p] * 32,
-                temp=[1 / sampling_params.temperature] * 32,
-            )
+            if isinstance(sampling_params.temperature, List):
+                updated_temperature = []
+                for i, temp in enumerate(sampling_params.temperature):
+                    if temp == 0:
+                        updated_temperature.append(1.0)
+                        sampling_params.top_k[i] = 1
+                    else:
+                        # need reciprocal for the sampling op
+                        updated_temperature.append(1 / temp)
+                self.model.tt_sampling.reset_params(
+                    k=sampling_params.top_k,
+                    p=sampling_params.top_p,
+                    temp=updated_temperature,
+                )
+            else:
+                if sampling_params.temperature == 0:  # argmax
+                    sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+                self.model.tt_sampling.reset_params(
+                    k=[sampling_params.top_k] * 32,
+                    p=[sampling_params.top_p] * 32,
+                    temp=[1 / sampling_params.temperature] * 32,
+                )
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
         if enable_trace:

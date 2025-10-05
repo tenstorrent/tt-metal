@@ -34,9 +34,9 @@ class SamplingParams:
     The same data class exists in vLLM at vllm/worker/tt_model_runner.py.
     """
 
-    temperature: float
-    top_k: int
-    top_p: float
+    temperature: float | list[float]
+    top_k: int | list[int]
+    top_p: float | list[float]
 
 
 class Generator:
