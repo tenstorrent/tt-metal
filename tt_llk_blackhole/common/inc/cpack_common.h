@@ -292,7 +292,13 @@ inline void set_packer_config(const uint pack_src_format, const uint pack_dst_fo
 
 template <bool is_fp32_dest_acc_en>
 inline void reconfig_packer_data_format(
-    const uint pack_src_format, const uint pack_dst_format, const uint tile_size, [[maybe_unused]] const uint face_r_dim, const uint tile_c_dim)
+    const uint pack_src_format,
+    const uint pack_dst_format,
+    const uint tile_size,
+    [[maybe_unused]] const uint face_r_dim,
+    const uint tile_c_dim,
+    const uint num_faces,
+    const bool partial_face)
 {
     const uint pack_output_src_format = (uint)pack_src_format & 0xF;
     const uint pack_output_dst_format = (uint)pack_dst_format & 0xF;
@@ -307,6 +313,19 @@ inline void reconfig_packer_data_format(
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2);
+
+    // Some initialization methods modify this configuration register, so need to set it again
+    // Number of reads per face used for resetting tile position generator for edge masks
+    pack_counters_u pack_counters;
+    pack_counters.val                       = 0;
+    pack_counters.f.pack_reads_per_xy_plane = face_r_dim;
+    TT_SETDMAREG(0, LOWER_HALFWORD(pack_counters.val), 0, LO_16(p_gpr_pack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(pack_counters.val), 0, HI_16(p_gpr_pack::TMP0));
+
+    for (uint i = 0; i < 4; i++)
+    {
+        TT_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i); // disable auto last generation
+    }
 
     dest_rd_ctrl_u dest_rd_ctrl;
     dest_rd_ctrl.val = 0;
@@ -335,7 +354,7 @@ inline void reconfig_packer_data_format(
 
     if (IS_BFP_FORMAT(pack_output_dst_format))
     {
-        TTI_WRCFG(p_gpr_pack::EXP0_SEC_SIZE_BFP, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Exp_section_size_RMW>((partial_face ? 1 : num_faces));
     }
     else if (
         (pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Lf8)) || (pack_output_dst_format == static_cast<DataFormatType>(DataFormat::Int8)))
