@@ -251,6 +251,9 @@ void execute_workloads(
                 tt::tt_metal::distributed::MeshCoordinate(0, 0), tt::tt_metal::distributed::MeshCoordinate(0, 0)),
             std::move(program));
     }
+
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    distributed_context.barrier();
     std::thread threads[mesh_workloads.size()];
     for (auto& [device_id, mesh_workload] : mesh_workloads) {
         threads[device_id] = std::thread([&]() {
@@ -348,15 +351,6 @@ void dump_link_stats(
                 uint32_t num_mismatched = 0;
                 for (size_t i = 0; i < result_vec.size(); ++i) {
                     if (result_vec[i] != inputs[i]) {
-                        TT_FATAL(
-                            false,
-                            "Got {} expected {} channel: {} host: {} tray: {} asic_location: {}",
-                            result_vec[i],
-                            inputs[i],
-                            +src_chan,
-                            host_name,
-                            asic_descriptors.at(asic_id).tray_id,
-                            asic_descriptors.at(asic_id).asic_location);
                         num_mismatched++;
                     }
                 }
@@ -434,13 +428,11 @@ void forward_faulty_link_list_to_controller(std::vector<FaultyLink>& faulty_link
                 tt::tt_metal::distributed::multihost::Rank{peer_rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
             serialized_faulty_link_list.resize(serialized_faulty_link_list_size);
-            std::cout << "Receiving faulty link list from controller" << std::endl;
             distributed_context.recv(
                 tt::stl::as_writable_bytes(
                     tt::stl::Span<uint8_t>(serialized_faulty_link_list.data(), serialized_faulty_link_list.size())),
                 tt::tt_metal::distributed::multihost::Rank{peer_rank},
                 tt::tt_metal::distributed::multihost::Tag{0});
-            std::cout << "Deserializing faulty link list from controller" << std::endl;
             std::vector<FaultyLink> remote_faulty_links =
                 tt::scaleout::validation::deserialize_faulty_links_from_bytes(serialized_faulty_link_list);
             faulty_links.insert(faulty_links.end(), remote_faulty_links.begin(), remote_faulty_links.end());
@@ -483,8 +475,7 @@ std::vector<FaultyLink> send_traffic_and_validate_links(
     std::vector<FaultyLink> faulty_links;
     for (int i = 0; i < num_iterations; i++) {
         std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
-        auto inputs = std::vector<uint32_t>(data_size / sizeof(uint32_t), 0);
-        std::iota(inputs.begin(), inputs.end(), 0);
+        auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, data_size / sizeof(uint32_t));
 
         configure_local_kernels(
             physical_system_descriptor,
@@ -527,9 +518,7 @@ std::vector<FaultyLink> send_traffic_and_validate_links(
             });
         }
     }
-    std::cout << "Forwarding faulty link list to controller" << std::endl;
     forward_faulty_link_list_to_controller(faulty_links);
-    std::cout << "Faulty link list forwarded to controller" << std::endl;
     return faulty_links;
 }
 
@@ -574,6 +563,15 @@ InputArgs parse_input_args(const std::vector<std::string>& args_vec) {
         input_args.output_path = std::filesystem::path(test_args::get_command_option(args_vec, "--output-path"));
     } else {
         input_args.output_path = generate_output_dir();
+    }
+    if (test_args::has_command_option(args_vec, "--num-iterations")) {
+        input_args.num_iterations = std::stoi(test_args::get_command_option(args_vec, "--num-iterations"));
+    }
+    if (test_args::has_command_option(args_vec, "--data-size")) {
+        input_args.data_size = std::stoi(test_args::get_command_option(args_vec, "--data-size"));
+    }
+    if (test_args::has_command_option(args_vec, "--packet-size-bytes")) {
+        input_args.packet_size_bytes = std::stoi(test_args::get_command_option(args_vec, "--packet-size-bytes"));
     }
     log_output_rank0("Generating System Validation Logs in " + input_args.output_path.string());
 
