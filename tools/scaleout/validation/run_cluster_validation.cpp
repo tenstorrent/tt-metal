@@ -154,7 +154,7 @@ void configure_local_kernels(
                         sender_program,
                         sender_kernel,
                         sender_coord,
-                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size, src_chan == 15});
+                        {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size, 0});
 
                     auto receiver_kernel = tt::tt_metal::CreateKernel(
                         receiver_program,
@@ -219,7 +219,10 @@ void configure_cross_host_kernels(
                     tt::tt_metal::EthernetConfig{
                         .noc = tt::tt_metal::NOC::NOC_0, .compile_args = {packet_size_bytes, packet_size_words}});
                 tt::tt_metal::SetRuntimeArgs(
-                    my_program, sender_kernel, my_coord, {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size});
+                    my_program,
+                    sender_kernel,
+                    my_coord,
+                    {src_eth_l1_byte_address, dst_eth_l1_byte_address, data_size, 0});
             } else {
                 std::vector<uint32_t> all_zeros(inputs.size(), 0);
                 tt::tt_metal::MetalContext::instance().get_cluster().write_core(
