@@ -109,6 +109,4 @@ class TtSegformerMLP:
                 dtype=ttnn.bfloat8_b,
             )
 
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
-
         return hidden_states
