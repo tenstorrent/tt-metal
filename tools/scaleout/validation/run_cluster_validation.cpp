@@ -322,11 +322,11 @@ bool link_unhealthy(const std::vector<TestResults>& link_stats, LinkFailure& fai
 void dump_link_stats(
     std::vector<uint32_t>& inputs,
     PhysicalSystemDescriptor& physical_system_descriptor,
-    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices,
     std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id,
-    size_t data_size,
-    size_t packet_size_bytes,
-    std::unordered_map<EthChannelIdentifier, std::vector<TestResults>>& test_results) {
+    std::unordered_map<EthChannelIdentifier, std::vector<TestResults>>& test_results,
+    std::map<int, std::shared_ptr<tt::tt_metal::distributed::MeshDevice>> devices = {},
+    size_t data_size = 0,
+    size_t packet_size_bytes = 0) {
     const size_t src_eth_l1_byte_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
     const auto& host_name = physical_system_descriptor.my_host_name();
@@ -341,17 +341,19 @@ void dump_link_stats(
             for (const auto& eth_connection : eth_connections) {
                 auto src_chan = eth_connection.src_chan;
                 auto coord = soc_desc.get_eth_core_for_channel(src_chan, CoordSystem::LOGICAL);
-                auto result_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                    chip_id,
-                    devices[chip_id]->ethernet_core_from_logical_core(coord),
-                    src_eth_l1_byte_address,
-                    data_size);
-
-                // Count mismatched words
                 uint32_t num_mismatched = 0;
-                for (size_t i = 0; i < result_vec.size(); ++i) {
-                    if (result_vec[i] != inputs[i]) {
-                        num_mismatched++;
+                if (data_size > 0) {
+                    auto result_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                        chip_id,
+                        devices[chip_id]->ethernet_core_from_logical_core(coord),
+                        src_eth_l1_byte_address,
+                        data_size);
+
+                    // Count mismatched words
+                    for (size_t i = 0; i < result_vec.size(); ++i) {
+                        if (result_vec[i] != inputs[i]) {
+                            num_mismatched++;
+                        }
                     }
                 }
 
@@ -441,7 +443,9 @@ void forward_faulty_link_list_to_controller(std::vector<FaultyLink>& faulty_link
 }
 
 std::vector<FaultyLink> send_traffic_and_validate_links(
-    PhysicalSystemDescriptor& physical_system_descriptor, const InputArgs& input_args) {
+    PhysicalSystemDescriptor& physical_system_descriptor,
+    const InputArgs& input_args,
+    std::unordered_map<uint64_t, chip_id_t>& asic_id_to_chip_id) {
     uint32_t packet_size_bytes = input_args.packet_size_bytes;
     uint32_t packet_size_words = input_args.packet_size_bytes >> 4;
     uint32_t data_size = input_args.data_size;
@@ -465,11 +469,6 @@ std::vector<FaultyLink> send_traffic_and_validate_links(
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config());
-
-    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
-    for (const auto& [chip_id, asic_id] : cluster.get_unique_chip_ids()) {
-        asic_id_to_chip_id[asic_id] = chip_id;
-    }
 
     std::unordered_map<EthChannelIdentifier, std::vector<TestResults>> test_results;
     std::vector<FaultyLink> faulty_links;
@@ -502,16 +501,16 @@ std::vector<FaultyLink> send_traffic_and_validate_links(
         dump_link_stats(
             inputs,
             physical_system_descriptor,
-            devices,
             asic_id_to_chip_id,
+            test_results,
+            devices,
             data_size,
-            packet_size_bytes,
-            test_results);
+            packet_size_bytes);
     }
 
     for (const auto& [channel_identifier, link_stats] : test_results) {
         LinkFailure failure_mode;
-        if (link_unhealthy(link_stats, failure_mode)) {
+        if (link_unhealthy(link_stats, failure_mode) || input_args.log_ethernet_metrics) {
             faulty_links.push_back(FaultyLink{
                 .channel_identifier = channel_identifier,
                 .link_failure = failure_mode,
@@ -806,7 +805,8 @@ void log_unexpected_statuses(const std::string& unexpected_status_log) {
     }
 }
 
-void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::filesystem::path& output_path) {
+void log_faulty_links(
+    const std::vector<FaultyLink>& faulty_links, const std::filesystem::path& output_path, bool log_ethernet_metrics) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     if (*distributed_context.rank() != 0) {
@@ -835,7 +835,7 @@ void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::fi
     // Expand each link into separate rows per failure type
     std::vector<FailureRow> failure_rows;
     for (const auto& link : faulty_links) {
-        if (link.link_failure.retrain_failure.retrain_count > 0) {
+        if (link.link_failure.retrain_failure.retrain_count > 0 || log_ethernet_metrics) {
             failure_rows.push_back(
                 {link.channel_identifier,
                  "Retrain",
@@ -845,7 +845,7 @@ void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::fi
                  0,
                  0});
         }
-        if (link.link_failure.crc_error_failure.crc_error_count > 0) {
+        if (link.link_failure.crc_error_failure.crc_error_count > 0 || log_ethernet_metrics) {
             failure_rows.push_back(
                 {link.channel_identifier,
                  "CRC Error",
@@ -855,7 +855,7 @@ void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::fi
                  0,
                  0});
         }
-        if (link.link_failure.uncorrected_codeword_failure.uncorrected_codeword_count > 0) {
+        if (link.link_failure.uncorrected_codeword_failure.uncorrected_codeword_count > 0 || log_ethernet_metrics) {
             failure_rows.push_back(
                 {link.channel_identifier,
                  "Uncorrected CW",
@@ -865,7 +865,7 @@ void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::fi
                  link.link_failure.uncorrected_codeword_failure.uncorrected_codeword_count,
                  0});
         }
-        if (link.link_failure.data_mismatch_failure.num_mismatched_words > 0) {
+        if (link.link_failure.data_mismatch_failure.num_mismatched_words > 0 || log_ethernet_metrics) {
             failure_rows.push_back(
                 {link.channel_identifier,
                  "Data Mismatch",
@@ -959,6 +959,38 @@ void log_faulty_links(const std::vector<FaultyLink>& faulty_links, const std::fi
     }
 }
 
+std::unordered_map<uint64_t, chip_id_t> generate_asic_id_to_chip_id_map() {
+    std::unordered_map<uint64_t, chip_id_t> asic_id_to_chip_id;
+    for (const auto& [chip_id, asic_id] : tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids()) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
+    return asic_id_to_chip_id;
+}
+
+void generate_link_metrics(PhysicalSystemDescriptor& physical_system_descriptor, const InputArgs& input_args) {
+    auto asic_id_to_chip_id = generate_asic_id_to_chip_id_map();
+    if (input_args.send_traffic) {
+        auto link_metrics = send_traffic_and_validate_links(physical_system_descriptor, input_args, asic_id_to_chip_id);
+        log_faulty_links(link_metrics, input_args.output_path, input_args.log_ethernet_metrics);
+    } else {
+        std::unordered_map<EthChannelIdentifier, std::vector<TestResults>> test_results;
+        std::vector<uint32_t> inputs = {};
+        dump_link_stats(inputs, physical_system_descriptor, asic_id_to_chip_id, test_results);
+        std::vector<FaultyLink> link_metrics;
+        for (const auto& [channel_identifier, link_stats] : test_results) {
+            LinkFailure failure_mode;
+            if (link_unhealthy(link_stats, failure_mode) || input_args.log_ethernet_metrics) {
+                link_metrics.push_back(FaultyLink{
+                    .channel_identifier = channel_identifier,
+                    .link_failure = failure_mode,
+                });
+            }
+        }
+        forward_faulty_link_list_to_controller(link_metrics);
+        log_faulty_links(link_metrics, input_args.output_path, input_args.log_ethernet_metrics);
+    }
+}
+
 void print_usage_info() {
     std::cout << "Utility to validate Ethernet Links and Connections for a Multi-Node TT Cluster" << std::endl;
     std::cout << "Compares live system state against the requested Cabling and Deployment Specifications" << std::endl
@@ -970,7 +1002,7 @@ void print_usage_info() {
     std::cout << "  --global-descriptor-path: Path to global descriptor" << std::endl;
     std::cout << "  --output-path: Path to output directory" << std::endl;
     std::cout << "  --hard-fail: Fail on warning" << std::endl;
-    std::cout << "  --log-ethernet-metrics: Log ethernet live ethernet statistics" << std::endl;
+    std::cout << "  --log-ethernet-metrics: Log live ethernet statistics" << std::endl;
     std::cout << "  --print-connectivity: Print Ethernet Connectivity between ASICs" << std::endl;
     std::cout << "  --help: Print usage information" << std::endl << std::endl;
     std::cout << "To run on a multi-node cluster, use mpirun with a --hostfile option" << std::endl;
@@ -1001,10 +1033,7 @@ int main(int argc, char* argv[]) {
         log_output_rank0("Factory System Descriptor (Golden Representation) Validation Complete");
     }
 
-    if (input_args.send_traffic) {
-        auto faulty_links = send_traffic_and_validate_links(physical_system_descriptor, input_args);
-        log_faulty_links(faulty_links, input_args.output_path);
-    }
+    generate_link_metrics(physical_system_descriptor, input_args);
 
     if (*distributed_context.rank() == 0) {
         std::string unexpected_status_log =
