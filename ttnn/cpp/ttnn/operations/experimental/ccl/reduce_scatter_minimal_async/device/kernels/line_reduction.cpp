@@ -13,19 +13,14 @@ void MAIN {
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t batch_slice_num_pages = get_compile_time_arg_val(3);
-    constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
-    constexpr uint32_t ring_size = get_compile_time_arg_val(5);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(6);
-    constexpr uint32_t num_links = get_compile_time_arg_val(7);
-    constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(8);
+    constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(4);
+    constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(5);
+    constexpr uint32_t tiles_read = get_compile_time_arg_val(6);
+    constexpr uint32_t tiles_to_read = get_compile_time_arg_val(7);
 
-    uint32_t arg_idx = 0;
-    uint32_t link = get_arg_val<uint32_t>(arg_idx++);
+    constexpr uint32_t num_packets = div_up(tiles_to_read - tiles_read, tile_granularity);
 
-    uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
-    uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
-    uint32_t num_packets = div_up(tiles_to_read - tiles_read, tile_granularity);
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
     add_tiles_init(input_cb_id, intermediate_cb, false);
 

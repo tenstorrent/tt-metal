@@ -577,6 +577,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     dir,                      // direction
                     chunks_per_sync_val,      // chunks_per_sync
                     dim,                      // dim
+                    start_pages_read_in_row,  // start_pages_read_in_row
+                    start_row_offset,         // start_row_offset
+                    start_tiles_read,         // start_tiles_read
+                    start_tiles_to_read       // start_tiles_to_read
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -601,10 +605,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     input_tensor.buffer()->address(),         // input_tensor_address
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     semaphore.at(dir).address(),              // out_ready_semaphore
-                    start_pages_read_in_row,                  // start_pages_read_in_row
-                    start_row_offset,                         // start_row_offset
-                    start_tiles_read,                         // start_tiles_read
-                    start_tiles_to_read                       // start_tiles_to_read
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -642,6 +642,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     dir,                            // direction
                     chunks_per_sync_val,            // chunks_per_sync
                     dim,                            // dim
+                    start_pages_read_in_row,        // start_pages_read_in_row
+                    start_row_offset,               // start_row_offset
+                    start_tiles_read,               // start_tiles_read
+                    start_tiles_to_read,            // tiles_to_read
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -691,10 +695,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     virtual_core.y,                                              // out_ready_sem_noc0_y
                     semaphore.at(dir).address(),                                 // out_ready_fwd_semaphore
                     semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
-                    start_pages_read_in_row,                                     // start_pages_read_in_row
-                    start_row_offset,                                            // start_row_offset
-                    start_tiles_read,                                            // start_tiles_read
-                    start_tiles_to_read,                                         // tiles_to_read
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
                     barrier_semaphore.has_value()                                // barrier_sem
                         ? barrier_semaphore.value().address()
@@ -1189,14 +1189,16 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 const bool do_final_reduction = !is_first_device_in_direction;
                 const int num_total_reduction_steps = num_intermediate_reduction_steps + (do_final_reduction ? 1 : 0);
                 const bool sync_with_other_direction = !(is_first_chip || is_last_chip);
-                uint32_t tiles_read =
-                    ((link * num_workers_per_direction + worker) * batch_slice_num_pages /
-                     (num_links * num_workers_per_direction));
-                uint32_t tiles_to_read = (link * num_workers_per_direction + worker + 1) * batch_slice_num_pages /
-                                         (num_links * num_workers_per_direction);
+
+                uint32_t worker_id = (link * num_workers_per_direction) + worker;
+                uint32_t num_workers = num_links * num_workers_per_direction;
+
+                uint32_t start_tiles_read = worker_id * batch_slice_num_pages / num_workers;
+                uint32_t start_tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
+
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                        topology, tiles_to_read, tiles_read, tile_granularity));
+                        topology, start_tiles_to_read, start_tiles_read, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader
@@ -1250,8 +1252,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     output_tensor.buffer()->address(),        // output_tensor_address
                     semaphore.at(0).address(),                // remote transfer sync semaphore
-                    (link * num_workers_per_direction) + worker,
-                    num_links * num_workers_per_direction,
+                    worker_id,
+                    num_workers,
                     fwd_bwd_semaphore_address};
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -1339,8 +1341,8 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     semaphore.at(0).address(),                // remote transfer sync semaphore
                     semaphore.at(1).address(),                // final reduction slot semaphore
                     semaphore.at(2).address(),                // batch_ready_semaphore
-                    (link * num_workers_per_direction) + worker,
-                    num_links * num_workers_per_direction,
+                    worker_id,
+                    num_workers,
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
@@ -1368,12 +1370,12 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     input_cb_index,
                     intermediate_cb_index,
                     compute_output_cb_index,
-                    batch_slice_num_pages,
                     tile_granularity,
-                    ring_size,
                     num_batches,
-                    num_links * num_workers_per_direction,
-                    num_total_reduction_steps};
+                    num_total_reduction_steps,
+                    start_tiles_read,
+                    start_tiles_to_read,
+                };
                 auto reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
@@ -1382,7 +1384,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     sender_reduce_kernel_config);
                 reduce_kernel_ids.push_back(reduce_kernel_id);
 
-                std::vector<uint32_t> reduce_rt_args = {(link * num_workers_per_direction) + worker};
+                std::vector<uint32_t> reduce_rt_args = {};
                 tt::tt_metal::SetRuntimeArgs(program, reduce_kernel_id, {core}, reduce_rt_args);
             }
         }

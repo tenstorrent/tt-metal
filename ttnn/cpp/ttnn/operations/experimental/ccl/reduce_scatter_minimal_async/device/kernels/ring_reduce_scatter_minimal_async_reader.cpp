@@ -35,6 +35,10 @@ constexpr uint32_t fuse_op = get_compile_time_arg_val(14);
 constexpr bool direction = get_compile_time_arg_val(15);
 constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(16);
 constexpr uint32_t dim = get_compile_time_arg_val(17);
+constexpr uint32_t start_pages_read_in_row = get_compile_time_arg_val(18);
+constexpr uint32_t start_row_offset = get_compile_time_arg_val(19);
+constexpr int32_t start_tiles_read = get_compile_time_arg_val(20);
+constexpr uint32_t start_tiles_to_read = get_compile_time_arg_val(21);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -47,12 +51,7 @@ void kernel_main() {
     address_t intermediate_tensor_address = get_arg_val<address_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
-    int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
-
-    constexpr uint32_t ct_idx = 18;
+    constexpr uint32_t ct_idx = 22;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
