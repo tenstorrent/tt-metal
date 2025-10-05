@@ -486,7 +486,7 @@ inline void _llk_pack_reconfig_data_format_(
     const bool partial_face        = false,
     const bool narrow_tile         = false)
 {
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim);
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face);
 
     if constexpr (is_tile_dim_reconfig_en)
     {
