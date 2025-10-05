@@ -201,7 +201,6 @@ void kernel_main() {
                         uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
                         noc_async_read(noc_read_addr, l1_write_addr, page_size);
                         l1_write_addr += page_size;
-                        tiles_read++;
 
                         input_pages_read_in_row++;
                         if (input_pages_read_in_row == slice_Wt) {
@@ -209,6 +208,7 @@ void kernel_main() {
                             input_pages_read_in_row -= slice_Wt;
                         }
                     }
+                    tiles_read += tiles_to_read_in_current_direction;
 
                     if (do_reduce) {
                         // read next intermediate slice out of the intermediate buffer, and put it in intermediate CB

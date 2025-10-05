@@ -1215,6 +1215,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 uint32_t start_tiles_read = worker_id * batch_slice_num_pages / num_workers;
                 uint32_t start_tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
 
+                uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
+                uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
+
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
                         topology, start_tiles_to_read, start_tiles_read, tile_granularity));
@@ -1239,6 +1242,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     do_final_reduction,
                     sync_with_other_direction,
                     chunks_per_sync_val,
+                    start_pages_read_in_row,
+                    start_row_offset,
+                    start_tiles_read,
+                    start_tiles_to_read,
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -1268,8 +1275,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     output_tensor.buffer()->address(),        // output_tensor_address
                     semaphore.at(0).address(),                // remote transfer sync semaphore
-                    worker_id,
-                    num_workers,
                     fwd_bwd_semaphore_address};
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -1305,6 +1310,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     do_final_reduction,
                     sync_with_other_direction,
                     chunks_per_sync_val,
+                    start_pages_read_in_row,
+                    start_row_offset,
+                    start_tiles_read,
+                    start_tiles_to_read,
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -1352,8 +1361,6 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     virtual_core.x,                           // out_ready_sem_noc0_x
                     virtual_core.y,                           // out_ready_sem_noc0_y
                     semaphore.at(0).address(),                // remote transfer sync semaphore
-                    worker_id,
-                    num_workers,
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
