@@ -134,8 +134,10 @@ void kernel_main() {
     }
 
     constexpr uint32_t slice_Wt = input_tensor_Wt / ring_size;
-    constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
-    constexpr uint32_t intermediate_num_pages = batch_num_pages * input_tensor_B;
+    constexpr uint32_t input_batch_num_pages = batch_slice_num_pages * ring_size;
+    constexpr uint32_t intermediate_num_pages = input_batch_num_pages * input_tensor_B;
+
+    constexpr uint32_t output_batch_num_pages = batch_slice_num_pages;
 
     /**
      * Intermediate buffer is double-sized (shape [2, *input_shape]) to accommodate forward and backward.
@@ -152,7 +154,7 @@ void kernel_main() {
             matmul_receiver.wait_for_matmul_batch(b);
         }
         int slice_idx = is_forward ? ring_size - 1 : 0;
-        uint32_t batch_offset = batch_num_pages * b;
+        uint32_t batch_offset = input_batch_num_pages * b;
 
         // Iterate over the slices in the direction we are going.
         // In forwards direction, count down from slice (ring_size -1) down to (my_chip_id+1), inclusive
@@ -167,7 +169,7 @@ void kernel_main() {
             uint32_t input_pages_read_in_row = start_pages_read_in_row;
             uint32_t input_row_offset = start_row_offset;
 
-            uint32_t intermediate_tile_id_start = intermediate_full_offset + batch_offset + slice_idx * slice_Wt;
+            uint32_t intermediate_tile_id_start = input_tile_id_start + intermediate_full_offset;
             uint32_t intermediate_pages_read_in_row = input_pages_read_in_row;
             uint32_t intermediate_row_offset = input_row_offset;
 
@@ -269,15 +271,21 @@ void kernel_main() {
             uint32_t input_tile_id_start = my_chip_id * slice_Wt + batch_offset;
             uint32_t input_pages_read_in_row = start_pages_read_in_row;
             uint32_t input_row_offset = start_row_offset;
+            uint32_t input_stride_Wt = input_tensor_Wt;
 
-            uint32_t intermediate_tile_id_start = intermediate_full_offset + batch_offset + my_chip_id * slice_Wt;
+            uint32_t intermediate_tile_id_start = input_tile_id_start + intermediate_full_offset;
             uint32_t intermediate_pages_read_in_row = input_pages_read_in_row;
             uint32_t intermediate_row_offset = input_row_offset;
+            uint32_t intermediate_stride_Wt = input_tensor_Wt;
+
+            uint32_t output_tile_id_start = b * output_batch_num_pages;
+            uint32_t output_pages_read_in_row = input_pages_read_in_row;
+            uint32_t output_row_offset =
+                input_row_offset / input_tensor_Wt * slice_Wt;  // TODO: (GR) extract out of kernel
+            uint32_t output_stride_Wt = slice_Wt;
 
             uint32_t tiles_read = start_tiles_read;
             uint32_t tiles_to_read = start_tiles_to_read;
-
-            uint32_t input_stride_Wt = input_tensor_Wt;
 
             /**
              * If two cores are doing final reduction, BWD core will accumulate output with
@@ -285,10 +293,20 @@ void kernel_main() {
              * If true, output += intermediate. Otherwise, output = input + intermediate
              */
             constexpr bool accumulate_output = sync_with_other_direction && !is_forward;
-            if (accumulate_output) {
-                input_tile_id_start = b * batch_slice_num_pages;  // output batch offset
-                input_row_offset = input_row_offset / input_tensor_Wt * slice_Wt;
-                input_stride_Wt = slice_Wt;
+            uint32_t tile_id_start;
+            uint32_t pages_read_in_row;
+            uint32_t row_offset;
+            uint32_t stride_Wt;
+            if constexpr (accumulate_output) {
+                tile_id_start = output_tile_id_start;
+                pages_read_in_row = output_pages_read_in_row;
+                row_offset = output_row_offset;
+                stride_Wt = output_stride_Wt;
+            } else {
+                tile_id_start = input_tile_id_start;
+                pages_read_in_row = input_pages_read_in_row;
+                row_offset = input_row_offset;
+                stride_Wt = input_stride_Wt;
             }
 
             uint32_t cb_in0 = cb_input_id;
@@ -305,16 +323,16 @@ void kernel_main() {
                 cb_reserve_back(cb_in0, tile_granularity);
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < num_pages_to_read; ++j) {
-                    uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
+                    uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
                     uint64_t noc_read_addr = accumulate_output ? get_noc_addr(tile_id, output_tensor_addrgen)
                                                                : get_noc_addr(tile_id, input_tensor_addrgen);
                     noc_async_read(noc_read_addr, l1_write_addr, page_size);
                     l1_write_addr += page_size;
 
-                    input_pages_read_in_row++;
-                    if (input_pages_read_in_row == slice_Wt) {
-                        input_row_offset += input_stride_Wt;
-                        input_pages_read_in_row -= slice_Wt;
+                    pages_read_in_row++;
+                    if (pages_read_in_row == slice_Wt) {
+                        row_offset += stride_Wt;
+                        pages_read_in_row -= slice_Wt;
                     }
                 }
                 tiles_read += num_pages_to_read;
@@ -336,7 +354,7 @@ void kernel_main() {
 
                     intermediate_pages_read_in_row++;
                     if (intermediate_pages_read_in_row == slice_Wt) {
-                        intermediate_row_offset += input_tensor_Wt;
+                        intermediate_row_offset += intermediate_stride_Wt;
                         intermediate_pages_read_in_row -= slice_Wt;
                     }
                 }
