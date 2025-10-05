@@ -1096,6 +1096,10 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
 
     const uint32_t input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const uint32_t batch_slice_num_pages = input_tensor_num_pages / ring_size / input_tensor_B;
+    const uint32_t input_batch_num_pages = input_tensor_num_pages / input_tensor_B;
+    const uint32_t output_batch_num_pages = input_batch_num_pages / ring_size;
+    const uint32_t input_channel_num_pages = input_batch_num_pages / input_tensor_C;
+    const uint32_t output_channel_num_pages = output_batch_num_pages / slice_C;
 
     bool input_is_sharded = input_tensor.is_sharded();
     bool intermediate_is_sharded = intermediate_tensor.is_sharded();
@@ -1212,15 +1216,15 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                 uint32_t worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
-                uint32_t start_tiles_read = worker_id * batch_slice_num_pages / num_workers;
-                uint32_t start_tiles_to_read = (worker_id + 1) * batch_slice_num_pages / num_workers;
+                uint32_t start_tiles_read = worker_id * output_channel_num_pages / num_workers;
+                uint32_t start_tiles_to_read = (worker_id + 1) * output_channel_num_pages / num_workers;
 
                 uint32_t start_pages_read_in_row = start_tiles_read % slice_Wt;
                 uint32_t start_row_offset = start_tiles_read / slice_Wt * input_tensor_Wt;
 
                 uint32_t chunks_per_sync_val =
                     chunks_per_sync.value_or(operations::experimental::ccl::detail::default_chunks_per_sync(
-                        topology, start_tiles_to_read, start_tiles_read, tile_granularity));
+                        topology, start_tiles_to_read * slice_C, start_tiles_read * slice_C, tile_granularity));
                 log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 // Reader
@@ -1246,6 +1250,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     start_row_offset,
                     start_tiles_read,
                     start_tiles_to_read,
+                    input_channel_num_pages,
+                    output_channel_num_pages,
+                    slice_C,
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
@@ -1314,6 +1321,9 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     start_row_offset,
                     start_tiles_read,
                     start_tiles_to_read,
+                    input_channel_num_pages,
+                    output_channel_num_pages,
+                    slice_C,
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -1393,6 +1403,7 @@ ReduceScatterProgramArtifacts build_line_reduce_scatter_minimal_async_program_ar
                     num_total_reduction_steps,
                     start_tiles_read,
                     start_tiles_to_read,
+                    slice_C,
                 };
                 auto reduce_kernel_id = tt::tt_metal::CreateKernel(
                     program,
