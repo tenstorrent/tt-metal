@@ -1,0 +1,14 @@
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-512-1024-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-1024-1024-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-1536-1024-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-2304-1024-1-google/vit-base-patch16-224]
+
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-512-2048-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-1024-2048-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-1536-2048-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-2304-2048-1-google/vit-base-patch16-224]
+
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-512-3072-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-1024-3072-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-1536-3072-1-google/vit-base-patch16-224]
+pr pytest models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_hiRes_bh.py::test_vit_layer[device_params0-2304-3072-1-google/vit-base-patch16-224]
