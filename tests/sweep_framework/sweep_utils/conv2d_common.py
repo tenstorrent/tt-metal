@@ -259,8 +259,6 @@ def run_conv2d_short_sweep(
     tt_bias_tensor = None
     conv_config = ttnn.Conv2dConfig()
     conv_output_dtype = ttnn.bfloat16
-    if stride_h == kernel_height and stride_w == kernel_width and stride_h >= 14 and pad_h == 0 and pad_w == 0:
-        conv_config.enable_kernel_stride_folding = True
     if is_forge_suite:
         input_layout = ttnn.Layout(input_layout)
         input_dtype = ttnn.DataType(input_dtype)
@@ -304,6 +302,7 @@ def run_conv2d_short_sweep(
         return_output_dim=True,
         return_weights_and_bias=True,
         dtype=conv_output_dtype,
+        # slice_config=ttnn.Conv2dL1FullSliceConfig,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
