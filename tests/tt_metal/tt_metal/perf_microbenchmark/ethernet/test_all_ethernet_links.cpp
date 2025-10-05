@@ -859,14 +859,21 @@ int main(int argc, char** argv) {
     }
 
     std::unordered_map<chip_id_t, tt_metal::distributed::MeshWorkload> mesh_workloads;
+    std::thread threads[programs.size()];
     for (auto& [device_id, program] : programs) {
         mesh_workloads[device_id] = tt_metal::distributed::MeshWorkload();
         mesh_workloads[device_id].add_program(
             tt_metal::distributed::MeshCoordinateRange(
                 tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)),
             std::move(program));
-        tt_metal::distributed::EnqueueMeshWorkload(
-            devices[device_id]->mesh_command_queue(), mesh_workloads[device_id], false);
+        threads[device_id] = std::thread([&] {
+            tt_metal::distributed::EnqueueMeshWorkload(
+                devices[device_id]->mesh_command_queue(), mesh_workloads[device_id], true);
+        });
+    }
+
+    for (auto& thread : threads) {
+        thread.join();
     }
 
     for (auto& [device_id, mesh_workload] : mesh_workloads) {
