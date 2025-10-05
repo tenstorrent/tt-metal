@@ -246,6 +246,8 @@ void MetalContext::teardown() {
 
     // Deinitialize inspector
     inspector_data_.reset();
+
+    control_plane_.reset();
 }
 
 MetalContext& MetalContext::instance() {
