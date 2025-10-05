@@ -133,7 +133,7 @@ struct Conv2dWeightsBiasPrepConfig {
         bool interleaved_mm_conv,
         bool has_bias_ = false,
         bool parameters_on_device_ = true,
-        std::optional<bool> enable_kernel_stride_folding_ = std::nullopt,
+        bool enable_kernel_stride_folding_ = false,
         bool full_inner_dim_ = false,
         bool enable_activation_reuse_ = false,
         std::array<uint32_t, 2> kernel_size_ = {1, 1},

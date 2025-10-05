@@ -259,7 +259,7 @@ Result conv2d_DRAM(
             true,  // DRAM MM Convs are always interleaved
             bias_tensor.has_value(),
             true,  // parameters_on_device
-            conv_config.enable_kernel_stride_folding,
+            conv_config.enable_kernel_stride_folding.value(),
             conv_config.full_inner_dim,
             conv_config.enable_activation_reuse,
             kernel_size,
@@ -769,7 +769,7 @@ Result conv2d_L1(
         mm_conv && auto_shard,
         bias_tensor.has_value(),
         true,  // parameters_on_device
-        conv_config.enable_kernel_stride_folding,
+        conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
         conv_config.enable_activation_reuse,
         kernel_size,
