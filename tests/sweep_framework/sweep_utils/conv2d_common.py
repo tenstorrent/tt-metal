@@ -302,7 +302,6 @@ def run_conv2d_short_sweep(
         return_output_dim=True,
         return_weights_and_bias=True,
         dtype=conv_output_dtype,
-        # slice_config=ttnn.Conv2dL1FullSliceConfig,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
