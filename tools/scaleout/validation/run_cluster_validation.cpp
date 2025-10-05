@@ -474,7 +474,8 @@ std::vector<FaultyLink> send_traffic_and_validate_links(
     std::vector<FaultyLink> faulty_links;
     for (int i = 0; i < num_iterations; i++) {
         std::unordered_map<chip_id_t, tt::tt_metal::Program> programs;
-        auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, data_size / sizeof(uint32_t));
+        auto inputs = std::vector<uint32_t>(data_size / sizeof(uint32_t), 0);
+        std::iota(inputs.begin(), inputs.end(), 0);
 
         configure_local_kernels(
             physical_system_descriptor,
