@@ -109,7 +109,6 @@ async function run() {
     core.info(`Restored previousRuns count: ${previousRuns.length}`);
     core.info(`Latest cached run date: ${latestCachedDate}`);
     // Test mode: download workflow-data.json artifact from a specific run and exit early
-    // TODO: Remove this once we're done testing
     if (testRunIdInput) {
       const runId = parseInt(testRunIdInput, 10);
       if (Number.isNaN(runId)) {
@@ -319,7 +318,6 @@ async function run() {
       // Exit early
       return;
     }
-    // TODO: Remove this once we're done testing
     // Fetch new runs from GitHub (for the last N days, only after latest cached run)
 
     // 1. Fetch runs for each event type separately
