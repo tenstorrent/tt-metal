@@ -110,7 +110,7 @@ jobs:
         with:
           name: workflow-data
           path: ${{ github.workspace }}/prev
-          run-id: 18274055622
+          run-id: ${{ steps.prev.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Echo selected previous run id
         run: |
