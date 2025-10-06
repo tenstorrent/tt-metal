@@ -412,7 +412,6 @@ async function run() {
           const jobsResp = await octokit.rest.actions.listJobsForWorkflowRun({ owner, repo, run_id: targetRun.id, per_page: 100 });
           const jobs = Array.isArray(jobsResp.data.jobs) ? jobsResp.data.jobs : [];
           const checkRunIds = [];
-          const gtestJobs = [];
           const gtestAnnotationJobNames = new Set();
           for (const j of jobs) {
             const cru = j && j.check_run_url;
@@ -421,15 +420,6 @@ async function run() {
               const id = idStr ? parseInt(idStr, 10) : NaN;
               if (!Number.isNaN(id)) checkRunIds.push({ id, job_name: j.name });
             }
-            // Heuristic: mark jobs that look like gtests and are not successful
-            try {
-              const jobName = (j && j.name) ? String(j.name) : '';
-              const isGtest = /gtest/i.test(jobName) || /gtests/i.test(jobName);
-              const conc = j && j.conclusion;
-              if (isGtest && conc !== 'success' && conc !== 'skipped' && conc !== 'cancelled') {
-                gtestJobs.push({ id: j.id, name: jobName });
-              }
-            } catch (_) { /* ignore */ }
           }
           const annRoot = path.join(workspace, 'annotations', String(targetRun.id));
           if (!fs.existsSync(annRoot)) fs.mkdirSync(annRoot, { recursive: true });
@@ -486,7 +476,7 @@ async function run() {
 
           // If any failing gtest job detected, download and extract run logs once and index gtest job logs
           try {
-            const shouldFetchGtestLogs = sawFailingAnnotationForGtest || (Array.isArray(gtestJobs) && gtestJobs.length > 0);
+            const shouldFetchGtestLogs = sawFailingAnnotationForGtest;
             if (shouldFetchGtestLogs) {
               const runLogsZip = await octokit.rest.actions.downloadWorkflowRunLogs({ owner, repo, run_id: targetRun.id });
               const runDir = path.join(logsRoot, String(targetRun.id));
@@ -501,10 +491,6 @@ async function run() {
               // Helper to sanitize strings for fuzzy file matching
               const sanitize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
               const wanted = new Map();
-              for (const gj of gtestJobs) {
-                const key = sanitize(gj.name);
-                if (!wanted.has(key)) wanted.set(key, { name: gj.name, files: [] });
-              }
               // Add any job names discovered via 'unknown file' annotations
               for (const jn of Array.from(gtestAnnotationJobNames.values())) {
                 const key = sanitize(jn);
