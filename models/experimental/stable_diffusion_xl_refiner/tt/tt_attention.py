@@ -68,7 +68,6 @@ class TtAttention(LightweightModule):
                 self.tt_qkv_weights,
                 dtype=ttnn.bfloat16,
             )
-            qkv_fused = ttnn.sharded_to_interleaved(qkv_fused, ttnn.DRAM_MEMORY_CONFIG)
 
             (
                 q_heads,
