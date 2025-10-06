@@ -1148,7 +1148,7 @@ async function run() {
 
     // Optional: Build Slack-ready alert message for all failing workflows with owner mentions
     let alertAllMessage = '';
-    if (alertAll && failedWorkflows.length > 0) {
+    if (failedWorkflows.length > 0) {
       const mention = (owners) => {
         const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
         const ids = arr.map(o => (o && o.id) ? `<@${o.id}>` : '').filter(Boolean);
@@ -1191,7 +1191,13 @@ async function run() {
         if (!owners || owners.length === 0) {
           owners = findOwnerForLabel(name);
         }
-        const ownerMentions = mention(owners) || '(no owner found)'; // get the slack IDs of the owners
+        // When alertAll is false, avoid pinging by listing owner names instead of Slack mention IDs
+        const ownerNamesText = (() => {
+          const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
+          const names = arr.map(o => (o && (o.name || o.id)) ? (o.name || o.id) : '').filter(Boolean);
+          return names.length ? names.join(', ') : '(no owner found)';
+        })();
+        const ownerMentions = alertAll ? (mention(owners) || '(no owner found)') : ownerNamesText; // conditionally ping owners only if alertAll is true
         const wfUrl = getWorkflowLink(github.context, runs[0]?.path); // get the workflow url link for the pipeline run (can use any run to get the workflow link)
         failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}`.trim()); // the run is failing because if it wasn't the for loop would have continued earlier
       }
