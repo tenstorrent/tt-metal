@@ -28,11 +28,11 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(1);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(3);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(4);
-constexpr uint32_t start_distance_in_hops_forward = get_compile_time_arg_val(5);
-constexpr uint32_t range_hops_forward = get_compile_time_arg_val(6);
-constexpr uint32_t start_distance_in_hops_backward = get_compile_time_arg_val(7);
-constexpr uint32_t range_hops_backward = get_compile_time_arg_val(8);
-constexpr bool is_sender = get_compile_time_arg_val(9);
+constexpr bool is_sender = get_compile_time_arg_val(5);
+constexpr uint32_t start_distance_in_hops_forward = get_compile_time_arg_val(6);
+constexpr uint32_t range_hops_forward = get_compile_time_arg_val(7);
+constexpr uint32_t start_distance_in_hops_backward = get_compile_time_arg_val(8);
+constexpr uint32_t range_hops_backward = get_compile_time_arg_val(9);
 
 inline constexpr uint32_t sharded_args_start_idx = 10;
 
@@ -129,8 +129,8 @@ void kernel_main() {
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
+        // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
         // 1. mcast via fabric to remote tensor addresses
         uint32_t tile_id = tile_id_start;
@@ -193,14 +193,14 @@ void kernel_main() {
         noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
         // 3. wait for mcast output ready semaphore
-        if (wait_output_semaphore) {
+        if (wait_output_semaphore && !is_sender) {
             volatile tt_l1_ptr uint32_t* sem_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
             noc_semaphore_wait(sem_ptr, out_ready_sem_wait_value);
         }
 
         // 4. global semaphore reset
-        if (reset_global_semaphore) {
+        if (reset_global_semaphore && !is_sender) {
             noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
         }
 
