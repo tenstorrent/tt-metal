@@ -564,10 +564,10 @@ void py_module(py::module& module) {
                 * - MatmulMultiCoreReuseMultiCastProgramConfig
                   - Interleaved (L1/DRAM), Block Sharded (L1)
                   - Interleaved (L1/DRAM)
-                * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in1
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0=False
                   - Interleaved (L1/DRAM), Height Sharded (L1)
                   - Interleaved (L1/DRAM)
-                * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0=True
                   - Interleaved (L1/DRAM), Width Sharded (L1)
                   - Interleaved (L1/DRAM), Width Sharded (L1)
 
