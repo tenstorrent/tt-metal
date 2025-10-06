@@ -306,6 +306,10 @@ function renderErrorsTable(errorSnippets) {
     // HTML escape the content
     const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     const jobEsc = escapeHtml(jobDisplay).replace(/\r?\n/g, ' ⇥ ');
+
+
+    // THE FOLLOWING SECTION IS PURELY FOR DISPLAY AESTHETICS. NO IMPORTANT LOGIC IS HERE
+    // ========================================================
     // Build a forced two-line HTML for the job label by inserting a <br/> near the midpoint.
     // Preference: split at '/' boundary; fallback to nearest space; otherwise hard split at midpoint.
     let jobHtml = jobEsc;
@@ -378,6 +382,7 @@ function renderErrorsTable(errorSnippets) {
     const maxCh = 88; // upper bound to avoid crowding other columns
     return Math.max(minCh, Math.min(maxCh, est));
   })();
+  // ========================================================
 
   return [
     '<table style="table-layout: auto; width: 100%;">',
@@ -425,23 +430,24 @@ function renderCommitsTable(commits) {
   ].join('\n');
 }
 
-function renderRawCommitUrlsTable(commits) {
-  if (!Array.isArray(commits) || commits.length === 0) {
-    return '_None_';
-  }
-  const rows = commits.map(c => {
-    const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : '');
-    // Wrap the URL in backticks to avoid GitHub auto-shortening to repo@shortSHA
-    // This renders the full raw URL text without hyperlinking
-    return `| \`${url}\` |`;
-  }).join('\n');
-  return [
-    '| URL |',
-    '|-----|',
-    rows,
-    ''
-  ].join('\n');
-}
+// I'm keeping this because it's still useful for debugging
+// function renderRawCommitUrlsTable(commits) {
+//   if (!Array.isArray(commits) || commits.length === 0) {
+//     return '_None_';
+//   }
+//   const rows = commits.map(c => {
+//     const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : '');
+//     // Wrap the URL in backticks to avoid GitHub auto-shortening to repo@shortSHA
+//     // This renders the full raw URL text without hyperlinking
+//     return `| \`${url}\` |`;
+//   }).join('\n');
+//   return [
+//     '| URL |',
+//     '|-----|',
+//     rows,
+//     ''
+//   ].join('\n');
+// }
 
 /**
  * Fetches PR information associated with a commit.
@@ -478,7 +484,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
     let snippets = [];
 
     // Helper: filter out generic exit-code snippets when a job has more specific errors
-    const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(s.trim());
+    const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(s.trim()); // this usually has no meaningful information because a previous error that was already registered just caused this one to appear
     const filterGenericExitSnippets = (arr) => {
       try {
         const byJob = new Map();
@@ -489,11 +495,11 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
         }
         const out = [];
         for (const [job, list] of byJob.entries()) {
-          const hasNonGeneric = list.some(sn => !isGenericExit(sn && sn.snippet));
+          const hasNonGeneric = list.some(sn => !isGenericExit(sn && sn.snippet)); // test to see if there is a non-generic exit snippet
           if (hasNonGeneric) {
-            for (const sn of list) { if (!isGenericExit(sn && sn.snippet)) out.push(sn); }
+            for (const sn of list) { if (!isGenericExit(sn && sn.snippet)) out.push(sn); } // if there is a non-generic exit snippet, add it to the output
           } else {
-            out.push(...list);
+            out.push(...list); // if there is no non-generic exit snippet, add all the snippets to the output (no point in filtering)
           }
         }
         return out;
@@ -514,7 +520,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
           core.info(`[GTEST] Jobs detected: ${jobs.length}`);
           const out = [];
           // Helper to strip ANSI color codes and other escape sequences
-          const stripAnsi = (s) => typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*m/g, '') : s;
+          const stripAnsi = (s) => typeof s === 'string' ? s.replace(/\x1b\[[0-9;]*m/g, '') : s; // this is probably unnecessary but no harm in doing it
 
           for (const job of jobs) {
             const jobName = (job && job.name) ? String(job.name) : 'gtest';
@@ -943,6 +949,7 @@ async function generateSummaryBox(grouped, github, context) {
     const workflowLink = getWorkflowLink(context, runs[0]?.path); // get the link to the workflow page that lists all the runs
     const runInfo = await getLastRunInfo(mainBranchRuns, github, context); // get the last run info for the workflow
 
+    // basically, create the statistics table for the workflow. these are the columns that are displayed in the summary box.
     const row = `<tr>
 <td><a href="${escapeHtml(workflowLink)}">${escapeHtml(name)}</a></td>
 <td>${escapeHtml(stats.eventTypes || 'unknown')}</td>
@@ -1070,14 +1077,14 @@ function loadCommitsIndex(commitsPath) {
   return undefined;
 }
 
-function listCommitsBetweenOffline(context, startShaExclusive, endShaInclusive) {
+function listCommitsBetweenOffline(context, startShaExclusive, endShaInclusive) { // get all the commits between two SHAs on the default branch (main), inclusive of endSha
   if (!Array.isArray(__commitsIndex) || __commitsIndex.length === 0) return [];
   const commits = __commitsIndex;
   const startIdx = commits.findIndex(c => c.sha === startShaExclusive);
   const endIdx = commits.findIndex(c => c.sha === endShaInclusive);
   if (endIdx === -1) return [];
   // We want commits strictly after start and up to and including end
-  const from = startIdx === -1 ? 0 : (startIdx + 1);
+  const from = startIdx === -1 ? 0 : (startIdx + 1); // basically, if the start index is -1, then we start from the beginning of the commits array
   const to = endIdx;
   const slice = commits.slice(from, to + 1);
   return slice.map(c => ({
