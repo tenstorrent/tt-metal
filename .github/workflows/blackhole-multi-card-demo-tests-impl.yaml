@@ -115,6 +115,8 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
   multi-card-demo-tests-large:
     if: ${{ inputs.num_devices >= 4 }}
     strategy:
@@ -194,3 +196,5 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()
