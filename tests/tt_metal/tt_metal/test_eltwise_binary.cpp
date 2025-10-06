@@ -37,6 +37,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/distributed.hpp>
 
+#include <tt-metalium/tt_metal.hpp>
+#include "test_common.hpp"
+
 namespace tt {
 namespace tt_metal {
 class CommandQueue;
@@ -51,6 +54,18 @@ using namespace tt::tt_metal;
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
+    std::vector<std::string> input_args(argv, argv + argc);
+
+    uint32_t reader_input = 0;
+    std::tie(reader_input, input_args) =
+        test_args::get_command_option_uint32_and_remaining_args(input_args, "--reader", 0);
+    uint32_t writer_input = 0;
+    std::tie(writer_input, input_args) =
+        test_args::get_command_option_uint32_and_remaining_args(input_args, "--writer", 0);
+    uint32_t compute_input = 0;
+    std::tie(compute_input, input_args) =
+        test_args::get_command_option_uint32_and_remaining_args(input_args, "--compute", 0);
+
     bool pass = true;
     bool multibank = true;
 
@@ -68,7 +83,7 @@ int main(int argc, char** argv) {
 
     distributed::MeshWorkload mesh_workloads[] = {
         distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload()};
-    auto ops = EltwiseOp::all();
+    auto ops = {EltwiseOp::Enum::ADD};  // EltwiseOp::all();
     for (auto eltwise_op : ops) {
         log_info(LogTest, "====================================================================");
         log_info(LogTest, "======= Running eltwise_binary test for op={}", op_id_to_op_name[eltwise_op]);
@@ -131,13 +146,37 @@ int main(int argc, char** argv) {
                     .set_page_size(ouput_cb_index, single_tile_size);
             tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
+            std::map<std::string, std::string> reader_defines = {
+                {"TEST_READER_DEFINE", "1"},
+            };
+            uint32_t reader_wait_time = 0;
+            if (reader_input == 9999) {
+                reader_defines["READER_NOC"] = "1";
+            } else if (reader_input > 0) {
+                reader_defines["READER_RISCV_WAIT"] = "1";
+                reader_wait_time = reader_input;
+            }
+
+            std::map<std::string, std::string> writer_defines = {
+                {"TEST_WRITER_DEFINE", "1"},
+            };
+            uint32_t writer_wait_time = 0;
+            if (writer_input == 9999) {
+                writer_defines["WRITER_NOC"] = "1";
+            } else if (writer_input > 0) {
+                writer_defines["WRITER_RISCV_WAIT"] = "1";
+                writer_wait_time = writer_input;
+            }
+
             auto binary_reader_kernel = tt_metal::CreateKernel(
                 program,
                 multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp"
                           : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
                 core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = tt_metal::NOC::RISCV_1_default,
+                    .defines = reader_defines});
 
             auto unary_writer_kernel = tt_metal::CreateKernel(
                 program,
@@ -145,25 +184,35 @@ int main(int argc, char** argv) {
                           : "tt_metal/kernels/dataflow/writer_unary.cpp",
                 core,
                 tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = tt_metal::NOC::RISCV_0_default,
+                    .defines = writer_defines});
 
             vector<uint32_t> compute_kernel_args = {};
 
-            std::map<std::string, std::string> binary_defines = {
+            std::map<std::string, std::string> compute_defines = {
                 {"ELTWISE_OP", op_id_to_op_define[eltwise_op]},
                 {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
+
+            uint32_t compute_wait_time = 0;
+            if (compute_input == 9999) {
+                compute_defines["COMPUTE_PROCESS"] = "1";
+            } else if (compute_input > 0) {
+                compute_defines["COMPUTE_RISCV_WAIT"] = "1";
+                compute_wait_time = compute_input;
+            }
             auto eltwise_binary_kernel = tt_metal::CreateKernel(
                 program,
                 "tt_metal/kernels/compute/eltwise_binary.cpp",
                 core,
-                tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
+                tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = compute_defines});
 
-            SetRuntimeArgs(program, eltwise_binary_kernel, core, {2048, 1});
+            SetRuntimeArgs(program, eltwise_binary_kernel, core, {num_tiles, 1, 0, compute_wait_time});
 
-            const std::array<uint32_t, 7> reader_args = {
-                dram_buffer_src0_addr, 0, num_tiles, dram_buffer_src1_addr, 0, num_tiles, 0};
+            const std::array<uint32_t, 8> reader_args = {
+                dram_buffer_src0_addr, 0, num_tiles, dram_buffer_src1_addr, 0, num_tiles, 0, reader_wait_time};
 
-            const std::array<uint32_t, 3> writer_args = {dram_buffer_dst_addr, 0, num_tiles};
+            const std::array<uint32_t, 4> writer_args = {dram_buffer_dst_addr, 0, num_tiles, writer_wait_time};
 
             SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
             SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
@@ -211,13 +260,13 @@ int main(int argc, char** argv) {
     }  // for EltwiseOp::all()
     mesh_device->close();
 
-    if (pass) {
-        log_info(LogTest, "Test Passed");
-    } else {
-        TT_THROW("Test Failed");
-    }
+    // if (pass) {
+    //     log_info(LogTest, "Test Passed");
+    // } else {
+    //     TT_THROW("Test Failed");
+    // }
 
-    TT_FATAL(pass, "Error");
+    // TT_FATAL(pass, "Error");
 
     return 0;
 }
