@@ -133,6 +133,7 @@ class ttnn_osa_module:
 
         if self.depthwise and self.isReduced:
             x = self.conv_reduction(x)
+
         for i, layer in enumerate(self.layers):
             module_name_with_i = "{}_{}".format(self.module_name, i)
 
@@ -152,11 +153,18 @@ class ttnn_osa_module:
                 x = ttnn.relu(x)
                 if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
                     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                # x = self.layers[i](device, x)
             else:
                 x = layer(device, x)
-                if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-                    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            if hasattr(x, "memory_config") and x.memory_config().is_sharded():
+                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             output.append(x)
+        for idx in range(len(output)):
+            if hasattr(output[idx], "memory_config") and output[idx].memory_config().is_sharded():
+                output[idx] = ttnn.to_memory_config(output[idx], ttnn.DRAM_MEMORY_CONFIG)
+
         x = ttnn.concat(output, dim=3)
 
         for y in output:
@@ -251,13 +259,25 @@ class ttnn_osa_stage:
 
     def __call__(self, device, x):
         if self.pooling is True:
-            x = ttnn.permute(x, (0, 3, 1, 2))
-            x = ttnn.to_torch(x)
-            x = F.max_pool2d(x, kernel_size=3, stride=2, ceil_mode=True)
-            x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16)
-            if x.get_layout() != ttnn.TILE_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.permute(x, (0, 2, 3, 1))
+            # x = ttnn.permute(x, (0, 3, 1, 2))
+            # x = ttnn.to_torch(x)
+            # x = F.max_pool2d(x, kernel_size=3, stride=2, ceil_mode=True)
+            # x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16)
+            # if x.get_layout() != ttnn.TILE_LAYOUT:
+            #     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+            # x = ttnn.permute(x, (0, 2, 3, 1))
+            x = ttnn.max_pool2d(
+                input_tensor=x,
+                batch_size=x.shape[0],
+                input_h=x.shape[1],
+                input_w=x.shape[2],
+                channels=x.shape[3],
+                kernel_size=[3, 3],
+                stride=[2, 2],
+                padding=[0, 0],
+                dilation=[1, 1],
+                ceil_mode=True,
+            )
 
         for module_name in self.blocks:
             module = getattr(self, module_name)  # Retrieve the block by name

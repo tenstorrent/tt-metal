@@ -286,7 +286,7 @@ def test_petr_without_saved_input(device, reset_seeds):
 
     img_metas_dict = dict()
     img_metas_dict["lidar2cam"] = np.random.randn(6, 4, 4)
-    img_metas_dict["img_shape"] = (900, 600)
+    img_metas_dict["img_shape"] = (320, 800)
     img_metas_dict["pad_shape"] = (320, 800)
     img_metas_dict["box_type_3d"] = LiDARInstance3DBoxes
     img_metas_dict["cam2img"] = [
@@ -310,6 +310,8 @@ def test_petr_without_saved_input(device, reset_seeds):
     ttnn_inputs["imgs"] = ttnn.from_torch(inputs["imgs"], device=device)
 
     ttnn_batch_img_metas = modified_batch_img_metas.copy()
+    print("ttnn_batch_img_metas", ttnn_batch_img_metas[0]["img_shape"])
+    print("modified_batch_img_metas", modified_batch_img_metas[0]["img_shape"])
     output = torch_model.predict(inputs, modified_batch_img_metas)
 
     parameters_petr_head = preprocess_model_parameters(
@@ -372,7 +374,7 @@ def test_petr_without_saved_input(device, reset_seeds):
 
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas)
 
-    # print("output", ttnn_output)
+    print("output", ttnn_output)
     assert_with_pcc(
         output[0]["pts_bbox"]["bboxes_3d"].tensor, ttnn_output[0]["pts_bbox"]["bboxes_3d"].tensor, pcc=0.99
     )  # 0.05455256429036736

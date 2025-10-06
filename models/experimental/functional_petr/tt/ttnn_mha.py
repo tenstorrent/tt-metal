@@ -136,8 +136,8 @@ class PETRMultiheadAttention:
         # TTNN Softmax
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 

@@ -145,6 +145,8 @@ class ttnn_PETR:
         Returns:
             batch_input_metas (list[dict]): Meta info with lidar2img added
         """
+        # print("img.shape", img.shape)
+
         for meta in batch_input_metas:
             lidar2img_rts = []
             # obtain lidar to image transformation matrix
@@ -156,7 +158,15 @@ class ttnn_PETR:
                 lidar2img_rt = viewpad @ lidar2cam_rt
                 lidar2img_rts.append(lidar2img_rt)
             meta["lidar2img"] = lidar2img_rts
-            img_shape = meta["img_shape"][:3]
+            print("meta[img_shape]", meta["img_shape"])
+            # If meta["img_shape"] is a list of tuples and you only need the first tuple:
+            img_shape = meta["img_shape"][0] if isinstance(meta["img_shape"], list) else meta["img_shape"]
+            # meta["img_shape"] = img_shape
             meta["img_shape"] = img_shape * img.shape[1]
+            print("meta[img_shape]", meta["img_shape"])
+            print("img_shape::", img_shape)
+            print("img.shape::", img[0].shape)
+            # img = img[1:]
+            print("img.shape::", img.shape)
 
         return batch_input_metas

@@ -154,6 +154,7 @@ class PETR(nn.Module):
         Returns:
             batch_input_metas (list[dict]): Meta info with lidar2img added
         """
+        print("img.shapetorch", img.shape)
         for meta in batch_input_metas:
             lidar2img_rts = []
             # obtain lidar to image transformation matrix
@@ -170,7 +171,12 @@ class PETR(nn.Module):
                 # and LoadMultiViewImageFromMultiSweepsFiles.
                 lidar2img_rts.append(lidar2img_rt)
             meta["lidar2img"] = lidar2img_rts
+            print("meta[img_shape]", meta["img_shape"])
             img_shape = meta["img_shape"][:3]
             meta["img_shape"] = [img_shape] * len(img[0])
+            # meta["img_shape"] = [img_shape] * len(img[0])
+            print("meta[img_shape]", meta["img_shape"])
+            print("img_shape::", img_shape)
+            print("img[0].shape::", img[0].shape)
 
         return batch_input_metas
