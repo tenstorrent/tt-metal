@@ -564,16 +564,17 @@ void py_module(py::module& module) {
                 * - MatmulMultiCoreReuseMultiCastProgramConfig
                   - Interleaved (L1/DRAM), Block Sharded (L1)
                   - Interleaved (L1/DRAM)
-                * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0=False
+                * - MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)
+                  - Interleaved (L1/DRAM), Height Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=True)
                   - Interleaved (L1/DRAM), Height Sharded (L1)
                   - Interleaved (L1/DRAM)
-                * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0=True
-                  - Interleaved (L1/DRAM), Width Sharded (L1)
-                  - Interleaved (L1/DRAM), Width Sharded (L1)
 
 
-            For :class:`MatmulMultiCoreReuseMultiCastProgramConfig`, a special case exists when :attr:`input_tensor_a` is single column (height sharded or interleaved) and :attr:`input_tensor_b` is a single row (width sharded or interleaved).
-            This setup only supports row major orientation without transpose multicast.
 
             When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
 
