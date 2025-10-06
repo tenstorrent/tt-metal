@@ -74,10 +74,7 @@ enum class FabricApiType : uint8_t {
 // Appends connection manager RT args for one or more routes.
 // next_hop_nodes: vector of next-hop nodes, one per route.
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
-// api_type:
-//   - Linear: No direction restrictions
-//   - Mesh: Auto-detect mode. If any N/S connection exists, enables N/S direction
-//                             validation (no N+S mixing). Does not block E/W-only connections.
+// api_type: set envvar for the kernel to indicate which fabric API type being used. Linear or Mesh.
 void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
