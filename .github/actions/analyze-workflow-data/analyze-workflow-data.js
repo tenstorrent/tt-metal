@@ -10,8 +10,6 @@ const core = require('@actions/core'); // Core utilities for I/O
 const github = require('@actions/github'); // GitHub API client
 const fs = require('fs'); // File system operations
 const path = require('path'); // File path utilities
-const os = require('os'); // Operating system utilities
-const { execFileSync } = require('child_process'); // Used to run external commands
 
 // Constants
 const DEFAULT_LOOKBACK_DAYS = 15;
@@ -863,7 +861,7 @@ function findGoodBadCommits(scheduledMainRuns, context) {
  * @param {object} context - GitHub Actions context
  * @returns {Promise<object>} Object containing run information
  */
-async function getLastRunInfo(mainBranchRuns, github, context) {
+async function getLastRunInfo(mainBranchRuns, context) {
   const lastMainRun = mainBranchRuns[0];
   if (!lastMainRun) { // if there is no last main run, return the empty values
     return {
@@ -877,7 +875,7 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
     };
   }
 
-  const prInfo = await fetchPRInfo(github, context, lastMainRun.head_sha); // fetch the PR info for the last main run
+  const prInfo = await fetchPRInfo(null, context, lastMainRun.head_sha); // fetch the PR info for the last main run
   // Current approach: filter by event type
   const mainRuns = mainBranchRuns.filter(r => r.event === lastMainRun.event || r.event === 'workflow_dispatch'); // get the relevant main runs for finding good and bad commits
   // Alternative approach: include all runs on main branch
@@ -903,7 +901,7 @@ async function getLastRunInfo(mainBranchRuns, github, context) {
  * @param {object} context - GitHub Actions context
  * @returns {Promise<string>} Markdown table for all workflows
  */
-async function generateSummaryBox(grouped, github, context) {
+async function generateSummaryBox(grouped, context) {
   const rows = [];
   const escapeHtml = (str) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 
@@ -928,7 +926,7 @@ async function generateSummaryBox(grouped, github, context) {
     }
 
     const workflowLink = getWorkflowLink(context, runs[0]?.path); // get the link to the workflow page that lists all the runs
-    const runInfo = await getLastRunInfo(mainBranchRuns, github, context); // get the last run info for the workflow
+    const runInfo = await getLastRunInfo(mainBranchRuns, context); // get the last run info for the workflow
 
     // basically, create the statistics table for the workflow. these are the columns that are displayed in the summary box.
     const row = `<tr>
@@ -972,12 +970,12 @@ async function generateSummaryBox(grouped, github, context) {
  * @param {object} context - GitHub Actions context
  * @returns {Promise<string>} Complete markdown report
  */
-async function buildReport(grouped, github, context) {
+async function buildReport(grouped, context) {
   const days = parseInt(core.getInput('days') || DEFAULT_LOOKBACK_DAYS, 10); // get the number of days to look back for workflow data
   const timestamp = new Date().toISOString(); // get the timestamp for the report
   return [
     `# Workflow Summary (Last ${days} Days) - Generated at ${timestamp}\n`,
-    await generateSummaryBox(grouped, github, context),
+    await generateSummaryBox(grouped, context),
     '\n## Column Descriptions\n',
     '<p>A unique run represents a single workflow execution, which may have multiple retry attempts. For example, if a workflow fails and is retried twice, this counts as one unique run with three attempts (initial run + two retries).</p>\n',
     '\n### Success Rate Calculations\n',
@@ -1176,11 +1174,8 @@ async function run() {
       }
     }
 
-    // Create authenticated Octokit client for PR info
-    const octokit = github.getOctokit(core.getInput('GITHUB_TOKEN', { required: true }));
-
     // Generate primary report
-    const mainReport = await buildReport(filteredGrouped, octokit, github.context);
+    const mainReport = await buildReport(filteredGrouped, github.context);
 
     // END OF BASIC ANALYZE STEP
 
