@@ -1,8 +1,18 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import ttnn
 from typing import List
 from models.experimental.transfuser.tt.bottleneck import TTRegNetBottleneck
+
+
+shard_dict = {
+    # stage_name : shard_layout
+    "layer1": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,  #
+    "layer2": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,  #
+    "layer3": ttnn.TensorMemoryLayout.WIDTH_SHARDED,  #
+    "layer4": ttnn.TensorMemoryLayout.WIDTH_SHARDED,  #
+}
 
 
 class Ttstages:
@@ -11,10 +21,10 @@ class Ttstages:
         parameters,
         stride,
         model_config,
+        stage_name,
         # layer_optimisations=neck_optimisations,
     ) -> None:
         self.inplanes = 32
-
         self.layer = self._make_layer(
             parameters=parameters,
             planes=72,
@@ -22,6 +32,7 @@ class Ttstages:
             stride=stride,
             groups=3,
             model_config=model_config,
+            stage_name=stage_name,
         )
 
     def _make_layer(
@@ -32,9 +43,12 @@ class Ttstages:
         stride: int,
         groups: int = 1,
         model_config=None,
+        stage_name=None,
     ) -> List[TTRegNetBottleneck]:
         layers = []
         self.inplanes = 32
+
+        shard_layout = shard_dict[stage_name]
 
         # First block (may have downsample)
         downsample = stride != 1 or self.inplanes != planes
@@ -45,6 +59,7 @@ class Ttstages:
                 stride=stride,
                 downsample=downsample,
                 groups=groups,
+                shard_layout=shard_layout,
             )
         )
         self.inplanes = planes
@@ -59,6 +74,7 @@ class Ttstages:
                     stride=1,
                     downsample=False,
                     groups=groups,
+                    shard_layout=shard_layout,
                 )
             )
 

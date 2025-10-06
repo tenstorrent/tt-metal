@@ -14,6 +14,7 @@ class TTRegNetBottleneck:
         stride=1,
         downsample=False,
         groups=1,
+        shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
     ):
         self.stride = stride
         self.downsample = downsample
@@ -28,7 +29,7 @@ class TTRegNetBottleneck:
             parameters=parameters["conv1"],
             kernel_fidelity=model_config,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=shard_layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             deallocate_activation=False,
             reallocate_halo_output=True,
@@ -49,7 +50,7 @@ class TTRegNetBottleneck:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             groups=groups,
             act_block_h=32,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=shard_layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             deallocate_activation=True,
             reallocate_halo_output=True,
@@ -103,7 +104,7 @@ class TTRegNetBottleneck:
             parameters=parameters["conv3"],
             kernel_fidelity=model_config,
             activation=None,
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            shard_layout=shard_layout,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             deallocate_activation=True,
             reallocate_halo_output=True,
@@ -122,7 +123,7 @@ class TTRegNetBottleneck:
                 parameters=parameters["downsample"],
                 kernel_fidelity=model_config,
                 activation=None,
-                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                shard_layout=shard_layout,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 deallocate_activation=True,
                 reallocate_halo_output=True,

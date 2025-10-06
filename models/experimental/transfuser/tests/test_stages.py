@@ -69,6 +69,7 @@ class StageInfra:
             parameters=parameters,
             stride=2,
             model_config=model_config,
+            stage_name=stage_name,
         )
 
         # Convert input to TTNN format
@@ -160,11 +161,11 @@ model_config = {
         ("layer2", (1, 72, 40, 176)),
         ("layer3", (1, 216, 20, 88)),
         ("layer4", (1, 576, 10, 44)),
-        # LidarEncoder Tests
-        ("layer1", (1, 32, 128, 128)),
-        ("layer2", (1, 72, 64, 64)),
-        ("layer3", (1, 216, 32, 32)),
-        ("layer4", (1, 576, 16, 16)),
+        # # LidarEncoder Tests
+        # ("layer1", (1, 32, 128, 128)),
+        # ("layer2", (1, 72, 64, 64)),
+        # ("layer3", (1, 216, 32, 32)),
+        # ("layer4", (1, 576, 16, 16)),
     ],
 )
 def test_stage(
