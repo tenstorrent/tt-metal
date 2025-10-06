@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -144,7 +143,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
         // issue more reads before calling barrier
         uint32_t num_sticks_per_core_read = 0, num_read_per_barrier = 0;
         if (num_sticks_per_core != 0) {
-            auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
+            auto num_sticks_per_core_pad32 = num_sticks_per_core + ((32 - num_sticks_per_core % 32) % 32);
             num_sticks_per_core_read =
                 tt::tt_metal::merge_num_sticks_to_read(num_sticks_per_core_pad32, input_row_size_bytes, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
@@ -275,7 +274,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     log_debug(tt::LogOp, "Output Buffer adddress: {}", output_buffer->address());
     std::vector<uint32_t> common_writer_kernel_args = {
-        output_buffer->address() + output_tensor_start[-1] * output_tensor.element_size(),
+        output_buffer->address() + (output_tensor_start[-1] * output_tensor.element_size()),
         output_row_size_bytes,
         input_row_size_bytes,
         input_row_size_bytes_offset,
@@ -511,7 +510,7 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     log_debug(tt::LogOp, "Slice Write Output Shape: {}", output_shape);
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
     auto shard_spec = input_tensor.shard_spec().value();
     auto input_cores = shard_spec.grid;
@@ -684,7 +683,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     log_debug(tt::LogOp, "Slice Write Input Shape : {} ,Actual Input Shape: {}", input_shape, input_shape);

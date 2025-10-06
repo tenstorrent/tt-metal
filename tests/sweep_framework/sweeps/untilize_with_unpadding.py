@@ -14,7 +14,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -57,12 +57,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 def untilize_with_unpadding(x, output_tensor_end, *args, **kwargs):
     untilized = untilize_util(x)
-    unpad = untilized[
-        : output_tensor_end[0] + 1,
-        : output_tensor_end[1] + 1,
-        : output_tensor_end[2] + 1,
-        : output_tensor_end[3] + 1,
-    ]
+    # Build slice dynamically based on the number of dimensions
+    slices = tuple(slice(None, end + 1) for end in output_tensor_end)
+    unpad = untilized[slices]
     return unpad
 
 

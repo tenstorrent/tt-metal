@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import tt2torch_tensor, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
@@ -167,7 +167,6 @@ def run_test_distributed_layernorm_with_program_cache_and_checks(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("iterations", [2], ids=["loops2"])
 @pytest.mark.parametrize("dtype", dtypes, ids=dtype_ids)
 @pytest.mark.parametrize("stats_dtype", stats_dtypes, ids=stats_dtypes_ids)
@@ -182,7 +181,6 @@ def test_distributed_layernorm_with_program_cache(
     )
 
 
-@skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("iterations", [2], ids=["loops2"])
 @pytest.mark.parametrize("dtype", dtypes, ids=dtype_ids)
 @pytest.mark.parametrize("stats_dtype", stats_dtypes, ids=stats_dtypes_ids)

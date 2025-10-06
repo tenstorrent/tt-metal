@@ -11,9 +11,9 @@
 
 #include <sys/types.h>
 #include <cstddef>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/utils.hpp>
+#include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -167,8 +167,7 @@ public:
         supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
         dev_msgs_factory_(dev_msgs_factory) {}
 
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalL1MemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalL1MemAddrType addr_type) const;
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
@@ -178,15 +177,14 @@ public:
     const dev_msgs::Factory& get_dev_msgs_factory() const;
 };
 
-template <typename T>
-inline T HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalL1MemAddrType>(addr_type);
+inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_bases_.size());
-    return reinterpret_cast<T>(this->mem_map_bases_[index]);
+    return this->mem_map_bases_[index];
 }
 
 inline uint32_t HalCoreInfoType::get_dev_size(HalL1MemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalL1MemAddrType>(addr_type);
+    uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
     TT_ASSERT(index < this->mem_map_sizes_.size());
     return this->mem_map_sizes_[index];
 }
@@ -385,7 +383,7 @@ public:
     HalProgrammableCoreType get_programmable_core_type(uint32_t core_type_index) const;
     uint32_t get_programmable_core_type_index(HalProgrammableCoreType programmable_core_type_index) const;
     CoreType get_core_type(uint32_t programmable_core_type_index) const;
-    uint32_t get_processor_classes_count(std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const;
+    uint32_t get_processor_classes_count(HalProgrammableCoreType programmable_core_type) const;
     uint32_t get_processor_types_count(
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
     // Query device features. Returns true if the feature is enabled.
@@ -395,15 +393,11 @@ public:
     // This value can be found in the ELF file.
     bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
-    template <typename T = DeviceAddr>
-    T get_dev_addr(uint32_t programmable_core_type_index, HalL1MemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
     uint32_t get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
 
     // Overloads for Dram Params
-    template <typename T = DeviceAddr>
-    T get_dev_addr(HalDramMemAddrType addr_type) const;
+    DeviceAddr get_dev_addr(HalDramMemAddrType addr_type) const;
     uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
 
     uint32_t get_alignment(HalMemType memory_type) const;
@@ -486,18 +480,8 @@ public:
 
 inline uint32_t Hal::get_programmable_core_type_count() const { return core_info_.size(); }
 
-inline uint32_t Hal::get_processor_classes_count(
-    std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type) const {
-    // TODO extract as reusable function like `to_index(programmable_core_type)`
-    uint32_t index = std::visit(
-        ttsl::overloaded{
-            [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
-                return utils::underlying_type(core_type_specifier);
-            },
-            [](uint32_t core_type_specifier) { return core_type_specifier; },
-        },
-        programmable_core_type);
-    TT_ASSERT(index < this->core_info_.size());
+inline uint32_t Hal::get_processor_classes_count(HalProgrammableCoreType programmable_core_type) const {
+    uint32_t index = get_programmable_core_type_index(programmable_core_type);
     return this->core_info_[index].get_processor_classes_count();
 }
 
@@ -506,7 +490,7 @@ inline uint32_t Hal::get_processor_types_count(
     uint32_t index = std::visit(
         ttsl::overloaded{
             [](HalProgrammableCoreType core_type_specifier) -> uint32_t {
-                return utils::underlying_type(core_type_specifier);
+                return ttsl::as_underlying_type(core_type_specifier);
             },
             [](uint32_t core_type_specifier) { return core_type_specifier; },
         },
@@ -521,28 +505,17 @@ inline HalProgrammableCoreType Hal::get_programmable_core_type(uint32_t core_typ
 
 inline CoreType Hal::get_core_type(uint32_t core_type_index) const { return core_info_[core_type_index].core_type_; }
 
-template <typename T>
-inline T Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
+inline DeviceAddr Hal::get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     TT_FATAL(
         !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
         "Attempting to read addr of unreserved memory");
-    return this->core_info_[index].get_dev_addr<T>(addr_type);
-}
-
-template <typename T>
-inline T Hal::get_dev_addr(uint32_t programmable_core_type_index, HalL1MemAddrType addr_type) const {
-    TT_ASSERT(programmable_core_type_index < this->core_info_.size());
-    TT_FATAL(
-        !(get_programmable_core_type(programmable_core_type_index) == HalProgrammableCoreType::TENSIX &&
-          addr_type == HalL1MemAddrType::UNRESERVED),
-        "Attempting to read addr of unreserved memory");
-    return this->core_info_[programmable_core_type_index].get_dev_addr<T>(addr_type);
+    return this->core_info_[index].get_dev_addr(addr_type);
 }
 
 inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalProgrammableCoreType>(programmable_core_type);
+    uint32_t index = ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type);
     TT_ASSERT(index < this->core_info_.size());
     TT_FATAL(
         !(programmable_core_type == HalProgrammableCoreType::TENSIX && addr_type == HalL1MemAddrType::UNRESERVED),
@@ -553,39 +526,38 @@ inline uint32_t Hal::get_dev_size(HalProgrammableCoreType programmable_core_type
     return this->core_info_[index].get_dev_size(addr_type);
 }
 
-template <typename T>
-inline T Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalDramMemAddrType>(addr_type);
+inline DeviceAddr Hal::get_dev_addr(HalDramMemAddrType addr_type) const {
+    uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_bases_.size());
-    return reinterpret_cast<T>(this->dram_bases_[index]);
+    return this->dram_bases_[index];
 }
 
 inline uint32_t Hal::get_dev_size(HalDramMemAddrType addr_type) const {
-    uint32_t index = utils::underlying_type<HalDramMemAddrType>(addr_type);
+    uint32_t index = ttsl::as_underlying_type<HalDramMemAddrType>(addr_type);
     TT_ASSERT(index < this->dram_sizes_.size());
     return this->dram_sizes_[index];
 }
 
 inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
-    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_.size());
     return this->mem_alignments_[index];
 }
 
 inline uint32_t Hal::get_read_alignment(HalMemType memory_type) const {
-    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_read_alignments_.size());
     return this->mem_read_alignments_[index];
 }
 
 inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
-    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_write_alignments_.size());
     return this->mem_write_alignments_[index];
 }
 
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
-    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
     return this->mem_alignments_with_pcie_[index];
 }
@@ -600,11 +572,11 @@ inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_ty
 
 inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
     const uint32_t num_processor_classes =
-        this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+        this->core_info_[ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type)]
             .get_processor_classes_count();
     uint32_t num_riscs = 0;
     for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
-        num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+        num_riscs += this->core_info_[ttsl::as_underlying_type<HalProgrammableCoreType>(programmable_core_type)]
                          .get_processor_types_count(processor_class_idx);
     }
     TT_ASSERT(num_riscs <= max_processors_per_core_);
@@ -637,9 +609,9 @@ inline bool Hal::get_supports_eth_fw_mailbox() const {
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
-    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
-    return this->core_info_[index].eth_fw_mailbox_msgs_[utils::underlying_type<FWMailboxMsg>(msg)];
+    return this->core_info_[index].eth_fw_mailbox_msgs_[ttsl::as_underlying_type<FWMailboxMsg>(msg)];
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg_index) const {
@@ -647,14 +619,14 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_addr(int mailbox_index, uint32_t arg
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
-    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     // -1 for the message
     return (this->core_info_[index].get_dev_size(HalL1MemAddrType::ETH_FW_MAILBOX) / sizeof(uint32_t)) - 1;
 }
 
 inline uint32_t Hal::get_eth_fw_mailbox_address(int mailbox_index) const {
-    const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
+    const auto index = ttsl::as_underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
     // Index 0 is the offset of the mailbox message
     return get_eth_fw_mailbox_arg_addr(mailbox_index, 0) - sizeof(uint32_t);
@@ -669,6 +641,17 @@ inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType
         case HalProgrammableCoreType::IDLE_ETH:
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_IDLE_ETH_KERNEL_CONFIG_BUFFER);
         default: TT_THROW("Invalid HalProgrammableCoreType {}", static_cast<int>(programmable_core_type));
+    }
+}
+
+// Core type conversion utility
+constexpr HalProgrammableCoreType hal_programmable_core_type_from_core_type(CoreType core_type) {
+    switch (core_type) {
+        case CoreType::WORKER:
+        case CoreType::TENSIX: return HalProgrammableCoreType::TENSIX;
+        case CoreType::ACTIVE_ETH: return HalProgrammableCoreType::ACTIVE_ETH;
+        case CoreType::IDLE_ETH: return HalProgrammableCoreType::IDLE_ETH;
+        default: TT_FATAL(false, "CoreType is not recognized by the HAL in {}", __FUNCTION__);
     }
 }
 

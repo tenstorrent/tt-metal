@@ -14,7 +14,7 @@ public:
     TensorTopology() :
         distribution_shape_(tt::tt_metal::distributed::MeshShape{1}),
         placements_({tt::tt_metal::distributed::MeshMapperConfig::Replicate{}}),
-        mesh_coords_({tt::tt_metal::distributed::MeshCoordinate{0}}) {}
+        mesh_coords_({tt::tt_metal::distributed::MeshCoordinate{0, 0}}) {}
 
     TensorTopology(
         tt::tt_metal::distributed::MeshShape distribution_shape,
@@ -23,6 +23,15 @@ public:
         distribution_shape_(std::move(distribution_shape)),
         placements_(std::move(placements)),
         mesh_coords_(std::move(mesh_coords)) {}
+
+    // Creates a tensor topology for a fully replicated tensor with 1D distribution shape.
+    static TensorTopology create_fully_replicated_tensor_topology(
+        const tt::tt_metal::distributed::MeshShape& mesh_shape);
+
+    // Creates a tensor topology for a sharded tensor with 1D distribution shape.
+    // `shard_dim` is the dimension to shard over (assumes sharded along dim 0 if not provided).
+    static TensorTopology create_sharded_tensor_topology(
+        const tt::tt_metal::distributed::MeshShape& mesh_shape, int shard_dim = 0);
 
     // Returns the shape that the original tensor was sharded over.
     const tt::tt_metal::distributed::MeshShape& distribution_shape() const { return distribution_shape_; }
@@ -52,8 +61,14 @@ public:
 private:
     tt::tt_metal::distributed::MeshShape distribution_shape_;
     tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> placements_;
+
     // Physical device coordinates
     std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords_;
 };
+
+bool operator==(const TensorTopology& lhs, const TensorTopology& rhs);
+bool operator!=(const TensorTopology& lhs, const TensorTopology& rhs);
+
+std::ostream& operator<<(std::ostream& os, const TensorTopology& tensor_topology);
 
 }  // namespace tt::tt_metal

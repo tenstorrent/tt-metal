@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -35,7 +35,6 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace tt {
@@ -106,7 +105,7 @@ void run_single_core_transpose(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 

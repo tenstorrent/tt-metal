@@ -84,8 +84,8 @@ public:
     void add_dispatch_write_linear(
         uint8_t num_mcast_dests,
         uint32_t noc_xy_addr,
-        uint32_t addr,
-        uint32_t data_sizeB,
+        DeviceAddr addr,
+        DeviceAddr data_sizeB,
         const void* data = nullptr,
         uint32_t write_offset_index = 0);
 
@@ -133,6 +133,8 @@ public:
 
     void add_data(const void* data, uint32_t data_size_to_copyB, uint32_t cmd_write_offset_incrementB)
         __attribute((nonnull(2)));
+
+    void align_write_offset();
 
     template <typename PackedSubCmd>
     void add_dispatch_write_packed(

@@ -4,7 +4,7 @@
 
 #include "metal_soc_descriptor.h"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 #include <string>
 
@@ -160,17 +160,6 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         this->dram_view_eth_cores.push_back(eth_dram_cores);
         this->dram_view_worker_cores.push_back(worker_dram_cores);
     }
-}
-
-// UMD expects virtual NOC coordinates for worker cores
-tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const {
-    tt::umd::CoreCoord virtual_coord =
-        translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::NOC0, get_umd_coord_system());
-    return tt_cxy_pair(physical_cxy.chip, virtual_coord.x, virtual_coord.y);
-}
-
-CoordSystem metal_SocDescriptor::get_umd_coord_system() const {
-    return CoordSystem::VIRTUAL;
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {

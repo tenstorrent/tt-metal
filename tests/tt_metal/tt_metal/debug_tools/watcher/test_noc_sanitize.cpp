@@ -39,7 +39,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -110,7 +109,7 @@ void RunTestOnCore(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
@@ -432,7 +431,7 @@ void RunTestIEth(
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
-    constexpr CoreCoord core = {16, 16};
+    constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {

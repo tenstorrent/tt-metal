@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,14 +7,14 @@
 #include <tt-metalium/tt_align.hpp>
 
 #include "dispatch_mem_map.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "control_plane.hpp"
 #include "dispatch_settings.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "utils.hpp"
+#include <tt_stl/enum.hpp>
 
 namespace tt::tt_metal {
 
@@ -55,13 +55,13 @@ uint32_t DispatchMemMap::dispatch_s_buffer_pages() const {
 }
 
 uint32_t DispatchMemMap::get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const {
-    uint32_t index = tt::utils::underlying_type<CommandQueueDeviceAddrType>(device_addr_type);
+    uint32_t index = ttsl::as_underlying_type<CommandQueueDeviceAddrType>(device_addr_type);
     TT_ASSERT(index < this->device_cq_addrs_.size());
     return device_cq_addrs_[index];
 }
 
 uint32_t DispatchMemMap::get_host_command_queue_addr(const CommandQueueHostAddrType& host_addr) const {
-    return tt::utils::underlying_type<CommandQueueHostAddrType>(host_addr) *
+    return ttsl::as_underlying_type<CommandQueueHostAddrType>(host_addr) *
            tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
 }
 
@@ -75,11 +75,12 @@ uint32_t DispatchMemMap::get_dispatch_message_addr_start() const {
     // Address of the first dispatch message entry. Remaining entries are each offset by
     // get_noc_stream_reg_space_size() bytes.
     return tt::tt_metal::MetalContext::instance().hal().get_noc_overlay_start_addr() +
-           tt::tt_metal::MetalContext::instance().hal().get_noc_stream_reg_space_size() * get_dispatch_stream_index(0) +
-           tt::tt_metal::MetalContext::instance()
-                   .hal()
-                   .get_noc_stream_remote_dest_buf_space_available_update_reg_index() *
-               sizeof(uint32_t);
+           (tt::tt_metal::MetalContext::instance().hal().get_noc_stream_reg_space_size() *
+            get_dispatch_stream_index(0)) +
+           (tt::tt_metal::MetalContext::instance()
+                .hal()
+                .get_noc_stream_remote_dest_buf_space_available_update_reg_index() *
+            sizeof(uint32_t));
 }
 
 uint32_t DispatchMemMap::get_dispatch_stream_index(uint32_t index) const {
@@ -158,7 +159,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     }
 
     uint32_t prefetch_dispatch_unreserved_base =
-    device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
+    device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(
         CommandQueueDeviceAddrType::UNRESERVED)];
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);

@@ -11,7 +11,7 @@
 #include <iomanip>
 #include <optional>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -35,7 +35,6 @@ FabricType operator&(FabricType lhs, FabricType rhs) {
     return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
 }
 
-namespace {
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
 RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirection& routing_direction) {
@@ -48,25 +47,6 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
         case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
         default: TT_THROW("Invalid routing direction: {}", routing_direction);
     }
-}
-
-FabricType topology_to_fabric_type(const proto::TorusTopology& topology) {
-    const auto& dim_types = topology.dim_types();
-
-    TT_FATAL(dim_types.size() == 2, "Torus topology must have 2 dimensions");
-
-    if (dim_types[0] == proto::TorusTopology::RING && dim_types[1] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_XY;
-    } else if (dim_types[0] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_Y;
-    } else if (dim_types[1] == proto::TorusTopology::RING) {
-        return FabricType::TORUS_X;
-    } else if (dim_types[0] == proto::TorusTopology::LINE && dim_types[1] == proto::TorusTopology::LINE) {
-        return FabricType::MESH;
-    }
-
-    TT_THROW("Invalid torus topology");
-    return FabricType::MESH;
 }
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
@@ -89,6 +69,7 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                  "p150_mesh_graph_descriptor.yaml"},  // TODO use quasar mesh
                 {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.yaml"},
             });
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
@@ -110,8 +91,8 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::SIMULATOR_QUASAR, "p150_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.textproto"},
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.textproto"},
+                {tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, "single_bh_galaxy_mesh_graph_descriptor.textproto"},
             });
-}  // namespace
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
@@ -212,7 +193,7 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
           std::pair{S, RoutingDirection::S},
           std::pair{W, RoutingDirection::W}}) {
         if (mesh_coord_range.contains(coord)) {
-            chip_id_t fabric_chip_id = coord[0] * mesh_shape[1] + coord[1];
+            chip_id_t fabric_chip_id = (coord[0] * mesh_shape[1]) + coord[1];
             valid_connections.insert(
                 {fabric_chip_id,
                  RouterEdge{
@@ -373,7 +354,8 @@ void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
                 std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
                 MeshCoordinateRange(
                     MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
-                    MeshCoordinate((host_coord[0] + 1) * board_ns_size - 1, (host_coord[1] + 1) * board_ew_size - 1)));
+                    MeshCoordinate(
+                        ((host_coord[0] + 1) * board_ns_size) - 1, ((host_coord[1] + 1) * board_ew_size) - 1)));
         }
 
         // Populate mesh_host_ranks_
@@ -530,7 +512,8 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
                 std::make_pair(*mesh_id, mesh_host_ranks_values.back()),
                 MeshCoordinateRange(
                     MeshCoordinate(host_coord[0] * board_ns_size, host_coord[1] * board_ew_size),
-                    MeshCoordinate((host_coord[0] + 1) * board_ns_size - 1, (host_coord[1] + 1) * board_ew_size - 1)));
+                    MeshCoordinate(
+                        ((host_coord[0] + 1) * board_ns_size) - 1, ((host_coord[1] + 1) * board_ew_size) - 1)));
         }
 
         this->mesh_host_ranks_[*mesh_id] =
@@ -541,7 +524,7 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         this->intra_mesh_connectivity_[*mesh_id].resize(mesh_size);
         for (const auto& src_mesh_coord : mesh_coord_range) {
             // Get the chip id for the current mesh coordinate
-            chip_id_t src_chip_id = src_mesh_coord[0] * mesh_shape[1] + src_mesh_coord[1];
+            chip_id_t src_chip_id = (src_mesh_coord[0] * mesh_shape[1]) + src_mesh_coord[1];
             // Get the valid connections for the current chip
             this->intra_mesh_connectivity_[*mesh_id][src_chip_id] =
                 this->get_valid_connections(src_mesh_coord, mesh_coord_range, board_name_to_fabric_type[mesh_board]);
@@ -754,7 +737,7 @@ MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, chip_id_t chip_id) 
 
 chip_id_t MeshGraph::coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const {
     const auto& mesh_shape = mesh_to_chip_ids_.at(mesh_id).shape();
-    return coordinate[0] * mesh_shape[1] + coordinate[1];
+    return (coordinate[0] * mesh_shape[1]) + coordinate[1];
 }
 
 std::optional<MeshHostRankId> MeshGraph::get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const {

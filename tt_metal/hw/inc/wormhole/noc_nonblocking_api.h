@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <limits>
 #include "noc_parameters.h"
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
@@ -131,6 +132,12 @@ inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, ui
 
 inline __attribute__((always_inline)) bool noc_cmd_buf_ready(uint32_t noc, uint32_t cmd_buf) {
     return (NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL) == NOC_CTRL_STATUS_READY);
+}
+
+inline __attribute__((always_inline)) void noc_clear_outstanding_req_cnt(uint32_t noc, uint32_t id_mask) {
+    uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CLEAR_OUTSTANDING_REQ_CNT;
+    volatile uint32_t* ptr = (volatile uint32_t*)offset;
+    *ptr = id_mask;
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
@@ -329,9 +336,10 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
     return (NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED) == noc_nonposted_atomics_acked[noc]);
 }
 
+template <uint8_t MAX_NOCS_TO_INIT = NUM_NOCS>
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
-    for (int noc = 0; noc < NUM_NOCS; noc++) {
+    for (uint8_t noc = 0; noc < MAX_NOCS_TO_INIT; noc++) {
         uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_NODE_ID);
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
@@ -584,7 +592,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
 // transaction at the same time. If one port on the receipient has no back-pressure then the transaction will hang
 // because there is no mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate
 // inline writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
-template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -593,7 +601,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t customized_src_addr = 0) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -1081,8 +1090,6 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 
     if constexpr (update_addr_lo) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr);
-        uint32_t be32 = 0xF << (dest_addr & (NOC_WORD_BYTES - 1));
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
     } else if constexpr (update_addr_hi) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, dest_addr);
     }
@@ -1252,18 +1259,16 @@ inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
  * | wait (template parameter)     | Whether to wait for command buffer readiness             | enum CQNocWait   | CQ_NOC_WAIT or CQ_NOC_wait                               | False    |
  */
 // clang-format on
-template <
-    uint8_t noc_mode = DM_DEDICATED_NOC,
-    uint32_t cmd_buf,
-    enum CQNocFlags flags,
-    enum CQNocSend send = CQ_NOC_SEND,
-    enum CQNocWait wait = CQ_NOC_WAIT>
-inline __attribute__((always_inline)) void noc_read_with_state(
-    uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+template <uint8_t noc_mode, uint32_t cmd_buf, enum CQNocFlags flags, enum CQNocSend send, enum CQNocWait wait>
+inline __attribute__((always_inline)) void noc_common_read_with_state(
+    uint32_t noc, uint32_t src_addr, uint32_t dst_addr, uint32_t size) {
+    if constexpr (send) {
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        } else if constexpr (noc_mode == DM_DEDICATED_NOC) {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
-
     if constexpr (wait) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
     }
@@ -1273,20 +1278,46 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_addr);
     }
-    if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        NOC_CMD_BUF_WRITE_REG(
-            noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         // TODO: Runtime assert for size < MAX_BURST_SIZE
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
     }
+}
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state(
+    uint32_t noc, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    noc_common_read_with_state<noc_mode, cmd_buf, flags, send, wait>(noc, (uint32_t)src_addr, dst_addr, size);
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        NOC_CMD_BUF_WRITE_REG(
+            noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+    }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
+}
 
-    if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        noc_reads_num_issued[noc] += 1;
+// Same as above, but with src_noc_addr giving the source NOC address separately. This allows 64 bit addresses within
+// the NOC transactions.
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state(
+    uint32_t noc, uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    noc_common_read_with_state<noc_mode, cmd_buf, flags, send, wait>(noc, (uint32_t)src_addr, dst_addr, size);
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_addr);
+    }
+    if constexpr (send) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
 }
 
@@ -1338,7 +1369,8 @@ inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, ui
  * |-------------------------------------|----------------------------------------------------------|-----------------|----------------------------------------------------------|----------|
  * | noc                                 | Which NOC to use for the transaction                     | uint32_t        | 0 or 1                                                   | True     |
  * | src_addr                            | Source address in local L1 memory                        | uint32_t        | 0..1 MB                                                  | True     |
- * | dst_addr                            | Destination NOC address (x,y)+local address              | uint64_t        | Results of \a get_noc_addr calls                         | True     |
+ * | dst_noc_addr                        | Destination NOC address (x,y)                            | uint32_t        |                                                          | True     |
+ * | dst_addr                            | Local address in destination NOC tile                    | uint64_t        | 0..4 GB                                                  | True     |
  * | size                                | Size of transaction in bytes                             | uint32_t        | 0..NOC_MAX_BURST_SIZE for single packet                  | False    |
  * | ndests                              | Number of destinations for multicast operations          | uint32_t        | 1 or more                                                | False    |
  * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t         | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
@@ -1358,8 +1390,8 @@ template <
     enum CQNocWait wait = CQ_NOC_WAIT,
     bool update_counter = true,
     bool posted = false>
-inline __attribute__((always_inline)) void noc_write_with_state(
-    uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+inline __attribute__((always_inline)) void noc_wwrite_with_state(
+    uint32_t noc, uint32_t src_addr, uint32_t dst_noc_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
         if constexpr (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -1379,8 +1411,7 @@ inline __attribute__((always_inline)) void noc_write_with_state(
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
-        NOC_CMD_BUF_WRITE_REG(
-            noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_COORDINATE, dst_noc_addr);
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         // TODO: Runtime assert for size < MAX_BURST_SIZE
@@ -1398,6 +1429,28 @@ inline __attribute__((always_inline)) void noc_write_with_state(
             noc_nonposted_writes_acked[noc] += ndests;
         }
     }
+}
+// clang-format off
+/**
+ * Wrapper around the above. \a dst_addr is a composite of NOC-xy coordinate and address within  NOC tile, result of \a get_noc_addr calls
+ */
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT,
+    bool update_counter = true,
+    bool posted = false>
+inline __attribute__((always_inline)) void noc_write_with_state(
+    uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
+    uint32_t dst_noc_addr = 0;
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        dst_noc_addr = (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
+    }
+    noc_wwrite_with_state<noc_mode, cmd_buf, flags, send, wait, update_counter, posted>(
+        noc, src_addr, dst_noc_addr, dst_addr, size, ndests);
 }
 
 // clang-format off

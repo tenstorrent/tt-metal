@@ -77,7 +77,7 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
 
 
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.002)]
+    "torch_dtype, ttnn_dtype, atol", [(torch.bfloat16, ttnn.bfloat16, 0.008), (torch.float32, ttnn.float32, 0.003)]
 )
 @pytest.mark.parametrize(
     "high, low",

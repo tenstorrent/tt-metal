@@ -19,7 +19,7 @@ from tests.sweep_framework.sweep_utils.sharding_utils import (
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 120
@@ -34,7 +34,7 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_spec": gen_sharded_spec_unary(4, max_tensor_size_per_core=20 * 1024, layouts=["TILE_LAYOUT"]),
-        "exponent": [torch.tensor(exp) for exp in range(1, 19)],
+        "exponent": [exponent_val for exponent_val in range(1, 19)],
         "grad_dtype": [ttnn.bfloat16, ttnn.bfloat16],
         "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat16],
     },
