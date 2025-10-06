@@ -315,7 +315,7 @@ jobs:
         with:
           ref: stable
           release-type: rc
-          dry-run: false
+          dry-run: ${{ inputs.dry-run || false }}
       - name: Log no action needed
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
         run: |
@@ -336,4 +336,4 @@ jobs:
         with:
           ref: ${{ needs.create-tag.outputs.version }}
           release-type: prod
-          dry-run: false
+          dry-run: ${{ inputs.dry-run || false }}
