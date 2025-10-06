@@ -336,11 +336,16 @@ void TestContext::organize_speedups_by_topology() {
 }
 
 double TestContext::calculate_geomean_speedup(const std::vector<double>& speedups) {
-    double geomean_speedup = 1.0;
-    for (const auto& speedup : speedups) {
-        geomean_speedup *= speedup;
+    if (speedups.empty()) {
+        log_error(tt::LogTest, "No speedups found to calculate geomean speedup, is the speedups vector empty?");
+        return 1.0;
     }
-    geomean_speedup = std::pow(geomean_speedup, 1.0 / speedups.size());
+    double log_geomean_speedup = 0.0;
+    for (const auto& speedup : speedups) {
+        log_geomean_speedup += std::log(speedup);
+    }
+    log_geomean_speedup /= speedups.size();
+    double geomean_speedup = std::exp(log_geomean_speedup);
     return geomean_speedup;
 }
 
@@ -361,6 +366,7 @@ std::vector<double> TestContext::concatenate_topology_speedups(const SpeedupsByT
         num_speedups += speedups.size();
     }
     if (num_speedups == 0) {
+        log_error(tt::LogTest, "No speedups found to concatenate, was topology_speedups correctly populated?");
         return std::vector<double>();
     }
     std::vector<double> concatenated_speedups;
