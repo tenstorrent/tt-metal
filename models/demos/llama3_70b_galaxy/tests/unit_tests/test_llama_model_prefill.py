@@ -21,11 +21,9 @@ from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.common.utility_functions import skip_for_grayskull
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(900)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

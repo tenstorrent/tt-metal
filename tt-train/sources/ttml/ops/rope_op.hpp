@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,10 +9,10 @@
 namespace ttml::ops {
 
 struct RopeScalingParams {
-    uint32_t original_context_length = 0U;
-    float scaling_factor = 0.0F;
-    float high_freq_factor = 0.0F;
-    float low_freq_factor = 0.0F;
+    uint32_t original_context_length = 2048U;
+    float scaling_factor = 1.0F;
+    float high_freq_factor = 1.0F;
+    float low_freq_factor = 1.0F;
 };
 
 struct RotaryEmbeddingParams {

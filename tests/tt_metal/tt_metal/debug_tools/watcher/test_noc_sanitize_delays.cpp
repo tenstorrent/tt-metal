@@ -32,7 +32,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <tt-metalium/utils.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -66,7 +65,7 @@ void RunDelayTestOnCore(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
@@ -75,9 +74,9 @@ void RunDelayTestOnCore(
     const uint32_t NUM_TILES = 4;
     const uint32_t DRAM_BUFFER_SIZE =
         SINGLE_TILE_SIZE * NUM_TILES;  // NUM_TILES of FP16_B, hard-coded in the reader/writer kernels
-    const uint32_t PAGE_SIZE = DRAM_BUFFER_SIZE;
+    const uint32_t PAGE_SZE = DRAM_BUFFER_SIZE;
 
-    distributed::DeviceLocalBufferConfig dram_config{.page_size = PAGE_SIZE, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{.page_size = PAGE_SZE, .buffer_type = tt_metal::BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = DRAM_BUFFER_SIZE};
 
     auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());

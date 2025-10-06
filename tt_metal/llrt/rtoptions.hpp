@@ -25,6 +25,7 @@
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/fabric_types.hpp>
 
 namespace tt {
 
@@ -37,7 +38,7 @@ enum RunTimeDebugFeatures {
     RunTimeDebugFeatureReadDebugDelay,
     RunTimeDebugFeatureWriteDebugDelay,
     RunTimeDebugFeatureAtomicDebugDelay,
-    RunTimeDebugFeatureDisableL1DataCache,
+    RunTimeDebugFeatureEnableL1DataCache,
     // NOTE: Update RunTimeDebugFeatureNames if adding new features
     RunTimeDebugFeatureCount
 };
@@ -86,8 +87,7 @@ struct InspectorSettings {
     bool initialization_is_important = false;
     bool warn_on_write_exceptions = true;
     std::filesystem::path log_path;
-    std::string rpc_server_host = "localhost";
-    uint16_t rpc_server_port = 50051;
+    std::string rpc_server_address = "localhost:50051";
     bool rpc_server_enabled = true;
 };
 
@@ -191,6 +191,9 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
+    // feature flag to enable 2-erisc mode on Blackhole (general, not fabric-specific)
+    bool enable_2_erisc_mode = false;
+
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
@@ -207,6 +210,9 @@ class RunTimeOptions {
 
     // Using MGD 2.0 syntax for mesh graph descriptor in Fabric Control Plane
     bool use_mesh_graph_descriptor_2_0 = false;
+
+    // Reliability mode override parsed from environment (RELIABILITY_MODE)
+    std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
 
 public:
     RunTimeOptions();
@@ -233,6 +239,8 @@ public:
     // can override with a SW call.
     bool get_watcher_enabled() const { return watcher_settings.enabled; }
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled = enabled; }
+    // Return a hash of which watcher features are enabled
+    uint32_t get_watcher_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms; }
     void set_watcher_interval(int interval_ms) { watcher_settings.interval_ms = interval_ms; }
     int get_watcher_dump_all() const { return watcher_settings.dump_all; }
@@ -276,10 +284,8 @@ public:
     }
     bool get_inspector_warn_on_write_exceptions() const { return inspector_settings.warn_on_write_exceptions; }
     void set_inspector_warn_on_write_exceptions(bool warn) { inspector_settings.warn_on_write_exceptions = warn; }
-    const std::string& get_inspector_rpc_server_host() const { return inspector_settings.rpc_server_host; }
-    void set_inspector_rpc_server_host(const std::string& host) { inspector_settings.rpc_server_host = host; }
-    uint16_t get_inspector_rpc_server_port() const { return inspector_settings.rpc_server_port; }
-    void set_inspector_rpc_server_port(uint16_t port) { inspector_settings.rpc_server_port = port; }
+    const std::string& get_inspector_rpc_server_address() const { return inspector_settings.rpc_server_address; }
+    void set_inspector_rpc_server_address(const std::string& address) { inspector_settings.rpc_server_address = address; }
     bool get_inspector_rpc_server_enabled() const { return inspector_settings.rpc_server_enabled; }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
 
@@ -370,13 +376,18 @@ public:
                 } else {
                     return "false";
                 }
-            case RunTimeDebugFeatureDisableL1DataCache: return std::to_string(get_feature_enabled(feature));
+            case RunTimeDebugFeatureEnableL1DataCache: return std::to_string(get_feature_enabled(feature));
             default: return "";
         }
     }
     std::string get_compile_hash_string() const {
-        std::string compile_hash_str =
-            fmt::format("{}_{}_{}", get_watcher_enabled(), get_kernels_early_return(), get_erisc_iram_enabled());
+        std::string compile_hash_str = fmt::format(
+            "{}_{}_{}_{}_{}",
+            get_watcher_hash(),
+            get_kernels_early_return(),
+            get_erisc_iram_enabled(),
+            get_enable_2_erisc_mode(),
+            get_is_fabric_2_erisc_mode_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -473,6 +484,9 @@ public:
     // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
     bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
 
+    // Feature flag to enable 2-erisc mode on Blackhole
+    bool get_enable_2_erisc_mode() const { return enable_2_erisc_mode; }
+
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
@@ -485,6 +499,9 @@ public:
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+
+    // Reliability mode override accessor
+    std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
     // Mock cluster accessors
     bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }

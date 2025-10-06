@@ -1,0 +1,20 @@
+include "mesh_shape.fbs";
+include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
+
+namespace ttnn.flatbuffer;
+
+enum MeshMapperPlacementType: ubyte {
+    Replicate = 0,
+    Shard = 1,
+}
+
+table MeshMapperPlacement {
+    type: MeshMapperPlacementType;
+    tensor_dim: int;
+}
+
+table TensorTopology {
+    distribution_shape: MeshShape;
+    placements: [MeshMapperPlacement];
+    mesh_coords: [tt.tt_metal.distributed.flatbuffer.MeshCoordinate];
+}

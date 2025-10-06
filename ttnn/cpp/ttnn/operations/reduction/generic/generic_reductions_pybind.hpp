@@ -16,7 +16,7 @@ void bind_reduction_operation(py::module& module, const reduction_operation_t& o
     namespace py = pybind11;
     auto doc = fmt::format(
         R"doc(
-        {0}
+        ``{1}(input_tensor: ttnn.Tensor, dim: Optional[int] = None, keepdim: bool = False, memory_config: Optional[ttnn.MemoryConfig] = None, compute_kernel_config: Optional[ttnn.ComputeKernelConfig] = None, scalar: float = 1.0, correction: bool = True) -> ttnn.Tensor``
 
         Computes the {0} of the input tensor :attr:`input_a` along the specified dimension :attr:`dim`.
         If no dimension is provided, {0} is computed over all dimensions yielding a single value.

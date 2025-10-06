@@ -25,7 +25,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -39,7 +39,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
-#include <tt-metalium/utils.hpp>
 #include <tt-metalium/distributed.hpp>
 
 namespace tt {
@@ -243,8 +242,7 @@ void create_and_run_row_pipeline(
                  (uint32_t)num_repetitions});
         }
     }
-    distributed::AddProgramToMeshWorkload(
-        mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
+    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
