@@ -48,7 +48,7 @@ def test_unet(
 
 
 @pytest.mark.models_device_performance_bare_metal
-def test_sdxl_unet_perf_device():
+def test_sdxl_refiner_perf_device():
     expected_device_perf_cycles_per_iteration = 1_066_002_193
 
     command = f"pytest models/experimental/stable_diffusion_xl_refiner/tests/test_sdxl_perf.py::test_unet"
