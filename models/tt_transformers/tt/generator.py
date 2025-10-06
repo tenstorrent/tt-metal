@@ -361,7 +361,7 @@ class Generator:
 
             # Instead of creating new device tensors, reuse the ones from prepare_inputs_decode compilation
             # by calling prepare_inputs_decode again which will return the device tensors AND ensure model state matches
-            device_inputs_i = self.model[i].prepare_inputs_decode([tokens[i], current_pos[i], user_page_table])
+            device_inputs_i = self.model[i].prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
@@ -406,7 +406,7 @@ class Generator:
         if reset_inputs:
             for i in range(self.data_parallel):
                 user_page_table = page_table[i] if page_table is not None else None
-                host_inputs_i = self.model[i].prepare_decode_inputs_host([tokens[i], current_pos[i], user_page_table])
+                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
 
                 copy_host_to_device(
                     host_tensors=host_inputs_i,

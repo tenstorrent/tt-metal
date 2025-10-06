@@ -99,7 +99,7 @@ def test_rope_embeddings(mesh_device, batch_size, seq_len, reset_seeds):
     print(f"k_rope_torch shape: {k_rope_torch.shape}")
 
     # Compare with reference using PCC like original
-    from models.utility_functions import comp_pcc
+    from models.common.utility_functions import comp_pcc
 
     passing, pcc_message = comp_pcc(q_tt_rotated_torch, q_rope_torch)
     mse = torch.nn.functional.mse_loss(q_tt_rotated_torch, q_rope_torch)

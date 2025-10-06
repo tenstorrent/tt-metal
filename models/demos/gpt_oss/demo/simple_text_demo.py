@@ -22,6 +22,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
 # Import GPT-OSS components using our refactored patterns
@@ -33,7 +34,6 @@ from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_in
 # Import specific utilities from tt_transformers
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision
-from models.utility_functions import run_for_wormhole_b0
 
 
 def prepare_gpt_oss_generator_args(
@@ -136,7 +136,7 @@ def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
     max_seq_len = 1024
     max_generated_tokens = 200  # Reasonable limit for testing
     instruct = True
-    enable_trace = False  # Start with trace disabled
+    enable_trace = True  # Start with trace disabled
 
     page_params = {
         "page_block_size": 64,

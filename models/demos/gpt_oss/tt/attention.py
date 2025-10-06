@@ -1,10 +1,10 @@
 import torch
 
 import ttnn
+from models.common.utility_functions import nearest_y
 from models.demos.gpt_oss.moe import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.experimental.stable_diffusion_35_large.tt.substate import substate
-from models.utility_functions import nearest_y
 
 from ..tt.sdpa import sdpa as tt_sdpa
 from ..utils.general_utils import MAX_SEQ_LEN

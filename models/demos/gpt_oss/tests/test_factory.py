@@ -149,7 +149,7 @@ def parametrize_weights(use_real=False):
 # Test helper functions
 def compare_tensors(tt_tensor, torch_tensor, mesh_device, pcc_threshold=0.99):
     """Universal tensor comparison - handles both TT tensors and already-converted torch tensors"""
-    from models.utility_functions import comp_pcc
+    from models.common.utility_functions import comp_pcc
 
     # Check if tt_tensor is already a torch tensor
     if isinstance(tt_tensor, torch.Tensor):

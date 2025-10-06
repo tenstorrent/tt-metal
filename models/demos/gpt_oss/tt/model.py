@@ -3,7 +3,7 @@ import torch
 import ttnn
 from models.demos.gpt_oss.moe import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_decode_mask
-from models.experimental.stable_diffusion_35_large.tt.substate import substate
+from models.experimental.tt_dit.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
 
 from ..reference.modeling_gpt_oss import GptOssRotaryEmbedding
@@ -35,6 +35,38 @@ class Model:
             paged_attention_config,
             mesh_config,
         )
+
+        # Setup sliding window attention mask like tt_transformers
+        if True:
+            from models.demos.gpt_oss.utils.general_utils import get_decode_mask
+
+            # Create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
+            self.decode_sliding_mask_mat = get_decode_mask(
+                self.hf_config,
+                self.mesh_device,
+                paged_attention_config=paged_attention_config,
+            )
+            # Create device tensor for sliding window mask
+            self.device_decode_sliding_mask = ttnn.as_tensor(
+                torch.concat(
+                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(1)],  # batch_size=1
+                    axis=0,
+                ).transpose(1, 2),
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            self.decode_sliding_mask_mat = None
+            self.device_decode_sliding_mask = None
+
+        # Ensure attributes exist even if sliding window is not configured
+        if not hasattr(self, "decode_sliding_mask_mat"):
+            self.decode_sliding_mask_mat = None
+        if not hasattr(self, "device_decode_sliding_mask"):
+            self.device_decode_sliding_mask = None
 
     @classmethod
     def create_transformer_compatible(
@@ -201,11 +233,9 @@ class Model:
 
     def ttnn_decode_forward(
         self,
-        inputs,
-        # x,
-        # current_pos,
-        # rot_mat_idxs_global=None,
-        # rot_mat_idxs_local=None,
+        tokens,
+        current_pos,
+        rot_mat_idxs=None,  # Add this parameter to match generator signature
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
@@ -213,15 +243,10 @@ class Model:
         """
         Decode forward pass - processes single tokens
         """
-        x = inputs[0]
-        current_pos = inputs[1]
+        x = tokens
 
-        # Extract page_table from inputs if available (5th element, index 4)
-        # inputs structure: [tokens, current_pos, tt_cos, tt_sin, page_table, tt_sliding_mask]
-        # Maintain backward compatibility: only extract if available and not None
-        if len(inputs) > 4 and inputs[4] is not None:
-            page_table = inputs[4]
-        # Otherwise keep the page_table parameter as-is (might be None for non-paged flow)
+        # Use the page_table parameter directly since it's passed as a keyword argument
+        # No need to extract from inputs since the generator passes it directly
 
         # For decode mode, we expect single token input
         input_embeds = ttnn.embedding(x, self.embedding_weight, layout=ttnn.TILE_LAYOUT)
@@ -354,37 +379,36 @@ class Model:
 
         return logits
 
-    def prepare_inputs_decode(self, inputs):
+    def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
-        Prepare inputs for decode mode
+        Prepare inputs for decode mode - matches tt_transformers interface (4 values)
         """
-
-        host_inputs = self.prepare_decode_inputs_host(inputs)
-        tt_cos = host_inputs[2]
-        tt_sin = host_inputs[3]
-        tt_sliding_mask = host_inputs[5]
-
+        host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        tt_cos_device = device_inputs[2]
-        tt_sin_device = device_inputs[3]
-        tt_sliding_mask_device = device_inputs[5]
-
-        rope_stuff = (self.apply_rope, tt_cos_device, tt_sin_device)
-        tt_mask = None
-        attention_masks = {"full_attention": tt_mask, "sliding_attention": tt_sliding_mask_device}
+        tt_sliding_mask_device = copy_host_to_device(
+            [self._current_attention_masks["sliding_attention"]], mesh_device=self.mesh_device
+        )
+        tt_cos_device = copy_host_to_device([self._current_rope_stuff[1]], mesh_device=self.mesh_device)
+        tt_sin_device = copy_host_to_device([self._current_rope_stuff[2]], mesh_device=self.mesh_device)
+        rope_stuff = (self.apply_rope, tt_cos_device[0], tt_sin_device[0])
+        attention_masks = {"full_attention": None, "sliding_attention": tt_sliding_mask_device[0]}
 
         # Store references to the DEVICE tensors - these will be automatically updated during trace execution
         self._current_attention_masks = attention_masks
         self._current_rope_stuff = rope_stuff
-        return device_inputs
+        # Return 4 values to match tt_transformers interface:
+        # tokens, current_pos, rope_idxs, page_table
+        return (
+            device_inputs[0],  # tokens
+            device_inputs[1],  # current_pos
+            device_inputs[2],  # rope_idxs (list of cos, sin)
+            device_inputs[3],  # page_table
+        )
 
-    def prepare_decode_inputs_host(self, inputs):
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """
-        Prepare decode inputs on host before transferring to device
+        Prepare decode inputs on host before transferring to device - matches tt_transformers interface
         """
-        tokens = inputs[0]
-        current_pos = inputs[1]
-        page_table = inputs[2]
 
         # Convert tokens to proper format
         if tokens.dim() == 1:
@@ -393,18 +417,18 @@ class Model:
         # For decode mode, we expect single tokens - NO padding needed
         # (Padding is only needed for prefill mode with longer sequences)
 
+        # Convert to TTNN tensors on host (not on device) - they will be moved to device later
         tokens = ttnn.from_torch(
-            tokens,
-            # device=self.mesh_device,
+            tokens.unsqueeze(0).unsqueeze(0),  # Convert to 4D
+            device=None,  # Keep on host
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        tokens = ttnn.unsqueeze_to_4D(tokens)
 
         # Prepare current position
         current_pos_tt = ttnn.from_torch(
             current_pos,
-            # device=self.mesh_device,
+            device=None,  # Keep on host
             dtype=ttnn.int32,
         )
 
@@ -412,7 +436,7 @@ class Model:
         if page_table is not None:
             page_table = ttnn.from_torch(
                 page_table,
-                # device=self.mesh_device,
+                device=None,  # Keep on host
                 dtype=ttnn.int32,
             )
 
@@ -430,23 +454,61 @@ class Model:
         #     sliding_mask = torch.nn.functional.pad(sliding_mask, (0, 0, 0, pad_h), value=-float("inf"))
 
         tt_mask = None  # No causal mask needed in decode mode
-        tt_sliding_mask = ttnn.from_torch(sliding_mask, device=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        # Convert sliding_mask to TTNN tensor on host first
+        tt_sliding_mask_host = ttnn.from_torch(
+            sliding_mask,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+        )
 
         # Create RoPE embeddings on host for the current position (matching test_demo.py pattern)
         rope_temp_tensor = torch.randn(1)
         # EXACTLY like original test: torch.tensor([cur_pos]).unsqueeze(0)
         position_ids = torch.tensor([pos_idx]).unsqueeze(0)
-        cos, sin = self.rope_embeddings(rope_temp_tensor, position_ids)
+        tt_cos, tt_sin = self.rope_embeddings(rope_temp_tensor, position_ids)
+        tt_cos = ttnn.from_torch(tt_cos.unsqueeze(-2), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_sin = ttnn.from_torch(tt_sin.unsqueeze(-2), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        # Use sliding window mask for sliding attention layers
+        attention_masks = {"full_attention": None, "sliding_attention": tt_sliding_mask_host}
 
-        # Convert to TTNN tensors on device (like original test)
-        tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=None, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        # Store references to the DEVICE tensors - these will be automatically updated during trace execution
+        self._current_attention_masks = attention_masks
+        # Store the rope setup and cos/sin tensors for use in the model
+        # Use self.apply_rope (ApplyRotaryPosEmb) not self.rope_embeddings (GptOssRotaryEmbedding)
+        self._current_rope_stuff = (self.apply_rope, tt_cos, tt_sin)
 
-        return [tokens, current_pos_tt, tt_cos, tt_sin, page_table, tt_sliding_mask]
+        # Return 4 values to match tt_transformers interface:
+        # tokens, current_pos_tt, rope_idxs, page_table
+        # rope_idxs should be a single TTNN tensor, not a list
+        # For GPT-OSS, we need to create a single rope index tensor
+        rope_idxs = ttnn.from_torch(
+            torch.tensor([pos_idx], dtype=torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        return tokens, current_pos_tt, rope_idxs, page_table
+
+    def update_attention_masks(self, current_pos):
+        """
+        Update sliding window attention mask for decode mode - matches tt_transformers interface
+        """
+        if self.device_decode_sliding_mask is not None:
+            torch_mask = torch.concat(
+                [
+                    self.decode_sliding_mask_mat[i, :, current_pos[i].item() : current_pos[i].item() + 1, :].unsqueeze(
+                        0
+                    )
+                    for i in range(self.decode_sliding_mask_mat.shape[0])
+                ],
+                axis=0,
+            ).transpose(1, 2)
+
+            # Update the device tensor
+            ttnn.update_tensor(self.device_decode_sliding_mask, torch_mask)
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
-        Prepare inputs for prefill mode
+        Prepare inputs for prefill mode - matches Gemma3 interface (5 values)
         """
 
         # Embed the tokens
@@ -491,6 +553,7 @@ class Model:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
 
+        # Return 5 values to match Gemma3 interface:
         return tokens_embd, rot_mats_global, rot_mats_local, tt_page_table, tt_chunk_page_table
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
