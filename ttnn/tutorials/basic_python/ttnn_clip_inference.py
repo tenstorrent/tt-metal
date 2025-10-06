@@ -52,6 +52,7 @@ def main():
             if isinstance(value, torch.Tensor):
                 # Convert PyTorch tensors to TT-NN tensors
                 ttnn_state_dict[key] = ttnn.from_torch(value, layout=ttnn.TILE_LAYOUT, device=get_device())
+                ttnn_state_dict[key] = ttnn.typecast(ttnn_state_dict[key], dtype=ttnn.bfloat16)
             elif isinstance(value, torch.Size):
                 # Convert PyTorch Size objects to TT-NN Size objects
                 ttnn_state_dict[key] = ttnn.Size(value)
@@ -67,14 +68,14 @@ def main():
             # Scale factor for attention scores: 1/sqrt(head_dim) for numerical stability
             self.scale = 1.0 / math.sqrt(num_heads)
 
-            self.q_proj_weight = ttnn.typecast(state_dict[f"{prefix}.q_proj.weight"], dtype=ttnn.bfloat16)
-            self.q_proj_bias = ttnn.typecast(state_dict[f"{prefix}.q_proj.bias"], dtype=ttnn.bfloat16)
-            self.k_proj_weight = ttnn.typecast(state_dict[f"{prefix}.k_proj.weight"], dtype=ttnn.bfloat16)
-            self.k_proj_bias = ttnn.typecast(state_dict[f"{prefix}.k_proj.bias"], dtype=ttnn.bfloat16)
-            self.v_proj_weight = ttnn.typecast(state_dict[f"{prefix}.v_proj.weight"], dtype=ttnn.bfloat16)
-            self.v_proj_bias = ttnn.typecast(state_dict[f"{prefix}.v_proj.bias"], dtype=ttnn.bfloat16)
-            self.out_proj_weight = ttnn.typecast(state_dict[f"{prefix}.out_proj.weight"], dtype=ttnn.bfloat16)
-            self.out_proj_bias = ttnn.typecast(state_dict[f"{prefix}.out_proj.bias"], dtype=ttnn.bfloat16)
+            self.q_proj_weight = state_dict[f"{prefix}.q_proj.weight"]
+            self.q_proj_bias = state_dict[f"{prefix}.q_proj.bias"]
+            self.k_proj_weight = state_dict[f"{prefix}.k_proj.weight"]
+            self.k_proj_bias = state_dict[f"{prefix}.k_proj.bias"]
+            self.v_proj_weight = state_dict[f"{prefix}.v_proj.weight"]
+            self.v_proj_bias = state_dict[f"{prefix}.v_proj.bias"]
+            self.out_proj_weight = state_dict[f"{prefix}.out_proj.weight"]
+            self.out_proj_bias = state_dict[f"{prefix}.out_proj.bias"]
 
         def forward(self, hidden_states):
             sequence_size, batch_size, hidden_size = hidden_states.shape
@@ -147,10 +148,10 @@ def main():
         def __init__(self, state_dict, attention_mask=None, prefix=""):
             self.prefix = prefix
 
-            self.mlp_c_fc_weight = ttnn.typecast(state_dict[f"{prefix}.fc1.weight"], dtype=ttnn.bfloat16)
-            self.mlp_c_fc_bias = ttnn.typecast(state_dict[f"{prefix}.fc1.bias"], dtype=ttnn.bfloat16)
-            self.mlp_c_proj_weight = ttnn.typecast(state_dict[f"{prefix}.fc2.weight"], dtype=ttnn.bfloat16)
-            self.mlp_c_proj_bias = ttnn.typecast(state_dict[f"{prefix}.fc2.bias"], dtype=ttnn.bfloat16)
+            self.mlp_c_fc_weight = state_dict[f"{prefix}.fc1.weight"]
+            self.mlp_c_fc_bias = state_dict[f"{prefix}.fc1.bias"]
+            self.mlp_c_proj_weight = state_dict[f"{prefix}.fc2.weight"]
+            self.mlp_c_proj_bias = state_dict[f"{prefix}.fc2.bias"]
 
         def forward(self, x):
             x = ttnn.linear(x, self.mlp_c_fc_weight, bias=self.mlp_c_fc_bias, transpose_b=True)
@@ -168,10 +169,10 @@ def main():
             )
             self.mlp = MultilayerPerceptron(state_dict, prefix=f"{prefix}.mlp")
 
-            self.layer_norm_1_weight = ttnn.typecast(state_dict[f"{prefix}.layer_norm1.weight"], dtype=ttnn.bfloat16)
-            self.layer_norm_1_bias = ttnn.typecast(state_dict[f"{prefix}.layer_norm1.bias"], dtype=ttnn.bfloat16)
-            self.layer_norm_2_weight = ttnn.typecast(state_dict[f"{prefix}.layer_norm2.weight"], dtype=ttnn.bfloat16)
-            self.layer_norm_2_bias = ttnn.typecast(state_dict[f"{prefix}.layer_norm2.bias"], dtype=ttnn.bfloat16)
+            self.layer_norm_1_weight = state_dict[f"{prefix}.layer_norm1.weight"]
+            self.layer_norm_1_bias = state_dict[f"{prefix}.layer_norm1.bias"]
+            self.layer_norm_2_weight = state_dict[f"{prefix}.layer_norm2.weight"]
+            self.layer_norm_2_bias = state_dict[f"{prefix}.layer_norm2.bias"]
 
         def forward(self, x):
             # LayerNorm
@@ -392,14 +393,10 @@ def main():
 
     class CLIP:
         def __init__(self, state_dict):
-            self.token_embedding = ttnn.typecast(
-                state_dict["text_model.embeddings.token_embedding.weight"], dtype=ttnn.bfloat16
-            )
-            self.positional_embedding = ttnn.typecast(
-                state_dict["text_model.embeddings.position_embedding.weight"], dtype=ttnn.bfloat16
-            )
+            self.token_embedding = state_dict["text_model.embeddings.token_embedding.weight"]
+            self.positional_embedding = state_dict["text_model.embeddings.position_embedding.weight"]
 
-            self.text_projection = ttnn.typecast(state_dict["text_projection.weight"], dtype=ttnn.bfloat16)
+            self.text_projection = state_dict["text_projection.weight"]
             self.context_length = self.positional_embedding.shape[0]
             self.vocab_size = self.token_embedding.shape[0]
             self.transformer_width = state_dict["text_model.final_layer_norm.weight"].shape[0]
