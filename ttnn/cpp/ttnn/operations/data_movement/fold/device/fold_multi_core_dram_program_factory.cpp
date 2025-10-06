@@ -30,7 +30,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto device = input_tensor.device();
     auto program = tt::tt_metal::CreateProgram();
 
-    const uint32_t input_width = input_tensor.padded_shape()[2];
+    const uint32_t input_width = input_tensor.logical_shape()[2];
 
     // Get compute grid size and buffer pointers
     Buffer* src0_buffer = input_tensor.buffer();
