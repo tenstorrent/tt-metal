@@ -12,7 +12,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 
-#define DEBUG_PRINT 1
+#define DEBUG_PRINT 0
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -229,6 +229,13 @@ void MAIN {
                         tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
 
                         copy_tile_init(tile_tmp_cb_id);
+                        if constexpr (pack_untilize_reinit) {
+                            // note pack_untilize_dest_init must be called immediately after copy_tile_init see issue
+                            // #27314
+                            tensix_sync();
+                            pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
+                            tensix_sync();
+                        }
                         copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
                         copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
 
@@ -243,9 +250,6 @@ void MAIN {
                     }
 
                     max_reduce_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
-
-                    dprint_tensix_dest_reg(0);
-                    dprint_tensix_dest_reg(2);
 
                     cb_pop_front(curr_in_idx_cb_id, 1);
                 } else {
@@ -315,19 +319,9 @@ void MAIN {
                     tile_regs_release();
                 }
             } else {
-                if constexpr (pack_untilize_reinit) {
-                    tensix_sync();
-                    PACK(DPRINT << "Pack untilize init with : " << output_faces << " faces" << ENDL());
-                    pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                    tensix_sync();
-                }
-
                 pack_reconfig_data_format(out_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
                     out_cb_id, 1, 0, num_out_sticks, output_faces);
-
-                PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
-
                 pack_reconfig_data_format(out_idx_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, index_dst_idx>(
                     out_idx_cb_id, 1, 0, num_out_sticks, output_faces);
