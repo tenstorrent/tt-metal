@@ -7,7 +7,7 @@ from ....utils.tensor import bf16_tensor
 from ....utils.check import assert_quality
 
 
-def run_test_linear(device, M, K, N):
+def run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
 
@@ -35,11 +35,11 @@ def run_test_linear(device, M, K, N):
 
     # This is the optimal single-core config for 4096x4096x4096
     matmul_config = ttnn.MinimalMatmulConfig(
-        M_block_size=4,
-        K_block_size=32,
-        N_block_size=4,
-        subblock_h=2,
-        subblock_w=2,
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
         compute_with_storage_grid_size=core_grid,
     )
     tt_output = ttnn.experimental.minimal_matmul(
@@ -58,8 +58,12 @@ def run_test_linear(device, M, K, N):
     "M, K, N",
     [(4096, 4096, 4096)],
 )
-def test_linear(device, M, K, N):
-    check_result = run_test_linear(device, M, K, N)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
 
