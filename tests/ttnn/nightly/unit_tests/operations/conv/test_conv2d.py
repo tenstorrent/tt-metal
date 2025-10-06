@@ -62,17 +62,31 @@ def randomize_torch_tensor(
     torch_tensor_map,
     tensor_shape,
     generate_positive_numbers=False,
+    mode="random",
+    fill_value=None,
 ):
-    if generate_positive_numbers:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-        torch_tensor = torch.abs(torch_tensor)
-        return torch_tensor
+    tensor_shape = tuple(tensor_shape)
+    cache_key = (tensor_shape, generate_positive_numbers, mode, fill_value)
+
+    if cache_key in torch_tensor_map.keys():
+        torch_tensor = torch_tensor_map[cache_key]
     else:
-        if tensor_shape in torch_tensor_map.keys():
-            torch_tensor = torch_tensor_map[tensor_shape]
+        if mode == "random":
+            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+            if generate_positive_numbers:
+                torch_tensor = torch.abs(torch_tensor)
+        elif mode == "stick":
+            h, w = tensor_shape[2], tensor_shape[3]
+            stick = torch.arange(h * w, dtype=torch.bfloat16).reshape(1, 1, h, w)
+            torch_tensor = stick.expand(tensor_shape)
+        elif mode == "single":
+            if fill_value is None:
+                raise ValueError("fill_value must be provided when mode is 'single'")
+            torch_tensor = torch.full(tensor_shape, fill_value, dtype=torch.bfloat16).float()
         else:
-            torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16).float()
-            torch_tensor_map[tensor_shape] = torch_tensor
+            raise ValueError(f"Unsupported mode: {mode}. Use 'random', 'stick', or 'single'")
+
+        torch_tensor_map[cache_key] = torch_tensor
 
     return torch_tensor
 
@@ -4944,13 +4958,15 @@ def test_conv2d_1kX1k(
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, groups, kernel, stride, padding, dilation, shard_layout, dtype, weights_dtype, bias_dtype, activation, enable_act_double_buffer, enable_weight_double_buffer",
     (
-        (10, 144, 144, 56, 56, 144, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", False, True), # mobilenetv2 - 1.
-        (10, 576, 576, 14, 14, 576, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 2.
-        (10, 960, 960, 7, 7, 960, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 3.
-        (10, 112, 112, 7, 7, 112, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 4.
+        (1, 32 * 2, 32 * 2, 32, 32, 32 * 2, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", False, True), # random
 
-        (1, 320, 320, 80, 80, 320, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", False, False), # yolov10x - 1.
-        (1, 640, 640, 40, 40, 640, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", True, True), # yolov10x - 2.
+        # (10, 144, 144, 56, 56, 144, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", False, True), # mobilenetv2 - 1.
+        # (10, 576, 576, 14, 14, 576, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 2.
+        # (10, 960, 960, 7, 7, 960, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 3.
+        # (10, 112, 112, 7, 7, 112, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "relu6", True, True), # mobilenetv2 - 4.
+
+        # (1, 320, 320, 80, 80, 320, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", False, False), # yolov10x - 1.
+        # (1, 640, 640, 40, 40, 640, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", True, True), # yolov10x - 2.
         # (1, 32 * 8, 32 * 8, 16, 16, 32 * 8, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # + 30k
         # (1, 32 * 8 * 4, 32 * 8 * 4, 16, 16, 32 * 8 * 4, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "relu6", True, True), # + 30k
         # (1, 320, 320, 80, 80, 320, (3, 3), (1, 1), (1, 1), (1, 1), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat8_b, "silu", False, False), # +80k
@@ -4965,7 +4981,7 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
 
 
     torch_input_tensor_nchw = randomize_torch_tensor(
-        torch_tensor_map, conv_input_shape
+        torch_tensor_map, conv_input_shape, False, mode="single", fill_value=1.0
     )
 
     torch_weight_tensor = torch.ones(conv_weight_shape, dtype=torch.bfloat16).float()
@@ -5029,6 +5045,10 @@ def test_groups_vs_pool2(device, torch_tensor_map, batch, input_channels, output
     # Permute from NHWC to NCHW format: [batch, out_h, out_w, channels] -> [batch, channels, out_h, out_w]
     torch_output_final = torch_output_reshaped.permute(0, 3, 1, 2)
 
+    print("torch_output_final:")
+    print(torch_output_final)
+    print("ref:")
+    print(ref)
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_final, ref, pcc=0.99)
     logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
 

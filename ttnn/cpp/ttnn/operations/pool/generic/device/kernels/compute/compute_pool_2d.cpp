@@ -11,8 +11,11 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "tt-metalium/constants.hpp"
+// #include "tt-metalium/tt_backend_api_types.hpp"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -55,6 +58,8 @@ void MAIN {
     constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(19);
     constexpr bool is_output_tiled = get_compile_time_arg_val(20);  // 1 = TILED, 0 = ROW_MAJOR
     constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(21);
+    constexpr uint32_t mul_cb_id = get_compile_time_arg_val(22);     // for depthwise conv multiplication
+    constexpr uint32_t weight_cb_id = get_compile_time_arg_val(23);  // for depthwise conv weights
 
     constexpr uint32_t topk_output_tiles = 1;
     constexpr uint32_t topk_cb_tile_idx = 0;
@@ -82,6 +87,10 @@ void MAIN {
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
     constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::SUM) ? true : false;
+
+    uint32_t num_pages_to_8 = 1;
+
+    DPRINT << "num_pages_to_8: " << num_pages_to_8 << ENDL();
 
     // tilize reconfiguration can be beneficial when we have a wide tensor with a non MAX_TILES_PER_REDUCTION number of
     // C tiles, but we only use it when the window size fits within a face such that the tilize can be done only on the
@@ -119,10 +128,14 @@ void MAIN {
     }
 
     uint32_t tilize_stick_counter = 0;
-    for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
+    uint32_t sticks_left = nsticks_per_core_by_nblocks;
+    uint32_t n = 0;
+    uint32_t curr_in_cb_id = in_cb_id_0;
+
+    while (sticks_left--) {
         const bool reader0 = !(split_reader && (n & 0x1));
-        const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
-        const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
+        const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
+        // const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
         const uint32_t curr_in_idx_cb_id = !reader0 ? in_idx_cb_id_1 : in_idx_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
@@ -135,6 +148,7 @@ void MAIN {
             const bool first_c_block = c_i == 0;
             const uint32_t tiles_to_reduce =
                 tilize_reconfig ? (last_c_block ? partial_iter_output_tiles : max_tiles_per_iter) : max_tiles_per_iter;
+            const uint32_t effective_tiles = (window_size_hw * tiles_to_reduce * 32 + 1023) / 1024;
             const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
             const uint32_t output_faces =
                 (last_tile_is_partial && last_c_block)
@@ -189,15 +203,83 @@ void MAIN {
 
                     cb_pop_front(curr_in_idx_cb_id, 1);
                 } else {
-                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        curr_in_cb_id,
-                        curr_scalar_cb_id,
-                        tiles_to_reduce,
-                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                        num_faces_in_input_tile,
-                        face_r_dim);
-                    for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                        reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                    UNPACK((llk_unpack_tilize_uninit(curr_in_cb_id)));
+                    // UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(curr_in_cb_id, weight_cb_id)));
+                    PACK((pack_untilize_uninit(mul_cb_id)));
+                    reconfig_data_format(mul_cb_id, curr_in_cb_id, curr_scalar_cb_id, weight_cb_id);
+                    mul_tiles_init(curr_in_cb_id, weight_cb_id);
+
+                    tile_regs_acquire();
+
+                    while (num_pages_to_8 > sticks_left) {
+                        num_pages_to_8--;
+                    }
+
+                    for (uint32_t j = 0; j < num_pages_to_8; j++) {
+                        {
+                            UNPACK(DPRINT << "receiving " << effective_tiles << " tiles" << ENDL());
+                            cb_wait_front(curr_in_cb_id, effective_tiles);
+                        }
+
+                        for (uint32_t i = 0; i < effective_tiles; ++i) {
+                            UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id, i));
+                            UNPACK(tt::compute::common::print_full_tile(weight_cb_id, 0));
+                            mul_tiles(curr_in_cb_id, weight_cb_id, i, 0, j * tiles_to_reduce + i);
+                        }
+                        cb_pop_front(curr_in_cb_id, effective_tiles);
+
+                        curr_in_cb_id = (curr_in_cb_id == in_cb_id_0) ? in_cb_id_1 : in_cb_id_0;
+                    }
+                    sticks_left -= num_pages_to_8;
+
+                    dprint_tensix_dest_reg(0);
+                    // dprint_tensix_dest_reg(1);
+                    // dprint_tensix_dest_reg(2);
+                    // dprint_tensix_dest_reg(3);
+                    // dprint_tensix_dest_reg(4);
+                    // dprint_tensix_dest_reg(5);
+                    // dprint_tensix_dest_reg(6);
+                    // dprint_tensix_dest_reg(7);
+
+                    tile_regs_commit();
+
+                    tile_regs_wait();
+                    DPRINT << "stick no " << n << ENDL();
+                    cb_reserve_back(mul_cb_id, effective_tiles * num_pages_to_8);
+                    for (uint32_t j = 0; j < num_pages_to_8; j++) {
+                        for (uint32_t i = 0; i < effective_tiles; ++i) {
+                            pack_tile(j * tiles_to_reduce + i, mul_cb_id, j);
+                            DPRINT << "mul_cb_id tile " << j << " :" << ENDL();
+                            PACK(tt::compute::common::print_full_tile(mul_cb_id, j));
+                        }
+                    }
+                    cb_push_back(mul_cb_id, effective_tiles * num_pages_to_8);
+
+                    tile_regs_release();
+
+                    {
+                        reconfig_data_format(curr_in_cb_id, mul_cb_id, weight_cb_id, curr_scalar_cb_id);
+                        UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            mul_cb_id, curr_scalar_cb_id, tiles_to_reduce, num_faces_in_output_tile, face_r_dim, 1)));
+                        MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
+                        PACK((llk_pack_untilize_init<tiles_to_reduce, tiles_to_reduce, false, false, TILE_C_DIM>(
+                            out_cb_id, 1, num_faces_in_output_tile)));
+                    }
+
+                    tile_regs_acquire();
+                    for (uint32_t j = 0; j < num_pages_to_8; j++) {
+                        cb_wait_front(mul_cb_id, effective_tiles);
+                        unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                            mul_cb_id,
+                            curr_scalar_cb_id,
+                            tiles_to_reduce,
+                            0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                            num_faces_in_input_tile,
+                            face_r_dim);
+                        for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
+                            reduce_tile_math(j * tiles_to_reduce + math_tile_idx, num_faces_in_input_tile);
+                        }
+                        cb_pop_front(mul_cb_id, effective_tiles);
                     }
                 }
                 cb_pop_front(curr_in_cb_id, 1);
@@ -246,12 +328,15 @@ void MAIN {
                 } else {
                     // ROW_MAJOR output: pack directly to output CB
                     if (last_c_block) {
-                        pack_untilize_dest<partial_iter_output_tiles>(
-                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                        for (uint32_t i = 0; i < num_pages_to_8; i++) {
+                            cb_reserve_back(out_cb_id, tiles_to_reduce);
+                            pack_untilize_dest<partial_iter_output_tiles>(
+                                out_cb_id, 1, 0, num_out_sticks, i * tiles_to_reduce);
+                        }
                     } else {
                         pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     }
-                    cb_push_back(out_cb_id, output_faces);
+                    cb_push_back(out_cb_id, output_faces * tiles_to_reduce);
                     tile_regs_release();
                 }
             } else {
@@ -283,6 +368,7 @@ void MAIN {
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
+        n++;
     }
 }
 

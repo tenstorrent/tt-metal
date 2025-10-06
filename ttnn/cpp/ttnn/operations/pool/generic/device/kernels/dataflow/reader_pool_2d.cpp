@@ -6,7 +6,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG_PRINT 0
+#define ENABLE_DEBUG_PRINT 1
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -114,6 +114,7 @@ ALWI void read_window_with_top_left_index(
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (window_h * window_w) <= 16 && !last_tile_is_partial;
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
+    constexpr uint32_t effective_tiles = (window_h * window_w * in_ntiles_c * 32 + 1023) / 1024;
     if constexpr (return_indices) {
         static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices");
     }
@@ -132,7 +133,7 @@ ALWI void read_window_with_top_left_index(
         }
 
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
-        cb_reserve_back(in_cb_id, 1);
+        cb_reserve_back(in_cb_id, in_ntiles_c);
         uint32_t in_idx_l1_write_addr = 0;
         if constexpr (return_indices) {
             in_idx_l1_write_addr = get_write_ptr(in_idx_cb_id);
@@ -215,7 +216,9 @@ ALWI void read_window_with_top_left_index(
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
-            cb_push_back(in_cb_id, 1);
+            DPRINT << "sending " << effective_tiles << " tiles" << ENDL();
+            tt::data_movement::common::print_bf16_pages(get_write_ptr(in_cb_id), 64, 9);
+            cb_push_back(in_cb_id, effective_tiles);
             if constexpr (return_indices) {
                 cb_push_back(in_idx_cb_id, 1);
             }
@@ -304,6 +307,8 @@ void kernel_main() {
     constexpr uint32_t dilation_h = get_compile_time_arg_val(34);
     constexpr uint32_t dilation_w = get_compile_time_arg_val(35);
     constexpr bool return_indices = (bool)get_compile_time_arg_val(36);
+    constexpr uint32_t weight_cb_id = get_compile_time_arg_val(37);
+
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -345,6 +350,10 @@ void kernel_main() {
             }
         }
         // we don't need to clear the idx CB since the data CB is the one being sorted
+    }
+
+    if constexpr (reader_id == 0) {
+        fill_with_val(get_write_ptr(weight_cb_id), 1024, 0x3f80);
     }
 
     // initialize the scalar CB

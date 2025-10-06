@@ -378,8 +378,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t in_cb_page_padded = tt::round_up(
         in_cb_sz,
         tt::constants::TILE_HW);  // NOTE: ceil to tile size since triscs work with tilesize instead of pagesize
-    const uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
-    const uint32_t in_cb_npages = params.multi_buffering_factor;
+    uint32_t num_pages_to_8 = 1;
+    const uint32_t in_cb_pagesize = tt::tile_size(params.data_format);
+    const uint32_t in_cb_npages = params.multi_buffering_factor * params.in_ntiles_c * num_pages_to_8;
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, params.data_format);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
@@ -418,6 +419,20 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             tile_idx_tmp_cb_id, program, all_cores, params.index_nbytes * tile_elems, 1, params.index_format);
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tile_idx_tmp_cb_id, params.index_nbytes * tile_elems, 1);
     }
+    // Add CBs for depthwise convolution support (mul_cb and weight_cb)
+    const uint32_t mul_cb_id = next_cb_index++;
+    const uint32_t mul_cb_pagesize = tile_size(params.data_format);
+    const uint32_t mul_cb_npages =
+        std::min(params.in_ntiles_c * num_pages_to_8, 8u);  // Max 8 tiles per width (because of dest)
+    tt::tt_metal::create_cb(mul_cb_id, program, all_cores, mul_cb_pagesize, mul_cb_npages, params.data_format);
+    log_debug(tt::LogOp, "CB {} (mul_cb) :: PS = {}, NP = {}", mul_cb_id, mul_cb_pagesize, mul_cb_npages);
+
+    const uint32_t weight_cb_id = next_cb_index++;
+    const uint32_t weight_cb_pagesize = tile_size(params.data_format);
+    const uint32_t weight_cb_npages =
+        std::min(params.in_ntiles_c * num_pages_to_8, 8u);  // Max 8 tiles per width (because of dest)
+    tt::tt_metal::create_cb(weight_cb_id, program, all_cores, weight_cb_pagesize, weight_cb_npages, params.data_format);
+    log_debug(tt::LogOp, "CB {} (weight_cb) :: PS = {}, NP = {}", weight_cb_id, weight_cb_pagesize, weight_cb_npages);
 
     const bool is_output_tiled = output_layout == Layout::TILE;
     const bool is_output_block_format = is_block_float(outputs[0].dtype());
@@ -573,7 +588,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         stride_w,                       // 33
         dilation_h,                     // 34
         dilation_w,                     // 35
-        (uint32_t)return_indices};      // 36
+        (uint32_t)return_indices,       // 36
+        weight_cb_id};                  // 37 - for depthwise conv weights
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -621,7 +637,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         (uint32_t)return_indices,       // 18
         pre_tilize_cb_id,               // 19
         is_output_tiled,                // 20
-        is_output_block_format};        // 21
+        is_output_block_format,         // 21
+        mul_cb_id,                      // 22 - for depthwise conv multiplication
+        weight_cb_id};                  // 23 - for depthwise conv weights
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
