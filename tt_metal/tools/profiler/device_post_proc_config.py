@@ -180,6 +180,81 @@ class default_setup(metaclass=MergeMetaclass):
     deviceTarball = "device_perf_results.tgz"
 
 
+class perf_analysis(default_setup):
+    timerAnalysis = {
+        "trisc0_compute_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "COMPUTE"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "COMPUTE"},
+        },
+        "trisc1_compute_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "COMPUTE"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "COMPUTE"},
+        },
+        "trisc2_compute_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "COMPUTE"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "COMPUTE"},
+        },
+        "reader_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "NCRISC", "zone_name": "READER"},
+            "end": {"core": "ANY", "risc": "NCRISC", "zone_name": "READER"},
+        },
+        "writer_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "BRISC", "zone_name": "WRITER"},
+            "end": {"core": "ANY", "risc": "BRISC", "zone_name": "WRITER"},
+        },
+        "trisc0_kernel_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+        },
+        "trisc1_kernel_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+        },
+        "trisc2_kernel_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+        },
+        "core_compute_cb_wait_front": {
+            "across": "core",
+            "type": "sum",
+            "marker": {"risc": "TRISC_0", "zone_name": "CB-COMPUTE-WAIT-FRONT"},
+        },
+        "core_compute_cb_reserve_back": {
+            "across": "core",
+            "type": "sum",
+            "marker": {"risc": "TRISC_2", "zone_name": "CB-COMPUTE-RESERVE-BACK"},
+        },
+        "core_reader_cb_reserve_back": {
+            "across": "core",
+            "type": "sum",
+            "marker": {"risc": "ANY", "zone_name": "CB-READER-RESERVE-BACK"},
+        },
+        "core_reader_cb_wait_front": {
+            "across": "core",
+            "type": "sum",
+            "marker": {"risc": "ANY", "zone_name": "CB-WRITER-WAIT-FRONT"},
+        },
+    }
+
+    detectOps = False
+
+
 class test_timestamped_events(default_setup):
     timerAnalysis = {
         "erisc_events": {

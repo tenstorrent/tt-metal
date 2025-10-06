@@ -566,7 +566,7 @@ def op_core_first_last_analysis(riscData, analysis):
 
 def get_duration(riscData, analysis):
     totalDuration = 0
-    for index, (timerID, timestamp, attachedData, risc, core) in enumerate(riscData["timeseries"]):
+    for index, (timerID, timestamp, attachedData, risc) in enumerate(riscData["timeseries"]):
         desMarker = {"risc": risc, "zone_name": timerID["zone_name"]}
         if desMarker == analysis["marker"]:
             totalDuration += attachedData
