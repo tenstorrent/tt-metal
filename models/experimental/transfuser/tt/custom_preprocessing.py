@@ -14,6 +14,14 @@ def preprocess_conv_parameter(parameter, *, dtype):
     return parameter
 
 
+stage_structure = {
+    "layer1": ["b1", "b2"],
+    "layer2": ["b1", "b2", "b3", "b4", "b5"],
+    "layer3": ["b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "b10", "b11", "b12", "b13"],
+    "layer4": ["b1"],
+}
+
+
 def custom_preprocessor(
     model, name, ttnn_module_args, convert_to_ttnn, custom_preprocessor_func=None, mesh_mapper=None
 ):
@@ -347,9 +355,10 @@ def custom_preprocessor(
         stage_layer = getattr(model.image_encoder.features, model.stage_name)
 
         parameters[model.stage_name] = {}
+        blocks = stage_structure[model.stage_name]
 
         # Process each bottleneck in the stage
-        for block_idx, block_name in enumerate(["b1", "b2"]):  # Adjust based on your stage structure
+        for block_idx, block_name in enumerate(blocks):  # Adjust based on your stage structure
             if hasattr(stage_layer, block_name):
                 block = getattr(stage_layer, block_name)
                 parameters[model.stage_name][block_name] = {}

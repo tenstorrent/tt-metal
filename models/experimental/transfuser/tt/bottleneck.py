@@ -20,7 +20,6 @@ class TTRegNetBottleneck:
         self.downsample = downsample
         self.groups = groups
         self.model_config = model_config
-        print(parameters)
         # conv1: 1x1 convolution
         self.conv1 = TTConv2D(
             kernel_size=1,

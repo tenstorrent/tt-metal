@@ -8,10 +8,10 @@ from models.experimental.transfuser.tt.bottleneck import TTRegNetBottleneck
 
 shard_dict = {
     # stage_name : shard_layout
-    "layer1": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,  #
-    "layer2": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,  #
-    "layer3": ttnn.TensorMemoryLayout.WIDTH_SHARDED,  #
-    "layer4": ttnn.TensorMemoryLayout.WIDTH_SHARDED,  #
+    "layer1": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    "layer2": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    "layer3": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    "layer4": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
 }
 
 
