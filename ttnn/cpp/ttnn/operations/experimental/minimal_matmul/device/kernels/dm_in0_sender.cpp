@@ -57,9 +57,30 @@ void kernel_main() {
     DPRINT << "in0send: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
 
+    /**
+     * This is a Serpentine (Boustrophedon) output block ordering.
+     * It enables reuse of one of the input blocks for the last output block.
+     * Starting at output block (0,0), go east until the end, then south one block, then west until the end, then south
+     * one block, and repeat. At the same time, alternate between K striding forwards or backwards in order to enable
+     * reuse.
+     */
+
+    constexpr uint32_t N_num_blocks = N_end_block - N_start_block + 1;
+
+    bool k_forward = true;
+    bool n_forward = true;
+    bool reuse_block = false;
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
-        for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
-            for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+        reuse_block = false;
+        for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
+            uint32_t n_block = n_forward ? N_start_block + n_block_iter : N_end_block - n_block_iter;
+            for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                if (reuse_block && k_block_iter == 0) {
+                    // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
+                    reuse_block = false;
+                    continue;
+                }
+                uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 DPRINT << "in0send: read in0 on m_block: " << m_block << ", n_block: " << n_block
                        << ", k_block: " << k_block << ENDL();
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
@@ -105,6 +126,10 @@ void kernel_main() {
                 DPRINT << "in0 sender after send data arrived" << ENDL();
 #endif
             }
+            k_forward = !k_forward;
+            // We get reuse on in0 when striding N block
+            reuse_block = true;
         }
+        n_forward = !n_forward;
     }
 }
