@@ -43,6 +43,8 @@
 #include "ttnn/operations/eltwise/complex/complex_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary_pybind.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward_pybind.hpp"
+#include "ttnn/operations/eltwise/fused/materialize_pybind.hpp"
+#include "ttnn/operations/eltwise/lazy/expression_pybind.hpp"
 #include "ttnn/operations/eltwise/quantization/quantization_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_pybind.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward_pybind.hpp"
@@ -94,6 +96,12 @@ void py_module(py::module& module) {
 
     auto m_binary = module.def_submodule("binary", "binary operations");
     binary::py_module(m_binary);
+
+    auto m_fused = module.def_submodule("fused", "fused operations");
+    fused::py_module(m_fused);
+
+    auto m_lazy = module.def_submodule("lazy", "lazy operations");
+    lazy::py_module(m_lazy);
 
     auto m_quantization = module.def_submodule("quantization", "quantization operations");
     quantization::py_module(m_quantization);
