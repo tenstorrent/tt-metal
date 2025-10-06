@@ -14,16 +14,14 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, down_block_id, attn_id, num_attn_heads",
+    "input_shape, encoder_shape, block_id, attn_id, num_attn_heads, block_type",
     [
-        ((1, 4096, 768), None, 1, 1, 12),
-        ((1, 4096, 768), (1, 77, 1280), 1, 2, 12),
-        ((1, 1024, 1536), None, 2, 1, 24),
-        ((1, 1024, 1536), (1, 77, 1280), 2, 2, 24),
-        # Missing MidBlock CrossAttention tests
-        # [(1, 256, 1536), (1, 77, 1280)]
-        # [(1, 256, 1536)]
-        # but these test cases pass if used instead of (1, 1024, 1536)
+        ((1, 4096, 768), None, 1, 1, 12, "down_blocks"),
+        ((1, 4096, 768), (1, 77, 1280), 1, 2, 12, "down_blocks"),
+        ((1, 1024, 1536), None, 2, 1, 24, "down_blocks"),
+        ((1, 1024, 1536), (1, 77, 1280), 2, 2, 24, "down_blocks"),
+        ((1, 256, 1536), None, 0, 1, 24, "mid_block"),
+        ((1, 256, 1536), (1, 77, 1280), 0, 2, 24, "mid_block"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -31,9 +29,10 @@ def test_attention(
     device,
     input_shape,
     encoder_shape,
-    down_block_id,
+    block_id,
     attn_id,
     num_attn_heads,
+    block_type,
     is_ci_env,
 ):
     unet = UNet2DConditionModel.from_pretrained(
@@ -46,15 +45,23 @@ def test_attention(
     unet.eval()
     state_dict = unet.state_dict()
 
-    if attn_id == 1:
-        torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn1
-    else:
-        torch_attention = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[0].attn2
+    if block_type == "down_blocks":
+        if attn_id == 1:
+            torch_attention = unet.down_blocks[block_id].attentions[0].transformer_blocks[0].attn1
+        else:
+            torch_attention = unet.down_blocks[block_id].attentions[0].transformer_blocks[0].attn2
+        module_path = f"down_blocks.{block_id}.attentions.0.transformer_blocks.0.attn{attn_id}"
+    elif block_type == "mid_block":
+        if attn_id == 1:
+            torch_attention = unet.mid_block.attentions[0].transformer_blocks[0].attn1
+        else:
+            torch_attention = unet.mid_block.attentions[0].transformer_blocks[0].attn2
+        module_path = f"mid_block.attentions.0.transformer_blocks.0.attn{attn_id}"
 
     tt_attention = TtAttention(
         device,
         state_dict,
-        f"down_blocks.{down_block_id}.attentions.0.transformer_blocks.0.attn{attn_id}",
+        module_path,
         num_attn_heads,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
