@@ -164,17 +164,17 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
             li t1, 0x8
             csrrc zero, 0x7c0, t1
              )ASM" ::
-            : "t1");
+                : "t1");
 #if !defined(ENABLE_HW_CACHE_INVALIDATION)
-    // Disable gathering to stop HW from invalidating the data cache after 128 transactions by setting bit 24
-    // This is default enabled
-    asm(R"ASM(
+        // Disable gathering to stop HW from invalidating the data cache after 128 transactions by setting bit 24
+        // This is default enabled
+        asm(R"ASM(
             li   t1, 0x1
             slli t1, t1, 24
             fence
             csrrs zero, 0x7c0, t1
             )ASM" ::
-            : "t1");
+                : "t1");
 #endif
     } else {
         asm(R"ASM(
@@ -182,7 +182,7 @@ inline __attribute__((always_inline)) void set_l1_data_cache() {
             li t1, 0x8
             csrrs zero, 0x7c0, t1
              )ASM" ::
-            : "t1");
+                : "t1");
     }
 #endif
 }
