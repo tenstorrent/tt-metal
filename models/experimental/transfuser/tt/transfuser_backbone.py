@@ -14,10 +14,8 @@ class TtTransfuserBackbone:
         parameters,
         stride,
         model_config,
-        # layer_optimisations=neck_optimisations,
     ) -> None:
         self.inplanes = 32
-        # print(f"{parameters=}")
         self.conv1 = TTConv2D(
             kernel_size=3,
             stride=2,
@@ -27,7 +25,6 @@ class TtTransfuserBackbone:
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceHeight, num_slices=2),
             deallocate_activation=True,
             reallocate_halo_output=True,
             reshard_if_not_optimal=True,
@@ -110,20 +107,17 @@ class TtTransfuserBackbone:
         return layers
 
     def normalize_imagenet_ttnn(self, x):
-        """Normalize input images according to ImageNet standards using TTNN operations."""
-        # ImageNet normalization constants
-        # Channel 0 (R): (x/255.0 - 0.485) / 0.229
-        # Channel 1 (G): (x/255.0 - 0.456) / 0.224
-        # Channel 2 (B): (x/255.0 - 0.406) / 0.225
-
+        """Normalize input images according to ImageNet standards using TTNN operations.
+        Expects input in NHWC format
+        """
         # First divide by 255.0 to convert from [0,255] to [0,1]
         x = ttnn.multiply(x, 1.0 / 255.0)
 
-        # Split channels for per-channel normalization
-        # Note: x is in NCHW format at this point
-        x_r = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], 1, x.shape[2], x.shape[3]])  # Red channel
-        x_g = ttnn.slice(x, [0, 1, 0, 0], [x.shape[0], 2, x.shape[2], x.shape[3]])  # Green channel
-        x_b = ttnn.slice(x, [0, 2, 0, 0], [x.shape[0], 3, x.shape[2], x.shape[3]])  # Blue channel
+        # For NHWC format: [batch, height, width, channels]
+        # Slice along the channel dimension (dim=3)
+        x_r = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], x.shape[1], x.shape[2], 1])  # Red channel
+        x_g = ttnn.slice(x, [0, 0, 0, 1], [x.shape[0], x.shape[1], x.shape[2], 2])  # Green channel
+        x_b = ttnn.slice(x, [0, 0, 0, 2], [x.shape[0], x.shape[1], x.shape[2], 3])  # Blue channel
 
         # Normalize each channel: (x - mean) / std
         x_r = ttnn.subtract(x_r, 0.485)
@@ -135,8 +129,8 @@ class TtTransfuserBackbone:
         x_b = ttnn.subtract(x_b, 0.406)
         x_b = ttnn.multiply(x_b, 1.0 / 0.225)
 
-        # Concatenate channels back together
-        x = ttnn.concat([x_r, x_g, x_b], dim=1)
+        # Concatenate along channel dimension (dim=3 for NHWC)
+        x = ttnn.concat([x_r, x_g, x_b], dim=3)
 
         return x
 
@@ -144,30 +138,27 @@ class TtTransfuserBackbone:
         # Process image input
         logger.info(f"image_encoder_conv1")
         image_x = self.normalize_imagenet_ttnn(image_x)
-        print("///////////////////")
-        print(image_x.shape)
-        print(lidar_x.shape)
-        # image_x = ttnn.permute(image_x, (0, 2, 3, 1))
         image_out, image_shape = self.conv1(device, image_x, image_x.shape)
         # Reshape to spatial dimensions: 80 * 352 = 28160
         # out = ttnn.reshape(out, (1, 80, 352, 32))
         # out = ttnn.permute(out, (0, 3, 1, 2))
         logger.info(f"lidar_encoder_conv1")
         # Process lidar input
-        # lidar_x = ttnn.permute(lidar_x, (0, 2, 3, 1))
         lidar_out, lidar_shape = self.lidar_conv1(device, lidar_x, lidar_x.shape)
         print("..........................................")
         print(lidar_shape)
         print(image_shape)
 
         logger.info(f"image_encoder_layer1")
-        image_out = ttnn.reshape(image_out, (1, 80, 352, 32))
+        # image_out = ttnn.reshape(image_out, (1, 80, 352, 32))
+        image_out = ttnn.reshape(image_out, image_shape)
         # Process layer1 blocks
         for block in self.image_layer1:
             image_out = block(image_out, device)
 
         logger.info(f"lidar_encoder_layer1")
-        lidar_out = ttnn.reshape(lidar_out, (1, 128, 128, 32))
+        lidar_out = ttnn.reshape(lidar_out, lidar_shape)
+        # lidar_out = ttnn.reshape(lidar_out, (1, 128, 128, 32))
         for block in self.lidar_layer1:
             lidar_out = block(lidar_out, device)
 

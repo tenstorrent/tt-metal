@@ -80,14 +80,12 @@ class TransfuserBackboneInfra:
 
         # Convert input to TTNN format
         tt_image_input = ttnn.from_torch(
-            # self.torch_image_input,
             self.torch_image_input.permute(0, 2, 3, 1),
             dtype=ttnn.bfloat16,
             mesh_mapper=self.inputs_mesh_mapper,
         )
         tt_lidar_input = ttnn.from_torch(
             self.torch_lidar_input.permute(0, 2, 3, 1),
-            # self.torch_lidar_input,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
