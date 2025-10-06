@@ -45,7 +45,6 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
     const bool is_dram_input = input_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     tt::tt_metal::MemoryConfig output_memory_config;
-
     if (is_dram_input) {
         TT_FATAL(
             memory_config.has_value(),
@@ -58,6 +57,10 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
             output_memory_config = infer_hwc_output_memory_config(a);
         }
     }
+    TT_FATAL(
+        output_memory_config.shard_spec()->shape[1] % 8 == 0,
+        "Output shard width must be rounded up to next multiple of 8 to satisfy alignment constrains (width was {})",
+        output_memory_config.shard_spec()->shape[1]);
 
     auto program = ConvertToHWC{output_memory_config, dtype.value_or(a.dtype())};
     return tt::tt_metal::operation::run(program, {a}, {}, {}).at(0);

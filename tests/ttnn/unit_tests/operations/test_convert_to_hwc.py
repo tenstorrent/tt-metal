@@ -174,7 +174,7 @@ def test_convert_to_hwc_dram(
 
 
 def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device):
-    C = 8
+    C = 4
     HW = 32
     core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     padded_sharded_dim = 32
@@ -193,3 +193,10 @@ def test_convert_to_hwc_dram_input_without_memory_config_should_fail(device):
         RuntimeError, match="When input tensor is in DRAM, output memory_config must be explicitly specified"
     ):
         ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16)
+
+    output_shard_shape = (padded_sharded_dim, C)
+    output_shard_spec = ttnn.ShardSpec(core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
+
+    with pytest.raises(RuntimeError):
+        ttnn.experimental.convert_to_hwc(input_tensor, dtype=ttnn.bfloat16, memory_config=output_mem_config)
