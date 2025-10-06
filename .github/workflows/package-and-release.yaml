@@ -82,6 +82,8 @@ jobs:
             fi
             exit 0
           fi
+          echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
+          exit 1
 
       - name: Get should-create-release
         id: get-should-create-release
