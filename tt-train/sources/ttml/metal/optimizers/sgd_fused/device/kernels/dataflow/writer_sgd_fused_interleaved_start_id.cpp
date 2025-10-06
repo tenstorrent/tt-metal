@@ -49,8 +49,8 @@ void kernel_main() {
 #endif
     uint32_t end_tile = start_tile + num_tiles_to_process;
     for (uint32_t tile_idx = start_tile; tile_idx < end_tile; tile_idx += block_size) {
-        uint32_t nth_tile_in_row = tile_idx % Wt;
-        uint32_t current_block_size = (nth_tile_in_row + block_size <= Wt) ? block_size : (Wt - nth_tile_in_row);
+        uint32_t tiles_left = end_tile - tile_idx;
+        uint32_t current_block_size = std::min(block_size, tiles_left);
 
 #if USE_MOMENTUM
         write_cb_block_to_dram(
