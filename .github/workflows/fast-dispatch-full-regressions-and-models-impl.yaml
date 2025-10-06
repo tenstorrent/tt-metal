@@ -306,6 +306,7 @@ jobs:
             pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
           else
             pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+          fi
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
