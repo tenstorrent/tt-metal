@@ -186,12 +186,10 @@ SGDFusedProgramFactory::cached_program_t SGDFusedProgramFactory::create(
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    // compile arguments
-    uint32_t block_size = 4U;
-
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
 
+    uint32_t block_size = std::min(4U, num_tiles_per_core_group_1);
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
