@@ -1550,7 +1550,7 @@ async function run() {
     // Set outputs
     core.setOutput('failed_workflows', JSON.stringify(failedWorkflows));
     core.setOutput('report', finalReport);
-    if (alertAll) core.setOutput('alert_all_message', alertAllMessage || '');
+    core.setOutput('alert_all_message', alertAllMessage || '');
     core.setOutput('regressed_workflows', JSON.stringify(regressedDetails));
 
     await core.summary.addRaw(finalReport).write();
