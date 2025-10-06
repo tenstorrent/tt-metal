@@ -244,6 +244,7 @@ class MotifPipeline:
         prompt_count = len(prompt_1)
 
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
+        cfg_factor = self._parallel_config.cfg_parallel.factor
 
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
@@ -298,19 +299,19 @@ class MotifPipeline:
             tt_latents_step_list = []
             for i, submesh_device in enumerate(self._submesh_devices):
                 tt_prompt_embeds = tensor.from_torch(
-                    prompt_embeds[i : i + 1] if self._parallel_config.cfg_parallel.factor == 2 else prompt_embeds,
-                    device=submesh_device if not traced else None,
+                    prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
+                    device=submesh_device,
+                    on_host=traced,
                 )
 
                 tt_pooled_prompt_embeds = tensor.from_torch(
-                    pooled_prompt_embeds[i : i + 1]
-                    if self._parallel_config.cfg_parallel.factor == 2
-                    else pooled_prompt_embeds,
-                    device=submesh_device if not traced else None,
+                    pooled_prompt_embeds[i : i + 1] if cfg_factor == 2 else pooled_prompt_embeds,
+                    device=submesh_device,
+                    on_host=traced,
                 )
 
                 tt_initial_latents = tensor.from_torch(
-                    latents, device=submesh_device if not traced else None, mesh_mapping={sp_axis: 1}
+                    latents, device=submesh_device, on_host=traced, mesh_mapping={sp_axis: 1}
                 )
 
                 if traced:
