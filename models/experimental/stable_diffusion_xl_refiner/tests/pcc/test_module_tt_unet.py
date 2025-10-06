@@ -16,8 +16,6 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
 def prepare_ttnn_tensors(
     device, torch_input_tensor, torch_timestep_tensor, torch_temb_tensor, torch_encoder_tensor, torch_time_ids
 ):
-    torch.manual_seed(2025)
-
     ttnn_timestep_tensor = ttnn.from_torch(
         torch_timestep_tensor,
         dtype=ttnn.bfloat16,
