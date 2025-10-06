@@ -57,8 +57,15 @@ def test_vgg16(
     }
 
     torch_batched_tensor = torch_input_tensor_nchw.repeat(batch_size, 1, 1, 1)
+    # pad torch tensors so that channels are multiple of 8
+    # Pad channels to be multiple of 8
+    _, C, H, W = torch_batched_tensor.shape
+    pad_channels = (8 - C % 8) % 8
+    if pad_channels > 0:
+        torch_batched_tensor = torch.nn.functional.pad(torch_batched_tensor, (0, 0, 0, 0, 0, pad_channels))
+
     torch_input_tensor = torch.permute(torch_batched_tensor, (0, 2, 3, 1))
-    tt_batched_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    tt_batched_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, device=device)
 
     ttnn_output = ttnn_vgg.ttnn_vgg16(device, tt_batched_input_tensor, parameters, batch_size, model_config)
     torch_output_tensor = ttnn.to_torch(ttnn_output)
