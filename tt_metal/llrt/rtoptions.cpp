@@ -49,7 +49,7 @@ RunTimeOptions::RunTimeOptions() {
         this->root_dir = g_root_dir;
     }
 
-    TT_ASSERT(this->is_root_dir_set, "Root Directory is not set.");
+    TT_FATAL(this->is_root_dir_set, "Root Directory is not set.");
 
     if (!this->root_dir.empty()) {
         std::filesystem::path p(root_dir);
