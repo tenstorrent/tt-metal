@@ -19,9 +19,10 @@ jobs:
   profiler-tests:
     needs: build-artifact-profiler
     secrets: inherit
-    uses: ./.github/workflows/galaxy-profiler-tests-impl.yaml
+    uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       topology: topology-6u
+      test-script: ./tests/scripts/run_profiler_regressions.sh
