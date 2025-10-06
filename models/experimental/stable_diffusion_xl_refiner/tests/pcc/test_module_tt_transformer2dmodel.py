@@ -21,7 +21,7 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)
-def test_transformermodel(
+def test_transformermodel_refiner(
     device,
     input_shape,
     encoder_shape,

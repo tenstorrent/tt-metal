@@ -22,7 +22,7 @@ from functools import reduce
         ((4096, 768), "down_blocks.1.attentions.0.transformer_blocks.0.ff", 0.999),
     ],
 )
-def test_feedforward(device, input_shape, module_path, pcc, is_ci_env, reset_seeds):
+def test_feedforward_refiner(device, input_shape, module_path, pcc, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
         "stabilityai/stable-diffusion-xl-refiner-1.0",
         torch_dtype=torch.float32,

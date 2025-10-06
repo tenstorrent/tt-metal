@@ -156,7 +156,7 @@ def run_unet_model(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)
-def test_unet(
+def test_unet_refiner(
     device,
     input_shape,
     timestep_shape,
