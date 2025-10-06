@@ -160,7 +160,7 @@ jobs:
           annotations-index-path: ${{ github.workspace }}/annotations/annotations-index.json
           commits-path: ${{ github.workspace }}/commits-main.json
           logs-index-path: ${{ github.workspace }}/logs/logs-index.json
-          alert-all: 'false'
+          alert-all: 'true'
           workflow_configs: |
             [
               {"display": "All post-commit tests", "wkflw_name": "All post-commit tests"},
