@@ -43,7 +43,18 @@ RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->is_root_dir_set = true;
-        this->root_dir = std::string(root_dir_str) + "/";
+        this->root_dir = std::string(root_dir_str);
+    } else if (!g_root_dir.empty()) {
+        this->is_root_dir_set = true;
+        this->root_dir = g_root_dir;
+    }
+
+    TT_ASSERT(this->is_root_dir_set, "Root Directory is not set.");
+
+    if (!this->root_dir.empty()) {
+        std::filesystem::path p(root_dir);
+        p /= "";  // ensures trailing slash, never duplicates
+        this->root_dir = p.string();
     }
 
     // Check if user has specified a cache path.
@@ -264,12 +275,7 @@ RunTimeOptions::RunTimeOptions() {
 }
 
 void RunTimeOptions::set_root_dir(const std::string& root_dir) {
-    if (!root_dir.empty()) {
-        std::filesystem::path p(root_dir);
-        p /= "";  // ensures trailing slash, never duplicates
-        this->root_dir = p.string();
-        this->is_root_dir_set = true;
-    }
+    std::call_once(g_root_once, [&] { g_root_dir = root_dir; });
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {

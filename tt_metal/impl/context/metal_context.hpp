@@ -46,7 +46,7 @@ public:
     MetalContext& operator=(MetalContext&& other) noexcept = delete;
     MetalContext(const MetalContext&) = delete;
     MetalContext(MetalContext&& other) noexcept = delete;
-    static MetalContext& instance(const std::string& root_dir = "");
+    static MetalContext& instance();
 
     Cluster& get_cluster();
     llrt::RunTimeOptions& rtoptions();
@@ -104,7 +104,7 @@ public:
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
-    MetalContext(const std::string& root_dir);
+    MetalContext();
     ~MetalContext();
 
     void clear_l1_state(chip_id_t device_id);
