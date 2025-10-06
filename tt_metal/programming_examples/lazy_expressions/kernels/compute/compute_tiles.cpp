@@ -8,15 +8,21 @@
 
 namespace NAMESPACE {
 void MAIN {
+    // rt args are:
+    // - n_tiles
+    // - any scalar params used in expression tree
     const auto n_tiles = get_arg_val<uint32_t>(0);
     const auto value = get_arg_val<uint32_t>(1);
 
-    constexpr auto num_tiles_per_cycle = get_compile_time_arg_val(0);
-    constexpr auto cb_temp = get_compile_time_arg_val(1);
+    // ct args are:
+    // - num_tiles_per_cycle
+    // - cb_indices for any intermediate buffered tiles in expression tree
+    // - cb_indices for input tensors
+    // - cb_index for output tensor
 
     // 4 circular buffers: cb_in0, cb_in1, cb_in2, cb_out0
-    // and append cb_temp to circular buffers
-    const auto view = views::MakeComputeView<4, num_tiles_per_cycle, cb_temp>();
+    // and append 2 ct args (num_tiles_per_cycle, cb_temp)
+    const auto view = views::MakeComputeView<4, 2>();
 
     view.init_tiles(views::init_sfpu<tt::c_0, tt::c_3>());
 
