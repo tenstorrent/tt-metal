@@ -201,7 +201,7 @@ class MotifPipeline:
 
         self._text_encoder = TextEncoder(
             device=encoder_device,
-            ccl_manager=self.ccl_managers[0],
+            ccl_manager=self._ccl_managers[0],
             parallel_config=encoder_parallel_config,
             enable_t5=enable_t5_text_encoder,
             use_torch_clip_encoder=use_torch_clip_text_encoder,
@@ -544,7 +544,7 @@ class MotifPipeline:
         negative_prompt_2: list[str | None],
         negative_prompt_3: list[str | None],
         num_images_per_prompt: int,
-        do_classifier_free_guidance: bool,
+        cfg_enabled: bool,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         timer = self.timing_collector
 
@@ -562,7 +562,7 @@ class MotifPipeline:
                 negative_prompt_1, negative_prompt_2, negative_prompt_3, num_images_per_prompt=num_images_per_prompt
             )
 
-        if not do_classifier_free_guidance:
+        if not cfg_enabled:
             return prompt_embeds, pooled_prompt_embeds, prompt_embeds, pooled_prompt_embeds
 
         zeroed_prompt_embeds = negative_prompt_embeds.clone()

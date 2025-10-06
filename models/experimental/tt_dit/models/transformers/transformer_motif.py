@@ -83,7 +83,7 @@ class TimeTextProjection(Module):
         batch_size = pooled_projection.shape[0]
 
         assert len(pooled_projection.shape) == 2
-        assert timestep.shape == [batch_size, 1]
+        assert timestep.shape in ([1, 1], [batch_size, 1])
         assert timestep.dtype == ttnn.float32, "timesteps require float32 precision"
 
         emb = timestep * self.time_proj_factor
@@ -255,11 +255,10 @@ class MotifTransformer(Module):
         batch_size, _, _ = spatial.shape
         assert len(prompt.shape) == 3
         assert len(pooled.shape) == 2
-        assert timestep.shape == [batch_size, 1]
+        assert timestep.shape in ([1, 1], [batch_size, 1])
 
         assert prompt.shape[0] == batch_size
         assert pooled.shape[0] == batch_size
-        assert timestep.shape[0] == batch_size
 
         tp_axis = self.parallel_config.tensor_parallel.mesh_axis
 
