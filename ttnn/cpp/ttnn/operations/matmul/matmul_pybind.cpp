@@ -547,10 +547,35 @@ void py_module(py::module& module) {
                   - TILE
 
         Memory Support:
-            - Interleaved: DRAM and L1
-            - Input A also supports sharding (width, height, block), with row major orientation, depending on the program config
-            - Input B also supports sharding (width, height, block), with row major orientation depending on the program config, although in a more limited manner than Input A
-            - Sharded outputs (when used): must match Input A buffer type and memory layout; some configs disallow width sharded outputs
+            The supported memory configurations for the two input tensors are program config dependent, as described below:
+
+            .. list-table:: Supported Memory Configurations
+                :header-rows: 1
+
+                * - Config
+                  - Input A
+                  - Input B
+                * - MatmulMultiCoreReuseProgramConfig
+                  - Interleaved (L1/DRAM), Height/Block Sharded (L1)
+                  - Interleaved (L1/DRAM), Height/Block Sharded (L1)
+                * - MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
+                  - Width Sharded (L1)
+                  - Width Sharded (DRAM)
+                * - MatmulMultiCoreReuseMultiCastProgramConfig
+                  - Interleaved (L1/DRAM), Block Sharded (L1)
+                  - Interleaved (L1/DRAM)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in1
+                  - Interleaved (L1/DRAM), Height Sharded (L1)
+                  - Interleaved (L1/DRAM)
+                * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
+                  - Interleaved (L1/DRAM), Width Sharded (DRAM)
+
+
+            For :class:`MatmulMultiCoreReuseMultiCastProgramConfig`, a special case exists when :attr:`input_tensor_a` is single column (height sharded or interleaved) and :attr:`input_tensor_b` is a single row (width sharded or interleaved).
+            This setup only supports row major orientation without transpose multicast.
+
+            When sharded output tensors are provided, they should match :attr:`input_tensor_a`'s buffer type and memory layout.
 
         Example:
             >>> # matrix x matrix - no batch dimensions
