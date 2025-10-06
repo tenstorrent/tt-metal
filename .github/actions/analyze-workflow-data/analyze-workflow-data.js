@@ -1365,6 +1365,22 @@ async function run() {
               if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
               resolveOwnersForSnippet(sn, item.name);
             }
+            // Aggregate owners across snippets for this regression item
+            const ownerSet = new Map();
+            for (const sn of (item.error_snippets || [])) {
+              if (Array.isArray(sn.owner)) {
+                for (const o of sn.owner) {
+                  if (!o) continue;
+                  const k = `${o.id || ''}|${o.name || ''}`;
+                  ownerSet.set(k, o);
+                }
+              }
+            }
+            let owners = Array.from(ownerSet.values());
+            if (!owners.length) {
+              owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
+            }
+            item.owners = owners;
           } catch (_) { /* ignore */ }
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
