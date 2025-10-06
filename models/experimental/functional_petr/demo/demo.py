@@ -27,6 +27,7 @@ from torch.nn import Conv2d, Linear
 from torch import nn
 from models.experimental.functional_petr.reference.utils import LiDARInstance3DBoxes
 
+import cv2
 
 # ============= Mock Classes to Replace MMDet3D Dependencies =============
 import matplotlib
@@ -36,7 +37,103 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 
-def save_petr_visualizations(ttnn_output, output_dir="./"):
+def transform_box(box, matrix):
+    """
+    Apply a 4x4 transformation matrix to a 3D bounding box.
+    Args:
+        box: numpy array of shape (7,) or (n,7) representing the 3D box parameters
+             (x, y, z, w, l, h, yaw)
+        matrix: numpy array of shape (4, 4) representing the transformation matrix
+    Returns:
+        box_transformed: numpy array of same shape as input box representing the transformed box
+    """
+    # Extract box parameters
+    print(f"box shape: {box.shape}")
+    print(f"box: {box}")
+    # if box.shape == (7,):
+    #     x, y, z, w, l, h, yaw = box
+    # else:
+    x, y, z, w, l, h, yaw = box[:7]
+
+    # Create a 4x4 box transformation matrix
+    box_to_lidar = np.eye(4)
+    box_to_lidar[:3, :3] = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
+    box_to_lidar[:3, 3] = [x, y, z]
+
+    # Multiply the box transformation matrix with the given matrix
+    lidar_to_cam = np.matmul(matrix, box_to_lidar)
+
+    # Extract transformed box parameters
+    x, y, z = lidar_to_cam[:3, 3]
+    yaw = np.arctan2(lidar_to_cam[1, 0], lidar_to_cam[0, 0])
+
+    if box.shape == (7,):
+        return np.array([x, y, z, w, l, h, yaw])
+    else:
+        return np.stack([x, y, z, w, l, h, yaw], axis=-1)
+
+
+def project_3d_to_2d(box_3d, intrinsic):
+    """
+    Project a 3D bounding box to 2D using the camera intrinsic matrix.
+    Args:
+        box_3d: numpy array of shape (7,) representing the 3D box parameters
+                (x, y, z, w, l, h, yaw) in the camera frame
+        intrinsic: numpy array of shape (3, 3) representing the camera intrinsic matrix
+    Returns:
+        box_2d: tuple of (xmin, ymin, xmax, ymax) representing the 2D bounding box
+    """
+    # Extract box vertices in the camera frame
+    x, y, z, w, l, h, yaw = box_3d
+    vertices_3d = np.array(
+        [
+            [x - l / 2, y - w / 2, z - h / 2, 1],
+            [x - l / 2, y + w / 2, z - h / 2, 1],
+            [x + l / 2, y + w / 2, z - h / 2, 1],
+            [x + l / 2, y - w / 2, z - h / 2, 1],
+            [x - l / 2, y - w / 2, z + h / 2, 1],
+            [x - l / 2, y + w / 2, z + h / 2, 1],
+            [x + l / 2, y + w / 2, z + h / 2, 1],
+            [x + l / 2, y - w / 2, z + h / 2, 1],
+        ]
+    )
+
+    # Project vertices onto the image plane
+    vertices_2d = np.matmul(intrinsic, vertices_3d[:, :3].T)
+
+    # Check for zero values in the third row
+    mask = vertices_2d[2, :] != 0
+    vertices_2d = vertices_2d[:, mask]
+
+    # Perform division only for non-zero values
+    vertices_2d = vertices_2d[:2, :] / vertices_2d[2, :]
+    vertices_2d = vertices_2d.T
+
+    # Find the bounding box of the projected vertices
+    if vertices_2d.shape[0] > 0:
+        xmin, ymin = np.min(vertices_2d, axis=0)
+        xmax, ymax = np.max(vertices_2d, axis=0)
+        return xmin, ymin, xmax, ymax
+    else:
+        return None
+
+
+def draw_box_on_image(img, box_2d, color=(0, 255, 0), thickness=2):
+    """
+    Draw a 2D bounding box on an image.
+    Args:
+        img: numpy array representing the image
+        box_2d: tuple of (xmin, ymin, xmax, ymax) representing the 2D bounding box
+        color: tuple of (B, G, R) values for the box color
+        thickness: integer for the box line thickness
+    Returns:
+        None (the function modifies the input image in-place)
+    """
+    xmin, ymin, xmax, ymax = map(int, box_2d)
+    cv2.rectangle(img, (xmin, ymin), (xmax, ymax), color, thickness)
+
+
+def save_petr_visualizations(ttnn_output, camera_images, img_metas, output_dir="./"):
     output_dict = ttnn_output[0]["pts_bbox"]
     boxes = output_dict["bboxes_3d"].tensor.cpu().numpy()
     scores = output_dict["scores_3d"].to(torch.float32).cpu().numpy()
@@ -49,7 +146,29 @@ def save_petr_visualizations(ttnn_output, output_dir="./"):
     threshold = 0.14
     mask = scores > threshold
     filtered_boxes = boxes[mask][:50]  # Limit to 50 boxes
+    cam_names = ["CAM_FRONT", "CAM_FRONT_RIGHT", "CAM_FRONT_LEFT", "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"]
 
+    for cam_id, cam_name in enumerate(cam_names):
+        img = camera_images[cam_id]
+
+        # Get intrinsic and extrinsic matrices for this camera
+        intrinsic = img_metas[0]["cam_intrinsic"][cam_id]
+        lidar2cam = img_metas[0]["lidar2cam"][cam_id]
+
+        for box in filtered_boxes:
+            # Transform box from LiDAR to camera frame
+            box_cam = transform_box(box, lidar2cam)
+
+            # Project 3D box vertices to 2D
+            box_2d = project_3d_to_2d(box_cam, intrinsic)
+            if box_2d is not None:
+                draw_box_on_image(img, box_2d)
+
+            # Draw 2D box on image
+            # draw_box_on_image(img, box_2d)
+
+        # Save annotated image
+        cv2.imwrite(f"{output_dir}/petr_{cam_name}.jpg", img)
     # Draw boxes
     for i, box in enumerate(filtered_boxes):
         x, y, z, w, l, h, yaw = box[:7]
@@ -488,9 +607,10 @@ def load_real_nuscenes_images(data_root="models/experimental/functional_petr/res
                 "pad_shape": (320, 800),
                 "cam2img": [np.eye(4, dtype=np.float32) for _ in range(6)],
                 "lidar2img": [np.eye(4, dtype=np.float32) for _ in range(6)],
+                "cam_intrinsic": [np.array([[1000, 0, 400], [0, 1000, 160], [0, 0, 1]]) for _ in range(6)],
             }
         ],
-    }
+    }, imgs_list
 
 
 # ============= Main Demo Function =============
@@ -516,7 +636,9 @@ def test_demo(device, reset_seeds):
             input_data = torch.load(data_path, weights_only=False)
         else:
             print("Loading real nuScenes images...")
-            input_data = load_real_nuscenes_images("models/experimental/functional_petr/resources/nuscenes")
+            input_data, camera_images = load_real_nuscenes_images(
+                "models/experimental/functional_petr/resources/nuscenes"
+            )
         print(f"   Data loaded successfully")
     except FileNotFoundError:
         print(f"   WARNING: Data file not found. Creating dummy data...")
@@ -699,7 +821,7 @@ def test_demo(device, reset_seeds):
     print("Demo completed successfully!")
     print("=" * 60)
 
-    return ttnn_output
+    return ttnn_output, camera_images, ttnn_batch_img_metas
 
 
 # ============= Standalone Execution =============
@@ -720,8 +842,8 @@ if __name__ == "__main__":
 
     # Run the demo
     try:
-        ttnn_output = test_demo(device, None)
-        filtered_boxes = save_petr_visualizations(ttnn_output)
+        ttnn_output, camera_images, ttnn_batch_img_metas = test_demo(device, None)
+        filtered_boxes = save_petr_visualizations(ttnn_output, camera_images, ttnn_batch_img_metas)
     finally:
         if device:
             ttnn.close_device(device)
