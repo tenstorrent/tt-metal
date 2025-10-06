@@ -159,4 +159,12 @@ uint32_t Tensor::get_rank() const {
     return get_shape().rank();
 }
 
+void Tensor::assign(const TensorPtr& other) {
+    if (this->get_shape() != other->get_shape()) {
+        throw std::runtime_error(
+            fmt::format("Shape mismatch in Tensor::assign: {} vs {}", this->get_shape(), other->get_shape()));
+    }
+
+    this->set_value(other->get_value());
+}
 }  // namespace ttml::autograd
