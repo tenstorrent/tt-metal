@@ -124,7 +124,6 @@ def map_hf_to_meta_keys_vision_only(state_dict):
         ("post_layernorm", "ln_post"),
         ("embeddings.patch_embedding._linear", "embeddings.patch_embedding"),
         ("embeddings.patch_embedding", "embeddings.patch_embedding._linear"),
-        # ("embeddings.position_embedding.positional_embedding.weight", "embeddings.position_embedding.positional_embedding"),
         ("embeddings.position_embedding.weight", "embeddings.position_embedding.positional_embedding"),
     ]
 
