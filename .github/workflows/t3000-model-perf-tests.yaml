@@ -12,14 +12,14 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      version: 22.04
+      version: 24.04
       build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     with:
-      version: 22.04
+      version: 24.04
       build-wheel: true
       tracy: true
     secrets: inherit
