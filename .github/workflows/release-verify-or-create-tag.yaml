@@ -19,6 +19,10 @@ on:
         description: "If true, do not upload tag."
         default: false
         type: boolean
+      ref:
+        description: "The git ref (branch, tag, or commit SHA) to checkout"
+        required: false
+        type: string
     outputs:
       version:
         description: "New version"
@@ -34,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || 'main' }}
           fetch-depth: ${{ inputs.fetch_depth }}
           fetch-tags: true
       - uses: paulhatch/semantic-version@v5.4.0

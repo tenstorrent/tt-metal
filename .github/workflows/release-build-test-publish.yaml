@@ -27,6 +27,10 @@ on:
         required: false
         default: "false"
         type: string
+      ref:
+        description: "The git ref (branch, tag, or commit SHA) to checkout"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -40,6 +44,7 @@ jobs:
         packages: write
       secrets: inherit
       with:
+        ref: ${{ inputs.ref || 'main' }}
         version: ${{ inputs.version || 22.04 }}
         distro: ${{ inputs.distro || 'ubuntu' }}
         build-wheel: true
@@ -51,6 +56,7 @@ jobs:
         packages: write
       secrets: inherit
       with:
+        ref: ${{ inputs.ref || 'main' }}
         version: ${{ inputs.version || 22.04 }}
         tracy: true
         build-wheel: true
@@ -158,6 +164,7 @@ jobs:
     if: ${{ inputs.is-release-candidate !='true' }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
+      ref: ${{ inputs.ref || 'main' }}
       version: ${{ inputs.tag-version }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

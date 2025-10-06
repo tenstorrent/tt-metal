@@ -11,6 +11,10 @@ on:
         description: "Type of release to create. One of 'dev', 'rc', or 'prod'. If not provided, the type will be inferred from the git ref."
         required: false
         type: string
+      ref:
+        description: "The git ref (branch, tag, or commit SHA) to checkout"
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       dry-run:
@@ -22,6 +26,10 @@ on:
         description: "Type of release to create. One of 'dev', 'rc', or 'prod'. If not provided, the type will be inferred from the git ref."
         required: false
         default: "dev"
+        type: string
+      ref:
+        description: "The git ref (branch, tag, or commit SHA) to checkout"
+        required: false
         type: string
 
   schedule:
@@ -51,6 +59,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || 'main' }}
           fetch-depth: 0
       - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
@@ -91,6 +100,7 @@ jobs:
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
     secrets: inherit
     with:
+      ref: ${{ inputs.ref }}
       fetch_depth: 0
       bump_each_commit: false
       # tag-type is now set in release-precheck and passed as output
@@ -106,6 +116,7 @@ jobs:
       matrix:
         version: [22.04, 24.04]
     with:
+      ref: ${{ inputs.ref }}
       version: ${{ matrix.version }}
       dry-run: ${{ inputs.dry-run || false }}
       tag-version: ${{ needs.create-tag.outputs.version }}
@@ -176,6 +187,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'main' }}
       - name: Download changelog
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
@@ -210,6 +223,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || 'main' }}
           submodules: recursive
       - name: Create archive with submodules
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
@@ -250,7 +264,7 @@ jobs:
       - name: Checkout stable branch
         uses: actions/checkout@v4
         with:
-          ref: stable
+          ref: ${{ inputs.ref || 'stable' }}
           fetch-depth: 0
       - name: Fetch all tags
         run: git fetch --tags --force origin
