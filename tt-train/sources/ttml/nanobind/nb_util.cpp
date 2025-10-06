@@ -384,6 +384,8 @@ tt::tt_metal::Tensor make_metal_tensor(
                 NB_THROW(nb::exception_type::type_error, UnsupportedMessages::INVALID);
                 break;
         }
+
+        NB_THROW(nb::exception_type::type_error, UnsupportedMessages::UNKNOWN);
     };
 
     switch (static_cast<nb::dlpack::dtype_code>(numpy_data_type.code)) {
