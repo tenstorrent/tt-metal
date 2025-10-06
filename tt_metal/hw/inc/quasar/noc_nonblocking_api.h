@@ -24,7 +24,7 @@ constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =
 #define NOC_0_Y(noc_index, noc_size_y, y) y
 #define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
 #define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y - 1 - (y)))
-#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(NOC_ID_LOGICAL))
+#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(0))
 
 ////
 /*TODO: RT review this file, currently using wormhole b0 copy, check if any changes needed for BH*/
@@ -185,17 +185,17 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
-    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(read_req_vc);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
-    }
+    // if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+    //     uint32_t noc_rd_cmd_field =
+    //         NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(read_req_vc);
+    //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    // }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(src_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         noc_reads_num_issued[noc] += 1;
@@ -245,18 +245,18 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
         (posted ? 0 : NOC_CMD_RESP_MARKED);
 
-    if constexpr (use_trid) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
-    }
+    // if constexpr (use_trid) {
+    //     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    // }
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, 0);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, 0);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
@@ -288,16 +288,16 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     uint32_t noc_cmd_field =
         NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
-        NOC_CMD_BRCST_SRC_INCLUDE | NOC_CMD_RESP_MARKED;
+        NOC_BRCST_SRC_INCLUDE | NOC_CMD_RESP_MARKED;
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, 0);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, 0);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         noc_nonposted_writes_num_issued[noc] += 1;
@@ -327,14 +327,14 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_exclude_region(
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
         NOC_CMD_RESP_MARKED;
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, exclude_region);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_BRCST_EXCLUDE, exclude_region);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         noc_nonposted_writes_num_issued[noc] += 1;
@@ -352,8 +352,8 @@ inline __attribute__((always_inline)) void ncrisc_noc_blitz_write_setup(
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | NOC_CMD_RESP_MARKED;
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
@@ -420,7 +420,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(
 inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(0));
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
@@ -449,7 +449,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 
         uint32_t noc_rd_cmd_field =
             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_CTRL_LO, noc_rd_cmd_field);
         NOC_CMD_BUF_WRITE_REG(noc, NCRISC_RD_CMD_BUF, NOC_RET_ADDR_MID, 0x0);  // get rid of this?
         NOC_CMD_BUF_WRITE_REG(
             noc,
@@ -462,7 +462,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
 inline __attribute__((always_inline)) void dynamic_noc_init() {
 #pragma GCC unroll 0
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(NOC_ID_LOGICAL));
+        uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc, 0, NOC_CFG(0));
         uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
         uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
         uint64_t xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
@@ -715,12 +715,12 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(dest_addr));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
         noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, be32);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
         if (posted) {
@@ -768,13 +768,13 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     NOC_CMD_BUF_WRITE_REG(
         noc,
         cmd_buf,
-        NOC_CTRL,
+        NOC_CTRL_LO,
         NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
             (posted ? 0 : NOC_CMD_RESP_MARKED) | NOC_CMD_AT);
     NOC_CMD_BUF_WRITE_REG(
         noc,
         cmd_buf,
-        NOC_AT_LEN_BE,
+        NOC_AT_LEN,
         NOC_AT_INS(NOC_AT_INS_INCR_GET) | NOC_AT_WRAP(wrap) | NOC_AT_IND_32((addr >> 2) & 0x3) | NOC_AT_IND_32_SRC(0));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, incr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, 0x1);
@@ -796,7 +796,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     src_addr_ = src_base_addr + src_addr;
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    while (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid)) > ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
+    while (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(trid)) > ((NOC_MAX_TRANSACTION_ID + 1) / 2));
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr_);  // (uint32_t)src_addr
@@ -822,7 +822,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    // NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
 }
 
 // clang-format off
@@ -856,12 +856,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         uint32_t noc_rd_cmd_field =
             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
     }
     if constexpr (use_vc) {
         uint32_t noc_rd_cmd_field =
             NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
     }
     // Handles reading from PCIe
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(src_noc_addr >> 32) & NOC_PCIE_MASK);
@@ -870,7 +870,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_set_state(
 
     // If one packet, set data size
     if constexpr (one_packet) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     }
 }
 
@@ -908,7 +908,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
     if constexpr (!one_packet) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
@@ -940,7 +940,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_read_any_len_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
     if (len_bytes > NOC_MAX_BURST_SIZE) {
         // Set data size for while loop
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, NOC_MAX_BURST_SIZE);
 
         while (len_bytes > NOC_MAX_BURST_SIZE) {
             ncrisc_noc_read_with_state<noc_mode, inc_num_issued, true /* one_packet */>(
@@ -989,7 +989,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
                              0x0 |  // (mcast ? (NOC_CMD_PATH_RESERVE | NOC_CMD_BRCST_PACKET) : 0x0)
                              (!posted ? NOC_CMD_RESP_MARKED : 0x0);
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     // Handles writing to PCIe
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_noc_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
@@ -997,7 +997,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
 
     // If one packet, set data size
     if constexpr (one_packet) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     }
 }
 
@@ -1041,7 +1041,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
     if constexpr (!one_packet) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, len_bytes);
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 
@@ -1079,7 +1079,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
     uint32_t noc, uint32_t cmd_buf, uint32_t src_local_addr, uint32_t dst_local_addr, uint32_t len_bytes) {
     if (len_bytes > NOC_MAX_BURST_SIZE) {
         // Set data size for while loop
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, NOC_MAX_BURST_SIZE);
 
         while (len_bytes > NOC_MAX_BURST_SIZE) {
             ncrisc_noc_write_with_state<noc_mode, posted, update_counter, true /* one_packet */>(
@@ -1132,7 +1132,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
 
     uint32_t noc_cmd_field = NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(static_vc) | NOC_CMD_CPY | NOC_CMD_WR |
                              NOC_CMD_WR_INLINE | 0x0 | (posted ? 0x0 : NOC_CMD_RESP_MARKED);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)dest_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_MID, (uint32_t)(dest_addr >> 32) & NOC_PCIE_MASK);
     NOC_CMD_BUF_WRITE_REG(
@@ -1140,7 +1140,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
 
     // If we're given a misaligned address, don't write to the bytes in the word below the address
     uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, be32);
 }
 
 // clang-format off
@@ -1200,7 +1200,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
     if constexpr (update_val) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, NOC_CTRL_SEND_REQ);
 
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
         if constexpr (posted) {
@@ -1231,14 +1231,14 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
  * S/s: write, do not write to src address register (NOC_TARG_ADDR_LO)
  * N/n: write, do not write to noc coordinates register (NOC_RET_ADDR_COORDINATE)
  * D/d: write, do not write to dst address register (NOC_RET_ADDR_LO)
- * L/l: write, do not write to length register (NOC_AT_LEN_BE)
+ * L/l: write, do not write to length register (NOC_AT_LEN)
  *
  * M/m: write, do not write to multicast register (NOC_CMD_BRCST_PACKET)
  * K/k: write, do not write to linked register (NOC_CMD_VC_LINKED)
  * P/p: write, do not write to posted register (NOC_CMD_RESP_MARKED)
  *
  * V/v: write, do not write to value register (NOC_AT_DATA)
- * B/b: write, do not write to byte-enable register (NOC_AT_LEN_BE)
+ * B/b: write, do not write to byte-enable register (NOC_AT_LEN)
  *
  * WAIT/wait: wait, do not wait for command buffer readiness (NOC_CMD_CTRL)
  * SEND/send: send, do not send the transaction immediately (NOC_CTRL_SEND_REQ)
@@ -1333,7 +1333,7 @@ inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
     uint32_t noc_rd_cmd_field =
         NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_rd_cmd_field);
 }
 
 // clang-format off
@@ -1391,7 +1391,7 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         // TODO: Runtime assert for size < MAX_BURST_SIZE
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, size);
     }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
@@ -1429,7 +1429,7 @@ inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, ui
                                   : 0x0) |
                              ((cmd_flags & CQ_NOC_CMD_FLAG_POSTED) ? 0 : NOC_CMD_RESP_MARKED);
 
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL_LO, noc_cmd_field);
 }
 
 // clang-format off
@@ -1498,7 +1498,7 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
     if constexpr (flags & CQ_NOC_FLAG_LEN) {
         // TODO: Runtime assert for size < MAX_BURST_SIZE
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN, size);
     }
     if constexpr (send) {
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);

@@ -201,8 +201,8 @@ std::vector<chip_id_t> get_physical_chip_sequence(uint32_t num_seq_chips) {
     }
 
     // determine the chip for the NW corner of the matrix
-    chip_id_t start_logical_chip_id = (num_rows - 1) * (col_offset < 0 ? std::abs(col_offset) : 0) +
-                                      (num_cols - 1) * (row_offset < 0 ? std::abs(row_offset) : 0);
+    chip_id_t start_logical_chip_id = ((num_rows - 1) * (col_offset < 0 ? std::abs(col_offset) : 0)) +
+                                      ((num_cols - 1) * (row_offset < 0 ? std::abs(row_offset) : 0));
 
     // populate the physical chip matrix
     std::vector<std::vector<chip_id_t>> physical_chip_matrix(num_rows, std::vector<chip_id_t>(num_cols));

@@ -3,50 +3,63 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t src_shard_cb = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_shard_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t src_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t dst_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t pixel_size = get_compile_time_arg_val(2);
+    constexpr uint32_t aligned_pixel_size = get_compile_time_arg_val(3);
+    constexpr uint32_t aligned_dst_pixel_size = get_compile_time_arg_val(4);
+    constexpr uint32_t aligned_chunk_size = get_compile_time_arg_val(5);
+    constexpr uint32_t aligned_row_size = get_compile_time_arg_val(6);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(7);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(8);
+    constexpr uint32_t num_dst_rows = get_compile_time_arg_val(9);
+    constexpr uint32_t num_dst_cols = get_compile_time_arg_val(10);
+    constexpr uint32_t dst_row_offset = get_compile_time_arg_val(11);
+    constexpr uint32_t is_reader = get_compile_time_arg_val(12);
 
-    const uint32_t pixel_size = get_arg_val<uint32_t>(0);
-    const uint32_t aligned_pixel_size = get_arg_val<uint32_t>(1);
-    const uint32_t aligned_dst_pixel_size = get_arg_val<uint32_t>(2);
-    const uint32_t num_src_pixels = get_arg_val<uint32_t>(3);
-    const uint32_t num_dst_pixels = get_arg_val<uint32_t>(4);
+    constexpr uint32_t dst_row_size = num_dst_cols * aligned_dst_pixel_size;
+    constexpr uint32_t cols_per_core = num_dst_cols / 2;
+    constexpr uint32_t process_cols = cols_per_core + ((num_dst_cols % 2) & is_reader);
+    constexpr uint32_t core_col_offset = is_reader ? 0 : aligned_chunk_size;
+    constexpr uint32_t core_dst_offset = is_reader ? 0 : aligned_dst_pixel_size;
 
-    const uint32_t aligned_chunk_size = get_arg_val<uint32_t>(5);
-    const uint32_t aligned_row_size = get_arg_val<uint32_t>(6);
+    constexpr bool is_aligned = (pixel_size == aligned_pixel_size);
+    constexpr uint32_t read_size = is_aligned ? aligned_chunk_size : pixel_size;
 
-    const uint32_t stride_h = get_arg_val<uint32_t>(7);
-    const uint32_t stride_w = get_arg_val<uint32_t>(8);
+    uint64_t src_noc_addr = get_noc_addr(get_read_ptr(src_cb));
+    const uint32_t dst_addr_base = get_write_ptr(dst_cb);
 
-    const uint32_t num_dst_rows = get_arg_val<uint32_t>(9);
-    const uint32_t num_dst_cols = get_arg_val<uint32_t>(10);
-    const uint32_t dst_row_offset = get_arg_val<uint32_t>(11);
+    noc_async_read_one_packet_set_state(src_noc_addr, read_size);
 
-    auto copy_next_dst_pixel = [&](uint64_t src_noc_address, uint32_t dst_l1_addr) -> void {
-        for (uint32_t row = 0, row_offset = 0; row < stride_h; ++row, row_offset += aligned_row_size) {
-            for (uint32_t col = 0, col_offset = 0; col < stride_w; ++col, col_offset += aligned_pixel_size) {
-                uint32_t offset = col_offset + row_offset;
-                noc_async_read(src_noc_address + offset, dst_l1_addr, pixel_size);
-                dst_l1_addr += pixel_size;
+    for (uint32_t row = 0; row < num_dst_rows; ++row) {
+        uint64_t src_col_offset = core_col_offset;
+        uint32_t dst_addr = dst_addr_base + (row * dst_row_size) + core_dst_offset;
+
+        for (uint32_t col = 0; col < process_cols; ++col) {
+            uint32_t dst_pixel_addr = dst_addr;
+            for (uint32_t h = 0; h < stride_h; ++h) {
+                const uint32_t h_offset = h * aligned_row_size;
+                if constexpr (is_aligned) {
+                    noc_async_read_one_packet_with_state<true>(
+                        src_noc_addr + src_col_offset + h_offset, dst_pixel_addr);
+                    dst_pixel_addr += aligned_chunk_size;
+                } else {
+                    for (uint32_t w = 0; w < stride_w; ++w) {
+                        const uint32_t w_offset = w * aligned_pixel_size;
+                        noc_async_read_one_packet_with_state<true>(
+                            src_noc_addr + src_col_offset + h_offset + w_offset, dst_pixel_addr);
+                        dst_pixel_addr += pixel_size;
+                    }
+                }
             }
-        }
-    };
-
-    uint64_t src_noc_addr = get_noc_addr(get_read_ptr(src_shard_cb));
-    uint32_t dst_addr = get_write_ptr(dst_shard_cb);
-
-    for (uint32_t i = 0; i < num_dst_rows; ++i) {
-        uint64_t src_col_offset = 0;
-        for (uint32_t j = 0; j < num_dst_cols; ++j) {
-            copy_next_dst_pixel(src_noc_addr + src_col_offset, dst_addr);
-            src_col_offset += aligned_chunk_size;
-            dst_addr += aligned_dst_pixel_size;
+            src_col_offset += aligned_chunk_size * 2;
+            dst_addr += aligned_dst_pixel_size * 2;
         }
         src_noc_addr += dst_row_offset;
-        noc_async_read_barrier();
     }
+
+    noc_async_read_barrier();
 }

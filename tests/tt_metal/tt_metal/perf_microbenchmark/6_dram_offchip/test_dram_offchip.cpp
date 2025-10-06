@@ -499,7 +499,7 @@ bool validation(
             auto sliced_input = slice_vec(
                 input_bf16,
                 (input_offset + num_tiles_per_core - num_reqs_at_a_time) * constants::TILE_HW,
-                (input_offset + num_tiles_per_core) * constants::TILE_HW - 1);
+                ((input_offset + num_tiles_per_core) * constants::TILE_HW) - 1);
 
             if (!(sliced_input == result_bf16)) {
                 return false;
@@ -531,7 +531,7 @@ bool validation(
             auto sliced_input = slice_vec(input_vec, input_offset, input_offset + write_size - 1);
             for (int block = 0; block < num_blocks; ++block) {
                 for (int req = 0; req < num_reqs_at_a_time * 512; ++req) {
-                    auto index = input_offset + block * (num_reqs_at_a_time * 512) + req;
+                    auto index = input_offset + (block * (num_reqs_at_a_time * 512)) + req;
                     if (result_vec[index] != sliced_input[req]) {
                         return false;
                     }

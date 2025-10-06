@@ -11,9 +11,11 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 
+// NOLINTBEGIN(misc-unused-using-decls)
 using tt::tt_metal::HalL1MemAddrType;
 using tt::tt_metal::HalMemType;
 using tt::tt_metal::HalProgrammableCoreType;
+// NOLINTEND(misc-unused-using-decls)
 
 namespace tt::tt_metal::hal {
 

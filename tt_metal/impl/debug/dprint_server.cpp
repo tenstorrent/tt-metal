@@ -43,8 +43,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
 
-using std::cout;
-using std::endl;
 using std::flush;
 using std::int32_t;
 using std::ofstream;
@@ -528,7 +526,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
     }
-    stream_ = outfile_ ? outfile_ : &cout;
+    stream_ = outfile_ ? outfile_ : &std::cout;
 
     // Spin off the thread that runs the print server.
     print_server_thread_ = new std::thread([this] { poll_print_data(); });
@@ -872,7 +870,7 @@ void DPrintServer::Impl::clear_log_file() {
         string file_name = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_file_name(
             tt::llrt::RunTimeDebugFeatureDprint);
         outfile_ = new ofstream(file_name);
-        stream_ = outfile_ ? outfile_ : &cout;
+        stream_ = outfile_ ? outfile_ : &std::cout;
     }
 }  // clear_log_file
 

@@ -31,6 +31,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
+            { model: oft, owner_id: U08AWRT6U3E, cmd: pytest models/experimental/oft/tests/ }, # Boris Janjic
             { model: panoptic-deeplab, owner_id: U08ARDXARPF, cmd: pytest models/experimental/panoptic_deeplab/tests/pcc/ }, # Ilija Anastasijevic
           ]
     name: Nightly 20 cores ${{ matrix.test-group.model }}

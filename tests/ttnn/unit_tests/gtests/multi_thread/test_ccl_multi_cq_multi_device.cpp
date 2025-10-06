@@ -46,7 +46,6 @@ using namespace tt_metal;
 
 using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
-using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshShape;
 
 // Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice

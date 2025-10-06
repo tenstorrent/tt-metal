@@ -6,8 +6,14 @@
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
-#include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/variant.h>
+
+#include "serialization/serializable.hpp"
+
+// Make NamedParameters opaque - must be before unordered_map include
+NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
+
+#include <nanobind/stl/unordered_map.h>
 
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_fwd.hpp"

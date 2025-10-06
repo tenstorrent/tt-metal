@@ -91,9 +91,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::ccl::reduce_scatter_detail {
 
-using ttnn::ccl::Shape4D;
-using ttnn::ccl::cmd::CclCommandTensor;
-
 enum fabric_lifetime_mode {
     // The fabric's lifetime exceed (before and after) the lifetime of the op
     // so the op should not in any way manage fabric lifetime

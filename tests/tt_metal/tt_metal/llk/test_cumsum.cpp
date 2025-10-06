@@ -72,8 +72,8 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
         for (int k = 0; k < dim_a; k++) {
             float res = 0;
             for (int j = 0; j < dim_b; j++) {
-                res += static_cast<float>(src[i * W * H + j * j_mul + k * k_mul]);
-                golden[i * W * H + j * j_mul + k * k_mul] = res;
+                res += static_cast<float>(src[(i * W * H) + (j * j_mul) + (k * k_mul)]);
+                golden[(i * W * H) + (j * j_mul) + (k * k_mul)] = res;
             }
         }
     }

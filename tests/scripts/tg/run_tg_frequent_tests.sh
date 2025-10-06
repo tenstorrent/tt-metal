@@ -48,6 +48,9 @@ run_tg_tests() {
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_gather_TG_post_commit.py --timeout=300 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_6U.py --timeout=500 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_6U.py --timeout=500 ; fail+=$?
+    pytest -n auto tests/nightly/tg/ccl/test_all_broadcast.py --timeout=200 ; fail+=$?
+    pytest -n auto tests/nightly/tg/ccl/test_minimal_all_gather_async.py --timeout=500 ; fail+=$?
+    pytest -n auto tests/nightly/tg/ccl/test_minimal_reduce_scatter_async.py --timeout=300 ; fail+=$?
 
   elif [[ "$1" == "sd35" ]]; then
     echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"

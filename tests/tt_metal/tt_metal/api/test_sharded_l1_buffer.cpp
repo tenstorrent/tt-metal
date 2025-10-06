@@ -54,7 +54,7 @@ struct L1Config {
     ShardSpecBuffer shard_spec() const {
         return ShardSpecBuffer(
             CoreRangeSet(std::set<CoreRange>(
-                {CoreRange(CoreCoord(0, 0), CoreCoord(0, num_cores_height * num_cores_width - 1))})),
+                {CoreRange(CoreCoord(0, 0), CoreCoord(0, (num_cores_height * num_cores_width) - 1))})),
             {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
              (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
             ShardOrientation::ROW_MAJOR,

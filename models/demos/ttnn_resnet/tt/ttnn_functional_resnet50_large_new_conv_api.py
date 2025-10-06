@@ -182,6 +182,7 @@ class resnet50Bottleneck:
                     reallocate_halo_output=True,
                     reshard_if_not_optimal=reshard_if_not_optimal,
                 ),
+                slice_config=ttnn.Conv2dL1FullSliceConfig,
                 compute_config=ttnn.init_device_compute_kernel_config(
                     device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
                 ),
@@ -232,6 +233,7 @@ class resnet50Bottleneck:
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
@@ -298,6 +300,7 @@ class resnet50Bottleneck:
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
@@ -328,6 +331,7 @@ class resnet50Bottleneck:
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
             ),
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
@@ -528,6 +532,7 @@ class resnet50:
                 deallocate_activation=True,
                 act_block_h_override=act_block_h_override,
             ),
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),
@@ -827,6 +832,7 @@ class resnet50:
                 deallocate_activation=True,
                 act_block_h_override=act_block_h_override,
             ),
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
             compute_config=ttnn.init_device_compute_kernel_config(
                 device.arch(), math_fidelity=self.model_config["MATH_FIDELITY"]
             ),

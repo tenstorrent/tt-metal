@@ -33,7 +33,7 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
 
 ### Performant Model with Trace+2CQ
 #### Single Device (BS=1):
-- end-2-end perf is 105 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
+- end-2-end perf is 132 FPS (**On N150**), _On N300 single device, the FPS will be low as it uses ethernet dispatch_
 
 Use the following command to run Model performant running with Trace+2CQ
 ```

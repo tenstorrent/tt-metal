@@ -15,9 +15,7 @@
 namespace tt::tt_metal {
 namespace {
 
-using ::testing::ElementsAre;
 using ::testing::Eq;
-using ::testing::IsEmpty;
 using ::testing::Pointwise;
 
 TEST(HostBufferTest, Empty) {

@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < num_cores_r; i++) {
             for (int j = 0; j < num_cores_c; j++) {
                 CoreCoord core = {(std::size_t)j, (std::size_t)i};
-                uint32_t core_index = i * num_cores_c + j;
+                uint32_t core_index = (i * num_cores_c) + j;
                 uint32_t l1_buffer_addr = l1_mesh_buffer->address();
 
                 const std::array noc_runtime_args = {core_index, l1_buffer_addr, num_tiles, num_cores_r * num_cores_c};

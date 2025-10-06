@@ -8,6 +8,8 @@
 #include <tt-metalium/core_descriptor.hpp>
 #include <cstdint>
 
+#include "impl/allocator/allocator_types.hpp"
+
 namespace tt {
 
 namespace tt_metal {

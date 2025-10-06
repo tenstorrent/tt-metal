@@ -150,7 +150,7 @@ int main(int argc, char** argv) {
             for (int r = 0; r < num_cores_r; ++r) {
                 for (int c = 0; c < num_cores_c; ++c) {
                     print_vec_of_bfloat16(
-                        tensors[r * num_cores_c + c].get_values(),
+                        tensors[(r * num_cores_c) + c].get_values(),
                         1,
                         "input tensor " + std::to_string(r) + " " + std::to_string(c));
                     if (single_read || one_buffer_share) {
@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
         std::vector<std::vector<uint32_t>> packed_tensors;
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
-                auto activations = pack_bfloat16_vec_into_uint32_vec(tensors[r * num_cores_c + c].get_values());
+                auto activations = pack_bfloat16_vec_into_uint32_vec(tensors[(r * num_cores_c) + c].get_values());
                 packed_tensors.push_back(activations);
                 if (single_read || one_buffer_share) {
                     break;
@@ -225,8 +225,8 @@ int main(int argc, char** argv) {
                     tt_metal::distributed::MeshBuffer::create(replicated_config, local_config, device.get()));
                 tt_metal::distributed::WriteShard(
                     device->mesh_command_queue(0),
-                    l1_buffers[r * num_cores_c + c],
-                    packed_tensors[r * num_cores_c + c],
+                    l1_buffers[(r * num_cores_c) + c],
+                    packed_tensors[(r * num_cores_c) + c],
                     tt::tt_metal::distributed::MeshCoordinate(0, 0),
                     true);
 
@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
                 tt::tt_metal::distributed::ReadShard(
                     device->mesh_command_queue(0),
                     result_vec,
-                    l1_buffers[r * num_cores_c + c],
+                    l1_buffers[(r * num_cores_c) + c],
                     tt::tt_metal::distributed::MeshCoordinate(0, 0),
                     true);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
@@ -255,11 +255,11 @@ int main(int argc, char** argv) {
                     print_vec_of_bfloat16(
                         result_bfp16, 1, "from l1 buffer " + std::to_string(r) + " " + std::to_string(c));
                     print_vec_of_bfloat16(
-                        tensors[r * num_cores_c + c].get_values(),
+                        tensors[(r * num_cores_c) + c].get_values(),
                         1,
                         "tensor " + std::to_string(r) + " " + std::to_string(c));
                 }
-                if (!(tensors[r * num_cores_c + c].get_values() == result_bfp16)) {
+                if (!(tensors[(r * num_cores_c) + c].get_values() == result_bfp16)) {
                     log_error(
                         LogTest,
                         "{}/{} - value read from l1 is wrong {} {}",
@@ -292,7 +292,7 @@ int main(int argc, char** argv) {
             for (int c = 0; c < num_cores_c; ++c) {
                 CoreCoord core = {(size_t)c, (size_t)r};
 
-                int l1_buffers_idx = (single_read || one_buffer_share) ? (0) : (r * num_cores_c + c);
+                int l1_buffers_idx = (single_read || one_buffer_share) ? (0) : ((r * num_cores_c) + c);
                 auto l1_buffer_addr = l1_buffers[l1_buffers_idx]->address();
 
                 uint32_t l1_buffer_offset = (one_buffer_share) ? ((r * num_cores_c + c) * Nt) : (0);
@@ -333,7 +333,7 @@ int main(int argc, char** argv) {
                         device->get_devices()[0], core, dst_cb_addr, cb_tiles * single_tile_size, result_vec);
                     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
-                    int tensors_idx = (single_read || one_buffer_share) ? (0) : (r * num_cores_c + c);
+                    int tensors_idx = (single_read || one_buffer_share) ? (0) : ((r * num_cores_c) + c);
 
                     int index = Nt;
                     if (one_buffer_share) {
@@ -341,7 +341,7 @@ int main(int argc, char** argv) {
                     }
 
                     auto sliced_tensor =
-                        slice_vec(tensors[tensors_idx].get_values(), (index - cb_tiles) * 1024, index * 1024 - 1);
+                        slice_vec(tensors[tensors_idx].get_values(), (index - cb_tiles) * 1024, (index * 1024) - 1);
 
                     if (print_tensor) {
                         print_vec_of_bfloat16(

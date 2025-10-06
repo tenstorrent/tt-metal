@@ -94,7 +94,7 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, 
         .prefetch_max_cmd_size(32_KB)
         .prefetch_cmddat_q_size(64_KB)
         .prefetch_scratch_db_size(19_KB)
-        .prefetch_ringbuffer_size(70_KB)
+        .prefetch_ringbuffer_size(67_KB)
         .prefetch_d_buffer_size(128_KB)
 
         .dispatch_size(128_KB)

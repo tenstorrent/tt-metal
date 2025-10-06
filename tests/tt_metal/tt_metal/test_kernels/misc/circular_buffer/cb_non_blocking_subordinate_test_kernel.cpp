@@ -31,6 +31,7 @@ void kernel_main() {
     auto get_idx = [n_pages](size_t i, size_t j) -> size_t { return i * n_pages + j; };
 
     for (int32_t i = 0; i < n_cbs; i++) {
+        experimental::CircularBuffer cb(i);
         auto* const output_buffer = reinterpret_cast<uint8_t*>(output_buffer_addrs[i]);
         for (int32_t j = 0; j < n_pages; j++) {
             // First level signal indicates the writer has pushed new pages to the CB
@@ -38,14 +39,14 @@ void kernel_main() {
             noc_semaphore_set(subordinate_sem_addr, 1);
 
             for (int32_t k = 0; k < n_pages; k++) {
-                auto result = cb_pages_available_at_front(i, k);
+                auto result = cb.pages_available_at_front(k);
                 output_buffer[get_idx(j, k)] = static_cast<uint8_t>(result);
             }
             noc_semaphore_wait(master_sem_addr, 2);
             noc_semaphore_set(master_sem_addr, 0);
             if (j > 0) {
-                cb_wait_front(i, j);
-                cb_pop_front(i, j);
+                cb.wait_front(j);
+                cb.pop_front(j);
             }
             // Second level signal indicates "alignment pages". We signal back that we are
             // done processing this step
@@ -53,8 +54,8 @@ void kernel_main() {
 
             if (j > 0) {
                 // snap back to alignment
-                cb_wait_front(i, n_pages - j);
-                cb_pop_front(i, n_pages - j);
+                cb.wait_front(n_pages - j);
+                cb.pop_front(n_pages - j);
             }
         }
     }

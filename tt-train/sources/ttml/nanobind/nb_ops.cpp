@@ -247,7 +247,7 @@ void py_module(nb::module_& m) {
             nb::arg("logits"),
             nb::arg("temperature"),
             nb::arg("seed"),
-            nb::arg("logits_padding_mask"));
+            nb::arg("logits_padding_mask") = nb::none());
     }
 
     {

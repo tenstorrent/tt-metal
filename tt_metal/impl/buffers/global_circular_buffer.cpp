@@ -82,7 +82,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     constexpr uint32_t num_config_elements = 7;
     uint32_t num_noc_xy_words = 2 * max_num_receivers_per_sender;
     auto cb_config_page_size = tt::align((num_config_elements + num_noc_xy_words) * sizeof(uint32_t), l1_alignment) +
-                               2 * max_num_receivers_per_sender * l1_alignment;
+                               (2 * max_num_receivers_per_sender * l1_alignment);
     uint32_t cb_config_size = cb_config_page_size * num_cores;
     ShardedBufferConfig cb_config_buffer_shard_config = {
         .device = device_,
@@ -99,8 +99,8 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
     auto config_buffer_address = cb_config_buffer_.get_buffer()->address();
     const auto& core_to_core_id = cb_config_buffer_.get_buffer()->get_buffer_page_mapping()->core_to_core_id;
     std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
-    uint32_t noc_xy_address = config_buffer_address + num_config_elements * sizeof(uint32_t);
-    uint32_t pages_sent_address = tt::align(noc_xy_address + num_noc_xy_words * sizeof(uint32_t), l1_alignment);
+    uint32_t noc_xy_address = config_buffer_address + (num_config_elements * sizeof(uint32_t));
+    uint32_t pages_sent_address = tt::align(noc_xy_address + (num_noc_xy_words * sizeof(uint32_t)), l1_alignment);
     auto buffer_address = cb_buffer().address();
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping_) {
         const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);

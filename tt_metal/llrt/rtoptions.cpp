@@ -198,6 +198,16 @@ RunTimeOptions::RunTimeOptions() {
         this->enable_hw_cache_invalidation = true;
     }
 
+    // Parse RELIABILITY_MODE: "strict" or "relaxed"
+    if (const char* reliability_mode_str = getenv("RELIABILITY_MODE"); reliability_mode_str != nullptr) {
+        std::string mode(reliability_mode_str);
+        if (mode == "relaxed") {
+            reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+        } else if (mode == "strict") {
+            reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        }
+    }
+
     if (std::getenv("TT_METAL_SIMULATOR")) {
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
         this->runtime_target_device_ = tt::TargetDevice::Simulator;
@@ -247,6 +257,11 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
         this->enable_2_erisc_mode_with_fabric = true;
+    }
+
+    if (getenv("TT_METAL_MULTI_AERISC")) {
+        log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
+        this->enable_2_erisc_mode = true;
     }
 
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
@@ -556,6 +571,23 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
     char *env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].prepend_device_core_risc =
         (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
+}
+
+uint32_t RunTimeOptions::get_watcher_hash() const {
+    // These values will cause kernels / firmware to be recompiled if they change
+    // Only the ones which have #define on the device side need to be listed here
+    std::string hash_str = "";
+    hash_str += std::to_string(watcher_feature_disabled(watcher_waypoint_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_noc_sanitize_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_assert_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_pause_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_ring_buffer_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_stack_usage_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
+    hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
+    hash_str += std::to_string(get_watcher_enabled());
+    std::hash<std::string> hash_fn;
+    return hash_fn(hash_str);
 }
 
 // Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor

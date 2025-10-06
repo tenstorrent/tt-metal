@@ -283,7 +283,7 @@ static void test_multi_core_interleaved_copy(
         // Calculate page range for this core
         uint32_t pages_per_core = total_pages / num_cores;
         uint32_t extra_pages = total_pages % num_cores;
-        uint32_t start_page_id = core_idx * pages_per_core + std::min(core_idx, extra_pages);
+        uint32_t start_page_id = (core_idx * pages_per_core) + std::min(core_idx, extra_pages);
         uint32_t end_page_id = start_page_id + pages_per_core + (core_idx < extra_pages ? 1 : 0);
 
         // Reader runtime args: input accessor common runtime args + input_base_address + start_page_id + end_page_id
