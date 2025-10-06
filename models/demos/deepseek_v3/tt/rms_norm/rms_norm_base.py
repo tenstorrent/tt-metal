@@ -46,15 +46,15 @@ class RMSNormBase(AbstractModule):
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls._rmsnorm_forward(x, cfg, "decode")
+        return cls._rmsnorm_forward(x, cfg)
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls._rmsnorm_forward(x, cfg, "prefill")
+        return cls._rmsnorm_forward(x, cfg)
 
     @classmethod
     @abstractmethod
-    def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig, mode: str) -> ttnn.Tensor:
+    def _rmsnorm_forward(cls, x: ttnn.Tensor, cfg: RunPrefillConfig | RunDecodeConfig) -> ttnn.Tensor:
         """Forward implementation of RMSNorm layer for both prefill and decode modes.
         Args:
             x: Input tensor (token indices)

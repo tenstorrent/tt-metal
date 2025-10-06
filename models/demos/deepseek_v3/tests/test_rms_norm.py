@@ -96,10 +96,10 @@ def test_forward_pass(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
-    model_state = RMSNormClass.create_state(
-        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
+    model_config = get_model_config(
+        RMSNormClass, mode, hf_config, mesh_device, *([ccl] if RMSNormClass is DistributedRMSNorm else [])
     )
+    model_state = RMSNormClass.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor

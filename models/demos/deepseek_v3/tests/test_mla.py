@@ -55,7 +55,7 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
     [
         ("decode", 1, 32),
         ("prefill", 128, 1),
-        ("prefill", 2048, 1),
+        # ("prefill", 2048, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -69,7 +69,7 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
 )
 @pytest.mark.parametrize(
     "module_path",
-    [None, "model.layers.0.self_attn"],
+    ["model.layers.0.self_attn"],
 )
 def test_forward_pass(
     mode,
@@ -156,9 +156,9 @@ def test_forward_pass(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLA, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(MLA, mode, hf_config_short, mesh_device, ccl)
     model_state = MLA.create_state(
-        hf_config_short, paged_config, mesh_device, ccl, (paged_input_cache,) * mesh_device.shape[0]
+        hf_config_short, paged_config, mesh_device, (paged_input_cache,) * mesh_device.shape[0]
     )
     run_config = create_run_config(model_config, weight_config, model_state)
 

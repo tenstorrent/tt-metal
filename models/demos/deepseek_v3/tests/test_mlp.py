@@ -161,8 +161,8 @@ def test_forward_pass(
     weight_config = get_test_weight_config(
         MLPClass, hf_config, (state_dict,) * num_module_layers, cache_path, mesh_device, force_recalculate_weight_config
     )
-    model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
-    model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
+    model_config = get_model_config(MLPClass, mode, hf_config, mesh_device, ccl)
+    model_state = MLPClass.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert input to TTNN

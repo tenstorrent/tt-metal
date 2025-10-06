@@ -193,16 +193,21 @@ class MLA(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        ccl: CCL,
     ) -> ModelPrefillConfig:
         """Prefill model config for an MLP with 1D tensor parallelism.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device
+            ccl: CCL object for semaphore management
 
         Returns:
             Dict containing operator configurations for prefill mode
         """
+
+        # Set the phase for CCL operations
+        ccl.set_phase("prefill")
 
         grid_size = mesh_device.compute_with_storage_grid_size()
 
@@ -298,13 +303,13 @@ class MLA(AbstractModule):
         )
 
         # Set up CCLs
-
         # Q
         wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_reduce_scatter_params(1),
         )
         wq_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -312,6 +317,7 @@ class MLA(AbstractModule):
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_all_gather_params(1),
         )
 
         # KV
@@ -321,6 +327,7 @@ class MLA(AbstractModule):
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_all_gather_params(1),
         )
         wkv_a_r_config = {
             "dims": [1],
@@ -340,6 +347,7 @@ class MLA(AbstractModule):
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_all_gather_params(1),
         )
 
         return {
@@ -371,16 +379,21 @@ class MLA(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        ccl: CCL,
     ) -> ModelDecodeConfig:
         """Generate decode operator configuration for this MLP layer.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device
+            ccl: CCL object for semaphore management
 
         Returns:
             Dict containing operator configurations for decode mode
         """
+
+        # Set the phase for CCL operations
+        ccl.set_phase("decode")
 
         grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = grid_size.x * grid_size.y
@@ -562,13 +575,13 @@ class MLA(AbstractModule):
         )
 
         # Set up CCLs
-
         # Q
         wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_reduce_scatter_params(1),
         )
         wq_a_ag_config = AllGatherAsyncConfig(
             mesh_device=MeshDeviceStub(mesh_shape),
@@ -576,6 +589,7 @@ class MLA(AbstractModule):
             dim=3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_all_gather_params(1),
         )
 
         # Q all-to-all
@@ -585,12 +599,14 @@ class MLA(AbstractModule):
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_all_gather_params(1),
         )
         wq_a2a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_reduce_scatter_params(1),
         )
 
         # KV
@@ -600,6 +616,7 @@ class MLA(AbstractModule):
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_all_gather_params(1),
         )
         wkv_a_r_config = {
             "dims": [1],
@@ -616,6 +633,7 @@ class MLA(AbstractModule):
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_reduce_scatter_params(1),
         )
 
         # FlashMLA all-to-all
@@ -625,12 +643,14 @@ class MLA(AbstractModule):
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_all_gather_params(1),
         )
         flash_mla_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_reduce_scatter_params(1),
         )
 
         # WO
@@ -640,6 +660,7 @@ class MLA(AbstractModule):
             dim=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
+            **ccl.get_all_gather_params(1),
         )
 
         return {
@@ -761,7 +782,6 @@ class MLA(AbstractModule):
         hf_config: PretrainedConfig,
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
-        ccl: CCL,
         caches: Sequence[torch.Tensor] | None = None,
     ) -> ModelState:
         kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
@@ -784,41 +804,10 @@ class MLA(AbstractModule):
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, 0),
         )
 
-        # CCL states setup (Must be in order of execution)
-        get_rs_params = lambda phase, axis: {
-            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(phase=phase, axis=axis),
-            "barrier_semaphore": ccl.get_barrier_sem(phase=phase, axis=axis),
-            "num_links": ccl.get_max_links(axis=axis),
-        }
-        get_ag_params = lambda phase, axis: {
-            "multi_device_global_semaphore": ccl.get_gather_sem(phase=phase, axis=axis),
-            "barrier_semaphore": ccl.get_barrier_sem(phase=phase, axis=axis),
-            "num_links": ccl.get_max_links(phase=phase, axis=axis),
-        }
-        ccl_states_prefill = {
-            "wq_a_rs_prefill": get_rs_params("prefill", 1),
-            "wq_a_ag_prefill": get_ag_params("prefill", 1),
-            "wkv_a_ag_prefill": get_ag_params("prefill", 1),
-            "wo_ag_prefill": get_ag_params("prefill", 1),
-        }
-        ccl_states_decode = {
-            "wq_a_rs_decode": get_rs_params("decode", 1),
-            "wq_a_ag_decode": get_ag_params("decode", 1),
-            "wq_a2a_ag_decode": get_ag_params("decode", 1),
-            "wq_a2a_rs_decode": get_rs_params("decode", 1),
-            "wkv_a_ag_decode": get_ag_params("decode", 1),
-            "wkv_a_rs_decode": get_rs_params("decode", 1),
-            "flash_mla_ag_decode": get_ag_params("decode", 1),
-            "flash_mla_rs_decode": get_rs_params("decode", 1),
-            "wo_ag_decode": get_ag_params("decode", 1),
-        }
-
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_shape": mesh_device.shape,
             "kvpe_cache": tt_cache,
-            **ccl_states_prefill,
-            **ccl_states_decode,
         }
 
     @classmethod
