@@ -22,7 +22,7 @@ welford_flavors = get_welford_params()
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        # Only SDXL/sd35 tests with 512,512 or larger sizes moved to nightly
+        # Only SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
         #  SDXL VAE
         (1, 128, 1024, 1024, 32, 32, 8, 8),
         (1, 128, 512, 512, 32, 8, 8, 8),

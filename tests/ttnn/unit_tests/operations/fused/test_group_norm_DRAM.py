@@ -50,7 +50,7 @@ welford_flavors = get_welford_params()
             4,
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-        # All SDXL/sd35 tests with 512,512 or larger sizes moved to nightly
+        # All SDXL/sd35 tests with 512x512 or larger sizes moved to nightly
         #  SDXL VAE
         (1, 256, 256, 256, 32, 4, 8, 8),
         (1, 512, 256, 256, 32, 4, 8, 8),
