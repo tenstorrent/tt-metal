@@ -260,10 +260,7 @@ def test_llama_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        ttnn.plus_one(
-            current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
-        )
+        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
         check_kv_cache = True
         if check_kv_cache:
             # PyTorch output --------------------------------------------------------------------

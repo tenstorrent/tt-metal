@@ -11,6 +11,7 @@
 #include <umd/device/types/arch.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <future>
 #include <set>
@@ -605,7 +606,7 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
 }
 
-void DevicePool::wait_for_fabric_router_sync() const {
+void DevicePool::wait_for_fabric_router_sync(uint32_t timeout_ms) const {
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
     if (!tt::tt_fabric::is_tt_fabric_config(fabric_config)) {
         return;
@@ -629,9 +630,28 @@ void DevicePool::wait_for_fabric_router_sync() const {
 
         const auto [router_sync_address, expected_status] = fabric_context.get_fabric_router_sync_address_and_status();
         std::vector<std::uint32_t> master_router_status{0};
+        auto start_time = std::chrono::steady_clock::now();
         while (master_router_status[0] != expected_status) {
             tt_metal::detail::ReadFromDeviceL1(
                 dev, master_router_logical_core, router_sync_address, 4, master_router_status, CoreType::ETH);
+
+            // Check for timeout
+            auto current_time = std::chrono::steady_clock::now();
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_time - start_time).count();
+            if (elapsed_ms > timeout_ms) {
+                log_info(
+                    tt::LogMetal,
+                    "Fabric Router Sync: master chan={}, logical core={}, sync address=0x{:08x}",
+                    master_router_chan,
+                    master_router_logical_core.str(),
+                    router_sync_address);
+                TT_THROW(
+                    "Fabric Router Sync: Timeout after {} ms. Device {}: Expected status 0x{:08x}, got 0x{:08x}",
+                    timeout_ms,
+                    dev->id(),
+                    expected_status,
+                    master_router_status[0]);
+            }
         }
 
         auto ready_address_and_signal = fabric_context.get_fabric_router_ready_address_and_signal();
