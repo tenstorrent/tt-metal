@@ -63,6 +63,7 @@ class StageInfra:
             custom_preprocessor=create_custom_mesh_preprocessor(self.weights_mesh_mapper),
             device=None,
         )
+        parameters = getattr(parameters, stage_name)
         # Build TTNN model
         self.ttnn_model = Ttstages(
             parameters=parameters,
@@ -156,14 +157,14 @@ model_config = {
     [
         # ImageCNN Tests
         ("layer1", (1, 32, 80, 352)),
-        # ("layer2", (1, 72, 40, 176)),
-        # ("layer3", (1, 216, 20, 88)),
-        # ("layer4", (1, 576, 10, 44)),
-        # # LidarEncoder Tests
-        # ("layer1", (1, 32, 128, 128)),
-        # ("layer2", (1, 72, 64, 64)),
-        # ("layer3", (1, 216, 32, 32)),
-        # ("layer4", (1, 576, 16, 16)),
+        ("layer2", (1, 72, 40, 176)),
+        ("layer3", (1, 216, 20, 88)),
+        ("layer4", (1, 576, 10, 44)),
+        # LidarEncoder Tests
+        ("layer1", (1, 32, 128, 128)),
+        ("layer2", (1, 72, 64, 64)),
+        ("layer3", (1, 216, 32, 32)),
+        ("layer4", (1, 576, 16, 16)),
     ],
 )
 def test_stage(
