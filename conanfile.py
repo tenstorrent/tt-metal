@@ -5,9 +5,11 @@
 from pathlib import Path
 import subprocess
 import re
+import os
 
 from conan import ConanFile
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout, CMakeDeps
+from conan.tools.env import VirtualRunEnv
 
 
 class TTNNConan(ConanFile):
@@ -116,6 +118,11 @@ class TTNNConan(ConanFile):
 
         tc.generate()
 
+        # Set environment variable for local builds
+        env = VirtualRunEnv(self)
+        env.environment().define("TT_METAL_HOME", self.source_folder)
+        env.generate()
+
     def build(self):
         cmake = CMake(self)
         cmake.configure(variables={"VERSION_NUMERIC": self.version})
@@ -124,12 +131,14 @@ class TTNNConan(ConanFile):
     def configure(self):
         self.options["libnuma"].shared = True
         self.options["cpython"].with_tkinter = False
+        self.options["hwloc"].shared = True
+        self.options["openmpi"].shared = True
 
     def requirements(self):
         self.requires("openmpi/4.1.6")
+        self.requires("openssl/3.5.4")
         self.requires("capstone/5.0.6")
         self.requires("libnuma/2.0.19")
-        # self.requires("boost/1.86.0")
         self.requires("hwloc/2.10.0")
         self.requires("zlib/1.3.1")
         self.requires("cpython/3.10.14")
