@@ -1220,7 +1220,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
 
     // tensor shape
     const auto& shape = a.padded_shape();
-    // TODO VASH eventually take num_batches out of H after second refactor
+    // TODO #30042 eventually take num_batches out of H after second refactor
     uint32_t H = shape[1] * shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
@@ -1249,7 +1249,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         H,
         num_virtual_rows);
 
-    // TODO VASH cleanup necessary values below
+    // TODO #30042 cleanup necessary values below
     uint32_t per_core_Mt_group_1 = Ht / num_virtual_rows;
     uint32_t per_core_M_group_1 = per_core_Mt_group_1 * TILE_HEIGHT;
     uint32_t per_core_Mt_group_2 = 0;
@@ -1321,10 +1321,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         num_rows_per_batch_per_core_group_1 = per_batch_tiles * TILE_HEIGHT;
         num_rows_per_batch_per_core_group_2 = per_batch_tiles * TILE_HEIGHT;
 
-        // TODO VASH, above num_batches_per_core_group_1/2 and per_core_M_group_1/2 should be different, but the
+        // TODO #30042, above num_batches_per_core_group_1/2 and per_core_M_group_1/2 should be different, but the
         // lefthand side values, as well as the left hand side values below should be non group 1/2 specific.  And then
         // everythign computed based on block_ht_group_1/2 should be the same, so they should be consolidated
-        // TODO VASH cleanup, comment above old
+        // TODO #30042 cleanup, comment above old
 
         block_ht_group_1 = per_batch_tiles;
         block_ht_group_2 = per_batch_tiles;
@@ -1561,7 +1561,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     std::vector<std::vector<CoreCoord>> mcast_groups;
     std::vector<std::vector<CoreCoord>> mcast_virtual_groups;
     int group_index = -1;
-    // TODO VASH group sizes below will just be 1.  we probably should get rid of mcast_groups and just use
+    // TODO #30042 group sizes below will just be 1.  we probably should get rid of mcast_groups and just use
     // mcast_sender_core_ranges_all, and rename that as well
     for (int i = 0; i < core_coords.size(); ++i) {
         if (mcast_sender_core_ranges_all.find(CoreRange(core_coords[i])) != mcast_sender_core_ranges_all.end()) {
@@ -1575,7 +1575,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         mcast_virtual_groups[group_index].push_back(virtual_core_coords[i]);
     }
     // how many cores in a mcast group
-    // TODO VASH this variable should be replaced everywhere with 1
+    // TODO #30042 this variable should be replaced everywhere with 1
     uint32_t num_cores_per_mcast_group = mcast_groups[0].size();
     // Mcast args
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -1706,10 +1706,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         (std::uint32_t)num_rows_per_batch_per_core_group_2};
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
-    // TODO VASH rename mcast
+    // TODO #30042 rename mcast
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(
         program,
@@ -1902,7 +1902,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
     }
 
-    // TODO VASH use shared code for group 1 and group 2
+    // TODO #30042 use shared code for group 1 and group 2
     // compute kernel compile time args
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_1 = {
         (std::uint32_t)1,
@@ -2271,7 +2271,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
     std::vector<KernelHandle> writer_kernel_ids;
     std::vector<KernelHandle> reader_sender_kernel_ids;
     std::vector<KernelHandle> reader_receiver_kernel_ids;
-    // TODO VASH
+    // TODO #30042
     float winv_group_1 =
         1.0f / std::sqrt(num_rows_per_batch_per_core_group_1 * num_channels_per_group);  // bcast-w scaler
     // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
@@ -2308,7 +2308,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_no_mcast(
         const auto& virtual_group = mcast_virtual_groups[i];
         bool rectangle_grid = is_rectangle_grid(group);
 
-        // TODO VASH group size here should be 1, and mcast_groups below should not exist (you are just dealing with 1
+        // TODO #30042 group size here should be 1, and mcast_groups below should not exist (you are just dealing with 1
         // core)
         // anywhere it refers to mcast_group_first[i] etc, just replace with core or virtual_core
         for (int j = 0; j < group.size(); ++j) {
@@ -2619,11 +2619,11 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
         out_data_format);
 
     // tile sizes
-    uint32_t in_single_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    uint32_t out_single_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
-    uint32_t gamma_beta_single_tile_size = tt::tt_metal::detail::TileSize(gamma_beta_cb_data_format);
-    uint32_t in_mask_single_tile_size = tt::tt_metal::detail::TileSize(in_mask_cb_data_format);
+    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    uint32_t gamma_beta_single_tile_size = tt::tile_size(gamma_beta_cb_data_format);
+    uint32_t in_mask_single_tile_size = tt::tile_size(in_mask_cb_data_format);
 
     IDevice* device = a.device();
 
@@ -3072,8 +3072,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
 
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(
