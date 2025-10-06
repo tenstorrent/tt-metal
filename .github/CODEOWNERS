@@ -334,6 +334,7 @@ dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra @tenstor
 
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt @tenstorrent/metalium-codeowners-large-changes
+tt-train/sources/ttml/nanobind @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt @athompsonTT @tenstorrent/metalium-codeowners-large-changes
 
 # tt-telemetry
 tt_telemetry/** @btrzynadlowski-tt @tt-asaigal @kluongTT @tenstorrent/metalium-codeowners-large-changes
