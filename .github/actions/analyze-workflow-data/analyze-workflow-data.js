@@ -20,6 +20,8 @@ const SUCCESS_RATE_DECIMAL_PLACES = 2;
 const SUCCESS_EMOJI = '✅';
 const FAILURE_EMOJI = '❌';
 const EMPTY_VALUE = '—';
+// Default owner override when a test name cannot be extracted
+const DEFAULT_INFRA_OWNER = { id: 'S0985AN7TC5', name: 'metal infra team' };
 
 // Optional annotations index mapping (runId -> directory)
 // This is populated when action inputs provide their paths.
@@ -302,6 +304,10 @@ function renderErrorsTable(errorSnippets) {
       const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
       if (names.length) ownerDisplay = names.join(', ');
     }
+    // Override owner to infra team when test name cannot be extracted
+    if (!testName || testName === 'NA') {
+      ownerDisplay = DEFAULT_INFRA_OWNER.name;
+    }
     const ownerEsc = escapeHtml(ownerDisplay);
     // Force exactly two lines: compute a break point (prefer comma, else space near middle), NBSP around words
     let ownerHtml = ownerEsc;
@@ -566,6 +572,11 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
               for (const it of snippets) {
                 if (!it) continue;
+                // Override owner to infra team when test name cannot be extracted
+                if (!it.test || it.test === 'NA') {
+                  it.owner = [DEFAULT_INFRA_OWNER];
+                  continue;
+                }
                 const cleaned = stripBracketSuffix(it.label || '');
                 const owner = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
                 if (owner && !it.owner) it.owner = owner;
@@ -622,6 +633,11 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
       const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
       for (const it of snippets) {
         if (!it) continue;
+        // Override owner to infra team when test name cannot be extracted (annotations typically lack test)
+        if (!it.test || it.test === 'NA') {
+          it.owner = [DEFAULT_INFRA_OWNER];
+          continue;
+        }
         const cleaned = stripBracketSuffix(it.label || '');
         const owner = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
         if (owner && !it.owner) it.owner = owner;
@@ -1338,7 +1354,12 @@ async function run() {
               seenOwners.add(k);
               normalized.push({ id, name });
             }
-            item.owners = normalized;
+            // If no error snippets were found, force owner to infra team for Slack ping
+            if (!Array.isArray(item.error_snippets) || item.error_snippets.length === 0) {
+              item.owners = [DEFAULT_INFRA_OWNER];
+            } else {
+              item.owners = normalized;
+            }
           } catch (_) { item.owners = []; }
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
@@ -1404,6 +1425,41 @@ async function run() {
           } else {
             item.error_snippets = [];
           }
+          // Derive owners from error snippets or fallback to workflow label mapping; default to infra when none
+          try {
+            const ownerSet = new Map();
+            for (const e of (item.error_snippets || [])) {
+              if (Array.isArray(e.owner)) {
+                for (const o of e.owner) {
+                  if (!o) continue;
+                  const key = `${o.id || ''}|${o.name || ''}`;
+                  ownerSet.set(key, o);
+                }
+              }
+            }
+            let ownersArr = Array.from(ownerSet.values());
+            if (ownersArr.length === 0) {
+              ownersArr = findOwnerForLabel(item.name) || [];
+            }
+            // Normalize and dedupe
+            const normalized = [];
+            const seenOwners = new Set();
+            for (const o of (ownersArr || [])) {
+              if (!o) continue;
+              const id = o.id || undefined;
+              const name = o.name || undefined;
+              const k = `${id || ''}|${name || ''}`;
+              if (seenOwners.has(k)) continue;
+              seenOwners.add(k);
+              normalized.push({ id, name });
+            }
+            // If no error info, force infra owner so Slack can ping
+            if (!Array.isArray(item.error_snippets) || item.error_snippets.length === 0) {
+              item.owners = [DEFAULT_INFRA_OWNER];
+            } else {
+              item.owners = normalized;
+            }
+          } catch (_) { item.owners = [DEFAULT_INFRA_OWNER]; }
           // Omit repeated errors (simplified)
           item.repeated_errors = [];
         }
