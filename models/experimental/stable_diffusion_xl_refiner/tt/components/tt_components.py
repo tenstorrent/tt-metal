@@ -26,7 +26,7 @@ class ResNetTimeEmbedding:
             self.temb_weights,
             bias=self.temb_bias,
         )
-        return ttnn.add(hidden_states, temb, use_legacy=True)
+        return ttnn.add(hidden_states, temb, use_legacy=False)
 
 
 class ResNetShortcutConnection:
@@ -49,7 +49,7 @@ class ResNetShortcutConnection:
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         shortcut = ttnn.to_layout(shortcut, ttnn.TILE_LAYOUT)
-        result = ttnn.add(hidden_states, shortcut, use_legacy=True)
+        result = ttnn.add(hidden_states, shortcut, use_legacy=False)
         return ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG), [C, H, W]
 
 

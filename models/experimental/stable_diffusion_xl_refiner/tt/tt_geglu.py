@@ -40,5 +40,5 @@ class TtGEGLU(LightweightModule):
 
         gate = ttnn.gelu(gate)
 
-        hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=True)
+        hidden_states = ttnn.mul_(hidden_states, gate, use_legacy=False)
         return hidden_states
