@@ -134,7 +134,8 @@ class TtASPP(LightweightModule):
         self.conv_branches.append(conv0)
 
         # Branches 2, 3, 4: 3x3 convolutions with dilations (BatchNorm fused)
-        channel_slices = [2, 4, 8]
+        # Default channel slices (fallback if model_configs not available)
+        default_channel_slices = [2, 4, 8]
 
         for i, dilation in enumerate(dilations):
             conv_idx = i + 1
@@ -144,11 +145,22 @@ class TtASPP(LightweightModule):
             conv_params = TtConv2dParameters(
                 weight=conv_params_path["weight"], bias=conv_bias, device=self.device, dilation=(dilation, dilation)
             )
+
+            # Get slice config from model_configs or use default
+            if self.model_configs is not None:
+                aspp_slice_config = self.model_configs.get_aspp_slice_config(conv_idx)
+                num_slices = aspp_slice_config["num_slices"]
+            else:
+                logger.warning(
+                    f"FALLBACK ASPP SLICE CONFIG: Using default channel slicing with num_slices={default_channel_slices[i]} for aspp.convs.{conv_idx} instead of model_configs"
+                )
+                num_slices = default_channel_slices[i]
+
             conv = TtConv2d.create_with_channel_slicing(
                 conv_params,
                 stride=(1, 1),
                 padding=(dilation, dilation),
-                num_slices=channel_slices[i],
+                num_slices=num_slices,
                 conv_path=f"aspp.convs.{i+1}",
                 model_configs=self.model_configs,
             )

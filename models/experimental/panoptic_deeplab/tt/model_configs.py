@@ -292,15 +292,18 @@ class ModelOptimisations:
         """
         if "fuse_conv.0" in conv_path:
             if iteration_index == 0:
-                return {"mode": "none", "num_slices": 1}
+                # Check if this is res3 stage (which has 160 channels after projection) - use channel slicing
+                if "res3" in conv_path:
+                    return {"mode": "channel", "num_slices": 5}
+                else:
+                    # Other stages use height slicing
+                    return {"mode": "height", "num_slices": 4}
             else:
                 # Use height slicing for subsequent iterations
                 return {"mode": "height", "num_slices": 4}
         elif "fuse_conv.1" in conv_path:
-            if iteration_index == 0:
-                return {"mode": "none", "num_slices": 1}
-            else:
-                return {"mode": "height", "num_slices": 2}
+            # Always use height slicing with num_slices=2 (matches original hardcoded logic)
+            return {"mode": "height", "num_slices": 2}
         else:
             return {"mode": "none", "num_slices": 1}
 

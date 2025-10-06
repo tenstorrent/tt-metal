@@ -69,14 +69,30 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             bias=ch0_bias,
             device=self.device,
         )
-        self.center_head_0 = TtConv2d.create_with_height_slicing(
-            ch0_params,
-            num_slices=2,
-            stride=(1, 1),
-            padding=(1, 1),
-            conv_path="instance_head.center_head.0",
-            model_configs=self.model_configs,
-        )
+        # Get slice config from model_configs for center_head.0
+        if self.model_configs is not None:
+            head_slice_config = self.model_configs.get_head_slice_config("center")
+            self.center_head_0 = TtConv2d.create_with_height_slicing(
+                ch0_params,
+                num_slices=head_slice_config["num_slices"],
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="instance_head.center_head.0",
+                model_configs=self.model_configs,
+            )
+        else:
+            # Fallback to original logic
+            logger.warning(
+                "FALLBACK INSEMB CENTER_HEAD.0: Using original hardcoded logic for instance_head.center_head.0 instead of model_configs"
+            )
+            self.center_head_0 = TtConv2d.create_with_height_slicing(
+                ch0_params,
+                num_slices=2,
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="instance_head.center_head.0",
+                model_configs=self.model_configs,
+            )
 
         # center_head_1
         center_head1_path = center_head_params[1]
@@ -91,14 +107,30 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             bias=ch1_bias,
             device=self.device,
         )
-        self.center_head_1 = TtConv2d.create_with_height_slicing(
-            ch1_params,
-            num_slices=2,
-            stride=(1, 1),
-            padding=(1, 1),
-            conv_path="instance_head.center_head.1",
-            model_configs=self.model_configs,
-        )
+        # Get slice config from model_configs for center_head.1
+        if self.model_configs is not None:
+            head_slice_config = self.model_configs.get_head_slice_config("center")
+            self.center_head_1 = TtConv2d.create_with_height_slicing(
+                ch1_params,
+                num_slices=head_slice_config["num_slices"],
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="instance_head.center_head.1",
+                model_configs=self.model_configs,
+            )
+        else:
+            # Fallback to original logic
+            logger.warning(
+                "FALLBACK INSEMB CENTER_HEAD.1: Using original hardcoded logic for instance_head.center_head.1 instead of model_configs"
+            )
+            self.center_head_1 = TtConv2d.create_with_height_slicing(
+                ch1_params,
+                num_slices=2,
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="instance_head.center_head.1",
+                model_configs=self.model_configs,
+            )
 
         # center_predictor
         center_predictor_params = (
@@ -141,14 +173,30 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             bias=oh0_bias,
             device=self.device,
         )
-        self.offset_head_0 = TtConv2d.create_with_height_slicing(
-            oh0_params,
-            num_slices=2,
-            stride=(1, 1),
-            padding=(1, 1),
-            conv_path="instance_head.offset_head.0",
-            model_configs=self.model_configs,
-        )
+        # Get slice config from model_configs for offset_head.0
+        if self.model_configs is not None:
+            head_slice_config = self.model_configs.get_head_slice_config("offset")
+            self.offset_head_0 = TtConv2d.create_with_height_slicing(
+                oh0_params,
+                num_slices=head_slice_config["num_slices"],
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="instance_head.offset_head.0",
+                model_configs=self.model_configs,
+            )
+        else:
+            # Fallback to original logic
+            logger.warning(
+                "FALLBACK INSEMB OFFSET_HEAD.0: Using original hardcoded logic for instance_head.offset_head.0 instead of model_configs"
+            )
+            self.offset_head_0 = TtConv2d.create_with_height_slicing(
+                oh0_params,
+                num_slices=2,
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="instance_head.offset_head.0",
+                model_configs=self.model_configs,
+            )
 
         # offset_head_1
         offset_head1_path = offset_head_params[1]
@@ -163,14 +211,30 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             bias=oh1_bias,
             device=self.device,
         )
-        self.offset_head_1 = TtConv2d.create_with_height_slicing(
-            oh1_params,
-            num_slices=2,
-            stride=(1, 1),
-            padding=(1, 1),
-            conv_path="instance_head.offset_head.1",
-            model_configs=self.model_configs,
-        )
+        # Get slice config from model_configs for offset_head.1
+        if self.model_configs is not None:
+            head_slice_config = self.model_configs.get_head_slice_config("offset")
+            self.offset_head_1 = TtConv2d.create_with_height_slicing(
+                oh1_params,
+                num_slices=head_slice_config["num_slices"],
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="instance_head.offset_head.1",
+                model_configs=self.model_configs,
+            )
+        else:
+            # Fallback to original logic
+            logger.warning(
+                "FALLBACK INSEMB OFFSET_HEAD.1: Using original hardcoded logic for instance_head.offset_head.1 instead of model_configs"
+            )
+            self.offset_head_1 = TtConv2d.create_with_height_slicing(
+                oh1_params,
+                num_slices=2,
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="instance_head.offset_head.1",
+                model_configs=self.model_configs,
+            )
 
         # offset_predictor
         offset_predictor_params = (

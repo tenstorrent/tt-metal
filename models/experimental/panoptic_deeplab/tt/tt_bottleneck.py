@@ -87,10 +87,20 @@ class TtBottleneck(LightweightModule):
             shortcut_params = parameters["shortcut"]
             shortcut_stride_tuple = (shortcut_stride, shortcut_stride)
 
-            # Apply width slicing for res3 blocks
+            # Apply width slicing for res3 blocks using model_configs
             shortcut_slice_config = None
             if block_id.startswith("res3"):
-                shortcut_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=2)
+                if self.model_configs is not None:
+                    res3_slice_config = self.model_configs.get_slice_config(f"{block_id}.shortcut")
+                    if res3_slice_config["mode"] == "width":
+                        shortcut_slice_config = SliceConfig(
+                            mode=SliceMode.WIDTH, num_slices=res3_slice_config["num_slices"]
+                        )
+                else:
+                    logger.warning(
+                        f"FALLBACK BOTTLENECK SLICE CONFIG: Using default width slicing with num_slices=2 for {block_id}.shortcut instead of model_configs"
+                    )
+                    shortcut_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=2)
 
             self.shortcut = TtConv2d(
                 TtConv2dParameters.from_preprocessed_parameters(

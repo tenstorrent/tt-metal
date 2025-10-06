@@ -47,8 +47,15 @@ class TtStem(LightweightModule):
         conv2_params = parameters["conv2"]
         conv3_params = parameters["conv3"]
 
-        # Configure width slicing for all conv layers
-        width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=4)
+        # Configure width slicing for all conv layers using model_configs
+        if self.model_configs is not None:
+            stem_slice_config = self.model_configs.get_slice_config("stem.conv1")
+            width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=stem_slice_config["num_slices"])
+        else:
+            logger.warning(
+                "FALLBACK STEM SLICE CONFIG: Using default width slicing with num_slices=4 instead of model_configs"
+            )
+            width_slice_config = SliceConfig(mode=SliceMode.WIDTH, num_slices=4)
 
         # Initialize conv layers
         self.conv1 = self._create_conv_layer(

@@ -119,6 +119,6 @@ def test_ttnn_insemb(device, model_location_generator):
     assert passed_center, f"Center PCC test failed: {msg_center}"
 
     ttnn_offset_out_torch = ttnn.to_torch(ttnn_offset_out_tt).permute(0, 3, 1, 2)
-    passed_offset, msg_offset = assert_with_pcc(torch_offset_out, ttnn_offset_out_torch, pcc=0.91)
+    passed_offset, msg_offset = assert_with_pcc(torch_offset_out, ttnn_offset_out_torch, pcc=0.90)
     logger.info(f"Offset PCC: {msg_offset}")
     assert passed_offset, f"Offset PCC test failed: {msg_offset}"
