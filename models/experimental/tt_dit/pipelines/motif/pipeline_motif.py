@@ -39,6 +39,7 @@ class PipelineTrace:
     prompt_input: ttnn.Tensor
     pooled_input: ttnn.Tensor
     timestep_input: ttnn.Tensor
+    sigma_difference_input: ttnn.Tensor
     latents_output: ttnn.Tensor
 
 
@@ -355,7 +356,9 @@ class MotifPipeline:
                             fill_value=sigma_difference,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=ttnn.bfloat16,
-                            device=submesh_device,  # Not used in trace region, can be on device always.
+                            device=submesh_device
+                            if not traced
+                            else None,  # Not used in trace region, can be on device always.
                         )
                         tt_sigma_difference_list.append(tt_sigma_difference)
 
@@ -449,6 +452,7 @@ class MotifPipeline:
             self._traces = []
             for submesh_id, submesh_device in enumerate(self._submesh_devices):
                 timestep_device = timestep[submesh_id].to(submesh_device)
+                sigma_difference_device = sigma_difference[submesh_id].to(submesh_device)
 
                 pred = self._step_inner(
                     cfg_enabled=cfg_enabled,
@@ -483,6 +487,7 @@ class MotifPipeline:
                         pooled_input=pooled_prompt_embeds[submesh_id],
                         timestep_input=timestep_device,
                         latents_output=pred,
+                        sigma_difference_input=sigma_difference_device,
                         tid=trace_id,
                     )
                 )
@@ -491,6 +496,10 @@ class MotifPipeline:
         if traced:
             for submesh_id, submesh_device in enumerate(self._submesh_devices):
                 ttnn.copy_host_to_device_tensor(timestep[submesh_id], self._traces[submesh_id].timestep_input)
+                ttnn.copy_host_to_device_tensor(
+                    sigma_difference[submesh_id], self._traces[submesh_id].sigma_difference_input
+                )
+                sigma_difference_device = self._traces[submesh_id].sigma_difference_input
                 ttnn.execute_trace(submesh_device, self._traces[submesh_id].tid, cq_id=0, blocking=False)
                 noise_pred_list.append(self._traces[submesh_id].latents_output)
         else:
@@ -504,6 +513,7 @@ class MotifPipeline:
                     submesh_index=submesh_id,
                 )
                 noise_pred_list.append(noise_pred)
+                sigma_difference_device = sigma_difference[submesh_id]
 
         if cfg_enabled:
             if not self._parallel_config.cfg_parallel.factor > 1:
@@ -531,7 +541,9 @@ class MotifPipeline:
                 )
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
-            ttnn.add_(latents[submesh_id], sigma_difference[submesh_id] * noise_pred_list[submesh_id])
+            ttnn.synchronize_device(submesh_device)  # Helps with accurate time profiling.
+            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference_device)
+            ttnn.add_(latents[submesh_id], noise_pred_list[submesh_id])
 
         return latents
 
