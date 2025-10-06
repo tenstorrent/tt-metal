@@ -88,6 +88,7 @@ def create_tt_model(
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
+        model_location_generator=model_location_generator,
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers

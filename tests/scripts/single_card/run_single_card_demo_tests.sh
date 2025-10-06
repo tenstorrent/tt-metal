@@ -66,7 +66,7 @@ run_gemma3_perf() {
 }
 
 run_phi4_perf() {
-  HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py -k "batch-1"
+  HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py
   echo "LOG_METAL: Phi4 perf tests completed (text only)"
 }
 

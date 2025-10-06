@@ -79,7 +79,8 @@ jobs:
           # Stable set (CIv2)
           STABLE_CIv2='[
             {"model":"yolov8s"},
-            {"model":"vadv2"}
+            {"model":"vadv2"},
+            {"model":"phi4"}
           ]'
 
           # Unstable set (explicit commands)
