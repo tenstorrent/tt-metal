@@ -9,8 +9,8 @@ from transformers import AutoImageProcessor
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.ttnn_resnet.test_lib.demo_utils import get_batch, get_data, get_data_loader
-from models.demos.ttnn_resnet.test_lib.resnet50_test_infra import create_test_infra
+from models.demos.ttnn_resnet.tests.common.demo_utils import get_batch, get_data, get_data_loader
+from models.demos.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
 
 resnet_model_config = {
     "MATH_FIDELITY": ttnn.MathFidelity.LoFi,
