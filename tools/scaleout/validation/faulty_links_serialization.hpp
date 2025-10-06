@@ -10,7 +10,7 @@
 
 namespace tt::scaleout::validation {
 
-std::vector<uint8_t> serialize_faulty_links_to_bytes(const std::vector<::FaultyLink>& faulty_links);
-std::vector<::FaultyLink> deserialize_faulty_links_from_bytes(const std::vector<uint8_t>& data);
+std::vector<uint8_t> serialize_link_metrics_to_bytes(const std::vector<::EthernetLinkMetrics>& link_metrics);
+std::vector<::EthernetLinkMetrics> deserialize_link_metrics_from_bytes(const std::vector<uint8_t>& data);
 
 }  // namespace tt::scaleout::validation
