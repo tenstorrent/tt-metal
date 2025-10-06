@@ -42,6 +42,10 @@ on:
         required: false
         type: boolean
         default: false
+      scaleout-tests:
+        required: false
+        type: boolean
+        default: false
 
 run-name: ${{ inputs.description }}
 jobs:
