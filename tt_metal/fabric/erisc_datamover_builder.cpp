@@ -84,7 +84,7 @@ void configure_risc_settings(
     } else if (arch == tt::ARCH::BLACKHOLE) {
         if (num_riscv_cores == 1) {
             enable_handshake = true;
-            enable_context_switch = false;
+            enable_context_switch = tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
             enable_interrupts = false;
             is_sender_channel_serviced.fill(true);
             is_receiver_channel_serviced.fill(true);
@@ -93,7 +93,7 @@ void configure_risc_settings(
             if (risc_id == 0) {
                 // ERISC0: Handle sender channels only
                 enable_handshake = true;
-                enable_context_switch = false;
+                enable_context_switch = true;
                 enable_interrupts = false;
                 is_sender_channel_serviced.fill(true);
                 is_receiver_channel_serviced.fill(false);
@@ -257,9 +257,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         next_l1_addr += 32;
     }
 
-    // The Ethernet handshake structure is 32 B.
     this->handshake_addr = next_l1_addr;
-    next_l1_addr += 2 * eth_channel_sync_size;
+    next_l1_addr += eth_channel_sync_size;
 
     // issue: https://github.com/tenstorrent/tt-metal/issues/29073. TODO: Re-enable after hang is resolved.
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
@@ -981,7 +980,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
 void get_runtime_args_for_edm_termination_infos(
     const std::vector<edm_termination_info_t>& edm_termination_infos, std::vector<uint32_t>& args_out) {
-    args_out.reserve(args_out.size() + edm_termination_infos.size() * 4 + 1);
+    args_out.reserve(args_out.size() + (edm_termination_infos.size() * 4) + 1);
     args_out.push_back(edm_termination_infos.size());
     for (const auto& info : edm_termination_infos) {
         args_out.push_back(info.edm_noc_x);
@@ -1073,7 +1072,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     fabric_connections.valid_connections_mask |= (1u << eth_channel);
 
     size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, read_only) +
-                               eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t);
+                               (eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t));
     // Write to Tensix cores
     std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
     for (const auto& logical_core : worker_core_coords) {
@@ -1142,7 +1141,8 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     direction(direction),
     local_fabric_node_id(local_fabric_node_id),
     peer_fabric_node_id(peer_fabric_node_id),
-    handshake_address(config.handshake_addr),
+    handshake_address(tt::round_up(
+        tt::tt_metal::hal::get_erisc_l1_unreserved_base(), FabricEriscDatamoverConfig::eth_channel_sync_size)),
     channel_buffer_size(config.channel_buffer_size_bytes),
     sender_channels_num_buffers(config.sender_channels_num_buffers),
     receiver_channels_num_buffers(config.receiver_channels_num_buffers),

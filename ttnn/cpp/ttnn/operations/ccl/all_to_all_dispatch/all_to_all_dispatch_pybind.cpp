@@ -44,6 +44,7 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                 topology (ttnn.Topology, optional): the topology to use when dispatching the tokens. Defaults to what the mesh topology is initialized with. CAREFUL: no guarantees that the topology is valid for the given Fabric Init unless it matches the topology of the mesh.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration for the output tensors. Defaults to `None`.
                 subdevice_id (ttnn.SubDeviceId, optional): the subdevice id for the subdevice on which we allocate the worker cores. Defaults to `None`.
+                output_concat_dim (int, optional): the dimension to concat the output tokens along. Defaults to `1`, which is the batch dimension.
 
            Returns:
                Tuple[ttnn.Tensor, ttnn.Tensor]: The sparse output tokens tensor and the metadata tensor. The output tensor on each device is sparsely populated with all the tokens that are dispatched to that device. The non-dispatched tokens have placeholder rows populated with garbage. The metadata tensor is used to track the expert indices.
@@ -61,7 +62,8 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                                 num_links=num_links,
                                 topology=topology,
                                 memory_config=memory_config,
-                                subdevice_id=subdevice_id)doc";
+                                subdevice_id=subdevice_id,
+                                output_concat_dim=output_concat_dim)doc";
 
     using OperationType = decltype(ttnn::all_to_all_dispatch);
     ttnn::bind_registered_operation(
@@ -78,7 +80,8 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                const std::optional<uint32_t> num_links,
                const std::optional<tt::tt_fabric::Topology> topology,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+               const std::optional<uint32_t>& output_concat_dim) {
                 return self(
                     input_tensor,
                     expert_indices_tensor,
@@ -88,7 +91,8 @@ void py_bind_all_to_all_dispatch(py::module& module) {
                     num_links,
                     topology,
                     memory_config,
-                    subdevice_id);
+                    subdevice_id,
+                    output_concat_dim);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_indices_tensor").noconvert(),
@@ -99,7 +103,8 @@ void py_bind_all_to_all_dispatch(py::module& module) {
             py::arg("num_links") = 1,
             py::arg("topology") = tt::tt_fabric::Topology::Linear,
             py::arg("memory_config") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt});
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("output_concat_dim") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::ccl

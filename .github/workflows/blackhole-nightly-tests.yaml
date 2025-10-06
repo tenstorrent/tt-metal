@@ -89,8 +89,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   blackhole-multi-card-ttnn-stress-tests:
-    # Disabled due to https://github.com/tenstorrent/tt-metal/issues/29256
-    if: false
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml

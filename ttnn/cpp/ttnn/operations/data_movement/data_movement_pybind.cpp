@@ -83,7 +83,6 @@ void py_module(py::module& module) {
     py_bind_interleaved_to_sharded(module);
     py_bind_interleaved_to_sharded_partial(module);
     py_bind_repeat(module);
-    py_bind_reshape_enum(module);
     py_bind_reshape(module);
     py_bind_reshape_view(module);
     py_bind_view(module);
