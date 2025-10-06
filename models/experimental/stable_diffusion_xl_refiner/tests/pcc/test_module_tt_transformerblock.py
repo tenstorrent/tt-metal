@@ -14,13 +14,11 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
 
 
 @pytest.mark.parametrize(
-    "input_shape, encoder_shape, down_block_id, block_id, pcc",
+    "input_shape, encoder_shape, block_id, transformer_block_id, pcc, block_type",
     [
-        ((1, 1024, 1536), (1, 77, 1280), 2, 0, 0.999),
-        ((1, 4096, 768), (1, 77, 1280), 1, 0, 0.999),
-        # Missing MidBlock CrossAttention test
-        # [(1, 256, 1536), (1, 77, 1280)]
-        # but this test case passes if used instead of (1, 1024, 1536)
+        ((1, 1024, 1536), (1, 77, 1280), 2, 0, 0.999, "down_blocks"),
+        ((1, 4096, 768), (1, 77, 1280), 1, 0, 0.999, "down_blocks"),
+        ((1, 256, 1536), (1, 77, 1280), 0, 0, 0.999, "mid_block"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
@@ -28,9 +26,10 @@ def test_transformerblock(
     device,
     input_shape,
     encoder_shape,
-    down_block_id,
     block_id,
+    transformer_block_id,
     pcc,
+    block_type,
     is_ci_env,
 ):
     unet = UNet2DConditionModel.from_pretrained(
@@ -43,11 +42,17 @@ def test_transformerblock(
     unet.eval()
     state_dict = unet.state_dict()
 
-    torch_transformerblock = unet.down_blocks[down_block_id].attentions[0].transformer_blocks[block_id]
+    if block_type == "down_blocks":
+        torch_transformerblock = unet.down_blocks[block_id].attentions[0].transformer_blocks[transformer_block_id]
+        module_path = f"down_blocks.{block_id}.attentions.0.transformer_blocks.{transformer_block_id}"
+    elif block_type == "mid_block":
+        torch_transformerblock = unet.mid_block.attentions[0].transformer_blocks[transformer_block_id]
+        module_path = f"mid_block.attentions.0.transformer_blocks.{transformer_block_id}"
+
     tt_transformerblock = TtBasicTransformerBlock(
         device,
         state_dict,
-        f"down_blocks.{down_block_id}.attentions.0.transformer_blocks.{block_id}",
+        module_path,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
     torch_encoder_tensor = torch_random(encoder_shape, -0.1, 0.1, dtype=torch.float32)
