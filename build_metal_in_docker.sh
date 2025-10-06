@@ -22,7 +22,4 @@ docker build --progress=plain \
 
 # Step 3: Run conan create in the container
 echo "Running conan create in container"
-docker run -it --rm -v "$(pwd):/workspace" "${METAL_IMAGE_NAME}" \
-    conan create . --build=missing \
-    -cc core.net.http:timeout=240 \
-    --profile /tt-conan/default_cxx20.txt
+docker run -it --rm -v "$(pwd):/workspace" "${METAL_IMAGE_NAME}" ./run_metal_with_conan.sh "/tt-conan/default_cxx20.txt"

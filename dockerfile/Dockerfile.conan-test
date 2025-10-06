@@ -34,6 +34,7 @@ COPY dockerfile/default_cxx20.txt /tt-conan/default_cxx20.txt
 # Install conan dependencies
 RUN conan install . --build=missing \
     -cc core.net.http:timeout=240 \
+    -o 'ttnn/*:build_tests=True' \
     --profile:build /tt-conan/default_cxx20.txt \
     --profile:host /tt-conan/default_cxx20.txt
 

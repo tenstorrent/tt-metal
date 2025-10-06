@@ -97,7 +97,7 @@ class TTNNConan(ConanFile):
 
         #########################################################
         tc.variables["TT_INSTALL"] = True
-        tc.variables["WITH_PYTHON_BINDINGS"] = False
+        tc.variables["WITH_PYTHON_BINDINGS"] = True
         tc.variables["ENABLE_DISTRIBUTED"] = bool(self.options.enable_distributed)
         tc.variables["ENABLE_FAKE_KERNELS_TARGET"] = False
 
