@@ -319,6 +319,14 @@ void MAIN {
                     tile_regs_release();
                 }
             } else {
+                if constexpr (use_tilize_dest) {
+                    if constexpr (pack_untilize_reinit) {
+                        tensix_sync();
+                        pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
+                        tensix_sync();
+                    }
+                }
+
                 pack_reconfig_data_format(out_cb_id);
                 pack_untilize_dest<topk_output_tiles, topk_output_tiles, false, false, TILE_C_DIM, data_dst_idx>(
                     out_cb_id, 1, 0, num_out_sticks, output_faces);
