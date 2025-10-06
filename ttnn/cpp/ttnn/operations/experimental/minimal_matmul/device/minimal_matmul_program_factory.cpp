@@ -85,8 +85,10 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
     auto in0_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
     auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
 
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
@@ -191,6 +193,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
         std::vector<CoreCoord> in0_core_order;
         in0_core_order.push_back(left_core);
+        uint32_t in0_core_order_index = 0;
         for (uint32_t in0_worker_idx = 1; in0_worker_idx < grid_size.x; in0_worker_idx++) {
             CoreCoord in0_worker_core = {(std::size_t)0, (std::size_t)core.y};
             if (in0_noc == tt::tt_metal::NOC::NOC_1) {
@@ -198,10 +201,14 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             } else {
                 in0_worker_core.x = in0_worker_idx;
             }
+            if (in0_worker_core.x == core.x) {
+                in0_core_order_index = in0_worker_idx;
+            }
             in0_core_order.push_back(in0_worker_core);
         }
         std::vector<CoreCoord> in1_core_order;
         in1_core_order.push_back(top_core);
+        uint32_t in1_core_order_index = 0;
         for (uint32_t in1_worker_idx = 1; in1_worker_idx < grid_size.y; in1_worker_idx++) {
             CoreCoord in1_worker_core = {(std::size_t)core.x, (std::size_t)0};
             if (in1_noc == tt::tt_metal::NOC::NOC_0) {
@@ -209,12 +216,17 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             } else {
                 in1_worker_core.y = in1_worker_idx;
             }
+            if (in1_worker_core.y == core.y) {
+                in1_core_order_index = in1_worker_idx;
+            }
             in1_core_order.push_back(in1_worker_core);
         }
-        auto in0_prev_core = in0_core_order.at((std::size_t)std::max((int32_t)core.x - 1, 0));
-        auto in0_next_core = in0_core_order.at((std::size_t)std::min(core.x + 1, grid_size.x - 1));
-        auto in1_prev_core = in1_core_order.at((std::size_t)std::max((int32_t)core.y - 1, 0));
-        auto in1_next_core = in1_core_order.at((std::size_t)std::min(core.y + 1, grid_size.y - 1));
+        auto in0_prev_core = in0_core_order.at((std::size_t)std::max((int32_t)in0_core_order_index - 1, 0));
+        auto in0_next_core =
+            in0_core_order.at((std::size_t)std::min((size_t)in0_core_order_index + 1, grid_size.x - 1));
+        auto in1_prev_core = in1_core_order.at((std::size_t)std::max((int32_t)in1_core_order_index - 1, 0));
+        auto in1_next_core =
+            in1_core_order.at((std::size_t)std::min((size_t)in1_core_order_index + 1, grid_size.y - 1));
 
         auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
         ;
@@ -240,6 +252,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             input_tile_size,
             in0_mcast_sender_semaphore_id,
             in0_mcast_receiver_semaphore_id,
+            in0_valid_semaphore_id,
             1};
         tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
         auto in0_sender_kernels_id = CreateKernel(
@@ -278,6 +291,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             input_tile_size,
             in1_mcast_sender_semaphore_id,
             in1_mcast_receiver_semaphore_id,
+            in1_valid_semaphore_id,
             1};
         tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
