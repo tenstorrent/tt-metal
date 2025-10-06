@@ -191,9 +191,9 @@ Tensor WhereOperation::invoke(
     bool is_value_false_tensor = std::holds_alternative<Tensor>(value_false);
     Tensor condition = predicate;
 
-    // Check if sharding prevents optimized path
-    if (has_sharding(predicate, value_true, value_false, memory_config, output)) {
-        log_info(tt::LogOp, "Where - legacy (sharding detected)");
+    // Lambda to handle fallback to legacy implementation
+    auto fallback_to_legacy = [&](const char* reason) {
+        log_info(tt::LogOp, "Where - legacy ({})", reason);
         return std::visit(
             [&](const auto&... values) {
                 return ternary_utils::where_impl(
@@ -201,6 +201,11 @@ Tensor WhereOperation::invoke(
             },
             value_true,
             value_false);
+    };
+
+    // Check if sharding prevents optimized path
+    if (has_sharding(predicate, value_true, value_false, memory_config, output)) {
+        return fallback_to_legacy("sharding detected");
     }
 
     // Try optimized paths in order of preference
@@ -209,46 +214,37 @@ Tensor WhereOperation::invoke(
         const auto& t_true = std::get<Tensor>(value_true);
         const auto& t_false = std::get<Tensor>(value_false);
         std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-        Tensor result = handle_ttt_case(
+        return handle_ttt_case(
             condition,
             t_true,
             t_false,
             output_dtype,
             ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
             output);
-        if (result.is_allocated()) {
-            return result;
-        }
     } else if (is_value_true_tensor && !is_value_false_tensor) {
         // TTS case: tensor-tensor-scalar
         const auto& t_true = std::get<Tensor>(value_true);
         float scalar_false = std::get<float>(value_false);
         std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
-        Tensor result = handle_tts_case(
+        return handle_tts_case(
             condition,
             t_true,
             scalar_false,
             output_dtype,
             ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
             output);
-        if (result.is_allocated()) {
-            return result;
-        }
     } else if (!is_value_true_tensor && is_value_false_tensor) {
         // TST case: tensor-scalar-tensor
         float scalar_true = std::get<float>(value_true);
         const auto& t_false = std::get<Tensor>(value_false);
         std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_false.dtype());
-        Tensor result = handle_tst_case(
+        return handle_tst_case(
             condition,
             scalar_true,
             t_false,
             output_dtype,
             ternary_utils::determine_memory_config(memory_config, t_false.memory_config()),
             output);
-        if (result.is_allocated()) {
-            return result;
-        }
     } else if (!is_value_true_tensor && !is_value_false_tensor) {
         // TSS case: tensor-scalar-scalar
         float t_true = std::get<float>(value_true);
@@ -257,14 +253,7 @@ Tensor WhereOperation::invoke(
     }
 
     // Fallback to legacy implementation
-    log_info(tt::LogOp, "Where - legacy");
-    return std::visit(
-        [&](const auto&... values) {
-            return ternary_utils::where_impl(
-                condition, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
-        },
-        value_true,
-        value_false);
+    return fallback_to_legacy("invalid broadcast detected");
 }
 
 }  // namespace ternary

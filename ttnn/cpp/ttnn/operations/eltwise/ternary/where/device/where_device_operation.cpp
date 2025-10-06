@@ -35,8 +35,6 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
     const auto& value_false_tensor = tensor_args.value_false;
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
 
-    auto& predicate_shape = predicate_tensor.logical_shape();
-
     auto out_memory_config = args.memory_config;
     // For TTT, allow exact shape match or broadcast-compatible shapes
     auto broadcast_type = args.broadcast_type;
@@ -60,22 +58,16 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(predicate_tensor.memory_config().memory_layout()),
         static_cast<int>(out_memory_config.memory_layout()));
 
-    TT_FATAL(
-        broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST,
-        "Invalid broadcast type for Where device operation. Supported bcast dims for TTT: -5, -4, -3, -1, for TTS/TST: "
-        "-5, -4, -3");
-
-    // Validate tensor shapes based on variant using helper functions
+    // Validate tensor shapes based on variant and scalar broadcast compatibility
     if (args.where_variant == WhereVariant::TTT) {
         TT_FATAL(
             value_true_tensor.has_value() && value_false_tensor.has_value(),
             "TTT variant requires both value_true and value_false tensors");
-        validate_broadcast_compatibility(
-            args.where_variant,
-            broadcast_type,
-            predicate_shape,
-            value_true_tensor.value().logical_shape(),
-            value_false_tensor.value().logical_shape());
+
+        TT_FATAL(
+            ((broadcast_type != WhereBroadcastType::SCALAR_A_BCAST) &&
+             (broadcast_type != WhereBroadcastType::SCALAR_B_BCAST)),
+            "Unsupported broadcast type for TTT operation. scalar broadcast for TTT requires SCALAR_BCAST");
 
     } else if (args.where_variant == WhereVariant::TTS) {
         TT_FATAL(
@@ -85,8 +77,10 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
             args.value_false_scalar.has_value(),
             "Where TTS operation requires value_false_scalar to be set in operation attributes");
 
-        validate_broadcast_compatibility(
-            args.where_variant, broadcast_type, predicate_shape, value_true_tensor.value().logical_shape());
+        TT_FATAL(
+            (broadcast_type != WhereBroadcastType::SCALAR_BCAST),
+            "Unsupported broadcast type for TTS operation. scalar broadcast for TTS requires SCALAR_A_BCAST or "
+            "SCALAR_B_BCAST");
 
     } else if (args.where_variant == WhereVariant::TST) {
         TT_FATAL(
@@ -96,8 +90,10 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
             args.value_true_scalar.has_value(),
             "Where TST operation requires value_true_scalar to be set in operation attributes");
 
-        validate_broadcast_compatibility(
-            args.where_variant, broadcast_type, predicate_shape, value_false_tensor.value().logical_shape());
+        TT_FATAL(
+            (broadcast_type != WhereBroadcastType::SCALAR_BCAST),
+            "Unsupported broadcast type for TST operation. scalar broadcast for TST requires SCALAR_A_BCAST or "
+            "SCALAR_B_BCAST");
     }
 
     if (!predicate_tensor.is_sharded()) {
