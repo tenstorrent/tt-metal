@@ -316,8 +316,28 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.5
+    VERSION 1.1.6
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"
 )
+
+####################################################################################################################
+# Cap'n Proto : https://github.com/capnproto/capnproto
+####################################################################################################################
+CPMAddPackage(
+    NAME capnproto
+    GITHUB_REPOSITORY capnproto/capnproto
+    GIT_TAG
+        d135c9ca5e15219eaf131dfce1a41afdbaea9aab # v1.2.0
+    OPTIONS
+        "BUILD_TESTING OFF"
+        "CAPNP_LITE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "CMAKE_CXX_EXTENSIONS ON"
+)
+
+if(capnproto_ADDED)
+    target_compile_options(kj-async PRIVATE -Wno-deprecated-this-capture)
+    target_compile_options(kj-http PRIVATE -Wno-deprecated-this-capture)
+endif()

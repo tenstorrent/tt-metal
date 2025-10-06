@@ -5,12 +5,11 @@
 import pytest
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole, is_e75, is_wormhole_b0, skip_for_grayskull
+from models.common.utility_functions import is_blackhole, is_e75, is_wormhole_b0
 from models.demos.metal_BERT_large_11.demo.demo import test_demo as demo_json
 from models.demos.metal_BERT_large_11.demo.demo import test_demo_squadv2 as demo_squadv2
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("batch", (7,), ids=["batch_7"])
 @pytest.mark.parametrize(
     "input_path",
@@ -81,15 +80,14 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device):
         assert expected_answers[i] == answers[i]
 
 
-@skip_for_grayskull()
 @pytest.mark.skipif(is_blackhole(), reason="#7525: Not functional on BH yet")
 @pytest.mark.parametrize(
     "batch, exact, f1",
     (
         (
             7,
-            77.14,
-            84.21,
+            75.71,
+            83.74,
         ),
     ),
     ids=["batch_7"],

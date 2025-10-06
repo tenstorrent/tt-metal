@@ -15,7 +15,7 @@
 #include <string>
 #include <variant>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
@@ -41,7 +41,8 @@ BuildEnvManager::BuildEnvManager() {
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     build_state_indices_.resize(programmable_core_type_count);
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-        uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
+        uint32_t processor_class_count =
+            hal.get_processor_classes_count(hal.get_programmable_core_type(programmable_core));
         build_state_indices_[programmable_core].resize(processor_class_count);
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
             uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
@@ -71,7 +72,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t de
             static_cast<size_t>(soc_d.worker_l1_size) /
             tt::get_storage_core_bank_size(device_id, num_hw_cqs, dispatch_core_config).value();
     }
-    const size_t num_l1_banks = num_compute_and_storage_cores + num_storage_only_cores * num_banks_per_storage_core;
+    const size_t num_l1_banks = num_compute_and_storage_cores + (num_storage_only_cores * num_banks_per_storage_core);
 
     bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
     bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
@@ -150,7 +151,8 @@ std::vector<JitBuildState> create_build_state(
     // Loop through programmable core types and their processor classes/types.
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-        uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
+        uint32_t processor_class_count =
+            hal.get_processor_classes_count(hal.get_programmable_core_type(programmable_core));
         for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
             JitBuiltStateConfig config{
                 .core_type = static_cast<HalProgrammableCoreType>(programmable_core),

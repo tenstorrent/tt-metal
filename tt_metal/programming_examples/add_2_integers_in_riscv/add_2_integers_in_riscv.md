@@ -12,89 +12,96 @@ To build and execute, you may use the following commands:
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/metal_example_add_2_integers_in_riscv
 ```
-## Set up device and program/collaboration mechanisms
+## Set up device, command queue, workload, and program
 
-``` cpp
-Device *device = CreateDevice(0);
-CommandQueue& cq = device->command_queue();
+```cpp
+std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(0);
+distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+distributed::MeshWorkload workload;
+distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 Program program = CreateProgram();
 constexpr CoreCoord core = {0, 0};
 ```
 
-We follow the standard procedure for the initial steps in setting up the host program. The device that the program will execute on is identified, and the corresponding command queue is accessed. The program is initialized, and the core indicated for utilization in this example is at the coordinates `{0, 0}` in accordance to the logical mesh layout.
+We create a 1x1 `MeshDevice` at mesh coordinate {0, 0}, obtain its `MeshCommandQueue` to submit work, define a `MeshWorkload` and its device range, create a `Program`, and indicate the `core` we intend to use at the coordinates `{0, 0}` for utilization in this example.
 
-## Configure and initialize DRAM buffer
+## Configure DRAM and L1 buffers
 
-``` cpp
-constexpr uint32_t single_tile_size = 2 * 1024;
-tt_metal::InterleavedBufferConfig dram_config{
-            .device= device,
-            .size = single_tile_size,
-            .page_size = single_tile_size,
-            .buffer_type = tt_metal::BufferType::DRAM
+```cpp
+constexpr uint32_t buffer_size = sizeof(uint32_t);
+distributed::DeviceLocalBufferConfig dram_config{
+    .page_size = buffer_size,
+    .buffer_type = BufferType::DRAM};
+distributed::DeviceLocalBufferConfig l1_config{
+    .page_size = buffer_size,
+    .buffer_type = BufferType::L1};
+distributed::ReplicatedBufferConfig buffer_config{
+    .size = buffer_size,
 };
 ```
 
-We define the tile size to fit BFloat16 values before setting up the configuration for the DRAM buffer. We specify the device to create the buffers on as well as the size of the buffers. In this example, we will use an interleaved DRAM configuration for the buffers.
+We configure DRAM and L1 buffers using `DeviceLocalBufferConfig`, and size them with `ReplicatedBufferConfig` for use across the mesh. The `ReplicatedBufferConfig` allows the user to seamlessly port a buffer configuration across an arbitrary-sized mesh of devices.
 
-``` cpp
-std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
-std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
+## Create buffers
+
+```cpp
+auto src0_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+auto src1_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+auto src0_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+auto src1_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
+auto dst_l1_buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
 ```
 
-Next, we allocate memory for each buffer with the specified configuration for each of the input vectors and another buffer for the output vector. Source data will move from the host to DRAM, and the output will be sent from the DRAM to host.
+We create three DRAM buffers for inputs/outputs and three L1 buffers for on-core staging, all as `MeshBuffer`s on the same device.
 
-## Initialize source data and write to DRAM
+## Initialize source data and upload to DRAM
 
-``` cpp
-std::vector<uint32_t> src0_vec(1, 14);
-std::vector<uint32_t> src1_vec(1, 7);
+```cpp
+std::vector<uint32_t> src0_vec = {14};
+std::vector<uint32_t> src1_vec = {7};
 
-EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
-EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
+EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
+EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/false);
 ```
 
-On the host side, we set initialize the source data. In this case, they are represented as vectors with a single integer value. These values are then written to the corresponding DRAM buffers on the device through a dispatch by the command queue.
+We prepare two single-element host vectors and upload them asynchronously to the device.
 
-## Set up circular buffers for input
+## Create the Data Movement kernel
 
-``` cpp
-constexpr uint32_t src0_cb_index = CBIndex::c_0;
-CircularBufferConfig cb_src0_config = CircularBufferConfig(single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
-CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-
-constexpr uint32_t src1_cb_index = CBIndex::c_1;
-CircularBufferConfig cb_src1_config = CircularBufferConfig(single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src1_cb_index, single_tile_size);
-CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
-```
-
-L1 circular buffers will be used communicate data to and from the compute engine. We create a circular buffer for each of the source vectors. Each core will have its own segment of the source data stored in its corresponding circular buffer.
-
-## Kernel setup
-
-``` cpp
-KernelHandle binary_reader_kernel_id = CreateKernel(
+```cpp
+KernelHandle kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/add_2_integers_in_riscv/kernels/reader_writer_add_in_riscv.cpp",
     core,
     DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 ```
 
-In this example, we are using data movement processors for basic computation. As such, we create a kernel function for integer addition that utilizes the RISC-V 1 processor, which is designated for data movement, to run itself on. This kernel perform tile reading, addition, and writing.
+The kernel runs on a RISC-V Data Movement core. It reads inputs from DRAM, adds them, and writes the result back to DRAM.
 
-## Configure and execute program
+## Set runtime arguments and execute
 
-``` cpp
-SetRuntimeArgs(program, binary_reader_kernel_id, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), dst_dram_buffer->address(), src0_bank_id, src1_bank_id, dst_bank_id});
+```cpp
+SetRuntimeArgs(
+    program,
+    kernel_id,
+    core,
+    {
+        src0_dram_buffer->address(),
+        src1_dram_buffer->address(),
+        dst_dram_buffer->address(),
+        src0_l1_buffer->address(),
+        src1_l1_buffer->address(),
+        dst_l1_buffer->address(),
+    });
 
-EnqueueProgram(cq, program, false);
-Finish(cq);
+workload.add_program(device_range, std::move(program));
+distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
 ```
 
-In order to execute the program, we need to load the runtime arguments for the kernel function. After doing so with the corresponding buffer addresses, we can dispatch the program to the device for execution through the command queue.
+We pass DRAM and L1 addresses directly to the kernel, add the program to a `MeshWorkload`, and enqueue it non-blockingly.
 
-## Kernel execution
+## Kernel function
 
 ``` cpp
 // NoC coords (x,y) depending on DRAM location on-chip
@@ -139,10 +146,8 @@ In the kernel, tiles corresponding to each of the source vectors will be read fr
 
 ``` cpp
 std::vector<uint32_t> result_vec;
-EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
-printf("Result = %d : Expected = 21\n", result_vec[0]);
-
-CloseDevice(device);
+distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0), true);
+mesh_device->close();
 ```
 
-After executing the program, we create a destination vector on the host side to store the results of the device execution. Using `EnqueueReadBuffer`, the results are read from DRAM to the destination vector and displayed.
+We synchronously read back from the destination `MeshBuffer` using `ReadShard`, verify the result, and close the `MeshDevice`.

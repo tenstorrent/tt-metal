@@ -4,6 +4,7 @@
 
 import os
 import glob
+import platform
 import shutil
 import subprocess
 import sys
@@ -25,14 +26,25 @@ readme_path = Path(__file__).absolute().parent / "README.md"
 readme = readme_path.read_text(encoding="utf-8")
 
 
-# Get the platform-specific lib directory name
-def get_lib_dir():
-    if sys.platform == "win32":
-        return "bin"  # Windows DLLs go in bin directory
-    elif sys.platform.startswith("linux"):
-        return "lib64" if os.path.exists("/usr/lib64") else "lib"
-    else:  # macOS and others
-        return "lib"
+def get_lib_dir() -> str:
+    """
+    Inspired by GNUInstallDirs logic:
+    default = 'lib'
+    upgrade to 'lib64' only on 64-bit Linux that is not Debian/Arch/Alpine.
+    """
+    libdir = "lib"
+
+    if platform.system() == "Linux":
+        # skip lib64 on Debian/Arch/Alpine
+        if not (
+            Path("/etc/debian_version").exists()
+            or Path("/etc/arch-release").exists()
+            or Path("/etc/alpine-release").exists()
+        ):
+            if platform.architecture()[0] == "64bit":
+                libdir = "lib64"
+
+    return libdir
 
 
 BUNDLE_SFPI = False
@@ -277,8 +289,8 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        # lib naming: ttnncpp now installs as libttnn.so; keep _ttnncpp.so as a symlink for compatibility
-        lib_patterns = ["_ttnn.so", "libttnn.so*", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
+        # lib naming: We install libtt-nn.so now; keep _ttnncpp.so as a symlink for compatibility
+        lib_patterns = ["_ttnn.so", "libtt-nn.so*", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -398,10 +410,12 @@ setup(
     package_dir={
         "": "ttnn",
         "tracy": "tools/tracy",
+        "triage": "tools/triage",
     },
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),
     zip_safe=False,
     long_description=readme,
     long_description_content_type="text/markdown",
+    entry_points={"console_scripts": ["tt-triage = triage.triage:main"]},
 )

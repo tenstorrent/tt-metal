@@ -7,12 +7,12 @@ find_dependency(TT-Metalium REQUIRED)
 find_dependency(xtensor REQUIRED)
 
 # Set package as found
-set(TT-NN_FOUND TRUE)
+set(tt-nn_FOUND TRUE)
 
 # Include the exported targets
-include("${CMAKE_CURRENT_LIST_DIR}/TT-NN.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/tt-nn.cmake")
 
 # Set the directory containing the CMake files for the project
 get_filename_component(@PROJECT_NAME@_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
 
-message(STATUS "Found TT-NN at ${@PROJECT_NAME@_CMAKE_DIR}")
+message(STATUS "Found tt-nn at ${@PROJECT_NAME@_CMAKE_DIR}")

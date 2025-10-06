@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import gc
@@ -19,8 +19,10 @@ from models.common.utility_functions import torch_random
         ((1, 512, 128, 128), 0, 0, False, "mid_block", 0.999),
         ((1, 512, 128, 128), 0, 0, False, "up_blocks", 0.999),
         ((1, 512, 256, 256), 1, 0, False, "up_blocks", 0.999),
-        ((1, 512, 256, 256), 2, 0, True, "up_blocks", 0.999),
-        ((1, 256, 256, 256), 2, 1, False, "up_blocks", 0.999),
+        ((1, 512, 512, 512), 2, 0, True, "up_blocks", 0.999),
+        ((1, 256, 512, 512), 2, 1, False, "up_blocks", 0.999),
+        ((1, 256, 1024, 1024), 3, 0, True, "up_blocks", 0.999),
+        ((1, 128, 1024, 1024), 3, 1, False, "up_blocks", 0.999),
         ((1, 128, 1024, 1024), 0, 0, False, "down_blocks", 0.998),
         ((1, 128, 512, 512), 1, 0, True, "down_blocks", 0.999),
         ((1, 256, 512, 512), 1, 1, False, "down_blocks", 0.999),

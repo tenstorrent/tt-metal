@@ -42,7 +42,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     };
 
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
-    const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
+    const uint32_t intermediary_tile_size = tt::tile_size(intermediary_format);
 
     const uint32_t cb_in_id = tt::CBIndex::c_0;
     const tt::DataFormat input_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -189,9 +189,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
                     // Adjust read and write offsets to the correct stick address because we are splitting work across 2
                     // kernels
                     const uint32_t adjusted_read_offset =
-                        args.read_offset + total_num_sticks_kernel_0 * dram_write_stride_bytes;
+                        args.read_offset + (total_num_sticks_kernel_0 * dram_write_stride_bytes);
                     const uint32_t adjusted_write_offset =
-                        args.write_offset + total_num_sticks_kernel_0 * dram_read_stride_bytes;
+                        args.write_offset + (total_num_sticks_kernel_0 * dram_read_stride_bytes);
 
                     const std::vector<uint32_t> segment_kernel_1 = {
                         args.write_size, adjusted_read_offset, args.bank_id, adjusted_write_offset};

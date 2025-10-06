@@ -28,6 +28,7 @@ target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_topology.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
 )
 
@@ -340,6 +341,8 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_${PY_BINDING}.cpp
 )
 
 set(TTNN_P2P_PYBIND ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/point_to_point/point_to_point_${PY_BINDING}.cpp)
@@ -401,7 +404,9 @@ list(
 
 add_library(ttnncpp SHARED)
 add_library(TTNN::CPP ALIAS ttnncpp)
+add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
+add_library(tt-nn::tt-nn ALIAS ttnncpp) # Canonical alias — ensures consistency across find_package() usage
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
@@ -411,11 +416,9 @@ set_target_properties(
     ttnncpp
     PROPERTIES
         EXPORT_NAME
-            TTNN
-        PREFIX
-            "lib"
+            tt-nn
         OUTPUT_NAME
-            "ttnn"
+            "tt-nn"
         BUILD_RPATH
             "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
         INSTALL_RPATH
@@ -463,12 +466,6 @@ target_sources(
         cpp/ttnn/operations/generic/generic_op.cpp
         cpp/ttnn/operations/generic/device/generic_op_program_factory.cpp
         cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
-        cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_op.cpp
-        cpp/ttnn/operations/experimental/padded_slice/device/padded_slice_program_factory.cpp
-        cpp/ttnn/operations/experimental/padded_slice/padded_slice.cpp
-        cpp/ttnn/operations/experimental/slice_write/device/slice_write_op.cpp
-        cpp/ttnn/operations/experimental/slice_write/device/slice_write_program_factory.cpp
-        cpp/ttnn/operations/experimental/slice_write/slice_write.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
@@ -525,10 +522,12 @@ target_link_libraries(
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::Matmul
+        TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::Reshape
+        TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::SSM
         TTNN::Ops::Experimental::Transformer
         TTNN::Ops::Experimental::UnaryBackward
@@ -559,7 +558,7 @@ add_custom_command(
     COMMAND
         ${CMAKE_COMMAND} -E create_symlink "$<TARGET_FILE_NAME:ttnncpp>" "_ttnncpp$<TARGET_FILE_SUFFIX:ttnncpp>"
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:ttnncpp>"
-    COMMENT "Creating symlink _ttnncpp.so -> libttnn.so"
+    COMMENT "Creating symlink _ttnncpp.so -> $<TARGET_FILE_NAME:ttnncpp>"
 )
 
 if(TT_INSTALL)
@@ -575,7 +574,7 @@ if(TT_INSTALL)
     install(
         TARGETS
             ttnncpp
-        EXPORT TT-NN
+        EXPORT tt-nn
         FILE_SET
         api
             COMPONENT ttnn-dev
@@ -592,6 +591,7 @@ if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
     add_library(TTNN::PYTHON ALIAS ttnn)
     add_library(Metalium::TTNN ALIAS ttnn) # backwards compatibility. FIXME: remove
+    add_library(tt-nn::Python ALIAS ttnn) # Canonical alias — ensures consistency across find_package() usage
     target_compile_definitions(ttnn PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
     TT_ENABLE_UNITY_BUILD(ttnn)
 
@@ -639,7 +639,7 @@ if(WITH_PYTHON_BINDINGS)
             TT::Metalium
     )
     if(TT_INSTALL)
-        install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
+        install(TARGETS ttnn EXPORT tt-nn LIBRARY COMPONENT ttnn-runtime)
     endif()
 
     # Install .so into src files for pybinds implementation
@@ -663,7 +663,7 @@ if(WITH_PYTHON_BINDINGS)
     )
 endif()
 if(TT_INSTALL)
-    install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
+    install(EXPORT tt-nn NAMESPACE tt-nn:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
 endif()
 
 if(TTNN_BUILD_TESTS)
@@ -705,10 +705,12 @@ add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
 add_subdirectory(cpp/ttnn/operations/experimental/dropout)
 add_subdirectory(cpp/ttnn/operations/experimental/matmul)
+add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
+add_subdirectory(cpp/ttnn/operations/experimental/slice_write)
 add_subdirectory(cpp/ttnn/operations/experimental/ssm)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)

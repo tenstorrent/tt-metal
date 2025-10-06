@@ -200,6 +200,60 @@ tests:
   102:
     name: "Multicast Single Scheme"
 
+  110:
+    name: "Multi Interleaved Directed Ideal"
+
+  111:
+    name: "Multi Interleaved Sizes"
+
+  112:
+    name: "Multi Interleaved Read Directed Ideal"
+
+  113:
+    name: "Multi Interleaved Read Sizes"
+
+  114:
+    name: "Multi Interleaved Write Directed Ideal"
+
+  115:
+    name: "Multi Interleaved Write Sizes"
+
+  116:
+    name: "Multi Interleaved 2x2 Directed Ideal"
+
+  117:
+    name: "Multi Interleaved 2x2 Sizes"
+
+  118:
+    name: "Multi Interleaved 2x2 Read Directed Ideal"
+
+  119:
+    name: "Multi Interleaved 2x2 Read Sizes"
+
+  120:
+    name: "Multi Interleaved 2x2 Write Directed Ideal"
+
+  121:
+    name: "Multi Interleaved 2x2 Write Sizes"
+
+  122:
+    name: "Multi Interleaved 6x6 Directed Ideal"
+
+  123:
+    name: "Multi Interleaved 6x6 Sizes"
+
+  124:
+    name: "Multi Interleaved 6x6 Read Directed Ideal"
+
+  125:
+    name: "Multi Interleaved 6x6 Read Sizes"
+
+  126:
+    name: "Multi Interleaved 6x6 Write Directed Ideal"
+
+  127:
+    name: "Multi Interleaved 6x6 Write Sizes"
+
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
 
@@ -366,15 +420,3 @@ tests:
 
   318:
     name: "All from All Custom"
-
-  500:
-    name: "Inline Direct Write Performance Comparison"
-    comment: |
-      Compares stateful vs non-stateful NOC inline write performance.
-      Shows scaling advantage of stateful approach with increasing write counts.
-
-  501:
-    name: "Inline Direct Write Address Pattern"
-    comment: |
-      Evaluates the performance impact of stateful versus stateless approaches under scenarios
-      involving both identical and differing values and destinations.
