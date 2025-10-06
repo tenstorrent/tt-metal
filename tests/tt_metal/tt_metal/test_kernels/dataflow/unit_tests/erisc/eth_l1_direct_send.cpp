@@ -12,13 +12,6 @@ void kernel_main() {
     constexpr uint32_t num_bytes_per_send = get_compile_time_arg_val(0);
     constexpr uint32_t num_bytes_per_send_word_size = get_compile_time_arg_val(1);
 
-    // if (corrupt_data) {
-    volatile tt_l1_ptr uint32_t* data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_eth_l1_src_addr);
-    for (uint32_t i = 0; i < num_bytes / sizeof(uint32_t); i++) {
-        *(data_ptr + i) = *(data_ptr + i) + 1;
-    }
-    // }
-
     eth_send_bytes(
         local_eth_l1_src_addr, remote_eth_l1_dst_addr, num_bytes, num_bytes_per_send, num_bytes_per_send_word_size);
     eth_wait_for_receiver_done();
