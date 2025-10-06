@@ -88,6 +88,7 @@ jobs:
         if: ${{ inputs.extra-tag == 'pipeline-yyz2-lfc' && contains(matrix.test-group.name, 'llama') }}
         timeout-minutes: 15
         run: |
+          set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Run demo regression tests
