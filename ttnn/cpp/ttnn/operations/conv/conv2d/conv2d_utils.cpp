@@ -1562,7 +1562,7 @@ bool auto_enable_kernel_folding(
     std::array<uint32_t, 2>& stride,
     std::array<uint32_t, 4>& padding_n4) {
     if (!enable_folding_.has_value()) {
-        if (kernel_size[0] > 12 && kernel_size[1] > 12 && stride[0] <= kernel_size[0] && stride[1] <= kernel_size[1] &&
+        if (stride[0] == kernel_size[0] && stride[1] == kernel_size[1] &&
             (padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0) && is_dram) {
             log_info(tt::LogOp, "Auto enabling kernel folding");
             return true;

@@ -82,7 +82,7 @@ ResultWithOptions conv2d(
     bool return_weights_and_bias) {
     if (dram_slice_config_.has_value()) {
         if (dram_slice_config_.value().slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
-            log_warning(tt::LogOp, "Conv2d L1 with slice config {}", dram_slice_config_);
+            log_trace(tt::LogOp, "Conv2d L1 with slice config {}", dram_slice_config_);
             return result_to_result_with_options(
                 conv2d_L1(
                     input_tensor,
@@ -106,7 +106,7 @@ ResultWithOptions conv2d(
                 return_output_dim,
                 return_weights_and_bias);
         } else {
-            log_warning(tt::LogOp, "Conv2d DRAM with slice config {}", dram_slice_config_);
+            log_trace(tt::LogOp, "Conv2d DRAM with slice config {}", dram_slice_config_);
             return result_to_result_with_options(
                 conv2d_DRAM(
                     input_tensor,
@@ -134,7 +134,7 @@ ResultWithOptions conv2d(
     } else {
         bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor);
         if (input_is_on_device && input_tensor.memory_config().is_l1()) {
-            log_warning(tt::LogOp, "Conv2d L1 without slice config");
+            log_trace(tt::LogOp, "Conv2d L1 without slice config");
             return result_to_result_with_options(
                 conv2d_L1(
                     input_tensor,
@@ -158,7 +158,7 @@ ResultWithOptions conv2d(
                 return_output_dim,
                 return_weights_and_bias);
         }
-        log_warning(tt::LogOp, "Conv2d DRAM without slice config");
+        log_trace(tt::LogOp, "Conv2d DRAM without slice config");
         return result_to_result_with_options(
             conv2d_DRAM(
                 input_tensor,
