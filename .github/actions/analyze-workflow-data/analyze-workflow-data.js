@@ -300,13 +300,19 @@ function renderErrorsTable(errorSnippets) {
     const testEsc = escapeHtml(testName).replace(/\r?\n/g, ' ⇥ ');
     const snippetOneLine = escapeHtml(errorForDisplay || '').replace(/\r?\n/g, ' ⇥ ');
     let ownerDisplay = 'no owner found';
+    let ownersList = [];
     if (obj && Array.isArray(obj.owner) && obj.owner.length) {
-      const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
-      if (names.length) ownerDisplay = names.join(', ');
+      ownersList = obj.owner.slice();
     }
-    // Override owner to infra team when test name cannot be extracted
+    // If test name is NA, include infra in addition to existing owners
     if (!testName || testName === 'NA') {
-      ownerDisplay = DEFAULT_INFRA_OWNER.name;
+      const seen = new Set(ownersList.map(o => `${o?.id || ''}|${o?.name || ''}`));
+      const key = `${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}`;
+      if (!seen.has(key)) ownersList.push(DEFAULT_INFRA_OWNER);
+    }
+    if (ownersList.length) {
+      const names = ownersList.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
+      if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
     // Force exactly two lines: compute a break point (prefer comma, else space near middle), NBSP around words
@@ -572,14 +578,20 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
               for (const it of snippets) {
                 if (!it) continue;
-                // Override owner to infra team when test name cannot be extracted
-                if (!it.test || it.test === 'NA') {
-                  it.owner = [DEFAULT_INFRA_OWNER];
-                  continue;
-                }
+                // Attach owners from label mapping if none present
                 const cleaned = stripBracketSuffix(it.label || '');
-                const owner = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
-                if (owner && !it.owner) it.owner = owner;
+                const mapped = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
+                if (mapped && !it.owner) it.owner = mapped;
+                // If test name is NA/missing, include infra owner in addition to any found owners
+                if (!it.test || it.test === 'NA') {
+                  if (Array.isArray(it.owner) && it.owner.length) {
+                    const key = `${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}`;
+                    const seen = new Set(it.owner.map(o => `${o?.id || ''}|${o?.name || ''}`));
+                    if (!seen.has(key)) it.owner = [...it.owner, DEFAULT_INFRA_OWNER];
+                  } else {
+                    it.owner = [DEFAULT_INFRA_OWNER];
+                  }
+                }
               }
             } catch (_) { /* ignore */ }
             return snippets;
@@ -633,14 +645,20 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
       const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
       for (const it of snippets) {
         if (!it) continue;
-        // Override owner to infra team when test name cannot be extracted (annotations typically lack test)
-        if (!it.test || it.test === 'NA') {
-          it.owner = [DEFAULT_INFRA_OWNER];
-          continue;
-        }
+        // Attach owners from label mapping if none present
         const cleaned = stripBracketSuffix(it.label || '');
-        const owner = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
-        if (owner && !it.owner) it.owner = owner;
+        const mapped = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
+        if (mapped && !it.owner) it.owner = mapped;
+        // If test name is NA/missing, include infra owner alongside any existing owners
+        if (!it.test || it.test === 'NA') {
+          if (Array.isArray(it.owner) && it.owner.length) {
+            const key = `${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}`;
+            const seen = new Set(it.owner.map(o => `${o?.id || ''}|${o?.name || ''}`));
+            if (!seen.has(key)) it.owner = [...it.owner, DEFAULT_INFRA_OWNER];
+          } else {
+            it.owner = [DEFAULT_INFRA_OWNER];
+          }
+        }
       }
     } catch (_) { /* ignore */ }
 
