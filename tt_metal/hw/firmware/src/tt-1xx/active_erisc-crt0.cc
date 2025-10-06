@@ -19,7 +19,7 @@ static void return_to_base_fw();
 
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 
-extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
+extern "C" [[gnu::section(".start")]] void _start(void) {
     extern uint32_t __ldm_bss_start[];
     extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);

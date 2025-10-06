@@ -88,7 +88,7 @@ inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
     do {
         invalidate_l1_cache();
-        internal_::risc_context_switch();
+        // internal_::risc_context_switch();
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 #endif
@@ -110,8 +110,14 @@ int __attribute__((noinline)) main(void) {
     initialize_local_memory();
     noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);
 
-    disable_interrupts();
-    update_next_link_status_check_timestamp();
+    // disable_interrupts();
+    // update_next_link_status_check_timestamp();
+
+    // address of noc_reads_num_issued
+
+    uint32_t mailbox_addr = (uint32_t)mailboxes;
+    ((volatile uint32_t*)(0x10))[8] = mailbox_addr;
+    ((volatile uint32_t*)(0x10))[9] = 0xdeadbeef;
 
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
@@ -121,10 +127,10 @@ int __attribute__((noinline)) main(void) {
 
 #if defined(ENABLE_2_ERISC_MODE)
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+    // mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 #endif
 
-    set_deassert_addresses();
+    // set_deassert_addresses();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
@@ -133,9 +139,9 @@ int __attribute__((noinline)) main(void) {
     ncrisc_noc_full_sync();
 
 #if defined(ENABLE_2_ERISC_MODE)
-    deassert_all_reset();
+    // deassert_all_reset();
 #endif
-    wait_subordinate_eriscs();
+    // wait_subordinate_eriscs();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -155,8 +161,7 @@ int __attribute__((noinline)) main(void) {
             // to reset its launch message read pointer.
             if (flag_disable[0] != 1) {
                 return 0;
-            } else if (
-                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+            } else if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
@@ -166,7 +171,7 @@ int __attribute__((noinline)) main(void) {
                     internal_::notify_dispatch_core_done(dispatch_addr);
                 }
             } else {
-                internal_::risc_context_switch();
+                // internal_::risc_context_switch();
             }
         }
         WAYPOINT("GD");
@@ -175,18 +180,18 @@ int __attribute__((noinline)) main(void) {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
             // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
             // "invalid" iterations.
-            DeviceZoneScopedMainN("ERISC-FW");
+            // DeviceZoneScopedMainN("ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-            DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+            // DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
 
             noc_index = launch_msg_address->kernel_config.brisc_noc_id;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
-            run_subordinate_eriscs(enables);
+            // run_subordinate_eriscs(enables);
 
             constexpr int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
             if (enables & (1u << index)) {
@@ -195,6 +200,17 @@ int __attribute__((noinline)) main(void) {
                 flush_erisc_icache();
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
+
+                // ((volatile uint32_t*)(0x30000))[0] = (uint32_t)noc_reads_num_issued;
+                // ((volatile uint32_t*)(0x30000))[1] = (uint32_t)noc_nonposted_writes_num_issued;
+                // ((volatile uint32_t*)(0x30000))[2] = (uint32_t)noc_nonposted_writes_acked;
+                // ((volatile uint32_t*)(0x30000))[3] = (uint32_t)noc_nonposted_atomics_acked;
+                // ((volatile uint32_t*)(0x30000))[4] = (uint32_t)noc_posted_writes_num_issued;
+                // ((volatile uint32_t*)(0x30000))[5] = (uint32_t)rta_l1_base;
+                // ((volatile uint32_t*)(0x30000))[6] = (uint32_t)crta_l1_base;
+                // ((volatile uint32_t*)(0x30000))[7] = (uint32_t)mailboxes;
+                // ((volatile uint32_t*)(0x30000))[8] = mailbox_addr;
+                // ((volatile uint32_t*)(0x30000))[9] = 0xdeadbeef;
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
@@ -202,12 +218,12 @@ int __attribute__((noinline)) main(void) {
                 WAYPOINT("D");
             }
 
-            wait_subordinate_eriscs();
+            // wait_subordinate_eriscs();
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
-                launch_msg_address->kernel_config.enables = 0;
+                // launch_msg_address->kernel_config.enables = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
                 internal_::notify_dispatch_core_done(dispatch_addr);

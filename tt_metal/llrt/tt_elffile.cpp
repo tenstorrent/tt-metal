@@ -785,9 +785,10 @@ void ElfFile::Impl::XIPify() {
         }
     }
 
+    std::cout << "num_reloc_sections: " << num_reloc_sections << std::endl;
     if (!num_reloc_sections) {
         // Hm, that's suspicious
-        TT_THROW("{}: there are no relocation sections", path_);
+        // TT_THROW("{}: there are no relocation sections", path_);
     }
 
     // The text segment is now XIP

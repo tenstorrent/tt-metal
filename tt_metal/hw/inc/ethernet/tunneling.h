@@ -7,6 +7,7 @@
 
 #include "erisc.h"
 #include "eth_l1_address_map.h"
+#include "hw/inc/risc_attribs.h"
 #include "noc_nonblocking_api.h"
 #include "debug/eth_link_status.h"
 #include "tt_eth_ss_regs.h"
@@ -52,9 +53,9 @@ routing_info_t* routing_info = (routing_info_t*)(eth_l1_mem::address_map::ERISC_
 // Context Switch Config
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE);
 
-extern uint32_t __erisc_jump_table;
-volatile uint32_t* RtosTable =
-    (volatile uint32_t*)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
+// extern uint32_t __erisc_jump_table;
+// volatile uint32_t* RtosTable =
+//     (volatile uint32_t*)&__erisc_jump_table;  // Rtos Jump Table. Runtime application needs rtos function handles.;
 
 namespace internal_ {
 
@@ -75,7 +76,7 @@ FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32
     while (eth_txq_is_busy(q_num)) {
         // Note, this is overly eager... Kills perf on allgather
         if constexpr (ctx_switch) {
-            risc_context_switch();
+            // risc_context_switch();
         }
     }
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
@@ -154,7 +155,7 @@ void notify_dispatch_core_done(uint64_t dispatch_addr) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         while (!noc_cmd_buf_ready(n, NCRISC_AT_CMD_BUF));
     }
-    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
+    noc_fast_write_dw_inline<DM_DEDICATED_NOC, InlineWriteDst::REG>(
         noc_index,
         NCRISC_AT_CMD_BUF,
         1 << REMOTE_DEST_BUF_WORDS_FREE_INC,

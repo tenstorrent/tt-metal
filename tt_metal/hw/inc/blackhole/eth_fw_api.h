@@ -219,11 +219,11 @@ struct boot_results_t {
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "dev_msgs.h"
 
-uint64_t get_next_link_status_check_timestamp() {
+FORCE_INLINE uint64_t get_next_link_status_check_timestamp() {
     return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp));
 }
 
-void update_next_link_status_check_timestamp() {
+FORCE_INLINE void update_next_link_status_check_timestamp() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
     uint64_t timestamp = eth_read_wall_clock() + (ETH_CLOCK_CYCLE_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
     *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
@@ -296,14 +296,14 @@ FORCE_INLINE bool is_port_up() {
     return ((eth_status_t*)(MEM_SYSENG_ETH_STATUS))->port_status == port_status_e::PORT_UP;
 }
 
-static void service_eth_msg() {
+FORCE_INLINE void service_eth_msg() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
     invalidate_l1_cache();
     reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
 #endif
 }
 
-static void update_boot_results_eth_link_status_check() {
+FORCE_INLINE void update_boot_results_eth_link_status_check() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
     uint64_t curr_timestamp = eth_read_wall_clock();
     uint64_t next_timestamp = get_next_link_status_check_timestamp();
