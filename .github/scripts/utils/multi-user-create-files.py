@@ -1,6 +1,7 @@
 import yaml
 import os
 import argparse
+import shutil
 
 
 def multi_user_containers(num_containers, image):
@@ -33,6 +34,8 @@ def multi_user_containers(num_containers, image):
             "working_dir": "/app/tt-metal",
             "environment": {
                 "HOME": "/app",
+                "TT_METAL_HOME": "/app/tt-metal",
+                "TTNN_RUNTIME_ARTIFACTS": f"/app/tt-metal/.ttnn_runtime_artifacts_{i}",
                 "LD_LIBRARY_PATH": "/app/tt-metal/build/lib",
                 "PYTHONPATH": "/app/tt-metal",
                 "TT_MESH_GRAPH_DESC_PATH": "/app/tt-metal/tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml",
@@ -41,7 +44,11 @@ def multi_user_containers(num_containers, image):
             "devices": devices,
         }
 
-        os.makedirs(f"/home/{username}/.cache/tt-metal-cache-{i}", exist_ok=True)
+        cache_path = f"/home/{username}/.cache/tt-metal-cache-{i}"
+        if os.path.exists(cache_path):
+            shutil.rmtree(cache_path)
+        os.makedirs(cache_path)
+
     return services
 
 
