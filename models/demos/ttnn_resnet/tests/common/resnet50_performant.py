@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.ttnn_resnet.test_lib.resnet50_test_infra import create_test_infra
+from models.demos.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
 try:
