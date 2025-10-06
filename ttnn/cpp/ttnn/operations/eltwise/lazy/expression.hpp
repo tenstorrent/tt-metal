@@ -97,7 +97,7 @@ void traverse(Visitor visitor, ExpressionView expression) {
 
                 visitor(function);
             }},
-        expression);
+        expression.value());
 }
 
 template <typename>
@@ -111,35 +111,25 @@ class BasicExpression {
     explicit BasicExpression(const Tensor& tensor)
         requires std::same_as<BasicExpression, Expression>;
 
-    explicit BasicExpression(Unary operation, ExpressionView first, std::initializer_list<Param> params);
+    explicit BasicExpression(Unary operation, ExpressionView first, Params&& params);
+
+    explicit BasicExpression(Binary operation, ExpressionView first, ExpressionView second, Params&& params);
 
     explicit BasicExpression(
-        Binary operation, ExpressionView first, ExpressionView second, std::initializer_list<Param> params);
-
-    explicit BasicExpression(
-        Ternary operation,
-        ExpressionView first,
-        ExpressionView second,
-        ExpressionView third,
-        std::initializer_list<Param> params);
+        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params&& params);
 
 public:
     // Function must not be constructible from Tensor
     static std::optional<BasicExpression> from(const Tensor& tensor)
         requires std::same_as<BasicExpression, Expression>;
 
-    static std::optional<BasicExpression> from(
-        Unary operation, ExpressionView first, std::initializer_list<Param> params);
+    static std::optional<BasicExpression> from(Unary operation, ExpressionView first, Params params);
 
     static std::optional<BasicExpression> from(
-        Binary operation, ExpressionView first, ExpressionView second, std::initializer_list<Param> params);
+        Binary operation, ExpressionView first, ExpressionView second, Params params);
 
     static std::optional<BasicExpression> from(
-        Ternary operation,
-        ExpressionView first,
-        ExpressionView second,
-        ExpressionView third,
-        std::initializer_list<Param> params);
+        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params params);
 
     // getters for Expression
 
