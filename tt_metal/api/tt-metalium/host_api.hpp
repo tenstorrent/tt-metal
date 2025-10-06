@@ -39,7 +39,6 @@ namespace tt {
 
 namespace tt_metal {
 
-class CommandQueue;
 struct TraceDescriptor;
 
 class Program;
