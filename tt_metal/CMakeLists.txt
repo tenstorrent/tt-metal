@@ -15,9 +15,6 @@ set_target_properties(
             Metalium
 )
 
-target_link_options(tt_metal PRIVATE "LINKER:-Bsymbolic")
-target_compile_options(tt_metal PUBLIC -fno-semantic-interposition)
-
 include(flatbuffers)
 GENERATE_FBS_HEADER(
     api/tt-metalium/serialized_descriptors/mesh_coordinate.fbs

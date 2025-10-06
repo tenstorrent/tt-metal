@@ -1,4 +1,4 @@
-add_library(fabric OBJECT)
+add_library(fabric STATIC)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
 # These headers are for the device, not host; will require cross compiling to lint them (future work).
@@ -8,6 +8,7 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
+target_link_options(fabric PRIVATE "LINKER:-Bsymbolic")
 target_compile_options(
     fabric
     PUBLIC
