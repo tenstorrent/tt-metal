@@ -47,16 +47,12 @@ class TtnnYoloV11:
     def __call__(self, input, min_channels=16):
         n, c, h, w = input.shape
         
-        # 🔍 PRECISION TRACKING: Analyze input tensor
-        analyze_tensor_precision(input, "INPUT", "RAW_INPUT")
-        
         channel_padding_needed = min_channels - c
 
         # Only pad if we need more channels
         if channel_padding_needed > 0:
             # Use list format instead of tuples for ttnn.pad API compatibility
             x = ttnn.pad(input, [[0, 0], [0, channel_padding_needed], [0, 0], [0, 0]], value=0.0)
-            analyze_tensor_precision(x, "INPUT", "AFTER_PADDING")
             ttnn.deallocate(input)
         else:
             # No padding needed, use input as is
@@ -66,59 +62,34 @@ class TtnnYoloV11:
         analyze_tensor_precision(x, "BACKBONE", "AFTER_PERMUTE")
         
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_RESHAPE")
         
         x = self.conv1(self.device, x)
         analyze_tensor_precision(x, "BACKBONE", "AFTER_CONV1")
         
         x = self.conv2(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_CONV2")
         
         x = self.c3k2_1(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_C3K2_1")
 
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        analyze_tensor_precision(x, "BACKBONE", "TO_DRAM_BEFORE_CONV3")
 
         x = self.conv3(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_CONV3")
-        
         x = self.c3k2_2(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_C3K2_2")
-        
-        x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # Use consistent sharded DRAM config
-        analyze_tensor_precision(x4, "BACKBONE", "X4_TO_DRAM")
-        
-        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)  # Use consistent sharded DRAM config
+        x4 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
         x = self.conv5(self.device, x)
         analyze_tensor_precision(x, "BACKBONE", "AFTER_CONV5")
         
         x = self.c3k2_3(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_C3K2_3")
-        
         x6 = x
-        analyze_tensor_precision(x6, "BACKBONE", "X6_BRANCH")
-        
         x = self.conv6(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_CONV6")
-        
         x = self.c3k2_4(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_C3K2_4")
-        
         x = self.sppf(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_SPPF")
-        
         x = self.c2psa(self.device, x)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_C2PSA")
         x10 = x
-        analyze_tensor_precision(x10, "BACKBONE", "X10_BRANCH")
         
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_TO_ROW_MAJOR")
-        
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
-        analyze_tensor_precision(x, "BACKBONE", "AFTER_FINAL_RESHAPE")
         
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
         num_cores = determine_num_cores(nhw, x.shape[2])
@@ -131,17 +102,10 @@ class TtnnYoloV11:
         else:
             x = ttnn.interleaved_to_sharded(x, shardspec)
         x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())
-        analyze_tensor_precision(x, "NECK", "AFTER_UPSAMPLE_1")
-        
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-        analyze_tensor_precision(x, "NECK", "AFTER_RESHAPE_1")
-        
         x = sharded_concat_2(x, x6)
-        analyze_tensor_precision(x, "NECK", "AFTER_CONCAT_X6")
         ttnn.deallocate(x6)
-        
         x = self.c3k2_5(self.device, x)
-        analyze_tensor_precision(x, "NECK", "AFTER_C3K2_5")
         
         x13 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -157,51 +121,25 @@ class TtnnYoloV11:
         else:
             x = ttnn.interleaved_to_sharded(x, shardspec)
         x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())
-        analyze_tensor_precision(x, "NECK", "AFTER_UPSAMPLE_2")
-        
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-        analyze_tensor_precision(x, "NECK", "AFTER_RESHAPE_2")
-        
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = sharded_concat([x, x4], to_interleaved=False)
-        analyze_tensor_precision(x, "NECK", "AFTER_CONCAT_X4")
         ttnn.deallocate(x4)
-        
         x = self.c3k2_6(self.device, x)
-        analyze_tensor_precision(x, "NECK", "AFTER_C3K2_6")
-        
         x16 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        analyze_tensor_precision(x16, "NECK", "X16_FINAL")
-        
         x = self.conv7(self.device, x)
-        analyze_tensor_precision(x, "NECK", "AFTER_CONV7")
-        
         x = sharded_concat_2(x, x13)
-        analyze_tensor_precision(x, "NECK", "AFTER_CONCAT_X13")
         ttnn.deallocate(x13)
-        
         x = self.c3k2_7(self.device, x)
-        analyze_tensor_precision(x, "NECK", "AFTER_C3K2_7")
-        
         x19 = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        analyze_tensor_precision(x19, "NECK", "X19_FINAL")
-        
         x = self.conv8(self.device, x)
-        analyze_tensor_precision(x, "NECK", "AFTER_CONV8")
-        
         x = sharded_concat_2(x, x10)
-        analyze_tensor_precision(x, "NECK", "AFTER_CONCAT_X10")
         ttnn.deallocate(x10)
-        
         x = self.c3k2_8(self.device, x)
-        analyze_tensor_precision(x, "NECK", "AFTER_C3K2_8")
-        
         x22 = x
-        analyze_tensor_precision(x22, "NECK", "X22_FINAL")
 
-        print(f"\n🔍 [FINAL] Sending to OBB head: x16, x19, x22")
         x = self.obb(self.device, x16, x19, x22)
-        analyze_tensor_precision(x, "HEAD", "OBB_OUTPUT")
+        analyze_tensor_precision(x, "OUTPUT", "FINAL")
         deallocate_tensors(x16, x19, x22)
 
         return x

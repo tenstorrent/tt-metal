@@ -18,8 +18,11 @@ def analyze_tensor_precision(tensor, operation_name, step_name=""):
             torch_tensor = tensor.cpu()
         elif tensor_module == 'ttnn._ttnn.tensor':
             torch_tensor = ttnn.to_torch(tensor).cpu()
-        elif tensor_type == 'Parameter' and tensor_module == 'torch.nn.parameter':
-            # Handle PyTorch parameters
+        elif tensor_type == 'Parameter':
+            # Handle PyTorch parameters (any module containing 'parameter')
+            torch_tensor = tensor.data.cpu()
+        elif hasattr(tensor, 'data') and hasattr(tensor, 'cpu'):
+            # Fallback for parameter-like objects
             torch_tensor = tensor.data.cpu()
         else:
             raise ValueError(f"🔍 [DEBUG] Unsupported tensor type: {tensor_module}.{tensor_type}")
@@ -115,15 +118,15 @@ class Yolov11Conv2D:
 
         if "bias" in conv_pth and conv_pth.bias is not None:
             bias = ttnn.from_device(conv_pth.bias)
-            # 🔍 PRECISION TRACKING: Analyze loaded bias
-            analyze_tensor_precision(bias, f"WEIGHTS_BIAS-{self.in_channels}→{self.out_channels}", "LOADED_BIAS")
+            # 🔍 BIAS: Analyze loaded bias from device
+            analyze_tensor_precision(bias, f"LOADED_BIAS-{self.in_channels}→{self.out_channels}", "FROM_DEVICE")
             self.bias = bias
         else:
             self.bias = None
 
         weight = ttnn.from_device(conv_pth.weight)
-        # 🔍 PRECISION TRACKING: Analyze loaded weights
-        analyze_tensor_precision(weight, f"WEIGHTS_BIAS-{self.in_channels}→{self.out_channels}", "LOADED_WEIGHTS")
+        # 🔍 WEIGHTS: Analyze loaded weights from device
+        analyze_tensor_precision(weight, f"LOADED_WEIGHT-{self.in_channels}→{self.out_channels}", "FROM_DEVICE")
         self.weight = weight
 
     def __call__(self, x):
@@ -143,8 +146,6 @@ class Yolov11Conv2D:
         kernel_size = [self.kernel_size[0], self.kernel_size[1]]
         stride = [self.stride[0], self.stride[1]]
         padding = [self.padding[0], self.padding[1]]
-
-        analyze_tensor_precision(x, f"Conv2D-{self.in_channels}→{self.out_channels}", "INPUT")
 
         [x, [output_height, output_width], [self.weight, self.bias]] = ttnn.conv2d(
             input_tensor=x,
@@ -166,36 +167,12 @@ class Yolov11Conv2D:
             return_weights_and_bias=True,
             dtype=self.activation_dtype
         )
-
-        # 🔍 PRECISION TRACKING: Analyze output after conv2d
-        analyze_tensor_precision(x, f"Conv2D-{self.in_channels}→{self.out_channels}", "OUTPUT")
         
         hw = output_height * output_width
-        print(f"    Expected hw: {hw}, Actual x.shape[2]: {x.shape[2]}")
-        
         if x.shape[2] != hw:
-            print(f"    🔧 Reshaping needed: {x.shape[2]} -> {hw}")
-            print(f"    🔧 Converting to DRAM interleaved for reshaping, then back to sharded")
             x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
-            print(f"    🔧 After sharded_to_interleaved: {x.shape}, memory_config: {x.memory_config()}")
             x = x[:, :, :hw, :]
-            print(f"    🔧 After slicing: {x.shape}")
-            # Convert back to HEIGHT_SHARDED DRAM for next conv2d operations
-            try:
-                dram_sharded_config = ttnn.create_sharded_memory_config(
-                    x.shape,
-                    ttnn.CoreGrid(y=8, x=8),
-                    ttnn.ShardStrategy.HEIGHT,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=False,
-                )
-                dram_sharded_config.buffer_type = ttnn.BufferType.DRAM
-                x = ttnn.to_memory_config(x, dram_sharded_config)
-                print(f"    🔧 Converted back to DRAM HEIGHT_SHARDED: {x.memory_config()}")
-            except Exception as e:
-                print(f"    ⚠️  Failed to convert back to DRAM sharded, keeping interleaved: {e}")
         
-        print(f"🔍 [CONV2D DEBUG] Final output memory config: {x.memory_config()}")
         return x
 
 

@@ -283,20 +283,10 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             if input_tensor is None:
                 continue
                 
-            # 🔍 PRECISION TRACKING: Analyze preprocessed image tensor
-            print(f"\n🔍 [IMAGE PREPROCESSING] Analysis:")
-            analyze_tensor_precision(input_tensor, "IMAGE_PREPROCESSING", "AFTER_PIL_TRANSFORMS")
-                
             # Run PyTorch inference
             with torch.no_grad():
                 torch_output = torch_model(input_tensor)
             print(f"📤 PyTorch output shape: {torch_output.shape}")
-            
-
-            # 🔍 DEBUG: Check input tensor before passing to TTNN
-            print(f"🔍 [DEBUG] Input tensor shape: {input_tensor.shape}")
-            print(f"🔍 [DEBUG] Input tensor dtype: {input_tensor.dtype}")
-            print(f"🔍 [DEBUG] Input tensor range: [{input_tensor.min():.6f}, {input_tensor.max():.6f}]")
             
             torch_input, ttnn_input = create_yolov11_input_tensors(
                 device,

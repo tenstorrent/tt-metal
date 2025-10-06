@@ -17,34 +17,18 @@ def create_yolov11_input_tensors(
     num_devices = device.get_num_devices()
     inputs_mesh_mapper, _, _ = get_mesh_mappers(device)
     
-    # 🔍 DEBUG: Check input tensor parameter
-    print(f"🔍 [DEBUG] input_tensor is None: {input_tensor is None}")
-    if input_tensor is not None:
-        print(f"🔍 [DEBUG] input_tensor shape: {input_tensor.shape}")
-        print(f"🔍 [DEBUG] input_tensor dtype: {input_tensor.dtype}")
-    
     # Use provided input tensor or generate random data as fallback
     if input_tensor is not None:
-        # 🔍 PRECISION TRACKING: Analyze original input tensor
-        analyze_tensor_precision(input_tensor, "PREPROCESSING", "ORIGINAL_INPUT")
-        
+        analyze_tensor_precision(input_tensor, "INPUT", "ORIGINAL")
         torch_input_tensor = input_tensor
         # Ensure the tensor has the right batch size for multi-device
         if torch_input_tensor.shape[0] != batch * device.get_num_devices():
-            # Repeat the tensor if needed for multi-device setup
             torch_input_tensor = torch_input_tensor.repeat(device.get_num_devices(), 1, 1, 1)
-            analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "AFTER_REPEAT")
     else:
-        print(f"🔍 [DEBUG] input_tensor is None, using random fallback")
         torch_input_tensor = torch.randn(batch * device.get_num_devices(), input_channels, input_height, input_width)
-        analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "RANDOM_FALLBACK")
+        analyze_tensor_precision(torch_input_tensor, "INPUT", "RANDOM_FALLBACK")
     if is_sub_module:
-        # 🔍 PRECISION TRACKING: Sub-module path (not used in main model)
-        analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "BEFORE_SUB_MODULE_PERMUTE")
-        
         ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-        analyze_tensor_precision(ttnn_input_tensor, "PREPROCESSING", "AFTER_SUB_MODULE_PERMUTE")
-        
         ttnn_input_tensor = torch.reshape(
             ttnn_input_tensor,
             (
@@ -54,29 +38,14 @@ def create_yolov11_input_tensors(
                 ttnn_input_tensor.shape[-1],
             ),
         )
-        analyze_tensor_precision(ttnn_input_tensor, "PREPROCESSING", "AFTER_SUB_MODULE_RESHAPE")
-        
         ttnn_input_tensor = ttnn.from_torch(
             ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper
         )
-        # Convert back to torch for analysis
-        ttnn_torch_converted = ttnn.to_torch(ttnn_input_tensor)
-        analyze_tensor_precision(ttnn_torch_converted, "PREPROCESSING", "AFTER_SUB_MODULE_TTNN_CONVERSION_bfloat8_b")
     else:
-        # 🔍 PRECISION TRACKING: Main module path (used by actual model)
-        analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "BEFORE_MAIN_MODULE_PROCESSING")
-        
         n, c, h, w = torch_input_tensor.shape
-        print(f"🔍 [PREPROCESSING] Original tensor shape: {torch_input_tensor.shape}")
-        print(f"🔍 [PREPROCESSING] Original channels: {c}")
-        
         if c == 3:
             c = 16
-            print(f"🔍 [PREPROCESSING] Channels will be padded from 3 to 16 during model processing")
         n = n // num_devices if n // num_devices != 0 else n
-        
-        print(f"🔍 [PREPROCESSING] Memory config shape: [{n}, {c}, {h}, {w}]")
-        print(f"🔍 [PREPROCESSING] Converting to TTNN with dtype=bfloat16")
         
         input_mem_config = ttnn.create_sharded_memory_config(
             [n, c, h, w],
@@ -93,9 +62,9 @@ def create_yolov11_input_tensors(
             mesh_mapper=inputs_mesh_mapper,
         )
         
-        # 🔍 PRECISION TRACKING: Analyze after TTNN conversion
+        # Track precision loss from float32 -> bfloat16 conversion
         ttnn_torch_converted = ttnn.to_torch(ttnn_input_tensor)
-        analyze_tensor_precision(ttnn_torch_converted, "PREPROCESSING", "AFTER_MAIN_MODULE_TTNN_CONVERSION_bfloat16")
+        analyze_tensor_precision(ttnn_torch_converted, "INPUT", "AFTER_BFLOAT16_CONVERSION")
     return torch_input_tensor, ttnn_input_tensor
 
 
@@ -122,40 +91,40 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5, mesh_mapper=None)
 def custom_preprocessor(model, name, mesh_mapper=None):
     parameters = {}
     if isinstance(model, nn.Conv2d):
-        # 🔍 PRECISION TRACKING: Analyze original PyTorch weights before TTNN conversion
-        analyze_tensor_precision(model.weight, f"WEIGHT_CONVERSION-{name}", "PYTORCH_WEIGHT")
+        # 🔍 WEIGHTS: Analyze original PyTorch weights before TTNN conversion
+        analyze_tensor_precision(model.weight, f"WEIGHT-{name}", "PYTORCH")
         parameters["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-        # 🔍 PRECISION TRACKING: Analyze converted TTNN weights
-        analyze_tensor_precision(parameters["weight"], f"WEIGHT_CONVERSION-{name}", "TTNN_WEIGHT_float32")
+        # 🔍 WEIGHTS: Analyze converted TTNN weights
+        analyze_tensor_precision(parameters["weight"], f"WEIGHT-{name}", "TTNN_float32")
         
         if model.bias is not None:
-            # 🔍 PRECISION TRACKING: Analyze original PyTorch bias before TTNN conversion
-            analyze_tensor_precision(model.bias, f"BIAS_CONVERSION-{name}", "PYTORCH_BIAS")
+            # 🔍 BIAS: Analyze original PyTorch bias before TTNN conversion
+            analyze_tensor_precision(model.bias, f"BIAS-{name}", "PYTORCH")
             bias = model.bias.reshape((1, 1, 1, -1))
             parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-            # 🔍 PRECISION TRACKING: Analyze converted TTNN bias
-            analyze_tensor_precision(parameters["bias"], f"BIAS_CONVERSION-{name}", "TTNN_BIAS_float32")
+            # 🔍 BIAS: Analyze converted TTNN bias
+            analyze_tensor_precision(parameters["bias"], f"BIAS-{name}", "TTNN_float32")
 
     if isinstance(model, Conv):
-        # 🔍 PRECISION TRACKING: Analyze original PyTorch weights before batch norm folding
-        analyze_tensor_precision(model.conv.weight, f"CONV_WEIGHT_CONVERSION-{name}", "PYTORCH_CONV_WEIGHT")
-        if model.bn.bias is not None:
-            analyze_tensor_precision(model.bn.bias, f"BN_BIAS_CONVERSION-{name}", "PYTORCH_BN_BIAS")
+        # 🔍 WEIGHTS: Analyze original PyTorch weights before batch norm folding
+        analyze_tensor_precision(model.conv.weight, f"CONV_WEIGHT-{name}", "PYTORCH")
+        if hasattr(model.bn, 'bias') and model.bn.bias is not None:
+            analyze_tensor_precision(model.bn.bias, f"BN_BIAS-{name}", "PYTORCH")
         
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv, model.bn)
-        # 🔍 PRECISION TRACKING: Analyze weights after batch norm folding
-        analyze_tensor_precision(weight, f"CONV_WEIGHT_CONVERSION-{name}", "AFTER_BN_FOLDING")
-        analyze_tensor_precision(bias, f"CONV_BIAS_CONVERSION-{name}", "AFTER_BN_FOLDING")
+        # 🔍 WEIGHTS: Analyze weights after batch norm folding
+        analyze_tensor_precision(weight, f"CONV_WEIGHT-{name}", "AFTER_BN_FOLDING")
+        analyze_tensor_precision(bias, f"CONV_BIAS-{name}", "AFTER_BN_FOLDING")
         
         parameters["conv"] = {}
         parameters["conv"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-        # 🔍 PRECISION TRACKING: Analyze converted TTNN weights
-        analyze_tensor_precision(parameters["conv"]["weight"], f"CONV_WEIGHT_CONVERSION-{name}", "TTNN_WEIGHT_float32")
+        # 🔍 WEIGHTS: Analyze converted TTNN weights
+        analyze_tensor_precision(parameters["conv"]["weight"], f"CONV_WEIGHT-{name}", "TTNN_float32")
         
         bias = bias.reshape((1, 1, 1, -1))
         parameters["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-        # 🔍 PRECISION TRACKING: Analyze converted TTNN bias
-        analyze_tensor_precision(parameters["conv"]["bias"], f"CONV_BIAS_CONVERSION-{name}", "TTNN_BIAS_float32")
+        # 🔍 BIAS: Analyze converted TTNN bias
+        analyze_tensor_precision(parameters["conv"]["bias"], f"CONV_BIAS-{name}", "TTNN_float32")
 
     return parameters
 
