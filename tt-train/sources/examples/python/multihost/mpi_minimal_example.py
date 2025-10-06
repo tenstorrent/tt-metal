@@ -2,6 +2,35 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+This script is a minimal example of using the SocketManager to send and receive data from rank 0 to all other ranks through MPI.
+
+Example usage:
+```
+export TT_MESH_ID=0
+export TT_MESH_HOST_RANK=0
+cd ${TT_METAL_HOME}/tt-train
+# synchronize build and binaries to all machines (may require modifications to the all_machines_copy.sh script)
+./sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync
+# run the script
+mpirun -x TT_METAL_HOME -x TT_MESH_ID -x TT_MESH_HOST_RANK --host metal-wh-01,metal-wh-03,metal-wh-04,metal-wh-05,metal-wh-06 --tag-output python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/mpi_minimal_example.py
+```
+
+Expected output:
+```
+[1,0]<stdout>:Rank 0 is sending data
+[1,1]<stdout>:Rank 1 is receiving data
+[1,2]<stdout>:Rank 2 is receiving data
+[1,4]<stdout>:Rank 4 is receiving data
+[1,3]<stdout>:Rank 3 is receiving data
+[1,1]<stdout>:Rank 1 received data: [1. 2. 3. 4. 5. 6. 7. 8.]
+[1,2]<stdout>:Rank 2 received data: [1. 2. 3. 4. 5. 6. 7. 8.]
+[1,3]<stdout>:Rank 3 received data: [1. 2. 3. 4. 5. 6. 7. 8.]
+[1,4]<stdout>:Rank 4 received data: [1. 2. 3. 4. 5. 6. 7. 8.]
+```
+
+"""
+
 import os
 import sys
 import numpy as np
