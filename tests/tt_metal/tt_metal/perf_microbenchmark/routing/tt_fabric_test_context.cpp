@@ -325,7 +325,7 @@ void TestContext::organize_speedups_by_topology() {
     for (const auto& result : comparison_results_) {
         const std::optional<Topology> result_topology = enchantum::cast<Topology>(result.topology);
         TT_FATAL(result_topology.has_value(), "Invalid topology in comparison result: {}", result.topology);
-        const double result_speedup = result.speedup;
+        const double result_speedup = result.speedup();
         speedups_per_topology_[result_topology.value()].speedups_by_packet_size[result.packet_size].push_back(
             result_speedup);
         std::optional<NocSendType> result_ntype = enchantum::cast<NocSendType>(result.ntype);
@@ -353,7 +353,7 @@ void TestContext::calculate_overall_geomean_speedup() {
     std::vector<double> speedups(comparison_results_.size());
     std::transform(
         comparison_results_.begin(), comparison_results_.end(), speedups.begin(), [](const ComparisonResult& result) {
-            return result.speedup;
+            return result.speedup();
         });
     overall_geomean_speedup_ = calculate_geomean_speedup(speedups);
     log_info(tt::LogTest, "Overall Geomean Speedup: {:.6f}", overall_geomean_speedup_);
