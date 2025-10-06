@@ -210,12 +210,20 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    // TODO: FIXME!
     const auto& input_tensor = input_tensors[0];
     auto inter_shape = input_tensor.logical_shape();
 
+    MemoryConfig adjusted_intermediate_mem_config;
     if (this->topology == ccl::Topology::Linear) {
         inter_shape[0] *= 2;
+
+        if (intermediate_mem_config.is_sharded()) {
+            auto intermediate_shard_spec = intermediate_mem_config.shard_spec().value();
+            intermediate_shard_spec.shape[0] *= 2;
+            adjusted_intermediate_mem_config = intermediate_mem_config.with_shard_spec(intermediate_shard_spec);
+        }
+    } else {
+        adjusted_intermediate_mem_config = intermediate_mem_config;
     }
 
     auto output_shape = input_tensor.logical_shape();
@@ -223,7 +231,8 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     return {
         TensorSpec(
             inter_shape,
-            TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), intermediate_mem_config)),
+            TensorLayout(
+                input_tensor.dtype(), input_tensor.tensor_spec().page_config(), adjusted_intermediate_mem_config)),
         TensorSpec(
             output_shape,
             TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config)),
