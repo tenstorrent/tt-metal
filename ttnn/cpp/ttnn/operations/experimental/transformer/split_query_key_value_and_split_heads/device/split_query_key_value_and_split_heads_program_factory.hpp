@@ -158,11 +158,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
                 (core_idx_x + core_idx_y * num_cores_c) * per_core_tiles,  // in0_tensor_tile_id
             };
             std::vector<uint32_t> writer_runtime_args = {
-                (std::uint32_t)q_buffer->address(),                 // q_tensor_addr
-                (std::uint32_t)k_buffer->address(),                 // k_tensor_addr
-                (std::uint32_t)v_buffer->address(),                 // v_tensor_addr
-                core_idx_x * out_w_tiles + core_idx_y * out_CHtWt,  // out_tensor_tile_id
-                core_idx_x + core_idx_y * out_CHtWt,                // out_tensor_tile_id_with_transpose
+                (std::uint32_t)q_buffer->address(),                     // q_tensor_addr
+                (std::uint32_t)k_buffer->address(),                     // k_tensor_addr
+                (std::uint32_t)v_buffer->address(),                     // v_tensor_addr
+                (core_idx_x * out_w_tiles) + (core_idx_y * out_CHtWt),  // out_tensor_tile_id
+                core_idx_x + (core_idx_y * out_CHtWt),                  // out_tensor_tile_id_with_transpose
             };
 
             tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
