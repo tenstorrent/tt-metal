@@ -39,11 +39,12 @@ void MAIN {
 
                 // Wait for input data once before beginning processing
                 while (tiles_read < tiles_to_read) {
+                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
                     uint32_t num_pages_to_read = 0;
                     if constexpr (direction) {
-                        num_pages_to_read = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                        num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
                     } else {
-                        num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                        num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
                     }
                     cb_wait_front(input_cb_id, tile_granularity);
                     cb_wait_front(intermediate_cb, tile_granularity);
@@ -60,12 +61,13 @@ void MAIN {
                     tiles_read += num_pages_to_read;
 
                     // Skip the tiles going the other direction
-                    if (tiles_read < tiles_to_read) {
+                    tiles_remaining_to_read = tiles_to_read - tiles_read;
+                    if (tiles_remaining_to_read > 0) {
                         num_pages_to_read = 0;
                         if constexpr (!direction) {
-                            num_pages_to_read = std::min((tiles_to_read - tiles_read) / 2, tile_granularity);
+                            num_pages_to_read = std::min(tiles_remaining_to_read / 2, tile_granularity);
                         } else {
-                            num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
+                            num_pages_to_read = std::min(tiles_remaining_to_read, tile_granularity);
                         }
                         tiles_read += num_pages_to_read;
                     }
