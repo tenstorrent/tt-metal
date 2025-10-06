@@ -1,4 +1,4 @@
-name: "[internal] Galaxy profiler tests impl"
+name: "[internal] profiler tests impl"
 
 on:
   workflow_call:
