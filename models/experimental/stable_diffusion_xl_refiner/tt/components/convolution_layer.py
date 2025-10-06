@@ -87,7 +87,7 @@ class ConvolutionLayer:
                 weights, bias, conv_config.conv_w_dtype
             )
 
-    def apply(self, hidden_states, B, C, H, W):
+    def forward(self, hidden_states, B, C, H, W):
         if self.split_conv:
             return self._apply_split_conv(hidden_states, B, C, H, W)
         else:

@@ -50,5 +50,5 @@ class TtUpsample2D(LightweightModule):
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         hidden_states = ttnn.upsample(hidden_states, (self.scale_factor, self.scale_factor))
         B, H, W, C = list(hidden_states.shape)
-        hidden_states, [C, H, W] = self.conv_layer.apply(hidden_states, B, C, H, W)
+        hidden_states, [C, H, W] = self.conv_layer.forward(hidden_states, B, C, H, W)
         return hidden_states, [C, H, W]

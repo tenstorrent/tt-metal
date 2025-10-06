@@ -146,7 +146,7 @@ class TtUNet2DConditionModel(LightweightModule):
         ttnn.deallocate(temb_add)
 
         # 2. initial conv
-        hidden_states, [C, H, W] = self.conv_in.apply(hidden_states, B, C, H, W)
+        hidden_states, [C, H, W] = self.conv_in.forward(hidden_states, B, C, H, W)
 
         # 3. down blocks
         down_block_res_samples = (hidden_states,)
@@ -174,9 +174,9 @@ class TtUNet2DConditionModel(LightweightModule):
                 )
 
         # 6. final norm and conv
-        hidden_states = self.norm.apply(hidden_states, B, C, H, W)
+        hidden_states = self.norm.forward(hidden_states, B, C, H, W)
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
-        hidden_states, [C, H, W] = self.conv_out.apply(hidden_states, B, C, H, W)
+        hidden_states, [C, H, W] = self.conv_out.forward(hidden_states, B, C, H, W)
 
         return hidden_states, [C, H, W]

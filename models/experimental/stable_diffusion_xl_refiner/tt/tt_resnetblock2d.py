@@ -92,25 +92,25 @@ class TtResnetBlock2D(LightweightModule):
         hidden_states = input_tensor
 
         # First normalization + activation
-        hidden_states = self.norm_layer_1.apply(hidden_states, B, C, H, W)
+        hidden_states = self.norm_layer_1.forward(hidden_states, B, C, H, W)
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
 
         # First convolution
-        hidden_states, [C, H, W] = self.conv_layer_1.apply(hidden_states, B, C, H, W)
+        hidden_states, [C, H, W] = self.conv_layer_1.forward(hidden_states, B, C, H, W)
 
         # Add time embedding
-        hidden_states = self.time_embedding.apply(hidden_states, temb)
+        hidden_states = self.time_embedding.forward(hidden_states, temb)
 
         # Second normalization + activation
-        hidden_states = self.norm_layer_2.apply(hidden_states, B, C, H, W)
+        hidden_states = self.norm_layer_2.forward(hidden_states, B, C, H, W)
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         hidden_states = ttnn.silu(hidden_states)
 
         # Second convolution
-        hidden_states, [C, H, W] = self.conv_layer_2.apply(hidden_states, B, C, H, W)
+        hidden_states, [C, H, W] = self.conv_layer_2.forward(hidden_states, B, C, H, W)
 
         # Apply shortcut connection
-        hidden_states, [C, H, W] = self.shortcut_connection.apply(input_tensor, hidden_states, input_shape)
+        hidden_states, [C, H, W] = self.shortcut_connection.forward(input_tensor, hidden_states, input_shape)
 
         return hidden_states, [C, H, W]

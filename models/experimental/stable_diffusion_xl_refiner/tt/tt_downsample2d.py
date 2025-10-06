@@ -43,6 +43,6 @@ class TtDownsample2D(LightweightModule):
     def forward(self, hidden_states, input_shape):
         B, C, H, W = input_shape
 
-        hidden_states, [C, H, W] = self.conv_layer.apply(hidden_states, B, C, H, W)
+        hidden_states, [C, H, W] = self.conv_layer.forward(hidden_states, B, C, H, W)
 
         return hidden_states, [C, H, W]

@@ -68,7 +68,7 @@ class TtTransformer2DModel(LightweightModule):
         hidden_states = input_tensor
 
         # GroupNorm
-        hidden_states = self.norm_layer.apply(hidden_states, B, C, H, W)
+        hidden_states = self.norm_layer.forward(hidden_states, B, C, H, W)
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
 
         # Input projection

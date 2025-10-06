@@ -82,19 +82,19 @@ class TtBasicTransformerBlock(LightweightModule):
         hidden_states = input_tensor
 
         # Self-attention layer
-        hidden_states = self.layer_norm_1.apply(hidden_states)
+        hidden_states = self.layer_norm_1.forward(hidden_states)
         hidden_states = self.attention_1.forward(hidden_states, None)
         attn_result = ttnn.add(input_tensor, hidden_states, use_legacy=False)
 
         ttnn.deallocate(input_tensor)
 
         # Cross-attention layer
-        hidden_states = self.layer_norm_2.apply(attn_result)
+        hidden_states = self.layer_norm_2.forward(attn_result)
         hidden_states = self.attention_2.forward(hidden_states, encoder_tensor)
         attn_result = ttnn.add(attn_result, hidden_states, use_legacy=False)
 
         # Feedforward layer
-        hidden_states = self.layer_norm_3.apply(attn_result)
+        hidden_states = self.layer_norm_3.forward(attn_result)
         hidden_states = self.feedforward.forward(hidden_states)
         attn_result = ttnn.add(attn_result, hidden_states, use_legacy=False)
 

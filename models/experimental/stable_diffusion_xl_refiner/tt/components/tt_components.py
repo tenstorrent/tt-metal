@@ -18,7 +18,7 @@ class ResNetTimeEmbedding:
 
         self.temb_weights, self.temb_bias = prepare_linear_params(device, weights, bias, conv_w_dtype)
 
-    def apply(self, hidden_states, temb):
+    def forward(self, hidden_states, temb):
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         temb = ttnn.silu(temb)
         temb = ttnn.linear(
@@ -39,13 +39,13 @@ class ResNetShortcutConnection:
         else:
             self.shortcut_conv = None
 
-    def apply(self, input_tensor, hidden_states, input_shape):
+    def forward(self, input_tensor, hidden_states, input_shape):
         B, C, H, W = input_shape
 
         shortcut = input_tensor
 
         if self.shortcut_conv is not None:
-            shortcut, [C, H, W] = self.shortcut_conv.apply(shortcut, B, C, H, W)
+            shortcut, [C, H, W] = self.shortcut_conv.forward(shortcut, B, C, H, W)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
         shortcut = ttnn.to_layout(shortcut, ttnn.TILE_LAYOUT)
@@ -64,7 +64,7 @@ class TransformerBlockLayerNorm:
             ttnn.from_torch(bias, ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT) if bias is not None else None
         )
 
-    def apply(self, hidden_states):
+    def forward(self, hidden_states):
         hidden_states = ttnn.layer_norm(
             hidden_states,
             weight=self.norm_weights,

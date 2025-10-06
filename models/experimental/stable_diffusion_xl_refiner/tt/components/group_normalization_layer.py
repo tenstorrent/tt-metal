@@ -52,7 +52,7 @@ class GroupNormalizationLayer:
         self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, weights, bias, self.core_grid.y)
         self.input_mask = prepare_gn_mask(device, weights.shape[0], self.norm_groups, self.core_grid.y)
 
-    def apply(self, hidden_states, B, C, H, W):
+    def forward(self, hidden_states, B, C, H, W):
         if self.sharded:
             return self._apply_sharded_norm(hidden_states, B, C, H, W)
         else:
