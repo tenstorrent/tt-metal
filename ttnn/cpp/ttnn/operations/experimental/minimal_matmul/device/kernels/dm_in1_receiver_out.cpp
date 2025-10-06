@@ -76,26 +76,30 @@ void kernel_main() {
             }
             k_forward = !k_forward;
             // We have an output block to write out
-            cb_wait_front(cb_id_out, out_block_num_tiles);
+            if (n_block_iter == (N_num_blocks - 1)) {
+                // This is the last iteration of the N block loop, so we will stride M next and get reuse, so we should
+                // write the output.
+                cb_wait_front(cb_id_out, out_block_num_tiles);
 
 #ifndef SKIP_OUT
-            uint32_t out_read_ptr = get_read_ptr(cb_id_out);
-            // safe_print_bf16_tile(out_read_ptr);
-            DPRINT << "in1recv: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
-            for (uint32_t m = 0; m < M_block_tiles; m++) {
-                uint32_t m_id = m_block * M_block_tiles + m;
-                for (uint32_t n = 0; n < N_block_tiles; n++) {
-                    uint32_t n_id = n_block * N_block_tiles + n;
-                    uint32_t tile_id = m_id * N_tiles + n_id;
-                    // DPRINT << "write out tile " << tile_id << ENDL();
-                    noc_async_write_tile(tile_id, out_reader, out_read_ptr);
-                    out_read_ptr += input_tile_size;
+                uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                // safe_print_bf16_tile(out_read_ptr);
+                DPRINT << "in1recv: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
+                for (uint32_t m = 0; m < M_block_tiles; m++) {
+                    uint32_t m_id = m_block * M_block_tiles + m;
+                    for (uint32_t n = 0; n < N_block_tiles; n++) {
+                        uint32_t n_id = n_block * N_block_tiles + n;
+                        uint32_t tile_id = m_id * N_tiles + n_id;
+                        // DPRINT << "write out tile " << tile_id << ENDL();
+                        noc_async_write_tile(tile_id, out_reader, out_read_ptr);
+                        out_read_ptr += input_tile_size;
+                    }
                 }
-            }
-            noc_async_write_barrier();
+                noc_async_write_barrier();
 #endif
 
-            cb_pop_front(cb_id_out, out_block_num_tiles);
+                cb_pop_front(cb_id_out, out_block_num_tiles);
+            }
         }
         n_forward = !n_forward;
         // We get reuse on in1 when striding M block

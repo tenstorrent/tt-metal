@@ -221,6 +221,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 M_blocks_per_core * core.y,
                 M_blocks_per_core * (core.y + 1) - 1,
                 K_tiles,
+                N_tiles,
                 N_blocks_per_core * core.x,
                 N_blocks_per_core * (core.x + 1) - 1,
                 M_block_tiles,
@@ -231,6 +232,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 in0_mcast_receiver_semaphore_id,
                 grid_size.y - 1};
             tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
+            tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_sender_compile_time_args);
             auto in0_sender_kernels_id = CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
@@ -244,6 +246,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
             std::vector<uint32_t> in0_sender_args = {
                 input_addr,
+                out_addr,
                 (std::uint32_t)in0_mcast_start.x,  // in0_mcast_dest_noc_start_x
                 (std::uint32_t)in0_mcast_start.y,  // in0_mcast_dest_noc_start_y
                 (std::uint32_t)in0_mcast_end.x,    // in0_mcast_dest_noc_end_x
@@ -256,6 +259,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 M_blocks_per_core * core.y,
                 M_blocks_per_core * (core.y + 1) - 1,
                 K_tiles,
+                N_tiles,
                 N_blocks_per_core * core.x,
                 N_blocks_per_core * (core.x + 1) - 1,
                 M_block_tiles,
@@ -264,6 +268,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 input_tile_size,
                 in0_mcast_sender_semaphore_id,
                 in0_mcast_receiver_semaphore_id};
+            tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in0_receiver_compile_time_args);
             auto in0_receiver_kernels_id = CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_receiver.cpp",
@@ -276,6 +281,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             reader_kernel_ids.push_back(in0_receiver_kernels_id);
 
             std::vector<uint32_t> in0_receiver_args = {
+                out_addr,
                 (std::uint32_t)in0_mcast_sender.x,  // in0_mcast_sender_noc_x
                 (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
             };
@@ -399,6 +405,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 auto& reader_args = reader_runtime_args[core.x][core.y];
                 if (in1_idx == 0) {
                     reader_args[0] = input_addr;
+                    reader_args[1] = output_addr;
+                } else {
+                    reader_args[0] = output_addr;
                 }
                 auto& writer_args = writer_runtime_args[core.x][core.y];
                 if (in0_idx == 0) {
