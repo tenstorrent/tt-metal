@@ -72,10 +72,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
-    const uint32_t buffer_factor = 2;  // Double buffer
-    uint32_t in0_cb_num_tiles = in0_block_num_tiles * buffer_factor;
-    uint32_t in1_cb_num_tiles = in1_block_num_tiles * buffer_factor;
-    uint32_t out_cb_num_tiles = out_block_num_tiles * buffer_factor;
+    const uint32_t inputs_buffer_factor = 3;   // Triple buffer
+    const uint32_t outputs_buffer_factor = 2;  // Double buffer
+    uint32_t in0_cb_num_tiles = in0_block_num_tiles * inputs_buffer_factor;
+    uint32_t in1_cb_num_tiles = in1_block_num_tiles * inputs_buffer_factor;
+    uint32_t out_cb_num_tiles = out_block_num_tiles * outputs_buffer_factor;
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
 
     auto in0_sender_cores = CoreRange({0, 0}, {0, grid_size.y - 1});
@@ -85,14 +86,18 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
     std::vector<uint32_t> in0_sem_valids;
     std::vector<uint32_t> in0_sem_acks;
-    for (uint32_t buf_idx = 0; buf_idx < buffer_factor; ++buf_idx) {
+    std::vector<uint32_t> in1_sem_valids;
+    std::vector<uint32_t> in1_sem_acks;
+    for (uint32_t buf_idx = 0; buf_idx < inputs_buffer_factor; ++buf_idx) {
         in0_sem_valids.push_back(tt::tt_metal::CreateSemaphore(program, core_grid, INVALID));
         in0_sem_acks.push_back(tt::tt_metal::CreateSemaphore(program, core_grid, INVALID));
+        in1_sem_valids.push_back(tt::tt_metal::CreateSemaphore(program, core_grid, INVALID));
+        in1_sem_acks.push_back(tt::tt_metal::CreateSemaphore(program, core_grid, INVALID));
     }
     // auto in0_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     // auto in0_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    // auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    // auto in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
 
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
     uint32_t next_cb_index = tt::CBIndex::c_0;
@@ -234,7 +239,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 N_block_tiles,
                 input_tile_size,
                 grid_size.y - 1,
-                buffer_factor};
+                inputs_buffer_factor};
             tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
             auto in0_sender_kernels_id = CreateKernel(
                 program,
@@ -269,7 +274,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 K_block_tiles,
                 N_block_tiles,
                 input_tile_size,
-                buffer_factor};
+                inputs_buffer_factor};
             auto in0_receiver_kernels_id = CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_receiver.cpp",
@@ -303,9 +308,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 K_block_tiles,
                 N_block_tiles,
                 input_tile_size,
-                in1_mcast_sender_semaphore_id,
-                in1_mcast_receiver_semaphore_id,
-                grid_size.x - 1};
+                grid_size.x - 1,
+                inputs_buffer_factor};
             tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
             tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
             auto in1_sender_kernels_id = CreateKernel(
@@ -327,6 +331,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 (std::uint32_t)in1_mcast_end.x,    // in1_mcast_dest_noc_end_x
                 (std::uint32_t)in1_mcast_end.y,    // in1_mcast_dest_noc_end_y
             };
+            in1_sender_args.insert(in1_sender_args.end(), in1_sem_valids.begin(), in1_sem_valids.end());
+            in1_sender_args.insert(in1_sender_args.end(), in1_sem_acks.begin(), in1_sem_acks.end());
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_sender_args);
         } else {
             // in1 receiver
@@ -341,8 +347,7 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 K_block_tiles,
                 N_block_tiles,
                 input_tile_size,
-                in1_mcast_sender_semaphore_id,
-                in1_mcast_receiver_semaphore_id};
+                inputs_buffer_factor};
             tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_receiver_compile_time_args);
             auto in1_receiver_kernels_id = CreateKernel(
                 program,
@@ -360,6 +365,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 (std::uint32_t)in1_mcast_sender.x,  // in1_mcast_sender_noc_x
                 (std::uint32_t)in1_mcast_sender.y,  // in1_mcast_sender_noc_y
             };
+            in1_receiver_args.insert(in1_receiver_args.end(), in1_sem_valids.begin(), in1_sem_valids.end());
+            in1_receiver_args.insert(in1_receiver_args.end(), in1_sem_acks.begin(), in1_sem_acks.end());
             SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
         }
 

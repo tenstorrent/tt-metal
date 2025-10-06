@@ -96,6 +96,9 @@ void kernel_main() {
                     }
                 }
                 noc_async_read_barrier();
+#endif
+                cb_push_back(cb_id_in0, in0_block_num_tiles);
+#ifndef SKIP_IN0
 
                 // DPRINT << "in0 sender wait for all clear" << ENDL();
                 volatile tt_l1_ptr uint32_t* in0_ack_sem_ptr =
@@ -126,7 +129,7 @@ void kernel_main() {
                 credits--;
                 buf_idx = (buf_idx + 1) % buffer_factor;
 #endif
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                // cb_push_back(cb_id_in0, in0_block_num_tiles);
             }
         }
     }

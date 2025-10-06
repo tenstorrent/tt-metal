@@ -39,9 +39,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
-    volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_sem_addrs[0]);
-
     const uint64_t in0_sender_base_noc_addr = get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, 0);
 
     DPRINT << "in0recv: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
