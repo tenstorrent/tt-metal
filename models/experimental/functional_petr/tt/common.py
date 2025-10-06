@@ -70,9 +70,9 @@ class Conv:
 
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
             math_approx_mode=True,
         )
 
@@ -90,9 +90,9 @@ class Conv:
                 conv_config = ttnn.Conv2dConfig(
                     weights_dtype=ttnn.bfloat16,
                     output_layout=ttnn.TILE_LAYOUT,
-                    deallocate_activation=False,  # Disable for stability
-                    reallocate_halo_output=False,  # Disable for stability
-                    enable_act_double_buffer=False,  # Disable for stability
+                    deallocate_activation=True,  # Disable for stability
+                    reallocate_halo_output=True,  # Disable for stability
+                    enable_act_double_buffer=True,  # Disable for stability
                     activation=None,  # Handle activation separately if needed
                 )
 
@@ -255,7 +255,7 @@ class Conv_with_split:
 
     def __call__(self, device, input_tensor):
         batch, height, width, channel = input_tensor.shape
-
+        original_input = input_tensor
         input_tensor = ttnn.to_torch(input_tensor)
         self.weights = ttnn.to_torch(self.weights)
         split_input_tensors = torch.split(input_tensor, self.split_input_channels, 3)
@@ -265,8 +265,8 @@ class Conv_with_split:
 
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=False,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
 
@@ -306,10 +306,32 @@ class Conv_with_split:
             else:
                 torch_output_tensor = torch.add(torch_output_tensor, torch_conv_output_tensor)
 
-        output_tensor = ttnn.from_torch(torch_output_tensor, dtype=ttnn.bfloat16, device=device)
-        output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if len(torch_output_tensor.shape) == 2:
+            # Reshape to 4D if it got flattened
+            torch_output_tensor = torch_output_tensor.reshape(batch, out_height, out_width, self.output_channels)
+        elif torch_output_tensor.shape[1] == 1 and torch_output_tensor.shape[2] != out_width:
+            # Shape is corrupted [batch, 1, h*w, channels]
+            torch_output_tensor = torch_output_tensor.reshape(batch, out_height, out_width, self.output_channels)
 
-        output_tensor = ttnn.reshape(output_tensor, (batch, out_height, out_width, output_tensor.shape[3]))
+        output_tensor = ttnn.from_torch(torch_output_tensor, dtype=ttnn.bfloat16, device=device)
+        # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if output_tensor.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # output_tensor = ttnn.reshape(output_tensor, (batch, out_height, out_width, output_tensor.shape[3]))
+        # output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+        if output_tensor.shape[1] != out_height or output_tensor.shape[2] != out_width:
+            output_tensor = ttnn.reshape(output_tensor, (batch, out_height, out_width, self.output_channels))
+
+        expected_shape = (batch, out_height, out_width, self.output_channels)
+        if output_tensor.shape != expected_shape:
+            output_tensor = ttnn.reshape(output_tensor, expected_shape)
+
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+
+        # Apply activation if specified
+        if self.activation == "relu":
+            output_tensor = ttnn.relu(output_tensor)
+
         del out_height, out_width
         return output_tensor

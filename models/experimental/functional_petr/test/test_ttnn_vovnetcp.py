@@ -326,11 +326,11 @@ def test_vovnetcp_osa_stage(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 92160}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_vovnetcp(
     device,
 ):
-    torch_input_tensor = torch.randn(6, 3, 320, 800)
+    torch_input_tensor = torch.randn(1, 3, 320, 800)
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, device=device)
     torch_model = VoVNetCP("V-99-eSE")
     torch_model.eval()
@@ -352,8 +352,8 @@ def test_vovnetcp(
     ttnn_output[1] = ttnn_output[1].permute(0, 3, 1, 2)
     ttnn_output[1] = ttnn_output[1].reshape(output[1].shape)
     ttnn_output[1] = ttnn_output[1].to(torch_input_tensor.dtype)
-    assert_with_pcc(output[1], ttnn_output[1], pcc=0.95)
-    passed, msg = check_with_pcc(output[1], ttnn_output[1], pcc=0.95)
+    assert_with_pcc(output[1], ttnn_output[1], pcc=0.99)
+    passed, msg = check_with_pcc(output[1], ttnn_output[1], pcc=0.99)
 
     logger.info(
         f"vovnetcp test passed: "
