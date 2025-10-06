@@ -35,6 +35,7 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 | All to all                  | 300-308              | Write transactions from multiple cores to multiple cores.                               |
 | All from all                | 310-318              | Read transactions from multiple cores to multiple cores.                                |
 | I2S Hardcoded               | 400-405              | Tests interleaved to sharded data movement operations for different memory layouts.     |
+| PCIe Read Bandwidth         | 600                  | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 
 ## Running Tests
 ### C++ Gtests
