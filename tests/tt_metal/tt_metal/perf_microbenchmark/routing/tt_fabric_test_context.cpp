@@ -419,7 +419,7 @@ void TestContext::generate_comparison_statistics() {
 void TestContext::generate_comparison_statistics_csv() {
     std::ostringstream comparison_statistics_oss;
     auto arch_name = tt::tt_metal::hal::get_arch_name();
-    comparison_statistics_oss << "comparison_statistics_" << arch_name << ".csv";
+    comparison_statistics_oss << "bandwidth_comparison_statistics_" << arch_name << ".csv";
     // Output directory already set in initialize_bandwidth_results_csv_file()
     std::filesystem::path output_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
