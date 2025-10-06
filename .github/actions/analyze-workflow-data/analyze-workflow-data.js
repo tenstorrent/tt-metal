@@ -342,7 +342,7 @@ function renderErrorsTable(errorSnippets) {
       // If owner is infra-only due to missing test, surface original pipeline owner for human context
       if (obj.owner_source && String(obj.owner_source).startsWith('infra_due_to_missing_test') && Array.isArray(obj.original_owners) && obj.original_owners.length) {
         const origNames = obj.original_owners.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
-        if (origNames.length) ownerDisplay = `${DEFAULT_INFRA_OWNER.name} (from ${origNames.join(', ')})`;
+        if (origNames.length) ownerDisplay = `${DEFAULT_INFRA_OWNER.name} (pipeline owner: ${origNames.join(', ')})`;
       }
     }
     const ownerEsc = escapeHtml(ownerDisplay);
