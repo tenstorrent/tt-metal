@@ -55,13 +55,21 @@ runs:
           --arg body "$TEXT" \
           --arg alert "$ALERT" \
           '
+          def chunk_lines(lines; size):
+            if (lines|length) == 0 then []
+            else [ (lines[0:size] | join("\n")) ] + chunk_lines(lines[size:]; size)
+            end;
+
+          ($alert | split("\n")) as $alert_lines |
           (
             [
               { "type": "section", "text": { "type": "mrkdwn", "text": $header } },
               { "type": "section", "text": { "type": "mrkdwn", "text": $body } }
             ]
             + (if ($alert | length > 0) then
-                 [ { "type": "divider" }, { "type": "section", "text": { "type": "mrkdwn", "text": $alert } } ]
+                 [ { "type": "divider" } ]
+                 + (chunk_lines($alert_lines; 15)
+                    | map({ "type": "section", "text": { "type": "mrkdwn", "text": . } }))
                else [] end)
           ) as $blocks
           | {
