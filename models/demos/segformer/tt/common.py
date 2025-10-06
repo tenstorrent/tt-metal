@@ -48,6 +48,7 @@ class Conv:
             deallocate_activation=self.deallocate,
             reallocate_halo_output=True,
             enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             output_layout=self.output_layout,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
