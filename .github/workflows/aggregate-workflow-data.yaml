@@ -197,7 +197,6 @@ jobs:
           echo '${{ needs.analyze-data.outputs.failed_workflows }}' | jq -r '.[]'
           # Add any additional failure handling steps here
       - name: Post regressions to Slack
-        if: ${{ needs.analyze-data.outputs.regressed_workflows != '[]' || needs.analyze-data.outputs.alert_all_message != '' }}
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
           slack_webhook_url: ${{ secrets.SLACK_TESTING_CHANNEL }}
