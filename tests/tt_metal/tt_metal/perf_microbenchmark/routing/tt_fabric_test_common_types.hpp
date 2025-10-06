@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,9 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -117,8 +119,10 @@ struct HighLevelPatternConfig {
 };
 
 struct ParsedTestConfig {
-    std::string name;
+    std::string name;               // Original base name for golden lookup
+    std::string parametrized_name;  // Enhanced name for debugging and logging
     TestFabricSetup fabric_setup;
+    std::optional<std::vector<std::string>> skip;  // Platforms on which this test should be skipped
     std::optional<std::string> on_missing_param_policy;
     std::optional<ParsedTrafficPatternConfig> defaults;
     std::optional<ParametrizationOptionsMap> parametrization_params;
@@ -138,7 +142,9 @@ struct ParsedTestConfig {
 };
 
 struct TestConfig {
-    std::string name;
+    std::string name;               // Original base name for golden lookup
+    std::string parametrized_name;  // Enhanced name for debugging and logging
+    uint32_t iteration_number = 0; // For multi-iteration tests, notes the specific iteration of this test
     TestFabricSetup fabric_setup;
     std::optional<std::string> on_missing_param_policy;
     std::optional<TrafficPatternConfig> defaults;
@@ -251,5 +257,20 @@ struct PhysicalMeshConfig {
         // Default path to the mesh descriptor.
     }
 };
+
+// Helper functions for fetching pattern parameters
+TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config);
+
+std::string fetch_pattern_test_type(const TrafficPatternConfig& pattern, auto lambda_test_type);
+
+std::string fetch_pattern_ftype(const TrafficPatternConfig& pattern);
+
+std::string fetch_pattern_ntype(const TrafficPatternConfig& pattern);
+
+uint32_t fetch_pattern_int(const TrafficPatternConfig& pattern, auto lambda_parameter);
+
+uint32_t fetch_pattern_num_packets(const TrafficPatternConfig& pattern);
+
+uint32_t fetch_pattern_packet_size(const TrafficPatternConfig& pattern);
 
 }  // namespace tt::tt_fabric::fabric_tests

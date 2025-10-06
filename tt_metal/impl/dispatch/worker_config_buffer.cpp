@@ -4,7 +4,7 @@
 
 #include "worker_config_buffer.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <stdint.h>
 #include <stdio.h>
 #include <algorithm>
@@ -48,10 +48,26 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
     sync_info.need_sync = false;
 
     size_t num_buffer_types = this->reservation_.size();
+    constexpr uint32_t active_eth_idx = static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(sizes.size() == num_buffer_types);
     for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
         uint32_t free_index = this->free_index_[idx];
         uint32_t alloc_index = this->alloc_index_[idx];
+
+        // Special handling for active ethernet. It's not used that much as the primary user is Fabric, and in that
+        // case it is launched once with slow dispatch only during init
+        if (idx == active_eth_idx && sizes[idx]) [[unlikely]] {
+            // Stall if another acteth kernel ran before this to ensure it's finished before we
+            // write a new binary
+            if (free_index != alloc_index) {
+                sync_info.need_sync = true;
+                sync_info.sync_count = std::max(sync_info.sync_count, this->entries_[free_index][idx].sync_count);
+            }
+            // Force allocations from the base address for deterministic allocations
+            this->reservation_[idx].addr = this->base_addrs_[idx];
+            this->reservation_[idx].size = sizes[idx];
+            continue;
+        }
 
         bool done = false;
         while (!done) {

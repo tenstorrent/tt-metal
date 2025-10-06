@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -26,11 +26,18 @@ struct AllToAllCombineDeviceOperation {
         const tt::tt_fabric::Topology topology;
         const bool locally_reduced;
         const CoreRangeSet worker_core_range_set;
+        const uint32_t output_shard_dim;
         static constexpr auto attribute_names = std::forward_as_tuple(
-            "output_mem_config", "axis", "num_links", "topology", "locally_reduced", "worker_core_range_set");
+            "output_mem_config",
+            "axis",
+            "num_links",
+            "topology",
+            "locally_reduced",
+            "worker_core_range_set",
+            "output_shard_dim");
         auto attribute_values() const {
             return std::forward_as_tuple(
-                output_mem_config, axis, num_links, topology, locally_reduced, worker_core_range_set);
+                output_mem_config, axis, num_links, topology, locally_reduced, worker_core_range_set, output_shard_dim);
         };
     };
     struct tensor_args_t {
@@ -106,7 +113,8 @@ struct AllToAllCombineDeviceOperation {
         const std::optional<uint32_t>& axis,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
         bool locally_reduced,
-        const CoreRangeSet& worker_core_range_set);
+        const CoreRangeSet& worker_core_range_set,
+        uint32_t output_shard_dim);
 };
 }  // namespace ttnn::operations::ccl
 

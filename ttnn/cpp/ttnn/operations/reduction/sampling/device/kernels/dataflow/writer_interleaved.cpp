@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -236,6 +236,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_temp = get_compile_time_arg_val(16);
     constexpr uint32_t core_id = get_compile_time_arg_val(17);
     constexpr uint32_t ids_per_batch = get_compile_time_arg_val(18);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(19);
+    constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
+    constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
+    constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
+    constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
     // read k, p, temp
@@ -244,32 +249,38 @@ void kernel_main() {
     cb_reserve_back(cb_id_k, 1);
     uint32_t cb_id_k_ptr = get_write_ptr(cb_id_k);
     uint64_t k_noc_addr = get_noc_addr(0, addrg_k);
-    noc_async_read(k_noc_addr + core_id * 4, cb_id_k_ptr, 4);
+    // Read the entire aligned chunk to avoid NOC alignment issues
+    noc_async_read(k_noc_addr, cb_id_k_ptr, k_chunk_size);
     noc_async_read_barrier();
     cb_push_back(cb_id_k, 1);
     volatile tt_l1_ptr uint32_t* k_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_id_k_ptr);
-    uint32_t k = k_ptr[0];
+    // Index into the chunk to get this core's value
+    uint32_t k = k_ptr[core_id];
 
     const auto addrg_p = TensorAccessor(p_args, p_addr, 64);
     cb_reserve_back(cb_id_p, 1);
     uint32_t cb_id_p_ptr = get_write_ptr(cb_id_p);
     uint64_t p_noc_addr = get_noc_addr(0, addrg_p);
-    noc_async_read(p_noc_addr + core_id * 2, cb_id_p_ptr, 2);
+    // Read the entire aligned chunk to avoid NOC alignment issues
+    noc_async_read(p_noc_addr, cb_id_p_ptr, p_chunk_size);
     noc_async_read_barrier();
     cb_push_back(cb_id_p, 1);
     volatile tt_l1_ptr uint16_t* p_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_p_ptr);
-    uint32_t p = p_ptr[0];
+    // Index into the chunk to get this core's value
+    uint32_t p = p_ptr[core_id];
 
     const auto addrg_temp = TensorAccessor(temp_args, temp_addr, 64);
     // cb_reserve_back(cb_id_temp, 1);
     uint32_t cb_id_temp_ptr = get_write_ptr(cb_id_temp);
     uint64_t temp_noc_addr = get_noc_addr(0, addrg_temp);
-    noc_async_read(temp_noc_addr + core_id * 2, cb_id_temp_ptr, 2);
+    // Read the entire aligned chunk to avoid NOC alignment issues
+    noc_async_read(temp_noc_addr, cb_id_temp_ptr, temp_chunk_size);
     noc_async_read_barrier();
     // cb_push_back(cb_id_temp, 1);
 
     volatile tt_l1_ptr uint16_t* temp_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_temp_ptr);
-    uint16_t temp = temp_ptr[0];
+    // Index into the chunk to get this core's value
+    uint16_t temp = temp_ptr[core_id];
     uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
     generate_bcast_unary_scalar(cb_id_temp, temp_packed);
     // generate the top-k mask
@@ -372,6 +383,7 @@ void kernel_main() {
 
     const auto s_out = TensorAccessor(dst_args, dst_addr, out_stick_size);
     uint64_t dst_noc_addr = get_noc_addr(0, s_out);
+    // Write individual core result - output buffer should handle alignment
     noc_async_write(out_addr + core_id * 4, dst_noc_addr + core_id * 4, 4);
     noc_async_write_barrier();
 }

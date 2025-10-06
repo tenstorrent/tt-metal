@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <mutex>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "llrt/rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/pcie/pci_device.hpp>
@@ -85,8 +85,9 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
         }
         return arch;
     } else if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
-        tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
-        arch = init.get_arch_name();
+        auto soc_desc =
+            tt::umd::SimulationDevice::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+        arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
     } else {
         arch = get_physical_architecture();
     }

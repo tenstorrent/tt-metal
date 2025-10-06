@@ -23,7 +23,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
@@ -94,6 +94,11 @@ public:
     tt_ClusterDescriptor* get_cluster_desc() const {
         TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
         return this->cluster_desc_;
+    }
+
+    const std::unique_ptr<tt::umd::Cluster>& get_driver() const {
+        TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+        return driver_;
     }
 
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
@@ -191,11 +196,6 @@ public:
         return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
     }
 
-    std::function<void(uint32_t, uint32_t, const uint8_t*)> get_fast_pcie_static_tlb_write_callable(int chip_id) const {
-        chip_id_t mmio_device_id = this->cluster_desc_->get_closest_mmio_capable_chip(chip_id);
-        return driver_->get_fast_pcie_static_tlb_write_callable(mmio_device_id);
-    }
-
     // Returns a writer object which holds a pointer to a static tlb
     // Allows for fast writes when targeting same device core by only doing the lookup once and avoiding repeated stack
     // traversals
@@ -287,13 +287,7 @@ public:
     }
 
     // Returns collection of devices that are controlled by the specified MMIO device inclusive of the MMIO device
-    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const {
-        TT_ASSERT(
-            this->cluster_desc_->get_chips_grouped_by_closest_mmio().count(mmio_device_id),
-            "Expected device {} to be an MMIO device!",
-            mmio_device_id);
-        return this->cluster_desc_->get_chips_grouped_by_closest_mmio().at(mmio_device_id);
-    }
+    const std::unordered_set<chip_id_t>& get_devices_controlled_by_mmio_device(chip_id_t mmio_device_id) const;
 
     // Returns map of connected chip ids to active ethernet cores
     std::unordered_map<chip_id_t, std::vector<CoreCoord>> get_ethernet_cores_grouped_by_connected_chips(
@@ -312,8 +306,11 @@ public:
     void initialize_fabric_config(
         tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
 
-    // Returns whether we are running on Galaxy.
+    // Returns whether we are running on Legacy Galaxy.
     bool is_galaxy_cluster() const;
+
+    // Returns whether we are running on UBB Galaxy.
+    bool is_ubb_galaxy() const;
 
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;

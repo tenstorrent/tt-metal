@@ -47,7 +47,6 @@ void bind_max_pool2d_operation(py::module& module) {
             return_indices (bool, optional): whether to return both values and indices. When True, returns a tuple (values, indices). Defaults to `False`.
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
-            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
             ttnn.Tensor or tuple[ttnn.Tensor, ttnn.Tensor]: the max pool convolved output tensor, or a tuple of (values, indices) if return_indices is True.
@@ -108,10 +107,8 @@ void bind_max_pool2d_operation(py::module& module) {
                bool reallocate_halo_output,
                bool return_indices,
                const DataType dtype,
-               const Layout output_layout,
-               QueueId queue_id) -> py::object {
+               const Layout output_layout) -> py::object {
                 auto result = self(
-                    queue_id,
                     input_tensor,
                     batch_size,
                     input_h,
@@ -131,12 +128,11 @@ void bind_max_pool2d_operation(py::module& module) {
                     dtype,
                     output_layout);
 
-                // Handle variant return type
-                if (std::holds_alternative<MaxPoolWithIndicesResult>(result)) {
-                    auto mpwi_result = std::get<MaxPoolWithIndicesResult>(result);
-                    return py::make_tuple(mpwi_result.output, mpwi_result.indices);
+                // Return single tensor or tuple based on vector size
+                if (result.size() == 1) {
+                    return py::cast(std::move(result[0]));
                 } else {
-                    return py::cast(std::get<ttnn::Tensor>(result));
+                    return py::cast(std::move(result));
                 }
             },
             py::arg("input_tensor"),
@@ -157,8 +153,7 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("reallocate_halo_output") = true,
             py::arg("return_indices") = false,
             py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("output_layout") = Layout::ROW_MAJOR,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_layout") = Layout::ROW_MAJOR});
 }
 
 void bind_avg_pool2d_operation(py::module& module) {
@@ -191,7 +186,6 @@ void bind_avg_pool2d_operation(py::module& module) {
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
             dtype (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
             output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
-            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
@@ -251,10 +245,8 @@ void bind_avg_pool2d_operation(py::module& module) {
                bool deallocate_input,
                bool reallocate_halo_output,
                const DataType dtype,
-               const Layout output_layout,
-               QueueId queue_id) -> ttnn::Tensor {
+               const Layout output_layout) -> ttnn::Tensor {
                 return self(
-                    queue_id,
                     input_tensor,
                     batch_size,
                     input_h,
@@ -292,8 +284,7 @@ void bind_avg_pool2d_operation(py::module& module) {
             py::arg("deallocate_input") = false,
             py::arg("reallocate_halo_output") = true,
             py::arg("dtype") = DataType::BFLOAT16,
-            py::arg("output_layout") = Layout::ROW_MAJOR,
-            py::arg("queue_id") = 0});
+            py::arg("output_layout") = Layout::ROW_MAJOR});
 }
 
 void py_module(py::module& module) {

@@ -5,7 +5,7 @@
 #include "unary_op_utils.hpp"
 
 #include <optional>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
@@ -92,6 +92,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::THRESHOLD: return "SFPU_OP_THRESHOLD_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
+        case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -102,11 +103,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     std::pair<std::string, std::string> op_init_and_name;
     TT_FATAL(is_parametrized_type(op_type), "operator should support at least one parameter", "Error");
     // TODO don't cast T to float when precision needs to be preserved
-    float param0 = params[0];
+    const T param0_raw = params[0];
+    float param0 = static_cast<float>(params[0]);
     switch (op_type) {
         case UnaryOpType::FILL:
-            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
-                op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)params[0])};
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "fill_tile_init();",
+                    fmt::format(
+                        "fill_tile_int({}, {}u);", idst, std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+            } else if (input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0_raw)};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
                 op_init_and_name = {
@@ -260,15 +268,49 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             op_init_and_name = {
                 "rsub_tile_init();", fmt::format("rsub_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
-        case UnaryOpType::SUB_UNARY_SFPU:
+        case UnaryOpType::RPOW:
             op_init_and_name = {
-                "binop_with_scalar_tile_init();",
-                fmt::format("sub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                "rpow_tile_init();", fmt::format("rpow_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            break;
+        case UnaryOpType::SUB_UNARY_SFPU:
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format(
+                        "sub_unary_tile_int32({}, {}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+            } else if (input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    // TODO: Use uint32_t tile API here once implemented #27621
+                    fmt::format("sub_unary_tile_int32({}, {}u);", idst, (uint)param0_raw)};
+            } else {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format("sub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::ADD_UNARY_SFPU:
-            op_init_and_name = {
-                "binop_with_scalar_tile_init();",
-                fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            TT_FATAL(
+                input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format(
+                        "add_unary_tile_int32({}, {}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+            } else if (input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    // TODO: Use uint32_t tile API here once implemented
+                    fmt::format("add_unary_tile_int32({}, {}u);", idst, (uint)param0_raw)};
+            } else {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format("add_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::MUL_UNARY_SFPU:
             op_init_and_name = {
@@ -729,6 +771,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::HARDSWISH: op_init_and_name = {}; break;
+        case UnaryOpType::CBRT: op_init_and_name = {}; break;
         default: TT_THROW("Undefined non-parametrized op type {}", op_type);
     }
     return op_init_and_name;
@@ -880,8 +923,8 @@ template std::map<std::string, std::string> get_defines<std::uint32_t>(
 template <typename T>
 std::pair<std::string, std::string> get_op_init_and_func(
     UnaryOpType op_type, std::span<const T> params, const std::string& idst, std::optional<DataType> input_dtype) {
-    return params.size() > 0 ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
-                             : get_op_init_and_func_default(op_type, idst, input_dtype);
+    return !params.empty() ? get_op_init_and_func_parameterized(op_type, params, idst, input_dtype)
+                           : get_op_init_and_func_default(op_type, idst, input_dtype);
 }
 
 template std::pair<std::string, std::string> get_op_init_and_func<float>(
@@ -949,6 +992,7 @@ std::string get_compute_kernel_path(
             } else {
                 return fmt::format("{}/{}", compute_root, "hardswish_kernel.cpp");
             }
+        case UnaryOpType::CBRT: return fmt::format("{}/{}", compute_root, "cbrt_kernel.cpp");
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
 }

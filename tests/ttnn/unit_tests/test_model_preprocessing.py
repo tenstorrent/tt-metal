@@ -19,7 +19,7 @@ from ttnn.model_preprocessing import (
 )
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import is_wormhole_b0, skip_for_grayskull, is_blackhole
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 @contextlib.contextmanager

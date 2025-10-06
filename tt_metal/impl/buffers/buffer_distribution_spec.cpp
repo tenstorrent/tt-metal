@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "buffer_distribution_spec.hpp"
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 
 #include <tt-metalium/math.hpp>
 
@@ -60,7 +60,7 @@ void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_o
     params.actual_shard_size[dim] = shard_size;
 
     for (size_t i = 0; i < params.shard_grid[dim] - 1; i++) {
-        iterate_over_shards(params, dim + 1, src_offset + i * params.shard_shape[dim] * params.tensor_strides[dim]);
+        iterate_over_shards(params, dim + 1, src_offset + (i * params.shard_shape[dim] * params.tensor_strides[dim]));
     }
 
     // Last shard may be partial, so we need to handle it separately
@@ -69,7 +69,7 @@ void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_o
     iterate_over_shards(
         params,
         dim + 1,
-        src_offset + (params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim]);
+        src_offset + ((params.shard_grid[dim] - 1) * params.shard_shape[dim] * params.tensor_strides[dim]));
 }
 
 tt::tt_metal::Shape convert_shape_to_pages(tt::tt_metal::Shape shape, const tt::tt_metal::Shape2D& page_shape) {
@@ -165,7 +165,7 @@ BufferDistributionSpec::BufferDistributionSpec(
         CMAKE_UNIQUE_NAMESPACE::squeeze_shape_ranks(tensor_shape_in_pages, shard_shape_in_pages);
 
     if (tensor_shape_in_pages_.volume() != 0) {
-        TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
+        TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
     }
 
     init_precomputed_data();
@@ -178,7 +178,7 @@ BufferDistributionSpec::BufferDistributionSpec(
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.volume() != 0, "Shard shape must have non zero volume!");
     if (tensor_shape_in_pages_.volume() != 0) {
-        TT_FATAL(cores_.size() != 0, "Can't distribute non zero volume tensor over an empty set of cores");
+        TT_FATAL(!cores_.empty(), "Can't distribute non zero volume tensor over an empty set of cores");
     }
 
     std::tie(tensor_shape_in_pages_, shard_shape_in_pages_) =
@@ -230,7 +230,7 @@ size_t BufferDistributionSpec::num_shards() const { return num_shards_; }
 size_t BufferDistributionSpec::num_cores_with_data() const { return std::min(num_cores(), num_shards()); }
 
 size_t BufferDistributionSpec::max_num_shards_per_core() const {
-    if (cores_.size() == 0) {
+    if (cores_.empty()) {
         return 0;
     }
     return (num_shards() + cores_.size() - 1) / cores_.size();
@@ -239,7 +239,7 @@ size_t BufferDistributionSpec::max_num_shards_per_core() const {
 size_t BufferDistributionSpec::max_num_dev_pages_per_core() const { return max_num_shards_per_core() * shard_volume_; }
 
 size_t BufferDistributionSpec::num_shards_per_core(size_t core_idx) const {
-    return num_shards() / num_cores() + (core_idx < num_shards() % num_cores() ? 1 : 0);
+    return (num_shards() / num_cores()) + (core_idx < num_shards() % num_cores() ? 1 : 0);
 }
 
 size_t BufferDistributionSpec::num_dev_pages_per_core(size_t core_idx) const {
@@ -290,7 +290,7 @@ void BufferDistributionSpec::init_precomputed_data() {
                 .cores_with_data = std::move(cores_with_data),
                 .cores_in_group_1 = CoreRangeSet(cores_with_more_shards),
                 .cores_in_group_2 = CoreRangeSet(cores_with_less_shards),
-                .num_shards_per_core_in_group_1 = num_shards() / num_cores() + 1,
+                .num_shards_per_core_in_group_1 = (num_shards() / num_cores()) + 1,
                 .num_shards_per_core_in_group_2 = num_shards() / num_cores(),
             };
         }

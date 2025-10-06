@@ -18,6 +18,8 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
         module,
         ttnn::group_norm,
         R"doc(
+                ``ttnn.group_norm(input_tensor: ttnn.Tensor, num_groups: int, epsilon: float = 1e-12, input_mask: Optional[ttnn.Tensor] = None, weight: Optional[ttnn.Tensor] = None, bias: Optional[ttnn.Tensor] = None, reciprocals: Optional[ttnn.Tensor] = None, memory_config: Optional[ttnn.MemoryConfig] = None, dtype: Optional[ttnn.DataType] = None, core_grid: Optional[ttnn.CoreGrid] = None, inplace: bool = True, output_layout: Optional[ttnn.Layout] = None, num_out_blocks: Optional[int] = None, compute_kernel_config: Optional[ttnn.DeviceComputeKernelConfig] = None, negative_mask: Optional[ttnn.Tensor] = None, use_welford: bool = False) -> ttnn.Tensor``
+
                 Computes group_norm over :attr:`input_tensor`.
                 See `Group Normalization <https://arxiv.org/abs/1803.08494>`_ for more details.
 
@@ -57,7 +59,8 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                 num_out_blocks (int, optional): Defaults to `None`.
                 compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
                 negative_mask (ttnn.Tensor, optional): Defaults to `None`. Can be used only in row-major sharded input/output tensors. Used to reduce the number of CB's used in the sharded version of the kernel by overlapping the CB's used for tilized input and output. (The kernel is in fact row major variant, but is internally tilizing RM into tilized inputs).
-
+                use_welford (bool, optional): Defaults to `False`. If `True`, the Welford's algorithm is used to compute the mean and variance.
+                reciprocals (ttnn.Tensor, optional): Defaults to `None`. FP32 tensor containing pre-computed reciprocal values. Only valid when use_welford is True. Must be sharded to L1 memory in each core.
 
             Returns:
                 ttnn.Tensor: the output tensor.
@@ -69,34 +72,37 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - TILE, ROW_MAJOR
-
+                      - TILE, ROW_MAJOR
 
                 .. list-table:: weight (gamma) and bias (beta)
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - ROW_MAJOR
+                      - ROW_MAJOR
 
                 .. list-table:: input_mask
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16, BFLOAT8_B
-                        - TILE
+                      - TILE
 
                 .. list-table:: output_tensor
                     :header-rows: 1
 
                     * - dtype
-                        - layout
+                      - layout
                     * - BFLOAT16
-                        - TILE, ROW_MAJOR
+                      - TILE, ROW_MAJOR
+
+            Memory Support:
+              - Interleaved: DRAM and L1
+              - Sharded (L1): Height and Block sharded
 
             Limitations:
               - :attr:`input_tensor` is a 4D tensor of shape [N, 1, H*W, C] and is allocated on the device
@@ -106,12 +112,12 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
               - :attr:`inplace` is not supported for TILE-layout inputs and requires input and output layouts to be identical.
               - When generating inputs (e.g. weight, bias) for block sharded tensors, the number of cores in a column should draw upon core.x rather than core.y.
               - When generating inputs (e.g. weight, bias) for height sharded tensors, the number of cores in a column should be 1 rather than core.y.
-              - Width-sharding is not supported (use height or block sharding)
+              - Width-sharding is not supported
 
             Example (Sharded Input):
                 .. code-block:: python
 
-                     N, C, H, W = 1, 64, 32, 1
+                    N, C, H, W = 1, 64, 32, 1
                     num_groups = 2
 
                     # Prepare random inputs
@@ -253,6 +259,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("input_mask") = std::nullopt,
             py::arg("weight") = std::nullopt,
             py::arg("bias") = std::nullopt,
+            py::arg("reciprocals") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
             py::arg("core_grid") = std::nullopt,
@@ -260,7 +267,8 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("output_layout") = std::nullopt,
             py::arg("num_out_blocks") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("negative_mask") = std::nullopt});
+            py::arg("negative_mask") = std::nullopt,
+            py::arg("use_welford") = false});
 }
 void bind_normalization_group_norm(py::module& module) { bind_normalization_group_norm_operation(module); }
 

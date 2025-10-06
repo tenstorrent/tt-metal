@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -57,6 +57,7 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     const auto mesh_rows = mesh_view.num_rows();
     const auto mesh_cols = mesh_view.num_cols();
     const auto batch = metadata_shape[1];
+    const auto seq = metadata_shape[2];
     const auto experts = mapping_shape[2];
 
     TT_FATAL(
@@ -91,8 +92,17 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(operation_attributes.axis.has_value(), "Axis must be specified at the moment");
     const auto& axis = operation_attributes.axis.value();
     const auto& axis_group = (axis == 0) ? mesh_rows : mesh_cols;
-
-    TT_FATAL(batch % axis_group == 0, "Batch {} must be divisible by axis group", batch, axis_group);
+    TT_FATAL(
+        operation_attributes.output_shard_dim == 1 || operation_attributes.output_shard_dim == 2,
+        "Output shard dimension must be 1 or 2, got {}. Output shard dimension is used to determine the dimension to "
+        "shard the output tokens along.",
+        operation_attributes.output_shard_dim);
+    uint32_t output_shard_dim = operation_attributes.output_shard_dim;
+    if (output_shard_dim == 1) {
+        TT_FATAL(batch % axis_group == 0, "Batch {} must be divisible by axis group", batch, axis_group);
+    } else if (output_shard_dim == 2) {
+        TT_FATAL(seq % axis_group == 0, "Sequence length {} must be divisible by axis group", seq, axis_group);
+    }
 
     TT_FATAL(
         operation_attributes.num_links > 0,
@@ -106,6 +116,7 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
 AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::tt_metal;
+    uint32_t output_shard_dim = operation_attributes.output_shard_dim;
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& input_shape = input_tensor.tensor_spec().logical_shape();
@@ -123,12 +134,15 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
     const uint32_t selected_experts_k = metadata_shape[-1];
 
     const auto& axis = operation_attributes.axis;
-    const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[!axis.value()] : 1;
-    const uint32_t total_batch_size = batch_size * batch_replicate_dim;
+    const uint32_t replicate_dim = axis.has_value() ? mesh_device->shape()[!axis.value()] : 1;
 
-    const uint32_t total_batch_per_device_size = total_batch_size / num_devices;
+    const uint32_t total_batch_per_device_size =
+        (output_shard_dim == 1) ? (batch_size * replicate_dim) / num_devices : batch_size;
+    const uint32_t total_seq_per_device_size =
+        (output_shard_dim == 2) ? (seq_size * replicate_dim) / num_devices : seq_size;
 
-    auto output_shape = ttnn::Shape({selected_experts_k, total_batch_per_device_size, seq_size, hidden_size});
+    auto output_shape =
+        ttnn::Shape({selected_experts_k, total_batch_per_device_size, total_seq_per_device_size, hidden_size});
 
     auto mem_config = operation_attributes.output_mem_config;
     return TensorSpec(
@@ -154,7 +168,8 @@ AllToAllCombineDeviceOperation::invoke(
     const std::optional<uint32_t>& axis,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const bool locally_reduced,
-    const CoreRangeSet& worker_core_range_set) {
+    const CoreRangeSet& worker_core_range_set,
+    uint32_t output_shard_dim) {
     return {
         operation_attributes_t{
             .output_mem_config = memory_config,
@@ -163,6 +178,7 @@ AllToAllCombineDeviceOperation::invoke(
             .topology = topology,
             .locally_reduced = locally_reduced,
             .worker_core_range_set = worker_core_range_set,
+            .output_shard_dim = output_shard_dim,
         },
         tensor_args_t{
             .input_tensor = input_tensor,

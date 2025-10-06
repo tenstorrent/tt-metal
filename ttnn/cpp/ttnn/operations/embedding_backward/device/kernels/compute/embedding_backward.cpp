@@ -38,7 +38,7 @@ void MAIN {
             uint32_t tile_to_get = 0;
             cb_get_tile(cb_mask, tile_to_get, &idx_addr_ptr);
             uint32_t idx_addr = reinterpret_cast<uint32_t>(idx_addr_ptr);
-#if defined ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE)
             // Workaround for tt-metal issue #11816:
             // Flush the cache, forces going to L1 to access data of cb_get_tile pointer
             asm volatile("fence");

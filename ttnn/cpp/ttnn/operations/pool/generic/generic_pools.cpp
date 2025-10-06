@@ -28,8 +28,8 @@ namespace operations::pool {
 // Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
 // maxpool.
-static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
-    QueueId queue_id,
+
+static std::vector<Tensor> pool2d_invoke(
     const Tensor& input_tensor,
     Pool2DType pool_type,
     uint32_t batch_size,
@@ -154,6 +154,17 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         }
 
         ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
+
+        bool is_tensor_already_flattened = (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1);
+        Tensor input_tensor_flattened = input_tensor;
+        // If tensor is in (n,h,w,c) format, flatten it to (1,1,nhw,c) for optimal sharding
+        if (!is_tensor_already_flattened) {
+            const auto flattened_input_shape = conv::flatten_4d_shape(input_tensor.logical_shape());
+            const auto flattened_padded_input_shape = conv::flatten_4d_shape(input_tensor.padded_shape());
+            input_tensor_flattened = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
+            input_tensor_shape = flattened_input_shape;
+        }
+
         uint32_t input_tensor_width_snapped_to_channels_alignment =
             tt::round_up(input_tensor_shape[3], num_cores_c * input_channels_alignment);
 
@@ -167,7 +178,7 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         if (padding_needed > 0 && is_block_float(dtype)) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
 
-            input_tensor_padded = ttnn::pad(ttnn::DefaultQueueId, input_tensor, pad_spec, 0.0f);
+            input_tensor_padded = ttnn::pad(input_tensor, pad_spec, 0.0f);
         } else {
             input_tensor_padded = input_tensor;
         }
@@ -179,10 +190,11 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
              input_tensor_shape[2],
              input_tensor_width_snapped_to_channels_alignment});
 
+        input_tensor_flattened = input_tensor_flattened.reshape(input_tensor_shape, input_padded_shape);
+
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
-
-        input_tensor_sharded = ttnn::to_memory_config(input_tensor_padded, sharded_mem_config, std::nullopt);
+        input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, sharded_mem_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
         TT_FATAL(
@@ -240,11 +252,11 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
     if (return_indices) {
         Shape spatial_shape({1, input_h, input_w, 1});
 
-        // Create indices tensor with UINT32 since repeat operation requires it
-        Tensor indices_hw = ttnn::index_all<uint32_t>(
+        // Create the index tensor
+        Tensor indices_hw = ttnn::index_all<uint16_t>(
             spatial_shape,
             spatial_shape,  // No padding needed for spatial-only shape
-            DataType::UINT32);
+            DataType::UINT16);
         Shape repeat_shape({batch_size, 1, 1, channels});
         Tensor index_full = ttnn::repeat(indices_hw.to_device(input_tensor.device()), repeat_shape);
 
@@ -253,28 +265,16 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
         Shape flattened_shape({1, 1, nhw, channels});
         Tensor index_full_reshaped = ttnn::reshape(index_full, flattened_shape);
 
-        // Convert to TILE layout for typecast operation
-        Tensor index_full_tiled = ttnn::to_layout(index_full_reshaped, ttnn::TILE_LAYOUT);
-
-        // Convert to UINT16
-        Tensor index_full_uint16 = ttnn::typecast(index_full_tiled, DataType::UINT16);
-
-        // Convert back to ROW_MAJOR layout
-        if (!is_in_tiled) {
-            index_full_uint16 = ttnn::to_layout(index_full_uint16, ttnn::ROW_MAJOR_LAYOUT);
-        }
-
         TT_FATAL(
             input_tensor_sharded.memory_config().is_sharded(), "Input tensor must be sharded to shard indices tensor.");
         index_tensor_sharded =
-            ttnn::to_memory_config(index_full_uint16, input_tensor_sharded.memory_config(), std::nullopt);
+            ttnn::to_memory_config(index_full_reshaped, input_tensor_sharded.memory_config(), std::nullopt);
     }
 
     std::vector<Tensor> haloed_tensors;
 
     // call the halo uop
     Tensor haloed_tensor = ttnn::halo(
-        queue_id,
         input_tensor_sharded,
         sliding_window_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
@@ -297,7 +297,6 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
 
     if (return_indices) {
         Tensor haloed_index = ttnn::halo(
-            queue_id,
             index_tensor_sharded,
             sliding_window_config,
             0,  // pad_val - should never be used as padding should never be the max index
@@ -324,7 +323,6 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
 
     // call the pool2d uop
     std::vector<Tensor> output_tensors = ttnn::prim::pool2d(
-        queue_id,
         haloed_tensors,
         sliding_window_config,
         pool_type,
@@ -348,15 +346,14 @@ static std::variant<Tensor, MaxPoolWithIndicesResult> pool2d_invoke(
             output_tensors.size() == 2,
             "Expected two output tensors when return_indices is true, but got {}.",
             output_tensors.size());
-        return MaxPoolWithIndicesResult{std::move(output_tensors[0]), std::move(output_tensors[1])};
+        return output_tensors;
     } else {
         TT_FATAL(output_tensors.size() == 1, "Expected a single output tensor when return_indices is false.");
-        return std::move(output_tensors[0]);
+        return output_tensors;
     }
 }
 
-std::variant<Tensor, MaxPoolWithIndicesResult> MaxPool2DOp::invoke(
-    QueueId queue_id,
+std::vector<Tensor> MaxPool2DOp::invoke(
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -376,7 +373,6 @@ std::variant<Tensor, MaxPoolWithIndicesResult> MaxPool2DOp::invoke(
     const DataType dtype,
     const Layout output_layout) {
     return pool2d_invoke(
-        queue_id,
         input_tensor,
         Pool2DType::MAX_POOL2D,
         batch_size,
@@ -401,7 +397,6 @@ std::variant<Tensor, MaxPoolWithIndicesResult> MaxPool2DOp::invoke(
 }
 
 Tensor AvgPool2DOp::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -421,7 +416,6 @@ Tensor AvgPool2DOp::invoke(
     const DataType dtype,
     const Layout output_layout) {
     auto result = pool2d_invoke(
-        queue_id,
         input_tensor,
         Pool2DType::AVG_POOL2D,
         batch_size,
@@ -445,7 +439,7 @@ Tensor AvgPool2DOp::invoke(
         output_layout);
 
     // Average pool always returns just the tensor, never indices
-    return std::get<Tensor>(result);
+    return result.at(0);
 }
 
 }  // namespace operations::pool

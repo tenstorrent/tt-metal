@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,6 @@ namespace ttnn {
 namespace operations::experimental::transformer {
 struct NlpCreateHeadsBoltzOperation {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        QueueId queue_id,
         const Tensor& input_tensor_q,
         const std::optional<Tensor>& input_tensor_kv,
         uint32_t num_q_heads,

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -20,7 +21,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <tt-metalium/allocator_types.hpp>
 
 #include <tt_stl/span.hpp>
 
@@ -148,7 +148,9 @@ public:
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-    virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
+
+    // If cq_id is not provided, the current command queue is returned from the current thread
+    virtual CommandQueue& command_queue(std::optional<uint8_t> cq_id = std::nullopt) = 0;
 
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
@@ -214,8 +216,6 @@ public:
     // Allowing to get corresponding MeshDevice for a given device to properly schedule programs / create buffers for
     // it. This is currently used exclusively by profiler.
     virtual std::shared_ptr<distributed::MeshDevice> get_mesh_device() = 0;
-
-    static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };
 
 }  // namespace tt_metal

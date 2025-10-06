@@ -24,3 +24,4 @@ if(TARGET all_generated_files)
 endif()
 
 add_subdirectory(tt-1xx)
+add_subdirectory(tt-2xx)
