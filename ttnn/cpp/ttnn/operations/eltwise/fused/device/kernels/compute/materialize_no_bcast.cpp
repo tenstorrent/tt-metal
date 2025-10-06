@@ -19,14 +19,12 @@ void MAIN {
     // - cb_indices for any intermediate buffered tiles in expression tree
     // - cb_indices for input tensors
     // - cb_index for output tensor
-    constexpr auto num_tiles_per_cycle = get_compile_time_arg_val(0);
-    constexpr auto cb_temp = get_compile_time_arg_val(1);
 
     // 4 circular buffers: cb_in0, cb_in1, cb_in2, cb_out0
-    // and append cb_temp to circular buffers
-    const auto view = views::MakeComputeView<4, num_tiles_per_cycle, cb_temp>();
+    // and append 2 ct args (num_tiles_per_cycle, cb_temp)
+    using View = views::MakeComputeView<4, 2>();
 
-    view.init_tiles(views::init_sfpu<tt::c_0, tt::c_3>());
+    View::init_tiles(views::init_sfpu<tt::c_0, tt::c_3>());
 
     // fused addcmul
     // c_0 + ((c_1 * value) * c_2) -> c_3
@@ -41,6 +39,6 @@ void MAIN {
         views::with_cb_ids</*0*/ tt::c_0, /*1*/ tt::c_4, /*2*/ tt::c_3>(
             views::add<0 /*c_0*/, 1 /*c_4*/>(0, 0, 0) | views::pack<2 /*c_3*/>(0));
 
-    view.compute_tiles(n_tiles, addcmul);
+    View::compute_tiles(n_tiles, addcmul);
 }
 }  // namespace NAMESPACE
