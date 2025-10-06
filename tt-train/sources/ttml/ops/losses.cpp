@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -37,32 +37,36 @@ autograd::TensorPtr cross_entropy_loss(
     auto target_shape = target->get_shape();
 
     if (prediction_shape.rank() != 4U || target_shape.rank() != 2U) {
-        throw std::logic_error(fmt::format(
-            "Cross entropy loss expects: prediction rank = 4, target rank = 2.\n"
-            "Got: prediction shape {}, target shape {}",
-            prediction_shape,
-            target_shape));
+        throw std::logic_error(
+            fmt::format(
+                "Cross entropy loss expects: prediction rank = 4, target rank = 2.\n"
+                "Got: prediction shape {}, target shape {}",
+                prediction_shape,
+                target_shape));
     }
 
     if (prediction_shape[0] != target_shape[0]) {
-        throw std::logic_error(fmt::format(
-            "Cross entropy loss: batch dimension (dim 0) must match.\n"
-            "Got: prediction shape {}, target shape {}",
-            prediction_shape,
-            target_shape));
+        throw std::logic_error(
+            fmt::format(
+                "Cross entropy loss: batch dimension (dim 0) must match.\n"
+                "Got: prediction shape {}, target shape {}",
+                prediction_shape,
+                target_shape));
     }
 
     if (prediction_shape[-2] != target_shape[-1]) {
-        throw std::logic_error(fmt::format(
-            "Cross entropy loss: prediction dim -2 must equal target dim -1.\n"
-            "Got: prediction shape {}, target shape {}",
-            prediction_shape,
-            target_shape));
+        throw std::logic_error(
+            fmt::format(
+                "Cross entropy loss: prediction dim -2 must equal target dim -1.\n"
+                "Got: prediction shape {}, target shape {}",
+                prediction_shape,
+                target_shape));
     }
 
     auto loss = ttml::metal::cross_entropy_fw(prediction->get_value(), target->get_value());
     auto shape = ttnn::Shape({1, 1, 1, 1});
-    autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));
+    autograd::TensorPtr out =
+        autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), loss.memory_config()));
     ttnn::moreh_mean(
         loss,
         std::nullopt,
@@ -82,7 +86,6 @@ autograd::TensorPtr cross_entropy_loss(
 
     auto links = autograd::get_links(prediction);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
-
     return out;
 }
 

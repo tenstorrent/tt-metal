@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include "lightmetal/lightmetal_capture.hpp"
 #include "flatbuffers/flatbuffers.h"
 #include "command_generated.h"
@@ -11,7 +11,6 @@
 #include "trace/trace_buffer.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/kernel.hpp>
 
 #include "impl/program/program_impl.hpp"
 

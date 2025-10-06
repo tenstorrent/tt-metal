@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/reduction/prod/device/prod_op_all.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -20,7 +19,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
+    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     uint32_t num_tiles = a.physical_volume() / TILE_HW;
 

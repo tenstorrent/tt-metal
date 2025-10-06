@@ -1,0 +1,123 @@
+# Not currently runnable, noted in: https://github.com/tenstorrent/tt-metal/issues/29448
+# Helpful places to look:
+# tt_fabric_test_config.hpp: Contains Enum mappers at the top which tell us what possible options are available for each field
+#   Also contains the functions that parse the YAML and convert it to the appropriate enum.
+# tt_fabric_test_common_types.hpp: Shows us the data structures that each field is parsed into, and which fields are optional.
+
+physical_mesh:
+  mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml"
+  eth_coord_mapping: [
+    [[0, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 1, 1, 0, 0]],
+    [[0, 2, 0, 0, 0], [0, 3, 0, 0, 0], [0, 2, 1, 0, 0], [0, 3, 1, 0, 0]]
+  ]
+
+allocation_policies:
+  default_payload_chunk_size: 4096
+  sender:
+    policy: ExhaustFirst
+    max_configs_per_core: 2 # Maximum number of traffic patterns each sender can be responsible for.
+    initial_pool_size: 1
+    pool_refill_size: 1
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 8 # Maximum number of traffic patterns each receiver can support (number of cores it can receive from).
+    initial_pool_size: 1
+    pool_refill_size: 1
+
+# Receiver's job is to check incoming packets and verify that they are correct.
+# If we increase max_configs_per_core, each receiver/sender can support more traffic patterns, increasing test size.
+# However, this reduces the amount of L1 memory that each traffic pattern is allocated during the test.
+# Worst case, if the buffer size is too small, a sender may have sent a new packet before the receiver has validated the current packet, causing errors.
+# There is currently no handshaking to protect against this.
+
+Tests:
+  - name: "TestName"
+    fabric_setup:
+      topology: Linear/Mesh/Ring/Torus # The logical topology we're testing.
+      # LowLatency: Each packet is loaded with an infiniband-style packet header, where a segment is peeled off for each hop.
+      # Dynamic: Every time a packet arrives at a router, the router checks its routing table to figure out where to send it.
+      (optional) routing_type: LowLatency/Dynamic
+      # Tensix extension for fabric routers, used to build connections between worker->fabric router, upstream fabric router->downstream fabric router.
+      (optional) fabric_tensix_config: Default/Mux
+      # Controls the number of ETH links on each chip that is used in the test.
+      # Each sender is duplicated N times, 1 for each link. Allows a single traffic pattern to be sent multiple times simultaneously to the same destination
+      (optional) num_links: 1/2/4
+      (optional) torus_config: XY/X/Y # Only used for Torus topology, to specify torus links
+
+    # Provides default values for traffic patterns.
+    (optional) defaults:
+      - (optional) ftype, ntype, size, num_packets, destination, atomic_inc_val, atomic_inc_wrap, mcast_start_hops:
+
+    # When specifying a test, we have two options
+    # 1. Specify a concrete list of senders
+    # 2. Specify a high-level pattern
+    # 1. Concrete list of senders
+    (optional) senders:
+        # Alternatives to Physical chip ID for device:
+        # 1. Logical device format [mesh_id, chip_id]
+        # 2. Mesh coordinate format [mesh_id, [row, col]]
+      - device: 0 # Physical chip ID
+        (optional) core: [1, 1] # [row, col] of the sender worker core.
+        patterns:
+          - (optional) ftype: unicast/mcast # Fabric traffic pattern
+            (optional) ntype: unicast_write/atomic_inc/fused_atomic_inc/unicast_scatter_write # NoC traffic pattern once on chip
+            (optional) size: 1024 # Size of each packet in bytes
+            (optional) num_packets: 100 # Number of packets to send
+            (optional) destination:
+              - (optional) device: 1 # Or [mesh_id, chip_id] or [mesh_id, [row, col]]
+                (optional) core: [1, 1] # [row, col] of the receiver worker core.
+                (optional) hops: # multicast only
+                  S: 1
+                  E: 1
+                  N: 0
+                  W: 0
+            (optional) atomic_inc_val: 1 # Only used for atomic_inc ntype, how much to increment by.
+            (optional) atomic_inc_wrap: 65535 # Only used for atomic_inc ntype, the maximum value of the remote counter after which it will wrap to 0.
+            # How many hops to perform before starting the multicast. Used for grid-based multicasting.
+            # For example, if the source is [0,0] and the destination is [0,1], and mcast_start_hops is 1, the multicast will start at [0,1].
+            (optional) mcast_start_hops: 0
+    # 2. High-level pattern
+    (optional) patterns:
+      - type: all_to_all/one_to_all/full_device_random_pairing/unidirectional_linear/full_ring/half_ring/all_devices_uniform_pattern
+        (optional) iterations: 2 # How many times to run the pattern.
+      - type: all_to_all
+      - type: one_to_all
+        (optional) iterations: 3
+        # NOTE: all_to_one is a special pattern. If no iterations are specified, the test is expanded into n iterations, where n refers to the number of chips in the test.
+        # In each iteration, the receiver will be located on a different chip.
+        # However, if iterations are specified, the test is only expanded into 'iterations' number of tests, which may reduce test coverage.
+      - type: all_to_one
+        (optional) iterations: 5
+
+    # How iterations works:
+    # expand_high_level_patterns in tt_fabric_test_config.hpp:
+    # 1. Before running any tests, the framework determines the max iterations across all high-level patterns.
+    # 2. All patterns will be run simultaneously in each iteration.
+    # expand_patterns_into_test in tt_fabric_test_config.hpp:
+    # 1. All patterns are given a new random seed, for randomized iterations.
+    # NOTE: Only the maximum number of iterations is used to determine the number of tests to run.
+    # In the case above, 5 iterations of the tests will be created, even though the first pattern only requests 2.
+
+
+
+    # Allows us to sweep multiple test configurations.
+    # The Framework generates new tests based on these parameters and inserts them into the test list.
+    (optional) parametrization_params:
+      (optional) ftype: [unicast, mcast]
+      (optional) ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      (optional) size: [1024, 2048, 4096]
+      (optional) num_packets: [10, 50, 100]
+      (optional) num_links: [1, 2, 4]
+
+    # Other test parameters
+    (optional) top_level_iterations: 1 # Determines how many times the whole YAML file is run.
+    (optional) benchmark_mode: true/false # If true, the framework will save run results into a csv file.
+    # If true, all senders will synchronize before the test begins.
+    #Allows us to ensure that all traffic patterns start at roughly the same time.
+    (optional) sync: true/false
+    (optional) seed: 12345 # Used to generate random packet data during testing.
+    (optional) bw_calc_func: "MyCustomBWFunc" # Not used
+    # on_missing_param_policy targets the following parameters in all tests: [ftype, ntype, size, num_packets].
+    # If on_missing_param_policy is set to "randomize", the framework randomizes the missing parameters.
+    # If on_missing_param_policy is not provided, the framework provides sane defaults for missing parameters.
+    (optional) on_missing_param_policy: "randomize"

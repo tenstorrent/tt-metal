@@ -7,7 +7,7 @@ import pytest
 import torch
 import torch.nn as nn
 import ttnn
-from models.utility_functions import comp_allclose
+from models.common.utility_functions import comp_allclose
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_equal

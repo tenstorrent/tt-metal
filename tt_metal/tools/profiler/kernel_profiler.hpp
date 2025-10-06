@@ -7,7 +7,7 @@
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 #include "risc_common.h"
 #include "dataflow_api_addrgen.h"
 #include "accessor/tensor_accessor.h"
@@ -101,12 +101,13 @@ __attribute__((noinline)) void init_profiler(
         sums[i] = 0;
     }
 
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+    defined(COMPILE_FOR_BRISC)
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
 
     if (runCounter == 0) {
-        for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
             for (uint32_t i = ID_HH; i < GUARANTEED_MARKER_1_H; i++) {
                 profiler_data_buffer[riscID].data[i] = 0;
             }
@@ -116,7 +117,7 @@ __attribute__((noinline)) void init_profiler(
         profiler_control_buffer[NOC_Y] = my_y[0];
     }
 
-    for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
             // TODO(MO): Clean up magic numbers
             profiler_data_buffer[riscID].data[i] = 0x80000000;
@@ -166,7 +167,7 @@ inline __attribute__((always_inline)) void mark_dropped_timestamps(uint32_t inde
 }
 
 inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValue) {
-    for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         profiler_data_buffer[riscID].data[ID_LL] = counterValue;
     }
 }
@@ -194,7 +195,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC)
 
 #if (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL & PROFILER_OPT_DO_DISPATCH_CORES))
 
@@ -251,7 +252,8 @@ void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
 
 __attribute__((noinline)) void finish_profiler() {
     risc_finished_profiling();
-#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || \
+    defined(COMPILE_FOR_BRISC)
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
     }
@@ -266,7 +268,7 @@ __attribute__((noinline)) void finish_profiler() {
         PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocDestinationStateSaver noc_state;
-    for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
+    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
@@ -323,7 +325,7 @@ __attribute__((noinline)) void finish_profiler() {
 __attribute__((noinline)) void quick_push() {
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC))
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
 
     // tt-metal/issues/22578 - forbid quick_push if any cmd buffer has NOC_CMD_VC_LINKED bit set
     auto linked_bit_is_set = [](const uint32_t reg_val) { return reg_val & NOC_CMD_VC_LINKED; };
@@ -393,7 +395,7 @@ __attribute__((noinline)) void quick_push() {
 void quick_push_if_linked(uint32_t cmd_buf, bool linked) {
 #if (                                                                                          \
     defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC))
+    defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC))
     if (!linked) {
         return;
     }

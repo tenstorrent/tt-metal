@@ -18,7 +18,6 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
-using ::testing::IsEmpty;
 using ::testing::SizeIs;
 
 TEST(MeshDeviceViewTest, GetRingCoordinatesRingShapeEmpty) {
@@ -121,6 +120,266 @@ TEST_F(MeshDeviceView2x4Test, MeshId) {
     const auto& view = mesh_device_->get_view();
     EXPECT_EQ(view.shape(), MeshShape(2, 4));
     EXPECT_EQ(view.mesh_id(), tt::tt_fabric::MeshId(0));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewBasicProperties) {
+    const auto& view = mesh_device_->get_view();
+
+    EXPECT_FALSE(view.empty());
+    EXPECT_EQ(view.size(), 8);
+    EXPECT_EQ(view.num_devices(), 8);
+    EXPECT_EQ(view.shape(), MeshShape(2, 4));
+    EXPECT_TRUE(view.is_mesh_2d());
+    EXPECT_EQ(view.num_rows(), 2);
+    EXPECT_EQ(view.num_cols(), 4);
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewContains) {
+    const auto& view = mesh_device_->get_view();
+
+    EXPECT_TRUE(view.contains(MeshCoordinate{0, 0}));
+    EXPECT_TRUE(view.contains(MeshCoordinate{1, 3}));
+    EXPECT_TRUE(view.contains(MeshCoordinate{0, 2}));
+
+    EXPECT_FALSE(view.contains(MeshCoordinate{2, 0}));
+    EXPECT_FALSE(view.contains(MeshCoordinate{0, 4}));
+    EXPECT_FALSE(view.contains(MeshCoordinate{3, 3}));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetDevice) {
+    const auto& view = mesh_device_->get_view();
+
+    auto* device_00 = view.get_device(MeshCoordinate{0, 0});
+    auto* device_13 = view.get_device(MeshCoordinate{1, 3});
+
+    EXPECT_NE(device_00, nullptr);
+    EXPECT_NE(device_13, nullptr);
+    EXPECT_NE(device_00->id(), device_13->id());
+
+    // Out of bounds returns nullptr
+    EXPECT_EQ(view.get_device(MeshCoordinate{2, 0}), nullptr);
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeId) {
+    const auto& view = mesh_device_->get_view();
+
+    auto fabric_id_00 = view.get_fabric_node_id(MeshCoordinate{0, 0});
+    auto fabric_id_13 = view.get_fabric_node_id(MeshCoordinate{1, 3});
+
+    EXPECT_NE(fabric_id_00, fabric_id_13);
+
+    // Out of bounds throws
+    EXPECT_ANY_THROW((void)view.get_fabric_node_id(MeshCoordinate{2, 0}));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetDevices) {
+    const auto& view = mesh_device_->get_view();
+
+    auto all_devices = view.get_devices();
+    EXPECT_THAT(all_devices, SizeIs(8));
+
+    // Verify all devices are unique
+    std::set<chip_id_t> device_ids;
+    for (auto* device : all_devices) {
+        device_ids.insert(device->id());
+    }
+    EXPECT_EQ(device_ids.size(), 8);
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetDevicesInRange) {
+    const auto& view = mesh_device_->get_view();
+
+    // Get 2x2 subregion
+    MeshCoordinateRange range(MeshCoordinate{0, 0}, MeshCoordinate(1, 1));
+    auto devices = view.get_devices(range);
+    EXPECT_THAT(devices, SizeIs(4));
+
+    // Get 1x4 row
+    MeshCoordinateRange row_range(MeshCoordinate{0, 0}, MeshCoordinate(0, 3));
+    auto row_devices = view.get_devices(row_range);
+    EXPECT_THAT(row_devices, SizeIs(4));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIds) {
+    const auto& view = mesh_device_->get_view();
+
+    auto all_fabric_ids = view.get_fabric_node_ids();
+    EXPECT_THAT(all_fabric_ids, SizeIs(8));
+
+    // Verify all fabric node IDs are unique
+    std::set<tt::tt_fabric::FabricNodeId> fabric_ids_set;
+    for (const auto& fabric_id : all_fabric_ids) {
+        fabric_ids_set.insert(fabric_id);
+    }
+    EXPECT_EQ(fabric_ids_set.size(), 8);
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsInRange) {
+    const auto& view = mesh_device_->get_view();
+
+    MeshCoordinateRange range(MeshCoordinate{0, 0}, MeshCoordinate(1, 1));
+    auto fabric_ids = view.get_fabric_node_ids(range);
+    EXPECT_THAT(fabric_ids, SizeIs(4));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetDevicesOnRow) {
+    const auto& view = mesh_device_->get_view();
+
+    auto row_0_devices = view.get_devices_on_row(0);
+    EXPECT_THAT(row_0_devices, SizeIs(4));
+
+    auto row_1_devices = view.get_devices_on_row(1);
+    EXPECT_THAT(row_1_devices, SizeIs(4));
+
+    // Out of bounds throws
+    EXPECT_ANY_THROW((void)view.get_devices_on_row(2));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetDevicesOnColumn) {
+    const auto& view = mesh_device_->get_view();
+
+    auto col_0_devices = view.get_devices_on_column(0);
+    EXPECT_THAT(col_0_devices, SizeIs(2));
+
+    auto col_3_devices = view.get_devices_on_column(3);
+    EXPECT_THAT(col_3_devices, SizeIs(2));
+
+    // Out of bounds throws
+    EXPECT_ANY_THROW((void)view.get_devices_on_column(4));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsOnRow) {
+    const auto& view = mesh_device_->get_view();
+
+    auto row_0_fabric_ids = view.get_fabric_node_ids_on_row(0);
+    EXPECT_THAT(row_0_fabric_ids, SizeIs(4));
+
+    auto row_1_fabric_ids = view.get_fabric_node_ids_on_row(1);
+    EXPECT_THAT(row_1_fabric_ids, SizeIs(4));
+
+    // Out of bounds throws
+    EXPECT_ANY_THROW((void)view.get_fabric_node_ids_on_row(2));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeIdsOnColumn) {
+    const auto& view = mesh_device_->get_view();
+
+    auto col_0_fabric_ids = view.get_fabric_node_ids_on_column(0);
+    EXPECT_THAT(col_0_fabric_ids, SizeIs(2));
+
+    auto col_3_fabric_ids = view.get_fabric_node_ids_on_column(3);
+    EXPECT_THAT(col_3_fabric_ids, SizeIs(2));
+
+    // Out of bounds throws
+    EXPECT_ANY_THROW((void)view.get_fabric_node_ids_on_column(4));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewFindDevice) {
+    const auto& view = mesh_device_->get_view();
+
+    auto* device = view.get_device(MeshCoordinate{1, 2});
+    ASSERT_NE(device, nullptr);
+
+    auto coord = view.find_device(device->id());
+    EXPECT_EQ(coord, MeshCoordinate(1, 2));
+
+    // Non-existent device throws
+    EXPECT_ANY_THROW((void)view.find_device(9999));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewLineCoordinates) {
+    const auto& view = mesh_device_->get_view();
+
+    auto line_coords = view.get_line_coordinates();
+    EXPECT_THAT(line_coords, SizeIs(8));
+
+    // Verify zigzag pattern: row 0 left-to-right, row 1 right-to-left
+    EXPECT_EQ(line_coords[0], MeshCoordinate(0, 0));
+    EXPECT_EQ(line_coords[1], MeshCoordinate(0, 1));
+    EXPECT_EQ(line_coords[2], MeshCoordinate(0, 2));
+    EXPECT_EQ(line_coords[3], MeshCoordinate(0, 3));
+    EXPECT_EQ(line_coords[4], MeshCoordinate(1, 3));
+    EXPECT_EQ(line_coords[5], MeshCoordinate(1, 2));
+    EXPECT_EQ(line_coords[6], MeshCoordinate(1, 1));
+    EXPECT_EQ(line_coords[7], MeshCoordinate(1, 0));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewRingCoordinates) {
+    const auto& view = mesh_device_->get_view();
+
+    auto ring_coords = view.get_ring_coordinates();
+    EXPECT_THAT(ring_coords, SizeIs(8));
+
+    // Verify ring traversal (clockwise from top-left)
+    EXPECT_EQ(ring_coords[0], MeshCoordinate(0, 0));
+    EXPECT_EQ(ring_coords[1], MeshCoordinate(0, 1));
+    EXPECT_EQ(ring_coords[2], MeshCoordinate(0, 2));
+    EXPECT_EQ(ring_coords[3], MeshCoordinate(0, 3));
+    EXPECT_EQ(ring_coords[4], MeshCoordinate(1, 3));
+    EXPECT_EQ(ring_coords[5], MeshCoordinate(1, 2));
+    EXPECT_EQ(ring_coords[6], MeshCoordinate(1, 1));
+    EXPECT_EQ(ring_coords[7], MeshCoordinate(1, 0));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewIsLocal) {
+    const auto& view = mesh_device_->get_view();
+
+    // All devices should be local in single-host tests
+    EXPECT_TRUE(view.is_local(MeshCoordinate{0, 0}));
+    EXPECT_TRUE(view.is_local(MeshCoordinate{1, 3}));
+
+    // Out of bounds throws
+    EXPECT_ANY_THROW((void)view.is_local(MeshCoordinate{2, 0}));
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewIterator) {
+    const auto& view = mesh_device_->get_view();
+
+    std::vector<IDevice*> iterated_devices;
+    for (auto device : view) {
+        iterated_devices.push_back(*device);
+    }
+
+    EXPECT_THAT(iterated_devices, SizeIs(8));
+
+    // Should match get_devices()
+    auto all_devices = view.get_devices();
+    EXPECT_EQ(iterated_devices, all_devices);
+}
+
+TEST_F(MeshDeviceView2x4Test, ViewMeshId) {
+    const auto& view = mesh_device_->get_view();
+
+    auto mesh_id = view.mesh_id();
+
+    // All fabric node IDs should have the same mesh ID
+    for (const auto& fabric_id : view.get_fabric_node_ids()) {
+        EXPECT_EQ(fabric_id.mesh_id, mesh_id);
+    }
+}
+
+TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
+    std::vector<IDevice*> devices;
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        devices.push_back(mesh_device_->get_view().get_device(coord));
+        fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
+    }
+
+    MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
+
+    EXPECT_ANY_THROW((void)view_1d.num_rows());
+    EXPECT_ANY_THROW((void)view_1d.num_cols());
+    EXPECT_ANY_THROW((void)view_1d.get_devices_on_row(0));
+    EXPECT_ANY_THROW((void)view_1d.get_devices_on_column(0));
+    EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_row(0));
+    EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_column(0));
+    EXPECT_ANY_THROW((void)view_1d.get_line_coordinates());
+    EXPECT_ANY_THROW((void)view_1d.get_ring_coordinates());
+    EXPECT_ANY_THROW((void)view_1d.get_line_devices());
+    EXPECT_ANY_THROW((void)view_1d.get_ring_devices());
+    EXPECT_ANY_THROW((void)view_1d.get_line_fabric_node_ids());
+    EXPECT_ANY_THROW((void)view_1d.get_ring_fabric_node_ids());
 }
 
 }  // namespace
