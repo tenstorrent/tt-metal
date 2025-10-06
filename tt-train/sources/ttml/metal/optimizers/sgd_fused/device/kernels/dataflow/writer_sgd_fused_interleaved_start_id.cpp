@@ -44,7 +44,7 @@ void kernel_main() {
     constexpr auto momentum_output_args = TensorAccessorArgs<param_out_args.next_compile_time_args_offset()>();
 
     const auto param_out_addr_generator = TensorAccessor(param_out_args, param_out_addr, tile_size_bytes);
-#ifdef USE_MOMENTUM
+#if USE_MOMENTUM
     const auto momentum_out_addr_generator = TensorAccessor(momentum_output_args, momentum_out_addr, tile_size_bytes);
 #endif
     uint32_t end_tile = start_tile + num_tiles_to_process;
