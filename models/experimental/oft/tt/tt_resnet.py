@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.oft.tt.common import Conv, GroupNorm, GroupNormDRAM
+from models.experimental.oft.tt.common import GroupNorm, GroupNormDRAM, create_conv2d_config
+from models.tt_cnn.tt.builder import TtConv2d
+from models.experimental.oft.tt.common import Conv
 
-# from models.experimental.oft.tt.common import Conv
 # from models.experimental.oft.tt.common import GroupNorm_fallback as GroupNorm
 # from models.experimental.oft.tt.common import GroupNorm_fallback as GroupNormDRAM
 from loguru import logger
@@ -20,18 +21,28 @@ except ModuleNotFoundError:
 
 class TTBasicBlock:
     expansion = 1
+    _id_counter = 1  # Static counter that starts from 1
 
-    def __init__(self, device, parameters, conv_pt, inplanes, planes, stride=1, scale=1, is_sliced=False):
+    def __init__(self, device, parameters, conv_args, inplanes, planes, stride=1, scale=1, is_sliced=False):
+        self.id = TTBasicBlock._id_counter  # Assign unique ID from counter
+        TTBasicBlock._id_counter += 1  # Increment counter for next instance
+
         self.is_sliced = is_sliced
-        logger.debug(f"TTBasicBlock: {inplanes=}, {planes=}, {stride=}, {is_sliced=}")
-        self.conv1 = Conv(
-            parameters.conv1, conv_pt.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
+        logger.debug(f"TTBasicBlock {self.id}: {inplanes=}, {planes=}, {stride=}, {is_sliced=}")
+        self.conv1 = TtConv2d(
+            create_conv2d_config(conv_args.conv1, parameters.conv1.weight, parameters.conv1.bias),
+            device=device,
         )
+
         if not is_sliced:
             self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         else:
             self.bn1 = GroupNormDRAM(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
-        self.conv2 = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
+
+        self.conv2 = TtConv2d(
+            create_conv2d_config(conv_args.conv2, parameters.conv2.weight, parameters.conv2.bias),
+            device=device,
+        )
         if not is_sliced:
             self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat16)
         else:
@@ -42,7 +53,7 @@ class TTBasicBlock:
                 self.downsample = True
                 self.downsample_conv = Conv(
                     parameters.downsample[0],
-                    conv_pt.downsample[0],
+                    conv_args.downsample[0],
                     stride=stride,
                     padding=0,
                     output_layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -54,18 +65,25 @@ class TTBasicBlock:
 
     def forward(self, device, x, gn_shard="HS", num_splits=1):
         if use_signpost:
-            signpost(header="TTBasicBlock forward started")
-        out, out_h, out_w = self.conv1(device, x)
+            signpost(header=f"TTBasicBlock {self.id} forward started")
+        out, [out_h, out_w] = self.conv1(x)
         logger.debug(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
-        out = ttnn.move(out)
+        if out.memory_config().buffer_type == ttnn.BufferType.L1:
+            out = ttnn.move(out)
         # logger.debug(f"SSHARDING {gn_shard=}")
         out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
         logger.debug(f"BN1 output shape: {out.shape}")
-        ttnn.relu(out, output_tensor=out)
 
-        out, out_h, out_w = self.conv2(device, out)
+        if out.get_layout() != ttnn.TILE_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=out.memory_config())
+        ttnn.relu(out, output_tensor=out)
+        if out.memory_config().buffer_type == ttnn.BufferType.L1:
+            out = ttnn.move(out)
+
+        out, [out_h, out_w] = self.conv2(out)
         logger.debug(f"Conv2 output shape: {out.shape}")
-        out = ttnn.move(out)
+        if out.memory_config().buffer_type == ttnn.BufferType.L1:
+            out = ttnn.move(out)
         out = self.bn2(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
         logger.debug(f"BN2 output shape: {out.shape}")
 
@@ -90,9 +108,14 @@ class TTBasicBlock:
             x = ttnn.to_memory_config(x, block_sharded_config)
             out = ttnn.add(out, x, memory_config=block_sharded_config)
 
-        out = ttnn.relu(out)
+        if out.get_layout() != ttnn.TILE_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=out.memory_config())
+        out = ttnn.relu(out, output_tensor=out)
+        if out.memory_config().buffer_type == ttnn.BufferType.L1:
+            out = ttnn.move(out)
+
         if use_signpost:
-            signpost(header="TTBasicBlock forward finished")
+            signpost(header=f"TTBasicBlock {self.id} forward finished")
         return out
 
 

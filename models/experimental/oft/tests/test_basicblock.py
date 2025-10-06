@@ -14,6 +14,16 @@ from models.experimental.oft.tt.model_preprocessing import create_OFT_model_para
 from tests.ttnn.unit_tests.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from loguru import logger
 
+from ttnn.model_preprocessing import ModuleArgs
+
+
+class Params(ModuleArgs):
+    __getattr__ = dict.__getitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        return super().__repr__()
+
 
 @pytest.mark.parametrize(
     "n, in_ch, out_ch, h, w, stride, sharding, is_sliced",
@@ -27,22 +37,31 @@ def test_tt_topdownblock_with_8_basicblocks(device, n, in_ch, out_ch, h, w, stri
     input_tensor = torch.randn(n, in_ch, h, w)
     # Create 8 BasicBlock modules from oft
     blocks = []
-    params_list = []
+    params_list = Params()
+    params_list.topdown = []
+    params_list.conv_args = Params()
+    params_list.conv_args.topdown = []
+
     for i in range(8):
         block = BasicBlock(inplanes=in_ch, planes=out_ch, stride=stride)
         blocks.append(block)
         params = create_OFT_model_parameters_resnet(block, input_tensor, device)
-        params_list.append(params)
+        params_list.topdown.append(params)
+        params_list.conv_args.topdown.append(params.conv_args)
     # Reference output using PyTorch blocks sequentially
     out_ref = input_tensor
     for block in blocks:
         out_ref = block(out_ref)
+
     # Create 8 TTBasicBlock modules
+    from models.experimental.oft.tt.model_optimizations import ModelOptimisations
+
+    params_list = ModelOptimisations.process(params_list)
     tt_blocks = [
         TTBasicBlock(
             device,
-            params_list[i],
-            params_list[i].conv_args,
+            params_list.topdown[i],
+            params_list.conv_args.topdown[i],
             inplanes=in_ch,
             planes=out_ch,
             stride=stride,

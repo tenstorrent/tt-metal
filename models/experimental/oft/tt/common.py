@@ -6,6 +6,7 @@ import ttnn
 import torch
 import math
 from loguru import logger
+from models.tt_cnn.tt.builder import Conv2dConfiguration
 
 
 def _nearest_32_per_core(x, core):
@@ -14,6 +15,63 @@ def _nearest_32_per_core(x, core):
 
 def _nearest_32(x):
     return math.ceil(x / 32) * 32
+
+
+def create_sharding_strategy(conv2d_args):
+    """Create appropriate sharding strategy from conv2d_args"""
+    from models.tt_cnn.tt.builder import (
+        AutoShardedStrategyConfiguration,
+        BlockShardedStrategyConfiguration,
+        HeightShardedStrategyConfiguration,
+        WidthShardedStrategyConfiguration,
+    )
+
+    # # Ensure conv2d_args is treated as a dictionary
+    # if not isinstance(conv2d_args, dict):
+    #     # Convert object with attributes to dictionary
+    #     conv2d_args = {k: getattr(conv2d_args, k, None) for k in dir(conv2d_args)
+    #                   if not k.startswith('_') and not callable(getattr(conv2d_args, k, None))}
+
+    shard_layout = conv2d_args.get("shard_layout", None)
+
+    if shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        return HeightShardedStrategyConfiguration(
+            reshard_if_not_optimal=conv2d_args.get("reshard_if_not_optimal", False),
+            act_block_h_override=conv2d_args.get("act_block_h", 0) or 0,
+        )
+    elif shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        return BlockShardedStrategyConfiguration(
+            reshard_if_not_optimal=conv2d_args.get("reshard_if_not_optimal", False),
+        )
+    elif shard_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        return WidthShardedStrategyConfiguration(
+            reshard_if_not_optimal=conv2d_args.get("reshard_if_not_optimal", False),
+        )
+    else:
+        return AutoShardedStrategyConfiguration()
+
+
+def create_conv2d_config(conv_args, weight, bias):
+    """Helper to create Conv2dConfiguration with proper sharding parameters"""
+    return Conv2dConfiguration.from_model_args(
+        conv_args,
+        weight,
+        bias,
+        weights_dtype=conv_args.get("weights_dtype", ttnn.bfloat16),
+        sharding_strategy=create_sharding_strategy(conv_args),
+        deallocate_activation=conv_args.get("deallocate_activation", False),
+        math_fidelity=conv_args.get("math_fidelity", ttnn.MathFidelity.LoFi),
+        fp32_dest_acc_en=conv_args.get("fp32_dest_acc_en", False),
+        packer_l1_acc=conv_args.get("packer_l1_acc", False),
+        enable_act_double_buffer=conv_args.get("enable_act_double_buffer", False),
+        output_layout=conv_args.get("output_layout", ttnn.TILE_LAYOUT),
+        conv2d_slice_config=ttnn.Conv2dSliceConfig(
+            slice_type=conv_args.get("slice_type", ttnn.Conv2dDRAMSliceHeight),  # Conv2dL1FullSliceConfig
+            num_slices=conv_args.get("num_slices", 1),
+        )
+        if "slice_type" in conv_args
+        else None,
+    )
 
 
 class Conv:
@@ -268,18 +326,23 @@ class GroupNormDRAM:
             _nearest_32_per_core(unpadded_shape[3], grid_y),
         ]
         logger.debug(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
-        input_tensor_tilized = ttnn.tilize_with_val_padding(
-            input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
-        )
-        logger.debug(
-            f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
-        )
+        if unpadded_shape[2] != out_shape[2] or unpadded_shape[3] != out_shape[3]:
+            input_tensor_tilized = ttnn.tilize_with_val_padding(
+                input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
+            )
+            logger.debug(
+                f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
+            )
+        else:
+            input_tensor_tilized = input_tensor
+
         [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
             [self.weight, self.bias], self.channels, self.num_groups, device, core_grid=grid_size, return_mask=True
         )
 
         # groupnorm
-        logger.debug(f"DRAM {grid_size=}")
+        logger.debug(f"DRAM {grid_size=} {device.num_program_cache_entries()=}")
+
         output_tensor = ttnn.group_norm(
             input_tensor_tilized,
             num_groups=self.num_groups,
@@ -292,7 +355,11 @@ class GroupNormDRAM:
             inplace=False,
             num_out_blocks=num_splits,
             epsilon=1e-5,
+            # use_welford=True,
         )
+        # return input_tensor
+
+        logger.debug(f"POST DRAM {grid_size=} {device.num_program_cache_entries()=}")
 
         # ttnn.synchronize_device(device)
         return output_tensor

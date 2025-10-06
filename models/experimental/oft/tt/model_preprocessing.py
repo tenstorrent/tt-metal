@@ -29,6 +29,8 @@ def custom_preprocessor(model, name):
         if model.bias is not None:
             bias = model.bias.reshape((1, 1, 1, -1))
             parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        else:
+            parameters["bias"] = None
     if isinstance(model, torch.nn.Linear):
         parameters[f"weight"] = preprocess_linear_weight(model.weight, dtype=ttnn.bfloat16)
         if model.bias is not None:
