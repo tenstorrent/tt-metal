@@ -293,6 +293,11 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             print(f"📤 PyTorch output shape: {torch_output.shape}")
             
 
+            # 🔍 DEBUG: Check input tensor before passing to TTNN
+            print(f"🔍 [DEBUG] Input tensor shape: {input_tensor.shape}")
+            print(f"🔍 [DEBUG] Input tensor dtype: {input_tensor.dtype}")
+            print(f"🔍 [DEBUG] Input tensor range: [{input_tensor.min():.6f}, {input_tensor.max():.6f}]")
+            
             torch_input, ttnn_input = create_yolov11_input_tensors(
                 device,
                 batch=input_tensor.shape[0],
@@ -335,13 +340,13 @@ def compare_ttnn_and_pytorch_obb_with_real_images(test_images):
             # Visualize PyTorch predictions
             torch_save_path = os.path.join(output_dir_torch, f"{image_name}_pytorch_obb.jpg")
             viz_torch, detections_torch = visualize_obb_predictions(
-                image_path, torch_output, confidence_threshold=0.02, save_path=torch_save_path
+                image_path, torch_output, confidence_threshold=0.01, save_path=torch_save_path
             )
             
             # Visualize TTNN predictions
             ttnn_save_path = os.path.join(output_dir_ttnn, f"{image_name}_ttnn_obb.jpg")
             viz_ttnn, detections_ttnn = visualize_obb_predictions(
-                image_path, ttnn_output_torch, confidence_threshold=0.02, save_path=ttnn_save_path
+                image_path, ttnn_output_torch, confidence_threshold=0.01, save_path=ttnn_save_path
             )
             
             # Create side-by-side comparison of PyTorch vs TTNN

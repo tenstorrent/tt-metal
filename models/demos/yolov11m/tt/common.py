@@ -18,6 +18,9 @@ def analyze_tensor_precision(tensor, operation_name, step_name=""):
             torch_tensor = tensor.cpu()
         elif tensor_module == 'ttnn._ttnn.tensor':
             torch_tensor = ttnn.to_torch(tensor).cpu()
+        elif tensor_type == 'Parameter' and tensor_module == 'torch.nn.parameter':
+            # Handle PyTorch parameters
+            torch_tensor = tensor.data.cpu()
         else:
             raise ValueError(f"🔍 [DEBUG] Unsupported tensor type: {tensor_module}.{tensor_type}")
 

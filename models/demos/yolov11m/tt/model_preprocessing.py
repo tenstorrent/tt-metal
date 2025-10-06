@@ -17,6 +17,12 @@ def create_yolov11_input_tensors(
     num_devices = device.get_num_devices()
     inputs_mesh_mapper, _, _ = get_mesh_mappers(device)
     
+    # 🔍 DEBUG: Check input tensor parameter
+    print(f"🔍 [DEBUG] input_tensor is None: {input_tensor is None}")
+    if input_tensor is not None:
+        print(f"🔍 [DEBUG] input_tensor shape: {input_tensor.shape}")
+        print(f"🔍 [DEBUG] input_tensor dtype: {input_tensor.dtype}")
+    
     # Use provided input tensor or generate random data as fallback
     if input_tensor is not None:
         # 🔍 PRECISION TRACKING: Analyze original input tensor
@@ -29,6 +35,7 @@ def create_yolov11_input_tensors(
             torch_input_tensor = torch_input_tensor.repeat(device.get_num_devices(), 1, 1, 1)
             analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "AFTER_REPEAT")
     else:
+        print(f"🔍 [DEBUG] input_tensor is None, using random fallback")
         torch_input_tensor = torch.randn(batch * device.get_num_devices(), input_channels, input_height, input_width)
         analyze_tensor_precision(torch_input_tensor, "PREPROCESSING", "RANDOM_FALLBACK")
     if is_sub_module:
