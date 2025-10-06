@@ -10,6 +10,9 @@
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
@@ -123,31 +126,51 @@ struct Conv2dOperation {
 };
 
 class Conv2dSliceAttr : public ttnn::operations::slicing_ops::OpSliceAttr {
+    using OptionalRefTensor = std::optional<std::reference_wrapper<ttnn::Tensor>>;
+    using RefTensor = std::reference_wrapper<ttnn::Tensor>;
+
+    uint32_t batch_size;
+    uint32_t input_channels;
+    uint32_t output_channels;
+    IOShape input_shape;
     std::array<uint32_t, 2> kernel_size;
     std::array<uint32_t, 2> stride;
     std::array<uint32_t, 4> padding_n4;
     std::array<uint32_t, 2> dilation;
     uint32_t groups;
-    ttnn::Tensor weight_tensor;
-    std::optional<ttnn::Tensor> bias_tensor;
+    Layout input_layout;
+    DataType input_dtype;
+    DataType output_dtype;
+    Tensor& weight_tensor;
+    OptionalRefTensor bias_tensor;
     Conv2dConfig conv_config;
+    DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
 
 public:
     Conv2dSliceAttr(
+        uint32_t batch_size,
+        IOShape input_shape,
+        uint32_t input_channels,
+        uint32_t output_channels,
         std::array<uint32_t, 2> kernel_size,
         std::array<uint32_t, 2> stride,
         std::array<uint32_t, 4> padding_n4,
         std::array<uint32_t, 2> dilation,
         uint32_t groups,
-        ttnn::Tensor& weight_tensor,
-        std::optional<ttnn::Tensor>& bias_tensor,
+        Layout input_layout,
+        DataType input_dtype,
+        DataType output_dtype,
+        Tensor& weight_tensor,
+        OptionalRefTensor bias_tensor,
         Conv2dConfig& conv_config,
+        DeviceComputeKernelConfig& compute_config,
         MeshDevice* device);
     std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
     uint32_t get_L1_usage() override;
     tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
-    ttnn::Tensor run_L1_op(const ttnn::Tensor& sliced_tensor) override;
+    ttnn::Tensor run_L1_op(
+        const ttnn::Tensor& sliced_input_tensor, IOShape output_slice_start, IOShape output_slice_end) override;
 };
 
 }  // namespace conv2d

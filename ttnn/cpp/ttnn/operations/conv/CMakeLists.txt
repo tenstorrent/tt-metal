@@ -29,6 +29,7 @@ target_sources(
         conv_transpose2d/conv_transpose2d.cpp
         conv_transpose2d/prepare_conv_transpose2d_weights.cpp
         conv2d/prepare_conv2d_weights.cpp
+        io_slicing/io_slicing.cpp
         conv1d/conv1d.cpp
 )
 

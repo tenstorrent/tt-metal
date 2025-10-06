@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
-
 #include "io_slicing.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
@@ -13,13 +11,14 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d.hpp"
 namespace ttnn::operations::slicing_ops {
 
 void run_sliced_op(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& output_tensor,
     OpSliceAttr* op_slice_attr,
-    conv::conv2d::Conv2dSliceConfig dram_slice_config, ) {
+    ttnn::operations::conv::conv2d::Conv2dSliceConfig dram_slice_config) {
     tt::tt_metal::Layout output_layout = output_tensor.layout();
     auto [batch_size, output_height, output_width, output_channels] = output_tensor.logical_shape().to_array_4D();
     auto [in_batch_, input_height, input_width, input_channels] = input_tensor.logical_shape().to_array_4D();
@@ -30,7 +29,6 @@ void run_sliced_op(
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
-    uint32_t width_rounding_value = (output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
 
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == conv::conv2d::Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height
@@ -44,8 +42,6 @@ void run_sliced_op(
     uint32_t slice_index = 0;
     uint32_t output_slice_dim_start = 0;
 
-    uint32_t additional_padded_width = 0;
-
     while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
         const uint32_t output_slice_size =
             slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
@@ -58,7 +54,6 @@ void run_sliced_op(
 
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
-        int pad_top, pad_bottom, pad_left, pad_right;
         if (dram_slice_config.slice_type == conv::conv2d::Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
@@ -101,7 +96,7 @@ void run_sliced_op(
         }
 
         log_trace(
-            LogOp,
+            tt::LogOp,
             "Conv2d DRAM Slicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
             slice_index,
             output_slice_height_start,
@@ -109,7 +104,7 @@ void run_sliced_op(
             output_slice_height_end,
             output_slice_width_end);
         log_trace(
-            LogOp,
+            tt::LogOp,
             "Conv2d DRAM Slicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
             slice_index,
             input_slice_height_start,
@@ -117,28 +112,17 @@ void run_sliced_op(
             input_slice_height_end,
             input_slice_width_end);
 
-        const uint32_t input_slice_height = input_slice_height_end - input_slice_height_start;
-        const uint32_t input_slice_width = input_slice_width_end - input_slice_width_start;
-
         const uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
 
         uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
-        if (output_slice_width % width_rounding_value != 0) {
-            additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
-            log_trace(
-                LogOp,
-                "Conv2d DRAM Slicing: Slice {}: Additional padding of {} added to the right side.",
-                slice_index,
-                additional_padded_width);
-            pad_right += additional_padded_width * stride[1];
-            output_slice_width += additional_padded_width;
-        }
 
-        log_debug(
+        log_info(
             tt::LogOp,
-            "Input Slice : {} x {}, Output Slice {} x {}",
-            input_slice_height,
-            input_slice_width,
+            "Input Slice : {},{} ->  {},{}, Output Slice {} x {}",
+            input_slice_height_start,
+            input_slice_width_start,
+            input_slice_height_end,
+            input_slice_width_end,
             output_slice_height,
             output_slice_width);
 
@@ -148,11 +132,14 @@ void run_sliced_op(
         Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
             input_tensor,
             ttnn::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-            ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, in_channels},
+            ttnn::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, input_channels},
             ttnn::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
             sliced_input_tensor_memory_config);
 
-        ttnn::Tensor sliced_output_tensor = op_slice_attr->run_L1_op(sliced_input_tensor);
+        ttnn::Tensor sliced_output_tensor = op_slice_attr->run_L1_op(
+            sliced_input_tensor,
+            {output_slice_height_start, output_slice_width_start},
+            {output_slice_height_end, output_slice_width_end});
 
         // slice_write supports all sharding layouts for tiled inputs. For row major, height & block sharding are
         // supported.
