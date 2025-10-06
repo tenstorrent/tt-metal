@@ -35,7 +35,7 @@ class TestFactory:
         mesh_shape = mesh_device.shape
 
         # Setup ModelArgs (no import-time loading)
-        model_args = ModelArgs(mesh_device=None, dummy_weights=True)
+        model_args = ModelArgs(mesh_device=mesh_device, dummy_weights=not use_real_weights)
 
         # Setup mesh config using actual mesh shape
         mesh_config = MeshConfig(mesh_shape, tp=mesh_shape[1], ep=mesh_shape[0])

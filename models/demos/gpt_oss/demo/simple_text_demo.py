@@ -10,6 +10,11 @@ Integrates GPT-OSS with tt_transformers infrastructure for:
 - Sophisticated generation loop with sampling
 - Performance profiling and benchmarking
 - Multi-user batch generation capability
+
+Updated to use refactored TestFactory and MeshConfig patterns:
+- Uses parametrize_mesh_with_fabric() for consistent mesh setup
+- Uses TestFactory.setup_test() for unified configuration
+- Passes mesh_config to create_tt_model for proper sharding
 """
 
 import pytest
@@ -17,8 +22,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mesh_with_fabric
 
-# Import GPT-OSS create_tt_model
+# Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table
@@ -40,6 +46,7 @@ def prepare_gpt_oss_generator_args(
     max_seq_len,
     page_params,
     paged_attention,
+    mesh_config=None,
 ):
     """Prepare generator args using GPT-OSS create_tt_model (clean version)"""
     submesh_devices = create_submeshes(mesh_device, data_parallel)
@@ -70,6 +77,7 @@ def prepare_gpt_oss_generator_args(
             paged_attention_config=paged_attention_config,
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
+            mesh_config=mesh_config,  # Pass mesh config for proper sharding
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -93,13 +101,24 @@ def prepare_gpt_oss_generator_args(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 42087296}], indirect=True
+    "mesh_shape",
+    [
+        (1, 8),
+    ],
 )
-def test_gpt_oss_demo(mesh_device):
+@parametrize_mesh_with_fabric()
+def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
-    # mesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 8)))
+    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
+
+    # Use our refactored TestFactory for consistent setup
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    config = setup["config"]
+    mesh_config = setup["mesh_config"]
+
+    logger.info(f"Using mesh config: {mesh_config}")
+    logger.info(f"Using config: {config}")
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()
@@ -159,6 +178,7 @@ def test_gpt_oss_demo(mesh_device):
         max_seq_len=max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
+        mesh_config=mesh_config,  # Pass our refactored mesh config
     )
 
     # Create generator (match tt-transformers pattern)

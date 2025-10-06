@@ -1,310 +1,377 @@
 """
-Minimal integration tests - full model pipeline for any GPT model size
+Full model integration test with accuracy testing
 """
 
-import pytest
+import os
+import pickle
+
 import torch
+from loguru import logger
 
-import ttnn
-
-from ...tt.layer import DecoderLayer
-from ...tt.model import Model
-from ..test_factory import TestFactory, parametrize_batch_seq, parametrize_mesh
+from ..test_factory import TestFactory, parametrize_mesh_with_fabric
 
 
-@parametrize_mesh(["1x8", "4x4"])
-@parametrize_batch_seq([(1, 1), (1, 32)])
-def test_decoder_layer_integration(mesh_device, batch_size, seq_len, reset_seeds):
-    """Test complete decoder layer - combines attention + MLP + norms"""
+class TokenAccuracy:
+    """Token accuracy testing similar to tt_transformers"""
 
-    setup = TestFactory.setup_test(mesh_device)
-    config = setup["config"]
+    def __init__(self, reference_tokens, top5_tokens):
+        self.gt_pos = -1
+        self.store_predicted_tokens = []
+        self.reference_tokens = reference_tokens
+        self.top5_tokens = top5_tokens
+        self.maxindex = len(self.reference_tokens) - 1
 
-    # Complete layer state dict
-    layer_state = {
-        "input_layernorm": {"weight": torch.ones(config.hidden_size)},
-        "post_attention_layernorm": {"weight": torch.ones(config.hidden_size)},
-        "self_attn": {
-            "q_proj": {
-                "weight": torch.randn(config.hidden_size, config.hidden_size),
-                "bias": torch.randn(config.hidden_size),
-            },
-            "k_proj": {
-                "weight": torch.randn(config.hidden_size, config.num_key_value_heads * config.head_dim),
-                "bias": torch.randn(config.num_key_value_heads * config.head_dim),
-            },
-            "v_proj": {
-                "weight": torch.randn(config.hidden_size, config.num_key_value_heads * config.head_dim),
-                "bias": torch.randn(config.num_key_value_heads * config.head_dim),
-            },
-            "o_proj": {
-                "weight": torch.randn(config.hidden_size, config.hidden_size),
-                "bias": torch.randn(config.hidden_size),
-            },
-            "sinks": torch.randn(config.num_attention_heads),
-        },
-        "mlp": {
-            "router": {
-                "weight": torch.randn(config.num_local_experts, config.hidden_size),
-                "bias": torch.randn(config.num_local_experts),
-            },
-            "experts": setup["state_dict"],
-        },
-    }
+    def collect_predicted_tokens(self, tokens):
+        """Collect predicted tokens during generation"""
+        self.store_predicted_tokens.append(tokens)
+        self.gt_pos += 1
+        return self.reference_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
 
-    # Create decoder layer
-    decoder_layer = DecoderLayer(
-        setup["mesh_device"],
-        config,
-        layer_state,
-        layer_idx=0,
-        ccl_manager=setup["ccl_manager"],
-        dtype=setup["dtype"],
-        tensor_cache_path=setup["tensor_cache_path"],
-        mesh_config=setup["mesh_config"],
-    )
-
-    # Test forward pass - works for any model size
-    hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
-    tt_hidden_states = ttnn.from_torch(
-        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"]
-    )
-
-    # Forward through complete layer
-    layer_out = decoder_layer(tt_hidden_states)
-
-    # Verify output shape matches input - essential for stacking layers
-    assert layer_out.shape == tt_hidden_states.shape
-
-    # Verify output is reasonable (not NaN/Inf)
-    layer_out_torch = ttnn.to_torch(layer_out, mesh_composer=ttnn.ConcatMesh2dToTensor(setup["mesh_device"]))
-    assert torch.isfinite(layer_out_torch).all()
+    def compute_accuracy(self):
+        """Compute top-1 and top-5 accuracy"""
+        count = 0
+        count_t5 = 0
+        matching_sz = min(len(self.reference_tokens), len(self.store_predicted_tokens))
+        for i in range(matching_sz):
+            # Compare against actual reference tokens, not top5_tokens[0]
+            if self.reference_tokens[i].item() == self.store_predicted_tokens[i]:
+                count += 1
+            if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
+                count_t5 += 1
+        accuracy_top1 = count / matching_sz
+        accuracy_top5 = count_t5 / matching_sz
+        return accuracy_top1, accuracy_top5
 
 
-@parametrize_mesh(["1x8"])  # Full model is expensive, test minimal config
-def test_model_construction(mesh_device, reset_seeds):
-    """Test that full model constructs correctly - essential for deployment"""
+def test_accuracy(
+    generator, model_args, input_ids, reference_tokens, top5_tokens, tokenizer, mesh_device, tt_kv_cache, prefill_len
+):
+    """
+    Test accuracy using teacher forcing method similar to tt_transformers
+    """
+    logger.info("Starting accuracy test with teacher forcing")
 
-    setup = TestFactory.setup_test(mesh_device)
-    config = setup["config"]
+    # Initialize accuracy tracker
+    accuracy_tracker = TokenAccuracy(reference_tokens, top5_tokens)
 
-    # Minimal model state dict (just enough for construction)
-    model_state = {
-        "model": {
-            "embed_tokens": {"weight": torch.randn(config.vocab_size, config.hidden_size)},
-            "norm": {"weight": torch.ones(config.hidden_size)},
-            "layers": {},
-        },
-        "lm_head": {"weight": torch.randn(config.vocab_size, config.hidden_size)},
-    }
+    # Prepare input prompt (use the preprocessed format)
+    # Use the full prefill length, not just the reference tokens length
+    input_prompt = input_ids[0, :prefill_len]
+    prompt_text = tokenizer.decode(input_prompt.tolist())
+    logger.info(f"Input prompt: {prompt_text[:100]}...")
 
-    # Add minimal layer states
-    for layer_idx in range(min(2, config.num_hidden_layers)):  # Test just 2 layers max
-        model_state["model"]["layers"][f"{layer_idx}"] = {
-            "input_layernorm": {"weight": torch.ones(config.hidden_size)},
-            "post_attention_layernorm": {"weight": torch.ones(config.hidden_size)},
-            "self_attn": {
-                "q_proj": {
-                    "weight": torch.randn(config.hidden_size, config.hidden_size),
-                    "bias": torch.randn(config.hidden_size),
-                },
-                "k_proj": {
-                    "weight": torch.randn(config.hidden_size, config.num_key_value_heads * config.head_dim),
-                    "bias": torch.randn(config.num_key_value_heads * config.head_dim),
-                },
-                "v_proj": {
-                    "weight": torch.randn(config.hidden_size, config.num_key_value_heads * config.head_dim),
-                    "bias": torch.randn(config.num_key_value_heads * config.head_dim),
-                },
-                "o_proj": {
-                    "weight": torch.randn(config.hidden_size, config.hidden_size),
-                    "bias": torch.randn(config.hidden_size),
-                },
-                "sinks": torch.randn(config.num_attention_heads),
-            },
-            "mlp": {
-                "router": {
-                    "weight": torch.randn(config.num_local_experts, config.hidden_size),
-                    "bias": torch.randn(config.num_local_experts),
-                },
-                "experts": setup["state_dict"],
-            },
-        }
+    # Convert to the format expected by generator (use the preprocessed format)
+    input_tokens_prefill_pt = [input_prompt.tolist()]
 
-    # Temporarily reduce layers for test
-    original_layers = config.num_hidden_layers
-    config.num_hidden_layers = min(2, original_layers)
+    # Generate tokens with teacher forcing using generator
+    generated_tokens = []
 
-    try:
-        # Test model construction
-        model = Model(
-            setup["mesh_device"],
-            config,
-            model_state,
-            setup["ccl_manager"],
-            dtype=setup["dtype"],
-            tensor_cache_path=setup["tensor_cache_path"],
-            mesh_config=setup["mesh_config"],
+    # First, do a single prefill like the demo
+    logger.info(f"Running initial prefill with {prefill_len} tokens...")
+    with torch.no_grad():
+        # Use the same format as the demo
+        # input_tokens_prefill_pt is already a list of lists, just convert to tensor
+        input_tokens_prefill_pt_tensor = torch.tensor(input_tokens_prefill_pt)
+        logits = generator.prefill_forward_text(
+            input_tokens_prefill_pt_tensor,
+            page_table=None,  # No paged attention for simple test
+            kv_cache=tt_kv_cache,  # Use the actual KV cache
+            prompt_lens=[prefill_len],  # Use the correct prefill length
         )
 
-        assert model is not None
-        assert len(model.layers) == config.num_hidden_layers
-        assert model.mesh_config.tp == setup["mesh_config"].tp
+    # Get the first predicted token
+    predicted_token = torch.argmax(logits, dim=-1)[0].item()
+    generated_tokens.append(predicted_token)
 
-    finally:
-        # Restore original layer count
-        config.num_hidden_layers = original_layers
+    # Print first token from TT model
+    tt_token_text = tokenizer.decode([predicted_token])
+    ref_token_text = tokenizer.decode([reference_tokens[0].item()])
+    logger.info(f"Token 0 - TT model: '{tt_token_text}' (id: {predicted_token})")
+    logger.info(f"Token 0 - Ref model: '{ref_token_text}' (id: {reference_tokens[0].item()})")
+
+    # For subsequent tokens, use decode (not prefill) like the demo
+    # Initialize like the demo
+    all_outputs = [input_tokens_prefill_pt[0][:prefill_len]]  # Start with prefill tokens
+    all_outputs[0].append(predicted_token)  # Add first generated token
+
+    # Initialize decode state like the demo
+    current_pos = torch.tensor([prefill_len])  # Start position after prefill
+    out_tok = torch.tensor([[predicted_token]])  # Current token to decode
+
+    for i in range(1, len(reference_tokens)):
+        # Use decode for subsequent tokens with teacher forcing (use reference tokens)
+        with torch.no_grad():
+            logits = generator.decode_forward_text(
+                out_tok,  # out_tok (current token)
+                current_pos,  # current_pos
+                enable_trace=False,  # enable_trace
+                page_table=None,  # page_table
+                kv_cache=tt_kv_cache,  # kv_cache
+            )
+
+        # Get predicted token
+        predicted_token = torch.argmax(logits, dim=-1)[0].item()
+        generated_tokens.append(predicted_token)
+
+        # Update for next iteration using reference token (teacher forcing)
+        reference_token = reference_tokens[i].item()
+        out_tok = torch.tensor([[reference_token]])  # Use reference token for next decode
+        current_pos += 1
+
+        # Log token comparison for debugging
+        if i < 5:  # Only log first 5 tokens to avoid spam
+            tt_token_text = tokenizer.decode([predicted_token])
+            ref_token_text = tokenizer.decode([reference_tokens[i].item()])
+            logger.info(f"Token {i} - TT: '{tt_token_text}' (id: {predicted_token})")
+            logger.info(f"Token {i} - Ref: '{ref_token_text}' (id: {reference_tokens[i].item()})")
+
+    # Compute accuracy
+    accuracy_tracker.store_predicted_tokens = generated_tokens
+    top1_acc, top5_acc = accuracy_tracker.compute_accuracy()
+
+    logger.info(f"Top-1 Accuracy: {top1_acc:.4f} ({top1_acc*100:.2f}%)")
+    logger.info(f"Top-5 Accuracy: {top5_acc:.4f} ({top5_acc*100:.2f}%)")
+
+    return top1_acc, top5_acc
 
 
-@parametrize_mesh(["1x8", "4x4"])
-def test_mesh_communication_patterns(mesh_device, reset_seeds):
-    """Test CCL communication works across different mesh shapes"""
+@parametrize_mesh_with_fabric()
+def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
+    """Test full model with accuracy testing using new abstractions"""
 
-    setup = TestFactory.setup_test(mesh_device)
+    # Cache file for reference tokens
+    cache_dir = "models/demos/gpt_oss/tests/unit/"
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, "reference_tokens.pkl")
 
-    # Test allreduce communication pattern
-    test_tensor = torch.randn(1, 32, setup["config"].hidden_size)
-    tt_tensor = ttnn.from_torch(test_tensor, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"])
-
-    # Test mesh config allreduce
-    if setup["mesh_config"].tp > 1:
-        # Add batch dimension for allreduce
-        tt_tensor_4d = ttnn.unsqueeze(tt_tensor, 0)
-        result = setup["mesh_config"].allreduce(tt_tensor_4d, setup["ccl_manager"], pad_size=192)
-        result = ttnn.squeeze(result, 0)
-
-        # Verify shapes are preserved
-        assert result.shape == tt_tensor.shape
-
-        # Verify result is reasonable
-        result_torch = ttnn.to_torch(result, mesh_composer=ttnn.ConcatMesh2dToTensor(setup["mesh_device"]))
-        assert torch.isfinite(result_torch).all()
-    else:
-        # For TP=1, allreduce should be identity
-        result = setup["mesh_config"].allreduce(tt_tensor, setup["ccl_manager"])
-        assert torch.allclose(ttnn.to_torch(result), ttnn.to_torch(tt_tensor))
-
-
-# Model compatibility test - ensure works across different GPT variants
-@pytest.mark.parametrize(
-    "model_variant",
-    [
-        "gpt_20b_style",  # Smaller model
-        "gpt_120b_style",  # Larger model
-    ],
-)
-def test_model_variant_compatibility(mesh_device, model_variant, reset_seeds):
-    """Test compatibility across different model variants/sizes"""
-
-    setup = TestFactory.setup_test(mesh_device)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
     config = setup["config"]
+    mesh_config = setup["mesh_config"]
 
-    # Adjust config for different variants (without hardcoding exact values)
-    if model_variant == "gpt_20b_style":
-        # Smaller configuration
-        scale_factor = 0.5
-    else:  # gpt_120b_style
-        # Larger configuration
-        scale_factor = 2.0
+    # Try to load cached reference tokens first
+    reference_tokens = None
+    top5_tokens = None
 
-    # Scale key dimensions proportionally
-    original_hidden = config.hidden_size
-    config.hidden_size = int(config.hidden_size * scale_factor)
-    config.intermediate_size = int(config.intermediate_size * scale_factor)
+    if os.path.exists(cache_file):
+        logger.info("Loading cached reference tokens...")
+        try:
+            with open(cache_file, "rb") as f:
+                cached_data = pickle.load(f)
+                reference_tokens = cached_data["reference_tokens"]
+                top5_tokens = cached_data["top5_tokens"]
+                logger.info(f"Loaded {len(reference_tokens)} cached reference tokens")
+        except Exception as e:
+            logger.warning(f"Failed to load cache: {e}")
+            reference_tokens = None
+            top5_tokens = None
 
-    # Generate appropriately scaled state dict
-    scaled_state = {
-        "gate_up_proj": torch.randn(config.num_local_experts, config.hidden_size, 2 * config.intermediate_size),
-        "gate_up_proj_bias": torch.randn(config.num_local_experts, 2 * config.intermediate_size),
-        "down_proj": torch.randn(config.num_local_experts, config.intermediate_size, config.hidden_size),
-        "down_proj_bias": torch.randn(config.num_local_experts, config.hidden_size),
-    }
+    # Generate reference tokens if not cached
+    if reference_tokens is None:
+        logger.info("Generating reference tokens (this may take a while)...")
 
-    # Test expert construction with scaled config
-    from ...tt.experts import Experts
+        # Create reference model for comparison (use full model like demo)
+        from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssForCausalLM
 
-    tt_experts = Experts(
+        # Load the same weights that the TTNN model uses
+        logger.info("Loading reference model weights...")
+        reference_weights = setup["model_args"].load_state_dict()
+
+        # Create reference model and load the real weights
+        reference_model = GptOssForCausalLM(config)
+        reference_model.load_state_dict(reference_weights, strict=False)
+        reference_model.eval()
+
+        # Use the same tokenizer setup as simple_text_demo
+        tokenizer = setup["model_args"].tokenizer
+
+        # Use the same setup as simple_text_demo
+        from models.demos.gpt_oss.demo.simple_text_demo import prepare_gpt_oss_generator_args
+
+        # Use the same parameters as the demo
+        num_devices = setup["mesh_device"].get_num_devices()
+        data_parallel = 1
+        global_batch_size = 1
+        max_seq_len = 1024
+        paged_attention = False
+        page_params = {"page_block_size": 64, "page_max_num_blocks_per_dp": 16}
+
+        (
+            model_args,
+            model,
+            page_table,
+            tt_kv_cache,
+            tokenizer,
+            processor,
+            paged_attention_config,
+        ) = prepare_gpt_oss_generator_args(
+            num_devices=num_devices,
+            data_parallel=data_parallel,
+            mesh_device=setup["mesh_device"],
+            instruct=True,
+            global_batch_size=global_batch_size,
+            optimizations=None,
+            max_seq_len=max_seq_len,
+            page_params=page_params,
+            paged_attention=paged_attention,
+            mesh_config=mesh_config,
+        )
+
+        # Create test input using the same prompt as the demo
+        input_prompts = ["What are the prime factors of 1?"]
+
+        # Use the same preprocessing as the demo
+        from models.tt_transformers.tt.common import preprocess_inputs_prefill
+
+        max_generated_tokens = 30  # Generate 30 tokens for testing
+
+        (
+            input_tokens_prefill_pt,
+            encoded_prompts,
+            decoding_pos,
+            prefill_lens,
+        ) = preprocess_inputs_prefill(
+            input_prompts,
+            tokenizer,
+            model_args,
+            instruct=True,
+            max_generated_tokens=max_generated_tokens,
+            max_prefill_len=1024,
+        )
+
+        # Use the correct prefill length from the preprocessing
+        actual_prefill_len = prefill_lens[0]
+
+        # Use the preprocessed input
+        input_ids = torch.stack(input_tokens_prefill_pt).view(1, -1)
+
+        # Generate reference tokens using the reference model (autonomous generation like demo)
+        with torch.no_grad():
+            # Use the same preprocessed input as TTNN model
+            reference_tokens = []
+            top5_tokens = []
+
+            # Start with the preprocessed input (90 tokens)
+            current_input = input_ids.clone()
+
+            # Generate tokens step by step (autonomous generation)
+            for i in range(max_generated_tokens):
+                # Get prediction from reference model
+                reference_output = reference_model(current_input)
+                reference_logits = reference_output.logits
+
+                # Get the next token from the last position
+                next_token = torch.argmax(reference_logits[0, -1, :]).item()
+                reference_tokens.append(next_token)
+
+                # Get top-5 for this token
+                top5_next = torch.topk(reference_logits[0, -1, :], k=5).indices
+                top5_tokens.append(top5_next)
+
+                # Add the predicted token to input for next iteration
+                current_input = torch.cat([current_input, torch.tensor([[next_token]])], dim=1)
+            # Convert to tensors
+            reference_tokens = torch.tensor(reference_tokens)
+            top5_tokens = torch.stack(top5_tokens)
+
+        # Save reference tokens to cache
+        logger.info("Saving reference tokens to cache...")
+        try:
+            with open(cache_file, "wb") as f:
+                pickle.dump({"reference_tokens": reference_tokens, "top5_tokens": top5_tokens}, f)
+            logger.info(f"Saved {len(reference_tokens)} reference tokens to cache")
+        except Exception as e:
+            logger.warning(f"Failed to save cache: {e}")
+
+    # If we have cached tokens, we still need to set up the TTNN model
+    if reference_tokens is not None:
+        # Use the same tokenizer setup as simple_text_demo
+        tokenizer = setup["model_args"].tokenizer
+
+        # Use the same setup as simple_text_demo
+        from models.demos.gpt_oss.demo.simple_text_demo import prepare_gpt_oss_generator_args
+
+        # Use the same parameters as the demo
+        num_devices = setup["mesh_device"].get_num_devices()
+        data_parallel = 1
+        global_batch_size = 1
+        max_seq_len = 1024
+        paged_attention = False
+        page_params = {"page_block_size": 64, "page_max_num_blocks_per_dp": 16}
+
+        (
+            model_args,
+            model,
+            page_table,
+            tt_kv_cache,
+            tokenizer,
+            processor,
+            paged_attention_config,
+        ) = prepare_gpt_oss_generator_args(
+            num_devices=num_devices,
+            data_parallel=data_parallel,
+            mesh_device=setup["mesh_device"],
+            instruct=True,
+            global_batch_size=global_batch_size,
+            optimizations=None,
+            max_seq_len=max_seq_len,
+            page_params=page_params,
+            paged_attention=paged_attention,
+            mesh_config=mesh_config,
+        )
+
+        # Create test input using the same prompt as the demo
+        input_prompts = ["What are the prime factors of 1?"]
+
+        # Use the same preprocessing as the demo
+        from models.tt_transformers.tt.common import preprocess_inputs_prefill
+
+        max_generated_tokens = 30  # Generate 30 tokens for testing
+
+        (
+            input_tokens_prefill_pt,
+            encoded_prompts,
+            decoding_pos,
+            prefill_lens,
+        ) = preprocess_inputs_prefill(
+            input_prompts,
+            tokenizer,
+            model_args,
+            instruct=True,
+            max_generated_tokens=max_generated_tokens,
+            max_prefill_len=1024,
+        )
+
+        # Use the correct prefill length from the preprocessing
+        actual_prefill_len = prefill_lens[0]
+
+        # Use the preprocessed input
+        input_ids = torch.stack(input_tokens_prefill_pt).view(1, -1)
+
+    # Create generator like the demo
+    from models.tt_transformers.tt.generator import Generator
+
+    generator = Generator(model, model_args, setup["mesh_device"], processor=processor, tokenizer=tokenizer)
+
+    # Test accuracy
+    top1_acc, top5_acc = test_accuracy(
+        generator,
+        model_args,
+        input_ids,
+        reference_tokens,
+        top5_tokens,
+        tokenizer,
         setup["mesh_device"],
-        config,
-        scaled_state,
-        setup["ccl_manager"],
-        dtype=setup["dtype"],
-        tensor_cache_path=setup["tensor_cache_path"],
-        mesh_config=setup["mesh_config"],
+        tt_kv_cache,
+        actual_prefill_len,
     )
 
-    # Test with scaled inputs
-    hidden_states = torch.randn(1, 16, config.hidden_size)
-    routing_weights = torch.randn(1, 16, config.num_local_experts)
+    # Assert minimum accuracy thresholds (realistic for teacher forcing)
+    min_top1_acc = 0.93  # 83% minimum top-1 accuracy with teacher forcing
+    min_top5_acc = 0.99  # 99% minimum top-5 accuracy with teacher forcing
 
-    tt_hidden = ttnn.from_torch(
-        hidden_states, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"]
-    )
-    tt_routing = ttnn.from_torch(
-        routing_weights, device=setup["mesh_device"], layout=ttnn.TILE_LAYOUT, dtype=setup["dtype"]
-    )
+    assert top1_acc >= min_top1_acc, f"Top-1 accuracy {top1_acc:.4f} below threshold {min_top1_acc}"
+    assert top5_acc >= min_top5_acc, f"Top-5 accuracy {top5_acc:.4f} below threshold {min_top5_acc}"
 
-    # Forward pass should work regardless of scale
-    output = tt_experts(tt_hidden, tt_routing)
-    assert output.shape == tt_hidden.shape
-
-    # Verify mesh config scales appropriately
-    expected_shard_size = config.intermediate_size // setup["mesh_config"].tp
-    assert tt_experts.intermediate_size_per_device == expected_shard_size
-
-    # Restore original config
-    config.hidden_size = original_hidden
-
-
-# Performance regression test - ensure changes don't break basic functionality
-def test_basic_functionality_preserved(mesh_device, reset_seeds):
-    """Smoke test to ensure all refactoring preserves basic functionality"""
-
-    setup = TestFactory.setup_test(mesh_device)
-
-    # Test all core components can be constructed
-    from ...tt.experts import Experts
-    from ...tt.mlp import MLP
-    from ...tt.rms_norm import RMSNorm
-    from ...tt.topk import TopKRouter
-
-    config = setup["config"]
-
-    # Basic construction test
-    experts = Experts(
-        setup["mesh_device"], config, setup["state_dict"], setup["ccl_manager"], mesh_config=setup["mesh_config"]
-    )
-
-    router_state = {
-        "weight": torch.randn(config.num_local_experts, config.hidden_size),
-        "bias": torch.randn(config.num_local_experts),
-    }
-    router = TopKRouter(setup["mesh_device"], config, router_state)
-
-    norm_state = {"weight": torch.ones(config.hidden_size)}
-    norm = RMSNorm(setup["mesh_device"], config, norm_state, mesh_config=setup["mesh_config"])
-
-    mlp_state = {"router": router_state, "experts": setup["state_dict"]}
-    mlp = MLP(setup["mesh_device"], config, mlp_state, setup["ccl_manager"], mesh_config=setup["mesh_config"])
-
-    # All components should construct successfully
-    assert all(comp is not None for comp in [experts, router, norm, mlp])
-
-    # Test basic forward passes work
-    hidden_states = ttnn.from_torch(
-        torch.randn(1, 8, config.hidden_size),
-        device=setup["mesh_device"],
-        layout=ttnn.TILE_LAYOUT,
-        dtype=setup["dtype"],
-    )
-
-    # All should process without error
-    norm_out = norm(hidden_states)
-    router_scores, _, _ = router(hidden_states)
-    expert_out = experts(hidden_states, router_scores)
-    mlp_out, _ = mlp(hidden_states)
-
-    # Verify all outputs have correct shapes
-    assert norm_out.shape == hidden_states.shape
-    assert expert_out.shape == hidden_states.shape
-    assert mlp_out.shape == hidden_states.shape
+    logger.info(f"✅ Full model accuracy test passed!")
+    logger.info(f"Top-1 Accuracy: {top1_acc:.4f} ({top1_acc*100:.2f}%)")
+    logger.info(f"Top-5 Accuracy: {top5_acc:.4f} ({top5_acc*100:.2f}%)")

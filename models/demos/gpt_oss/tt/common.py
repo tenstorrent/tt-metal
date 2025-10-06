@@ -20,6 +20,7 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
+    mesh_config=None,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
@@ -29,8 +30,9 @@ def create_tt_model(
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
-    # Create optimal MeshConfig for the mesh shape
-    mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
+    # Use provided mesh_config or create optimal MeshConfig for the mesh shape
+    if mesh_config is None:
+        mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
     # Create GPT-OSS ModelArgs
     gpt_oss_model_args = ModelArgs(
