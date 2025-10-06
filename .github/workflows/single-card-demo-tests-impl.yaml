@@ -221,7 +221,7 @@ jobs:
         timeout-minutes: 60
         shell: bash
         run: |
-          source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
+          source /work/tests/scripts/single_card/run_single_card_demo_tests.sh
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' && matrix.test-group.name != 'mobilenetv2' }}
