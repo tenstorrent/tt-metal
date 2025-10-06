@@ -232,12 +232,10 @@ SECTIONS
 #ifdef TYPE_FIRMWARE
   __fw_export_ldm_end = ABSOLUTE(.);
 #endif
-#if !defined(COMPILE_FOR_MAIN_AERISC)
 #ifdef TYPE_FIRMWARE
   __stack_top = DATA_START + DATA_SIZE;
 #else
   __stack_base = .;
-#endif
 #endif
 
   /* The loader uses this data to check for size overflows.

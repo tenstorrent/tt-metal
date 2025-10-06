@@ -115,10 +115,6 @@ int __attribute__((noinline)) main(void) {
 
     // address of noc_reads_num_issued
 
-    uint32_t mailbox_addr = (uint32_t)mailboxes;
-    ((volatile uint32_t*)(0x10))[8] = mailbox_addr;
-    ((volatile uint32_t*)(0x10))[9] = 0xdeadbeef;
-
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
