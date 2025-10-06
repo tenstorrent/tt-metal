@@ -166,7 +166,6 @@ def main():
                 # Scale factor for attention scores: 1/sqrt(head_dim) for numerical stability
                 scale = head_size**-0.5
 
-                # Note: KV-caching not implemented (not needed for single forward pass)
                 (q_weights, k_weights, v_weights) = qkv_weights
                 (q_bias, k_bias, v_bias) = qkv_biases
 
@@ -386,9 +385,6 @@ def main():
             x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             # Ensure class_embedding has matching memory configuration
-            # class_embedding = ttnn.reshape(
-            #     class_embedding, (class_embedding.shape[0], class_embedding.shape[1], class_embedding.shape[2])
-            # )
             class_embedding = ttnn.to_memory_config(class_embedding, memory_config=x.memory_config())
 
             # Step 7: Prepend class token to patch sequence
@@ -615,9 +611,6 @@ def main():
 
         # Load pre-trained CLIP model and convert weights to TT-NN format
         logger.info("Loading pre-trained CLIP model...")
-
-        # model = safetensors.torch.load_file("/home/nmaurice/.cache/huggingface/hub/models--openai--clip-vit-base-patch32/snapshots/c237dc49a33fc61debc9276459120b7eac67e7ef/model.safetensors")
-        # state_dict = convert_model_to_ttnn(model)
 
         model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
         state_dict = convert_model_to_ttnn(model.state_dict())
