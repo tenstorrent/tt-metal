@@ -11,8 +11,9 @@
 
 namespace ttnn::operations::experimental {
 
-ttnn::Tensor PlusOneOperation::invoke(const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids) {
-    return tt::tt_metal::operation::run(PlusOne{sub_core_grids}, {input_tensor}, {}, {}).at(0);
+ttnn::Tensor PlusOneOperation::invoke(
+    const Tensor& input_tensor, const std::optional<CoreRangeSet>& sub_core_grids, bool skip_negative_entries) {
+    return tt::tt_metal::operation::run(PlusOne{sub_core_grids, skip_negative_entries}, {input_tensor}, {}, {}).at(0);
 }
 
 }  // namespace ttnn::operations::experimental
