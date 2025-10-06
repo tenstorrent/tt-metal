@@ -215,8 +215,8 @@ jobs:
       - name: Enable Performance mode
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !matrix.test-group.civ2-compatible }}
         run: sudo cpupower frequency-set -g performance
-      - uses: ./.github/actions/ensure-active-weka-mount
-        if: ${{ !matrix.test-group.civ2-compatible }}
+      # - uses: ./.github/actions/ensure-active-weka-mount
+      #   if: ${{ !matrix.test-group.civ2-compatible }}
       - name: Run demo regression tests
         timeout-minutes: 60
         shell: bash
