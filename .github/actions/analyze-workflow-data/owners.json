@@ -362,7 +362,7 @@
     { "job-name-component": "single-card-demo-tests / yolov11m", "owner": { "id": "U04B9QAMM4N", "name": "Dimitri Gnidash" } },
     { "job-name-component": "single-card-demo-tests / yolov11", "owner": { "id": "U045U3DEKM4", "name": "Mohamed Bahnas" } },
     { "job-name-component": "single-card-demo-tests / yolov9c", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
-    { "job-name-component": "single-card-demo-tests / mobilenetv2", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartarians" } },
+    { "job-name-component": "single-card-demo-tests / mobilenetv2", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
     { "job-name-component": "single-card-demo-tests / yolov8s_world", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
     { "job-name-component": "single-card-demo-tests / ufld_v2", "owner": { "id": "U056BK5U81E", "name": "Dalar Vartanians" } },
     { "job-name-component": "single-card-demo-tests / swin_s", "owner": { "id": "U088413NP0Q", "name": "Ashai Reddy" } },
