@@ -8,13 +8,14 @@
 #include <tuple>
 #include <variant>
 
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
-
+#include "ttnn/operations/conv/io_slicing/io_slicing.hpp"
 namespace ttnn {
 
 namespace operations::conv {
@@ -120,6 +121,35 @@ struct Conv2dOperation {
         bool return_output_dim = false,
         bool return_weights_and_bias = false);
 };
+
+class Conv2dSliceAttr : public ttnn::operations::slicing_ops::OpSliceAttr {
+    std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 2> stride;
+    std::array<uint32_t, 4> padding_n4;
+    std::array<uint32_t, 2> dilation;
+    uint32_t groups;
+    ttnn::Tensor weight_tensor;
+    std::optional<ttnn::Tensor> bias_tensor;
+    Conv2dConfig conv_config;
+    MeshDevice* device;
+
+public:
+    Conv2dSliceAttr(
+        std::array<uint32_t, 2> kernel_size,
+        std::array<uint32_t, 2> stride,
+        std::array<uint32_t, 4> padding_n4,
+        std::array<uint32_t, 2> dilation,
+        uint32_t groups,
+        ttnn::Tensor& weight_tensor,
+        std::optional<ttnn::Tensor>& bias_tensor,
+        Conv2dConfig& conv_config,
+        MeshDevice* device);
+    std::tuple<IOShape, IOShape> get_input_slice(IOShape output_slice_start, IOShape output_slice_end) override;
+    uint32_t get_L1_usage() override;
+    tt::tt_metal::MemoryConfig get_input_memory_config(IOShape output_slice_start, IOShape output_slice_end) override;
+    ttnn::Tensor run_L1_op(const ttnn::Tensor& sliced_tensor) override;
+};
+
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn

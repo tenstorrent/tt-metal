@@ -983,6 +983,28 @@ ResultWithOptions Conv2dOperation::invoke(
         return_weights_and_bias);
 }
 
+Conv2dSliceAttr::Conv2dSliceAttr(
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 4> padding_n4,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    ttnn::Tensor& weight_tensor,
+    std::optional<ttnn::Tensor>& bias_tensor,
+    Conv2dConfig& conv_config,
+    MeshDevice* device) :
+    kernel_size(kernel_size),
+    stride(stride),
+    padding_n4(padding_n4),
+    dilation(dilation),
+    groups(groups),
+    weight_tensor(weight_tensor),
+    bias_tensor(bias_tensor),
+    conv_config(conv_config),
+    device(device) {
+
+    };
+
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn
