@@ -203,7 +203,7 @@ Once both report directories are uploaded, all analysis tabs will become availab
 
 ![Upload](https://github.com/mgajewskiTT/ttnn-tutorials-images/blob/main/media/ttnn_visualizer/2_upload_files.jpg?raw=true)
 
-> [NOTE]
+> [!NOTE]
 > If successful, a message will appear at the bottom of the page indicating both reports have been synchronized.
 
 ---
