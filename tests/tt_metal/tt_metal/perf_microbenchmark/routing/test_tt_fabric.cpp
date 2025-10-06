@@ -164,9 +164,6 @@ int main(int argc, char** argv) {
                 test_context.process_traffic_config(built_test);
                 log_info(tt::LogTest, "Traffic config processed");
 
-                // Initialize sync memory if line sync is enabled
-                test_context.initialize_sync_memory();
-
                 if (dump_built_tests) {
                     YamlTestConfigSerializer::dump({built_test}, output_stream);
                 }

@@ -65,63 +65,32 @@ void kernel_main() {
     uint64_t total_packets_received = 0;
 
     bool packets_left_to_validate = true;
-    uint32_t loop_count = 0;
     while (packets_left_to_validate) {
         packets_left_to_validate = false;
-
-        if (loop_count < 3) {
-            DPRINT << "Validation loop iteration " << loop_count << ENDL();
-        }
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             auto* traffic_config = receiver_config->traffic_configs()[i];
 
             if constexpr (!BENCHMARK_MODE) {
                 if (!traffic_config->has_packets_to_validate()) {
-                    if (loop_count < 3) {
-                        DPRINT << "Traffic config " << (uint32_t)i << " has no packets to validate" << ENDL();
-                    }
                     continue;
-                }
-
-                if (loop_count < 3) {
-                    DPRINT << "Traffic config " << (uint32_t)i << " has packets to validate, attempting poll..."
-                           << ENDL();
                 }
 
                 // if we are here, this means that we have atleast 1 packet left to validate
                 packets_left_to_validate = true;
 
-                if (loop_count < 3) {
-                    DPRINT << "Calling poll()..." << ENDL();
-                }
                 bool got_new_data = traffic_config->poll();
-                if (loop_count < 3) {
-                    DPRINT << "poll() returned " << (uint32_t)got_new_data << ENDL();
-                }
                 if (!got_new_data) {
                     continue;
                 }
 
-                if (loop_count < 3) {
-                    DPRINT << "Calling validate()..." << ENDL();
-                }
                 bool data_valid = traffic_config->validate();
-                if (loop_count < 3) {
-                    DPRINT << "validate() returned " << (uint32_t)data_valid << ENDL();
-                }
                 if (!data_valid) {
                     failed = true;
                     break;
                 }
 
-                if (loop_count < 3) {
-                    DPRINT << "Calling advance()..." << ENDL();
-                }
                 traffic_config->advance();  // Automatically handles credit return
-                if (loop_count < 3) {
-                    DPRINT << "advance() done, packet received successfully" << ENDL();
-                }
                 total_packets_received++;
 
                 packets_left_to_validate |= traffic_config->has_packets_to_validate();
@@ -133,8 +102,6 @@ void kernel_main() {
         if (failed) {
             break;
         }
-
-        loop_count++;
     }
 
     DPRINT << "Validation loop complete, total_packets_received=" << total_packets_received << ENDL();

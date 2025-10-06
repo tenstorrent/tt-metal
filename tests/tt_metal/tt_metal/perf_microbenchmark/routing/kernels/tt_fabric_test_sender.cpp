@@ -75,21 +75,10 @@ void kernel_main() {
     while (packets_left_to_send) {
         packets_left_to_send = false;
 
-        if (loop_count < 3) {  // Only print first few iterations
-            DPRINT << "Sending loop iteration " << loop_count << ENDL();
-        }
-
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             auto* traffic_config = sender_config->traffic_config_ptrs[i];
             if (!traffic_config->has_packets_to_send()) {
-                if (loop_count < 3) {
-                    DPRINT << "Traffic config " << (uint32_t)i << " has no packets to send" << ENDL();
-                }
                 continue;
-            }
-
-            if (loop_count < 3) {
-                DPRINT << "Traffic config " << (uint32_t)i << " attempting to send packet..." << ENDL();
             }
 
             // Send one packet (credit management is automatic, inside send_one_packet)
@@ -97,15 +86,8 @@ void kernel_main() {
 
             if (!sent) {
                 // Packet blocked (no credits) - keep trying
-                if (loop_count < 3) {
-                    DPRINT << "Traffic config " << (uint32_t)i << " BLOCKED" << ENDL();
-                }
                 packets_left_to_send = true;
                 continue;
-            }
-
-            if (loop_count < 3) {
-                DPRINT << "Traffic config " << (uint32_t)i << " sent packet successfully" << ENDL();
             }
 
             // Check if more packets remain

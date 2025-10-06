@@ -148,6 +148,9 @@ struct CommonMemoryMap {
     uint32_t get_mux_local_addresses_base() const { return mux_local_addresses.start; }
     uint32_t get_mux_local_addresses_size() const { return mux_local_addresses.size; }
 
+    uint32_t get_mux_termination_sync_address() const { return mux_termination_sync.start; }
+    uint32_t get_mux_termination_sync_size() const { return mux_termination_sync.size; }
+
     // Allocate credit chunk for mcast: reserves N contiguous credit addresses
     // Returns base address of the chunk
     uint32_t allocate_credit_chunk(uint32_t num_receivers) const {
@@ -278,6 +281,9 @@ struct SenderMemoryMap {
     uint32_t get_kernel_config_address() const { return common.get_kernel_config_address(); }
     uint32_t get_kernel_config_size() const { return common.get_kernel_config_size(); }
 
+    uint32_t get_mux_termination_sync_address() const { return common.get_mux_termination_sync_address(); }
+    uint32_t get_mux_termination_sync_size() const { return common.get_mux_termination_sync_size(); }
+
     // Credit address allocation methods
     uint32_t allocate_credit_chunk(uint32_t num_receivers) const { return common.allocate_credit_chunk(num_receivers); }
 
@@ -367,6 +373,9 @@ struct ReceiverMemoryMap {
     uint32_t get_local_args_size() const { return common.get_local_args_size(); }
     uint32_t get_kernel_config_address() const { return common.get_kernel_config_address(); }
     uint32_t get_kernel_config_size() const { return common.get_kernel_config_size(); }
+
+    uint32_t get_mux_termination_sync_address() const { return common.get_mux_termination_sync_address(); }
+    uint32_t get_mux_termination_sync_size() const { return common.get_mux_termination_sync_size(); }
 
     // Getter for payload chunk size used in this memory map
     uint32_t get_payload_chunk_size() const { return payload_chunk_size_; }

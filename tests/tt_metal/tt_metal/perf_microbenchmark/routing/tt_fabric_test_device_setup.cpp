@@ -399,13 +399,10 @@ void TestWorker::create_kernel(
             device_coord, this->logical_core_, local_args_address, local_args);
     }
 
-    // TODO: move this to mesh buffer?
-    /*
+    const auto device_info_provider_ptr = this->test_device_ptr_->get_device_info_provider();
     for (const auto& [address, num_bytes] : addresses_and_size_to_clear) {
-        std::vector<uint32_t> zero_vec((num_bytes / sizeof(uint32_t)), 0);
-        tt::tt_metal::detail::WriteToDeviceL1(device_handle, this->logical_core_, address, zero_vec);
+        device_info_provider_ptr->zero_out_buffer_on_cores(device_coord, {this->logical_core_}, address, num_bytes);
     }
-    */
 }
 
 // ====================================
@@ -874,8 +871,26 @@ void TestDevice::create_sync_kernel() {
         sync_connection_manager.generate_mux_termination_local_args_for_core(sync_core, device_info_provider_);
     local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
+    std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear = {
+        {sender_memory_map_->get_global_sync_address(), sender_memory_map_->get_global_sync_region_size()},
+        {sender_memory_map_->get_local_sync_address(), sender_memory_map_->get_local_sync_region_size()},
+    };
+
+    // clear out mux termination sync address (if mux connections are present)
+    if (mux_termination_local_args.size() > 0) {
+        addresses_and_size_to_clear.push_back(
+            {sender_memory_map_->get_mux_termination_sync_address(),
+             sender_memory_map_->get_mux_termination_sync_size()});
+    }
+
     // create sync kernel with local args
-    sync_worker.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
+    sync_worker.create_kernel(
+        coord_,
+        ct_args,
+        rt_args,
+        local_args,
+        sender_memory_map_->get_local_args_address(),
+        addresses_and_size_to_clear);
     log_debug(tt::LogTest, "created sync kernel on core: {}", sync_core);
 }
 
@@ -975,8 +990,28 @@ void TestDevice::create_sender_kernels() {
             connection_manager_.generate_mux_termination_local_args_for_core(core, device_info_provider_);
         local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
-        // Create kernel using helper (consistent with sync and receiver kernel creation)
-        sender.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
+        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
+
+        // clear out local sync address (if line sync is enabled)
+        if (global_sync_) {
+            addresses_and_size_to_clear.push_back(
+                {sender_memory_map_->get_local_sync_address(), sender_memory_map_->get_local_sync_region_size()});
+        }
+
+        // clear out mux termination sync address (if mux connections are present)
+        if (mux_termination_local_args.size() > 0) {
+            addresses_and_size_to_clear.push_back(
+                {sender_memory_map_->get_mux_termination_sync_address(),
+                 sender_memory_map_->get_mux_termination_sync_size()});
+        }
+
+        sender.create_kernel(
+            coord_,
+            ct_args,
+            rt_args,
+            local_args,
+            sender_memory_map_->get_local_args_address(),
+            addresses_and_size_to_clear);
 
         log_info(
             tt::LogTest,
@@ -987,9 +1022,6 @@ void TestDevice::create_sender_kernels() {
 }
 
 void TestDevice::create_receiver_kernels() {
-    // Unified receiver kernel creation - handles both fabric and mux connections based on per-pattern flow control
-
-    // Get routing flags from device_info_provider (similar to sender side)
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
     const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
 
@@ -1084,8 +1116,21 @@ void TestDevice::create_receiver_kernels() {
             connection_manager_.generate_mux_termination_local_args_for_core(core, device_info_provider_);
         local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
+        std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
+        if (mux_termination_local_args.size() > 0) {
+            addresses_and_size_to_clear.push_back(
+                {receiver_memory_map_->get_mux_termination_sync_address(),
+                 receiver_memory_map_->get_mux_termination_sync_size()});
+        }
+
         receiver.create_kernel(
-            coord_, ct_args, rt_args, local_args, receiver_memory_map_->get_local_args_address(), {});
+            coord_,
+            ct_args,
+            rt_args,
+            local_args,
+            receiver_memory_map_->get_local_args_address(),
+            addresses_and_size_to_clear);
+
         log_info(
             tt::LogTest,
             "Created receiver kernel on core {} (flow_control_patterns={})",

@@ -846,22 +846,16 @@ struct SenderCreditManager {
 
     // Initialize credit semaphores (called at connection open)
     void initialize() {
-        DPRINT << "SenderCreditManager::initialize: enabled=" << (uint32_t)enabled_ << ENDL();
         if (!enabled_) {
             return;
         }
 
-        DPRINT << "SenderCreditManager::initialize: num_receivers=" << num_receivers_
-               << " initial_credits=" << initial_credits_ << ENDL();
-        DPRINT << "SenderCreditManager: credit_reception_address_base="
-               << sender_credit_info_.credit_reception_address_base << ENDL();
         // Initialize all receiver credit semaphores to initial_credits
         for (uint32_t i = 0; i < num_receivers_; i++) {
             credit_semaphores_base_ptr_[i * CREDIT_STRIDE_WORDS] = initial_credits_;
         }
 
         estimated_available_credits_ = initial_credits_;
-        DPRINT << "SenderCreditManager::initialize: done" << ENDL();
     }
 
     // Check if credits available (non-blocking, called before send)
@@ -875,12 +869,6 @@ struct SenderCreditManager {
             return true;
         }
 
-        // Slow path: blocked - check actual credit state across all receivers
-        static uint32_t slow_path_count = 0;
-        if (slow_path_count++ < 5) {  // Only print first few times
-            DPRINT << "has_credits_available: slow path, estimated_available_credits_=" << estimated_available_credits_
-                   << ENDL();
-        }
         return const_cast<SenderCreditManager*>(this)->update_available_credits();
     }
 

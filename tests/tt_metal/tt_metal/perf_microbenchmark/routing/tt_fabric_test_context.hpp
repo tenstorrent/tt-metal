@@ -346,49 +346,6 @@ public:
 
     void open_devices(const TestFabricSetup& fabric_setup) { fixture_->open_devices(fabric_setup); }
 
-    void initialize_sync_memory() {
-        if (!global_sync_) {
-            return;  // Only initialize sync memory if line sync is enabled
-        }
-
-        log_debug(tt::LogTest, "Initializing sync memory for line sync");
-
-        // Initialize sync memory location with 16 bytes of zeros on all devices
-        uint32_t global_sync_address = this->sender_memory_map_.get_global_sync_address();
-        uint32_t global_sync_memory_size = this->sender_memory_map_.get_global_sync_region_size();
-        uint32_t local_sync_address = this->sender_memory_map_.get_local_sync_address();
-        uint32_t local_sync_memory_size = this->sender_memory_map_.get_local_sync_region_size();
-
-        // clear the global sync cores in device_global_sync_cores_ using zero_out_buffer_on_cores
-        for (const auto& [device_id, global_sync_core] : device_global_sync_cores_) {
-            if (fixture_->is_local_fabric_node_id(device_id)) {
-                const auto& device_coord = fixture_->get_device_coord(device_id);
-                std::vector<CoreCoord> cores = {global_sync_core};
-                // zero out the global sync address for global sync core
-                fixture_->zero_out_buffer_on_cores(device_coord, cores, global_sync_address, global_sync_memory_size);
-                // also need to zero out the local sync address for global sync core
-                fixture_->zero_out_buffer_on_cores(device_coord, cores, local_sync_address, global_sync_memory_size);
-            }
-        }
-
-        // clear the local sync cores in device_local_sync_cores_ using zero_out_buffer_on_cores
-        for (const auto& [device_id, local_sync_cores] : device_local_sync_cores_) {
-            if (fixture_->is_local_fabric_node_id(device_id)) {
-                const auto& device_coord = fixture_->get_device_coord(device_id);
-                fixture_->zero_out_buffer_on_cores(
-                    device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
-            }
-        }
-
-        // NOTE: Mux sync address clearing is now handled by FabricConnectionManager when mux connections are detected
-
-        log_debug(
-            tt::LogTest,
-            "Sync memory initialization complete at address: {} and address: {}",
-            global_sync_address,
-            local_sync_address);
-    }
-
     void compile_programs() {
         fixture_->setup_workload();
         // TODO: should we be taking const ref?

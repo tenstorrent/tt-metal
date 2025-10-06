@@ -315,6 +315,8 @@ public:
     // Sync: ephemeral connections (open/close per sync, can reuse same physical links as regular)
     FabricConnectionManager sync_connection_manager_;
 
+    std::shared_ptr<IDeviceInfoProvider> get_device_info_provider() const { return device_info_provider_; }
+
 private:
     void add_worker(TestWorkerType worker_type, CoreCoord logical_core);
     void create_sender_kernels();
