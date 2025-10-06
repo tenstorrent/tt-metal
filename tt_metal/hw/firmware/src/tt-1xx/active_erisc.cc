@@ -115,10 +115,6 @@ int __attribute__((noinline)) main(void) {
 
     // address of noc_reads_num_issued
 
-    uint32_t mailbox_addr = (uint32_t)mailboxes;
-    ((volatile uint32_t*)(0x10))[8] = mailbox_addr;
-    ((volatile uint32_t*)(0x10))[9] = 0xdeadbeef;
-
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
@@ -154,8 +150,15 @@ int __attribute__((noinline)) main(void) {
         WAYPOINT("GW");
 
         uint8_t go_message_signal = RUN_MSG_DONE;
+        __asm__ volatile("fence" ::: "memory");
         while ((go_message_signal = mailboxes->go_messages[0].signal) != RUN_MSG_GO) {
-            invalidate_l1_cache();
+            __asm__ volatile("fence" ::: "memory");
+            __asm__ volatile("fence" ::: "memory");
+            __asm__ volatile("fence" ::: "memory");
+            __asm__ volatile("fence" ::: "memory");
+            __asm__ volatile("fence" ::: "memory");
+            __asm__ volatile("fence" ::: "memory");
+            __asm__ volatile("fence" ::: "memory");
 
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
@@ -214,11 +217,36 @@ int __attribute__((noinline)) main(void) {
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+
+                // Ensure all memory operations complete before kernel execution
+                __asm__ volatile("fence" ::: "memory");  // Full memory fence
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+
                 reinterpret_cast<void (*)()>(kernel_lma)();
+
+                // Ensure all kernel operations complete before continuing
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+                __asm__ volatile("fence" ::: "memory");
+
                 WAYPOINT("D");
             }
 
             // wait_subordinate_eriscs();
+
+            // Ensure all operations complete before signaling done
+            __asm__ volatile("fence" ::: "memory");
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed

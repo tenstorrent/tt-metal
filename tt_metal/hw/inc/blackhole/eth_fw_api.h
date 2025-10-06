@@ -220,75 +220,79 @@ struct boot_results_t {
 #include "dev_msgs.h"
 
 FORCE_INLINE uint64_t get_next_link_status_check_timestamp() {
-    return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp));
+    // return *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp));
+    return 0;
 }
 
 FORCE_INLINE void update_next_link_status_check_timestamp() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
-    uint64_t timestamp = eth_read_wall_clock() + (ETH_CLOCK_CYCLE_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
-    *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) = timestamp;
+    // uint64_t timestamp = eth_read_wall_clock() + (ETH_CLOCK_CYCLE_1MS * ETH_UPDATE_LINK_STATUS_INTERVAL_MS);
+    // *reinterpret_cast<volatile tt_l1_ptr uint64_t*>(GET_MAILBOX_ADDRESS_DEV(link_status_check_timestamp)) =
+    // timestamp;
 #endif
 }
 
 void eth_set_interrupt_mode(uint32_t interrupt_number, uint32_t mode_val) {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
-    auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
-        ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + (4 * interrupt_number));
-    *reg_ptr = mode_val;
+    // auto reg_ptr = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
+    //     ETH_RISC_CTRL_A_INTERRUPT_MODE_0__REG_ADDR + (4 * interrupt_number));
+    // *reg_ptr = mode_val;
 #endif
 }
 
 void disable_interrupts() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
-    for (uint32_t i = 0; i < ETH_RISC_NUM_INTERRUPT_VECS; i++) {
-        eth_set_interrupt_mode(i, 0);
-    }
+    // for (uint32_t i = 0; i < ETH_RISC_NUM_INTERRUPT_VECS; i++) {
+    //     eth_set_interrupt_mode(i, 0);
+    // }
 #endif
 }
 
 FORCE_INLINE bool is_link_up() {
-#if defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0) && !defined(ENABLE_2_ERISC_MODE)
-    // Collect current link states
-    // TODO: Until erisc0 is enabled, use MAILBOX_RISC1 for link status check. When both riscs are enabled, assign one
-    // to use MAILBOX_OTHER Sending msgs to mailbox described in:
-    // https://tenstorrent.atlassian.net/wiki/spaces/syseng/pages/904626206/ETH+SW+APIs
-    constexpr uint32_t risc1_mailbox_addr = MEM_SYSENG_ETH_MAILBOX_ADDR + (MAILBOX_RISC1 * sizeof(eth_mailbox_t));
+    // #if defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0) && !defined(ENABLE_2_ERISC_MODE)
+    //     // Collect current link states
+    //     // TODO: Until erisc0 is enabled, use MAILBOX_RISC1 for link status check. When both riscs are enabled,
+    //     assign one
+    //     // to use MAILBOX_OTHER Sending msgs to mailbox described in:
+    //     // https://tenstorrent.atlassian.net/wiki/spaces/syseng/pages/904626206/ETH+SW+APIs
+    //     constexpr uint32_t risc1_mailbox_addr = MEM_SYSENG_ETH_MAILBOX_ADDR + (MAILBOX_RISC1 *
+    //     sizeof(eth_mailbox_t));
 
-    volatile tt_l1_ptr uint32_t* risc1_mailbox_msg_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, msg));
-    volatile tt_l1_ptr uint32_t* risc1_mailbox_arg0_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, arg[0]));
-    uint32_t risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    // Make sure mailbox is free to accept a new message
-    do {
-        invalidate_l1_cache();
-        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while (((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) != MEM_SYSENG_ETH_MSG_DONE) &&
-             risc1_mailbox_val != 0);
+    //     volatile tt_l1_ptr uint32_t* risc1_mailbox_msg_ptr =
+    //         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, msg));
+    //     volatile tt_l1_ptr uint32_t* risc1_mailbox_arg0_ptr =
+    //         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(risc1_mailbox_addr + offsetof(eth_mailbox_t, arg[0]));
+    //     uint32_t risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    //     // Make sure mailbox is free to accept a new message
+    //     do {
+    //         invalidate_l1_cache();
+    //         risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    //     } while (((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) != MEM_SYSENG_ETH_MSG_DONE) &&
+    //              risc1_mailbox_val != 0);
 
-    // This tells link status check to avoid copying results into another location in L1
-    *risc1_mailbox_arg0_ptr = 0xFFFFFFFF;
+    //     // This tells link status check to avoid copying results into another location in L1
+    //     *risc1_mailbox_arg0_ptr = 0xFFFFFFFF;
 
-    // Send msg to get the link status
-    *risc1_mailbox_msg_ptr = MEM_SYSENG_ETH_MSG_CALL | MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
+    //     // Send msg to get the link status
+    //     *risc1_mailbox_msg_ptr = MEM_SYSENG_ETH_MSG_CALL | MEM_SYSENG_ETH_MSG_LINK_STATUS_CHECK;
 
-    // Wait until the msg was serviced
-    do {
-        invalidate_l1_cache();
-        risc1_mailbox_val = *risc1_mailbox_msg_ptr;
-    } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
+    //     // Wait until the msg was serviced
+    //     do {
+    //         invalidate_l1_cache();
+    //         risc1_mailbox_val = *risc1_mailbox_msg_ptr;
+    //     } while ((risc1_mailbox_val & MEM_SYSENG_ETH_MSG_STATUS_MASK) == MEM_SYSENG_ETH_MSG_CALL);
 
-    auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
-    return link_status->rx_link_up == 1;
-#else
-    auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
-    if (link_status->rx_link_up != 1) {
-        // erisc0 checks link status and does retraining.  If erisc1 detects link down, wait a bit and check again
-        eth_wait_cycles(3 << 30);
-        eth_wait_cycles(2 << 30);
-    }
-    return link_status->rx_link_up == 1;
-#endif
+    //     auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
+    //     return link_status->rx_link_up == 1;
+    // #else
+    //     auto link_status = (volatile eth_live_status_t*)(MEM_SYSENG_ETH_LIVE_STATUS);
+    //     if (link_status->rx_link_up != 1) {
+    //         // erisc0 checks link status and does retraining.  If erisc1 detects link down, wait a bit and check
+    //         again eth_wait_cycles(3 << 30); eth_wait_cycles(2 << 30);
+    //     }
+    //     return link_status->rx_link_up == 1;
+    // #endif
+    return true;
 }
 
 FORCE_INLINE bool is_port_up() {
@@ -298,25 +302,25 @@ FORCE_INLINE bool is_port_up() {
 
 FORCE_INLINE void service_eth_msg() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
-    invalidate_l1_cache();
-    reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+    // invalidate_l1_cache();
+    // reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
 #endif
 }
 
 FORCE_INLINE void update_boot_results_eth_link_status_check() {
 #if defined(COMPILE_FOR_AERISC) && COMPILE_FOR_AERISC == 0 && defined(ENABLE_2_ERISC_MODE)
-    uint64_t curr_timestamp = eth_read_wall_clock();
-    uint64_t next_timestamp = get_next_link_status_check_timestamp();
-    // Debounce to only be called at every interval
-    // wrap-around safe comparison. calling this too many times can result in link
-    // instability
-    if ((curr_timestamp - next_timestamp) < (UINT64_MAX / 2)) {
-        invalidate_l1_cache();
-        reinterpret_cast<void (*)(uint32_t)>(
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
+    // uint64_t curr_timestamp = eth_read_wall_clock();
+    // uint64_t next_timestamp = get_next_link_status_check_timestamp();
+    // // Debounce to only be called at every interval
+    // // wrap-around safe comparison. calling this too many times can result in link
+    // // instability
+    // if ((curr_timestamp - next_timestamp) < (UINT64_MAX / 2)) {
+    //     invalidate_l1_cache();
+    //     reinterpret_cast<void (*)(uint32_t)>(
+    //         (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_status_check_ptr))(0xFFFFFFFF);
 
-        update_next_link_status_check_timestamp();
-    }
+    //     update_next_link_status_check_timestamp();
+    // }
 #endif
 }
 

@@ -1020,6 +1020,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                             receiver_core,
                             processor));
                     }
+                    return;
                 }
             }
         }

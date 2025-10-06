@@ -82,7 +82,7 @@ OUTPUT_ARCH(riscv)
 #elif defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_MAIN_AERISC)
 #define DATA_START MEM_AERISC_LOCAL_BASE
 #define DATA_SIZE MEM_AERISC_LOCAL_SIZE
-#define STACK_MIN_SIZE 0
+#define STACK_MIN_SIZE 768
 #define TEXT_START MEM_AERISC_FIRMWARE_BASE
 #if defined(TYPE_FIRMWARE)
 #define TEXT_SIZE MEM_AERISC_FIRMWARE_SIZE
@@ -232,12 +232,10 @@ SECTIONS
 #ifdef TYPE_FIRMWARE
   __fw_export_ldm_end = ABSOLUTE(.);
 #endif
-#if !defined(COMPILE_FOR_MAIN_AERISC)
 #ifdef TYPE_FIRMWARE
   __stack_top = DATA_START + DATA_SIZE;
 #else
   __stack_base = .;
-#endif
 #endif
 
   /* The loader uses this data to check for size overflows.

@@ -51,7 +51,7 @@ std::vector<std::vector<HalJitBuildConfig>> configure_for_2erisc() {
             // ERISC0
             {.fw_base_addr = MEM_AERISC_FIRMWARE_BASE,
              .local_init_addr = MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH,
-             .fw_launch_addr = MEM_AERISC_VOID_LAUNCH_FLAG,
+             .fw_launch_addr = AERISC_RESET_PC,
              .fw_launch_addr_value = MEM_AERISC_FIRMWARE_BASE,
              .memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP},
             // ERISC1
