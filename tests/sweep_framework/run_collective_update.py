@@ -243,12 +243,16 @@ def find_op_run_files(directory: pathlib.Path) -> List[pathlib.Path]:
     return files
 
 
-def extract_common_metadata(files: List[pathlib.Path]) -> Dict[str, Any]:
+def extract_common_metadata(files: List[pathlib.Path], run_type: str = "nightly") -> Dict[str, Any]:
     """
     Extract common metadata from all files and determine the earliest start
     and latest end timestamps.
 
     Optimized to only extract metadata fields without loading entire files.
+
+    Args:
+        files: List of file paths to process
+        run_type: Type of run - "nightly" or "comprehensive"
 
     Returns a dict with the common values and computed timestamps.
     """
@@ -309,18 +313,23 @@ def extract_common_metadata(files: List[pathlib.Path]) -> Dict[str, Any]:
     if latest_end:
         common_metadata["run_end_ts"] = datetime_to_str(latest_end)
 
-    common_metadata["run_contents"] = "all sweeps (nightly)"
+    # Set run_contents based on run type
+    if run_type == "comprehensive":
+        common_metadata["run_contents"] = "all sweeps (comprehensive)"
+    else:
+        common_metadata["run_contents"] = "all sweeps (nightly)"
 
     return common_metadata
 
 
-def update_op_run_files(directory: pathlib.Path, dry_run: bool = False) -> None:
+def update_op_run_files(directory: pathlib.Path, dry_run: bool = False, run_type: str = "nightly") -> None:
     """
     Update all op_run*.json files in the directory with common metadata.
 
     Args:
         directory: Path to the directory containing op_run*.json files
         dry_run: If True, only print what would be changed without modifying files
+        run_type: Type of run - "nightly" or "comprehensive"
     """
     # Find all op_run*.json files
     files = find_op_run_files(directory)
@@ -336,7 +345,7 @@ def update_op_run_files(directory: pathlib.Path, dry_run: bool = False) -> None:
 
     # Extract common metadata and compute timestamps
     try:
-        common_metadata = extract_common_metadata(files)
+        common_metadata = extract_common_metadata(files, run_type)
     except Exception as e:
         print(f"Error extracting metadata: {e}")
         return
@@ -386,6 +395,13 @@ def main():
         help="Directory containing op_run*.json files (default: tests/sweep_framework/results_export)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be changed without modifying files")
+    parser.add_argument(
+        "--run-type",
+        type=str,
+        choices=["nightly", "comprehensive"],
+        default="nightly",
+        help="Type of run: 'nightly' or 'comprehensive' (default: nightly)",
+    )
 
     args = parser.parse_args()
 
@@ -406,7 +422,7 @@ def main():
 
     # Run the update
     try:
-        update_op_run_files(args.directory, dry_run=args.dry_run)
+        update_op_run_files(args.directory, dry_run=args.dry_run, run_type=args.run_type)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
