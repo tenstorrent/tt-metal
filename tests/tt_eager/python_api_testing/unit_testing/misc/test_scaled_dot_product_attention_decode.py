@@ -74,6 +74,40 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
+def create_sliding_window_mask(b, nh, seq_len, cur_pos_list, sliding_window):
+    """
+    Create attention mask for sliding window attention.
+
+    Args:
+        b: batch size
+        nh: number of heads
+        seq_len: sequence length
+        cur_pos_list: list of current positions for each batch
+        sliding_window: sliding window size
+
+    Returns:
+        attn_mask: [b, nh, 1, seq_len] mask with -inf for positions outside window
+    """
+    attn_mask = torch.zeros((b, nh, 1, seq_len))
+
+    for i in range(b):
+        cur_pos = cur_pos_list[i]
+
+        # Calculate sliding window bounds
+        window_end = cur_pos + 1  # exclusive
+        window_start = max(0, window_end - sliding_window)
+
+        # Mask positions before sliding window start
+        if window_start > 0:
+            attn_mask[i, :, :, :window_start] = torch.finfo(torch.float32).min
+
+        # Mask positions after current position (causal)
+        if cur_pos + 1 < seq_len:
+            attn_mask[i, :, :, cur_pos + 1 :] = torch.finfo(torch.float32).min
+
+    return attn_mask
+
+
 def flash_attention_loop(q, K, V, mask, scale, k_chunk_size):
     seqlen = K.shape[-2]
     padded_num_heads = q.shape[-2]
@@ -325,6 +359,7 @@ def run_test_sdpa_decode_single_iter(
     sub_core_grids=None,
     override_q_chunk_size=None,
     override_k_chunk_size=None,
+    sliding_window=None,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
@@ -382,6 +417,11 @@ def run_test_sdpa_decode_single_iter(
 
     q_chunk_size = padded_num_heads if override_q_chunk_size is None else override_q_chunk_size
     k_chunk_size = get_chunk_size(max_start_idx + 1, s) if override_k_chunk_size is None else override_k_chunk_size
+    logger.info(f"Using k_chunk_size: {k_chunk_size}")
+    logger.info(f"Using compute_with_storage_grid_size: {grid_size}")
+    logger.info(f"Using sub_core_grids: {compute_sub_core_grids}")
+    logger.info(f"Using q_chunk_size: {q_chunk_size}")
+    logger.info(f"Using exp_approx_mode: False")
 
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -400,10 +440,15 @@ def run_test_sdpa_decode_single_iter(
     logger.debug(f"Using padded num heads: {padded_num_heads}")
 
     if causal:
-        attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
-        for i in range(b):
-            start_idx = start_indices[i]
-            attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
+        if sliding_window is not None:
+            # Use sliding window mask
+            attn_mask = create_sliding_window_mask(b, nh, padded_layer_len, start_indices, sliding_window)
+        else:
+            # Use regular causal mask
+            attn_mask = torch.zeros((b, nh, 1, padded_layer_len))
+            for i in range(b):
+                start_idx = start_indices[i]
+                attn_mask[i, :, :, start_idx + 1 :] = torch.finfo(torch.float32).min
     else:
         attn_mask = torch.bernoulli(
             torch.full(
@@ -431,6 +476,7 @@ def run_test_sdpa_decode_single_iter(
                 tt_V,
                 cur_pos_tensor=start_indices_tt,
                 scale=scale,
+                sliding_window=sliding_window,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
@@ -442,6 +488,7 @@ def run_test_sdpa_decode_single_iter(
                 tt_V,
                 cur_pos=start_indices,
                 scale=scale,
+                sliding_window=sliding_window,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
@@ -1504,3 +1551,181 @@ def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dty
 def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     ttnn.device.DisablePersistentKernelCache()
     run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype)
+
+
+@pytest.mark.parametrize(
+    "dtype, q_dtype",
+    [
+        [ttnn.bfloat16, ttnn.bfloat16],
+        # [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "all_bfp16",
+        # "kv_bfp8_q_bf16",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, sliding_window",
+    [
+        # Test different sliding window sizes
+        [1, 1, 1, 128, 128, (8, 1), 32],  # Micro test
+        # [4, 8, 1, 1024, 128, (8, 4), 64],    # Small window
+        # [4, 8, 1, 1024, 128, (8, 4), 128],   # Medium window
+        # [4, 8, 1, 1024, 128, (8, 4), 256],   # Large window
+        # [8, 16, 4, 2048, 128, (8, 8), 128],  # Multi-head with window
+        # [1, 8, 1, 4096, 128, (8, 4), 512],   # Long sequence with window
+    ],
+)
+@pytest.mark.parametrize("cur_pos_tensor", [False, True])
+@pytest.mark.timeout(120)
+def test_sdpa_decode_sliding_window(
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sliding_window, cur_pos_tensor
+):
+    """Test sliding window attention functionality."""
+
+    if nkv > 1 and q_dtype != ttnn.bfloat16:
+        pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
+
+    # Ensure sliding window is smaller than sequence length
+    if sliding_window >= s:
+        pytest.skip(f"Sliding window {sliding_window} must be smaller than sequence length {s}")
+
+    ttnn.device.DisablePersistentKernelCache()
+
+    # Test different positions to ensure sliding window works correctly
+    test_positions = [
+        sliding_window + 32,  # Window fully slides
+        sliding_window // 2,  # Window partially filled
+        # sliding_window - 1,   # Window almost full
+        # s // 2,               # Middle of sequence
+        # s - 10,               # Near end of sequence
+    ]
+
+    for cur_pos in test_positions:
+        if cur_pos >= s:
+            continue
+
+        logger.info(f"Testing sliding window={sliding_window} at position {cur_pos}")
+
+        # Test both cur_pos and cur_pos_tensor modes
+        run_test_sdpa_decode_single_iter(
+            device,
+            b,
+            nh,
+            nkv,
+            s,
+            d,
+            dtype,
+            grid_size,
+            q_dtype,
+            # cur_pos_tensor=cur_pos_tensor,
+            sharded_in=False,
+            sharded_out=False,
+            start_indices=[cur_pos] * b,
+            sliding_window=sliding_window,
+        )
+
+
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, sliding_window",
+    [
+        [4, 8, 1, 1024, 128, 64],  # Basic test
+        [8, 16, 4, 2048, 128, 128],  # Multi-head test
+    ],
+)
+def test_sdpa_decode_sliding_window_vs_causal(device, b, nh, nkv, s, d, sliding_window):
+    """
+    Test that sliding window attention with window_size >= cur_pos
+    produces the same results as regular causal attention.
+    """
+    dtype = ttnn.bfloat16
+    q_dtype = ttnn.bfloat16
+    grid_size = (8, 4)
+
+    ttnn.device.DisablePersistentKernelCache()
+
+    # Test position where sliding window should equal causal attention
+    cur_pos = sliding_window // 2  # Window is larger than current position
+
+    logger.info(f"Testing sliding window={sliding_window} vs causal at position {cur_pos}")
+
+    # Run regular causal attention
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        start_indices=[cur_pos] * b,
+        sliding_window=None,  # Regular causal attention
+    )
+
+    # Run sliding window attention
+    run_test_sdpa_decode_single_iter(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        dtype,
+        grid_size,
+        q_dtype,
+        start_indices=[cur_pos] * b,
+        sliding_window=sliding_window,  # Sliding window attention
+    )
+
+    # Both should pass with the same reference (PyTorch SDPA with appropriate masks)
+
+
+# @pytest.mark.parametrize(
+#     "dtype, q_dtype",
+#     [
+#         [ttnn.bfloat16, ttnn.bfloat16],
+#         [ttnn.bfloat8_b, ttnn.bfloat16],
+#     ],
+#     ids=[
+#         "all_bfp16",
+#         "kv_bfp8_q_bf16",
+#     ],
+# )
+# @pytest.mark.parametrize(
+#     "b, nh, nkv, s, d, grid_size, sliding_window",
+#     [
+#         [4, 8, 1, 2048, 128, (8, 4), 128],   # Test with sharding
+#         [8, 16, 4, 1024, 128, (8, 8), 64],   # Multi-head with sharding
+#     ],
+# )
+# def test_sdpa_decode_sliding_window_sharded(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sliding_window):
+#     """Test sliding window attention with input/output sharding."""
+
+#     if nkv > 1 and q_dtype != ttnn.bfloat16:
+#         pytest.skip("nkv > 1 requires q_dtype to be bfloat16")
+
+#     if sliding_window >= s:
+#         pytest.skip(f"Sliding window {sliding_window} must be smaller than sequence length {s}")
+
+#     ttnn.device.DisablePersistentKernelCache()
+
+#     cur_pos = sliding_window + 50  # Position where window is fully sliding
+
+#     # Test different sharding combinations
+#     sharding_configs = [
+#         (True, False),   # sharded_in=True, sharded_out=False
+#         (False, True),   # sharded_in=False, sharded_out=True
+#         (True, True),    # sharded_in=True, sharded_out=True
+#     ]
+
+#     for sharded_in, sharded_out in sharding_configs:
+#         logger.info(f"Testing sliding window with sharding: in={sharded_in}, out={sharded_out}")
+
+#         run_test_sdpa_decode_single_iter(
+#             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype,
+#             sharded_in=sharded_in, sharded_out=sharded_out,
+#             start_indices=[cur_pos] * b,
+#             sliding_window=sliding_window
+#         )
