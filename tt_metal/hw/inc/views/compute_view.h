@@ -5,7 +5,6 @@
 #include "compile_time_args.h"
 #include "compute_kernel_api/cb_api.h"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -53,9 +52,17 @@ public:
     }
 };
 
-// convenience alias to calculate initial offset for ct args
-template <size_t Accessors, uint32_t... CtArgs>
-using MakeComputeView = ComputeView<Accessors, sizeof...(CtArgs), CtArgs...>;
+template <size_t Accessors, class CtArgIndices>
+struct ComputeViewType;
+
+template <size_t Accessors, size_t... CtArgIndices>
+struct ComputeViewType<Accessors, std::index_sequence<CtArgIndices...>> {
+    using type = ComputeView<Accessors, sizeof...(CtArgIndices), get_compile_time_arg_val(CtArgIndices)...>;
+};
+
+// convenience alias to fetch ct args
+template <size_t Accessors, size_t Offset>
+using MakeComputeView = typename ComputeViewType<Accessors, std::make_index_sequence<Offset>>::type;
 
 // empty base case
 template <size_t Offset, uint32_t DefaultNumTilesPerCycle, uint32_t... Indices>

@@ -508,6 +508,8 @@ target_link_libraries(
         TTNN::Ops::Eltwise::Complex::Binary
         TTNN::Ops::Eltwise::Complex::Unary
         TTNN::Ops::Eltwise::Complex::Unary::Backward
+        TTNN::Ops::Eltwise::Fused
+        TTNN::Ops::Eltwise::Lazy
         TTNN::Ops::Eltwise::Quantization
         TTNN::Ops::Eltwise::Ternary
         TTNN::Ops::Eltwise::Ternary::Backward

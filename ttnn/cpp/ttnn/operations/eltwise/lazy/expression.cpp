@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
-
 #include "tt_stl/assert.hpp"
 #include "tt_stl/overloaded.hpp"
 #include "ttnn/operations/eltwise/lazy/expression.hpp"
@@ -51,28 +49,24 @@ BasicExpression<T>::BasicExpression(const Tensor& tensor)
     : nodes{tensor} {}
 
 template <typename T>
-BasicExpression<T>::BasicExpression(Unary operation, ExpressionView first, std::initializer_list<Param> params) {
+BasicExpression<T>::BasicExpression(Unary operation, ExpressionView first, Params&& params) {
     nodes.reserve(first.nodes.size() + 1);
     nodes.insert(nodes.end(), first.nodes.begin(), first.nodes.end());
-    nodes.emplace_back(FunctionNode{.operation = operation, .offsets = {1}, .params = params});
+    nodes.emplace_back(FunctionNode{.operation = operation, .offsets = {1}, .params = std::move(params)});
 }
 
 template <typename T>
-BasicExpression<T>::BasicExpression(
-    Binary operation, ExpressionView first, ExpressionView second, std::initializer_list<Param> params) {
+BasicExpression<T>::BasicExpression(Binary operation, ExpressionView first, ExpressionView second, Params&& params) {
     nodes.reserve(first.nodes.size() + second.nodes.size() + 1);
     nodes.insert(nodes.end(), first.nodes.begin(), first.nodes.end());
     nodes.insert(nodes.end(), second.nodes.begin(), second.nodes.end());
-    nodes.emplace_back(FunctionNode{.operation = operation, .offsets = {second.nodes.size() + 1, 1}, .params = params});
+    nodes.emplace_back(
+        FunctionNode{.operation = operation, .offsets = {second.nodes.size() + 1, 1}, .params = std::move(params)});
 }
 
 template <typename T>
 BasicExpression<T>::BasicExpression(
-    Ternary operation,
-    ExpressionView first,
-    ExpressionView second,
-    ExpressionView third,
-    std::initializer_list<Param> params) {
+    Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params&& params) {
     nodes.reserve(first.nodes.size() + second.nodes.size() + third.nodes.size() + 1);
     nodes.insert(nodes.end(), first.nodes.begin(), first.nodes.end());
     nodes.insert(nodes.end(), second.nodes.begin(), second.nodes.end());
@@ -80,14 +74,18 @@ BasicExpression<T>::BasicExpression(
     nodes.emplace_back(FunctionNode{
         .operation = operation,
         .offsets = {second.nodes.size() + third.nodes.size() + 1, third.nodes.size() + 1, 1},
-        .params = params});
+        .params = std::move(params)});
 }
 
 template <typename T>
 std::optional<BasicExpression<T>> BasicExpression<T>::from(const Tensor& tensor)
     requires std::same_as<BasicExpression, Expression>
 {
-    if (not tensor.tensor_id) {
+    if (tensor.storage_type() != StorageType::DEVICE) {
+        return std::nullopt;
+    }
+
+    if (not tensor.is_allocated()) {
         return std::nullopt;
     }
 
@@ -97,16 +95,15 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(const Tensor& tensor)
 }
 
 template <typename T>
-std::optional<BasicExpression<T>> BasicExpression<T>::from(
-    Unary operation, ExpressionView first, std::initializer_list<Param> params) {
+std::optional<BasicExpression<T>> BasicExpression<T>::from(Unary operation, ExpressionView first, Params params) {
     // add unary operation validation here
 
-    return BasicExpression<T>(operation, first, params);
+    return BasicExpression<T>(operation, first, std::move(params));
 }
 
 template <typename T>
 std::optional<BasicExpression<T>> BasicExpression<T>::from(
-    Binary operation, ExpressionView first, ExpressionView second, std::initializer_list<Param> params) {
+    Binary operation, ExpressionView first, ExpressionView second, Params params) {
     if (first.dtype() != second.dtype()) {
         return std::nullopt;
     }
@@ -121,16 +118,12 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(
 
     // add binary operation validation here
 
-    return BasicExpression<T>(operation, first, second, params);
+    return BasicExpression<T>(operation, first, second, std::move(params));
 }
 
 template <typename T>
 std::optional<BasicExpression<T>> BasicExpression<T>::from(
-    Ternary operation,
-    ExpressionView first,
-    ExpressionView second,
-    ExpressionView third,
-    std::initializer_list<Param> params) {
+    Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params params) {
     if (first.dtype() != second.dtype() or first.dtype() != third.dtype()) {
         return std::nullopt;
     }
@@ -145,7 +138,7 @@ std::optional<BasicExpression<T>> BasicExpression<T>::from(
 
     // add ternary operation validation here
 
-    return BasicExpression<T>(operation, first, second, third, params);
+    return BasicExpression<T>(operation, first, second, third, std::move(params));
 }
 
 // obtains left-most tensor in expression tree
@@ -414,7 +407,7 @@ void format_to(
         case 1:
             fmt::format_to(
                 out,
-                "views::copy<0>(0,0)|views::{}(0, get_arg_val<uint32_t>({}))|views::pack<1>(0)",
+                "views::copy<0>(0,0)|views::{}(0,get_arg_val<uint32_t>({}))|views::pack<1>(0)",
                 function_name(dtype, operation),
                 rt_arg_index++);
             return;
@@ -464,7 +457,7 @@ void format_to(
             return;
         default:
             TT_THROW(
-                "unexpected params size {} for binary {} {}",
+                "unexpected params size {} for ternary {} {}",
                 params.size(),
                 enchantum::to_string(dtype),
                 enchantum::to_string(operation));
@@ -490,7 +483,7 @@ void format_to(std::back_insert_iterator<std::string> out, FunctionView function
 
     // passing views as lvalues is disallowed
     // NOLINTNEXTLINE(performance-move-const-arg)
-    fmt::format_to(out, "views::with_cb_ids<{}>(", std::move(cb_ids));
+    fmt::format_to(out, "views::with_cb_ids<{},tt::{}>(", std::move(cb_ids), enchantum::to_string(function.index()));
     lazy::format_to(out, function.dtype(), function.operation(), function.params(), rt_arg_index);
     *out++ = ')';
 }
@@ -499,19 +492,57 @@ std::string to_compute_kernel_string(ExpressionView expression) {
     std::string result;
     // n_tiles is index 0
     int rt_arg_index = 1;
+    int tensor_count = 1;  // always output tensor
+    std::uint8_t total_indices = 0;
+    std::uint8_t reusable_indices = 0;
+
+    ttnn::operations::lazy::traverse(
+        ttsl::overloaded{
+            [&](const Tensor&) { ++tensor_count; },
+            [&](FunctionView function) {
+                for (const auto expression : function.arguments()) {
+                    if (expression.function()) {
+                        // this assumes no common sub-expressions
+                        // when CSE is introduced, this will need revised
+                        ++reusable_indices;
+                    }
+                }
+
+                if (reusable_indices > 0) {
+                    --reusable_indices;
+                } else {
+                    ++total_indices;
+                }
+            }},
+        expression);
+
+    const auto append_prefix = [&] {
+        std::format_to(
+            std::back_inserter(result),
+            "using "
+            "View=views::MakeComputeView<{},{}>;View::init_tiles(views::init_sfpu<tt::c_0,tt::{}>());View::compute_"
+            "tiles(n_tiles,",
+            tensor_count,
+            total_indices,
+            enchantum::to_string(tt::CBIndex(tensor_count - 1)));
+    };
 
     ttnn::operations::lazy::traverse(
         ttsl::overloaded{
             [](const ttnn::Tensor&) {},
             [&](FunctionView function) {
-                // separator
-                if (not result.empty()) {
+                // prefix or separator
+                if (result.empty()) {
+                    append_prefix();
+                } else {
                     result.push_back('|');
                 }
 
                 format_to(std::back_inserter(result), function, rt_arg_index);
             }},
         expression);
+
+    format_to(std::back_inserter(result), ");");
 
     return result;
 }
