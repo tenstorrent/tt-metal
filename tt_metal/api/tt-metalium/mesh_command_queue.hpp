@@ -20,7 +20,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
