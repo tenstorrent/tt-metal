@@ -149,7 +149,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       arch: "blackhole"
       runner-label: ${{ matrix.test-group }}
@@ -315,7 +315,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  LLMBox-only demo tests
+  # LLMBox-only demo tests
   blackhole-llmbox-demo-tests:
     needs: [build-artifact, generate-matrix]
     if: ${{ inputs.enable-llmbox-tests }}
@@ -333,7 +333,7 @@ jobs:
       extra-tag: pipeline-perf
       num_devices: 4
 
-  LLMBox-only unit tests
+  # LLMBox-only unit tests
   blackhole-llmbox-unit-tests:
     needs: [build-artifact-profiler, generate-matrix]
     if: ${{ inputs.enable-llmbox-tests }}
@@ -345,7 +345,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
 
-  TT-CNN Unit Tests
+  # TT-CNN Unit Tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-matrix]
     secrets: inherit
@@ -376,7 +376,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-  Multi-card post-commit tests
+  # Multi-card post-commit tests
   blackhole-multi-card-post-commit-tests:
     needs: build-artifact
     secrets: inherit
