@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <set>
 #include <string>
+#include <optional>
 
 #include "fabric_fixture.hpp"
 
@@ -539,6 +540,35 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsWithStartin
         { auto physical_chip_ids_invalid = convert_2d_mesh_adjacency_to_row_major_vector(topology_info, 99); },
         std::exception)
         << "Should throw when northwest corner chip ID is not in mesh container";
+}
+
+TEST_F(LogicalToPhysicalConversionFixture, TestConvert2DUsesProvidedNECorner) {
+    // 3x3 mesh
+    test_adjacency_map = {
+        {0, {1, 3}},
+        {1, {0, 2, 4}},
+        {2, {1, 5}},
+        {3, {0, 4, 6}},
+        {4, {1, 3, 5, 7}},
+        {5, {2, 4, 8}},
+        {6, {3, 7}},
+        {7, {4, 6, 8}},
+        {8, {5, 7}}};
+
+    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    tt::tt_metal::distributed::MeshShape mesh_shape(3, 3);
+
+    auto topology_info = build_mesh_adjacency_map(
+        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+
+    // Default embedding (auto-identify NE)
+    auto physical_chip_ids_default = convert_2d_mesh_adjacency_to_row_major_vector(topology_info);
+
+    // Provide NE corner explicitly = chip 2 (top-right in this canonical 3x3)
+    auto physical_chip_ids_with_ne = convert_2d_mesh_adjacency_to_row_major_vector(topology_info, std::nullopt, 2);
+
+    // Must match the default embedding if NE is correct
+    EXPECT_EQ(physical_chip_ids_with_ne, physical_chip_ids_default);
 }
 
 }  // namespace fabric_router_tests
