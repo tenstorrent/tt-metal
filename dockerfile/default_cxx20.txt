@@ -1,12 +1,20 @@
+
 include(default)
 
-{% set clang_info = detect_api.detect_clang_compiler("clang") %}
+{% set clang_candidates = ["clang", "clang-15", "clang-16", "clang-17", "clang-18", "clang-19"] %}
+{% set vars = {'clang_info': None, 'clang_binary': None} %}
+{% for clang_bin in clang_candidates %}
+  {% set candidate_info = detect_api.detect_clang_compiler(clang_bin) %}
+  {% if candidate_info[0] and not vars.clang_info %}
+    {% if vars.update({'clang_info': candidate_info, 'clang_binary': clang_bin}) %} {% endif %}
+  {% endif %}
+{% endfor %}
 {% set gcc_info = detect_api.detect_gcc_compiler("gcc") %}
 
 [settings]
-{% if clang_info[0] %}
+{% if vars.clang_info %}
 */*:compiler=clang
-*/*:compiler.version={{ clang_info[1].major }}
+*/*:compiler.version={{ vars.clang_info[1].major }}
 */*:compiler.libcxx=libstdc++11
 */*:compiler.cppstd=20
 {% else %}
@@ -18,9 +26,9 @@ include(default)
 
 
 [buildenv]
-{% if clang_info[0] %}
-CC=clang
-CXX=clang++
+{% if vars.clang_info %}
+CC={{ vars.clang_binary }}
+CXX={{ vars.clang_binary.replace("clang", "clang++") }}
 {% else %}
 CC=gcc
 CXX=g++
