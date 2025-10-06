@@ -67,16 +67,14 @@ class Generator:
         self,
         prefill_ids,
         page_table=None,
-        user_id=0,
-        last_token_idx=None,
         kv_cache=None,
         model_id=-1,
-        **kwargs,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        transformed_inputs = self.model[model_id].transform_prefill_inputs_device(*device_inputs)
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
             rot_mats_global=self.model[model_id].tt_rot_mats_prefill_global,
@@ -89,22 +87,8 @@ class Generator:
         logger.info("Done Compiling Model")
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        transformed_inputs = self.model[model_id].transform_prefill_inputs_device(*device_inputs)
-        tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-            x=transformed_inputs[0],
-            rot_mats_global=self.model[model_id].tt_rot_mats_prefill_global,
-            rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
-            page_table=transformed_inputs[1],
-            chunk_page_table=transformed_inputs[2],
-            kv_cache=kv_cache,
-        )
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-        transformed_inputs = self.model[model_id].transform_prefill_inputs_device(*device_inputs)
-
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
-        transformed_inputs = self.model[model_id].transform_prefill_inputs_device(*device_inputs)
+        transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
             rot_mats_global=self.model[model_id].tt_rot_mats_prefill_global,
@@ -134,16 +118,14 @@ class Generator:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
                 prefill_ids,
                 page_table=page_table,
-                last_token_idx=last_token_idx,
                 kv_cache=kv_cache,
                 model_id=model_id,
-                **kwargs,
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out_trace
 
-        tt_out_trace = self._prefill_forward_trace_prefill(
+        tt_out_trace = self._prefill_forward_trace(
             self.trace_id_prefill[trace_key],
             self.trace_inputs_prefill[trace_key],
             self.trace_output_prefill[trace_key],
@@ -154,7 +136,7 @@ class Generator:
 
         return tt_out_trace
 
-    def _prefill_forward_trace_prefill(
+    def _prefill_forward_trace(
         self,
         trace_id,
         device_inputs,
@@ -165,6 +147,7 @@ class Generator:
         model_id=-1,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
+        host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(
             host_inputs, device_tensors=device_inputs, mesh_device=self.model_args[model_id].mesh_device
@@ -174,17 +157,19 @@ class Generator:
 
         return tt_out_trace
 
-    def should_enable_trace(self, prefill_seq_len, prefill_ids, model_id):
+    def can_enable_trace(self, prefill_seq_len):
         """
         This function is used to determine if trace should be enabled for the prefill.
-        For this PR, we only covered the models that don't have sliding window.
-        If you add new code that affects the input to the prefill_forward, you need to disable trace for that model if you don't support tracing for that feature.
+        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
+        If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
+        There is no support to pass them as a tensor, and then inside the trace read it as a number.
+        This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (Llama-8B).
         """
         if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
             return False
-        if prefill_ids.shape[-1] > self.model_args[model_id].max_prefill_chunk_size:
+        if prefill_seq_len > self.model_args[0].max_prefill_chunk_size:
             return False
-        if hasattr(self.model_args[model_id], "sliding_window"):
+        if hasattr(self.model_args[0], "sliding_window"):
             return False
         return True
 
@@ -229,9 +214,10 @@ class Generator:
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
 
-            enable_trace = self.should_enable_trace(prefill_seq_len, prefill_ids, model_id)
+            enable_trace = enable_trace and self.can_enable_trace(prefill_seq_len)
+
             logger.info(
-                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[model_id].max_prefill_chunk_size}, enable trace: {enable_trace}"
+                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, enable trace: {enable_trace}"
             )
 
             page_table_user = (
@@ -274,8 +260,6 @@ class Generator:
                     model_id=model_id,
                     **local_kwargs,
                 )
-            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
-            # otherwise, we can process the logits after prefill immediately
             if enable_trace:
                 logits = ttnn.slice(
                     logits,
@@ -289,6 +273,8 @@ class Generator:
                     )
                 logits = self.model[model_id].lm_head(logits)
                 logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # if data parallel is greater than 1, we need to add logits to out_list and do the processing after all the prefill are done
+            # otherwise, we can process the logits after prefill immediately
             if self.data_parallel > 1:
                 out_list.append(logits)
             else:
