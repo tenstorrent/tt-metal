@@ -70,6 +70,7 @@ inline float bfloat16_to_float(uint16_t bfloat_val) {
     return f;
 }
 
+// NOLINTBEGIN(bugprone-switch-missing-default-case)
 string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     if (core_type == CoreType::ETH) {
         switch (risc_id) {
@@ -104,6 +105,7 @@ string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
     }
     return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
 }
+// NOLINTEND(bugprone-switch-missing-default-case)
 
 void AssertSize(uint8_t sz, uint8_t expected_sz) {
     TT_ASSERT(

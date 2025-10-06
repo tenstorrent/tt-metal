@@ -650,6 +650,7 @@ void ElfFile::Impl::XIPify() {
                 case R_RISCV_32_PCREL:
                     TT_THROW("{}: R_RISCV_32_PCREL relocation found at {}", path_, reloc.r_offset);
                     break;
+                default: TT_THROW("{}: unknown relocation type {} at {}", path_, type, reloc.r_offset);
             }
         }
 
