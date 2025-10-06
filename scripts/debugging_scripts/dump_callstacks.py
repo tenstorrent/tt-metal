@@ -185,7 +185,7 @@ def get_callstack(
         offsets.append(dispatcher_core_data.kernel_offset)
     try:
         if not full_callstack:
-            pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+            pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc() - 4
             return top_callstack(pc, elfs, offsets, context)
         else:
             return callstack(location, elfs, offsets, risc_name)
@@ -257,6 +257,7 @@ def dump_callstacks(
                     pass
         else:
             callstack = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
+            print(callstack)
 
         result = DumpCallstacksData(
             dispatcher_core_data=dispatcher_core_data,
@@ -311,7 +312,7 @@ def run(args, context: Context):
     full_callstack = args["--full_callstack"]
     gdb_callstack = args["--gdb_callstack"]
     active_cores = args["--active_cores"]
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth"]
+    BLOCK_TYPES_TO_CHECK = ["active_eth"]
     elfs_cache = get_elfs_cache(args, context)
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)

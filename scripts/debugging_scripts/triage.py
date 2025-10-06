@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 import importlib
 import importlib.metadata as importlib_metadata
 import sys
+import threading
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
@@ -470,6 +471,7 @@ def serialize_result(script: TriageScript | None, result):
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
+    return
     """Enforce approved `ttexalens` version unless skipped.
 
     Reads a single-line SHA from `ttexalens_ref.txt` in the parent

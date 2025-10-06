@@ -12,8 +12,9 @@ Description:
     Provides an API for grabbing or caching ParsedElfFile objects by given elf path.
 """
 
+import os
 import threading
-from triage import triage_singleton, ScriptConfig, run_script
+from triage import TTTriageError, triage_singleton, ScriptConfig, run_script
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
 from ttexalens.tt_exalens_lib import parse_elf
@@ -57,8 +58,14 @@ class ElfsCache:
             ParsedElfFile object for the given path
         """
         with self._lock:
+            if not os.path.exists(elf_path):
+                raise TTTriageError(f"ELF file {elf_path} does not exist.")
             if elf_path not in self._cache:
                 self._cache[elf_path] = parse_elf(elf_path, self.context)
+                if not self._cache[elf_path]:
+                    raise TTTriageError(
+                        f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+                    )
             return self._cache[elf_path]
 
     def has_elf(self, elf_path: str) -> bool:

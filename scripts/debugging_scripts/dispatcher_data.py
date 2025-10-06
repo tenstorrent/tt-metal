@@ -51,38 +51,15 @@ class DispatcherData:
             raise TTTriageError("No kernels found in inspector data.")
 
         self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
+        print(self._a_kernel_path)
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
         idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
         active_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "erisc")
 
-        # Check if firmware elf paths exist
-        if not os.path.exists(brisc_elf_path):
-            raise TTTriageError(f"BRISC ELF file {brisc_elf_path} does not exist.")
-
-        if not os.path.exists(idle_erisc_elf_path):
-            raise TTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
-
-        if not os.path.exists(active_erisc_elf_path):
-            raise TTTriageError(f"ACTIVE ERISC ELF file {active_erisc_elf_path} does not exist.")
-
+        # Parses the firmware elfs
         self._brisc_elf = elfs_cache[brisc_elf_path]
         self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
         self._active_erisc_elf = elfs_cache[active_erisc_elf_path]
-
-        # Check if debug info is obtained correctly
-        if not self._brisc_elf:
-            raise TTTriageError(
-                f"Failed to extract DWARF info from ELF file {brisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-            )
-        if not self._idle_erisc_elf:
-            raise TTTriageError(
-                f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-            )
-
-        if not self._active_erisc_elf:
-            raise TTTriageError(
-                f"Failed to extract DWARF info from ELF file {active_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-            )
 
         # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
@@ -123,7 +100,7 @@ class DispatcherData:
             programmable_core_type = self._ProgrammableCoreTypes_TENSIX
             enum_values = self._enum_values_tenisx
         elif location in location._device.idle_eth_block_locations:
-            # For eth, use the idle erisc elf
+            # For idle eth, use the idle erisc elf
             fw_elf = self._idle_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
             enum_values = self._enum_values_eth
@@ -231,6 +208,8 @@ class DispatcherData:
             kernel_path = os.path.realpath(kernel_path)
             if proc_name == "NCRISC" and location._device._arch == "wormhole_b0":
                 kernel_offset = 0xFFC00000
+            elif location in location._device.active_eth_block_locations and location._device._arch == "wormhole_b0":
+                kernel_offset = kernel_text_offset
             else:
                 kernel_offset = kernel_config_base + kernel_text_offset
         else:
