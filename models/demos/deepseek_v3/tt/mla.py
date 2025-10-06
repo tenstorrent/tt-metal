@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -20,8 +20,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
-    ReduceScatterAsyncConfig,
+    ReduceScatterAsyncMinimalConfig,
     ReshardConfig,
+    SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     MAX_BATCH_SIZE,
@@ -29,7 +30,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     even_int_div,
     get_mesh_coords,
     get_state_dicts,
-    save_and_get_path,
+    shard_and_save,
     sub_state_dicts,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -105,18 +106,16 @@ class MLA(AbstractModule):
         # Regular non-split weights
         linear_weight_configs = {  # TODO: add dequant
             ttnn_name: {
-                "input_tensor_b": save_and_get_path(
+                "input_tensor_b": cls._convert_metaweight(
                     output_path / f"{ttnn_name}.input_tensor_b",
-                    cls._convert_metaweight(
-                        dequantize(
-                            get_state_dicts(state_dicts, f"{hf_name}.weight", shape, dtype=torch.float8_e4m3fn),
-                            get_state_dicts(state_dicts, f"{hf_name}.weight_scale_inv", dtype=torch.float32),
-                            (1, weight_block_height, weight_block_width),
-                        ),
-                        mesh_dims,
-                        mesh_device,
+                    dequantize(
+                        get_state_dicts(state_dicts, f"{hf_name}.weight", shape, dtype=torch.float8_e4m3fn),
+                        get_state_dicts(state_dicts, f"{hf_name}.weight_scale_inv", dtype=torch.float32),
+                        (1, weight_block_height, weight_block_width),
                     ),
-                )
+                    mesh_dims,
+                    mesh_device,
+                ),
             }
             for hf_name, ttnn_name, shape, mesh_dims in [
                 ("q_a_proj", "wq_a", (q_lora_rank, dim), (0, -2)),
@@ -147,32 +146,31 @@ class MLA(AbstractModule):
             **norm_weight_configs,
             **linear_weight_configs,
             "wkv_b1": {
-                "input_tensor_b": save_and_get_path(
-                    output_path / "wkv_b1.input_tensor_b",
-                    cls._convert_metaweight(torch_weights_k, (0, -3), mesh_device),
-                )
+                "input_tensor_b": cls._convert_metaweight(
+                    output_path / "wkv_b1.input_tensor_b", torch_weights_k, (0, -3), mesh_device
+                ),
             },
             "wkv_b2": {
-                "input_tensor_b": save_and_get_path(
-                    output_path / "wkv_b2.input_tensor_b",
-                    cls._convert_metaweight(torch_weights_v, (0, -3), mesh_device),
-                )
+                "input_tensor_b": cls._convert_metaweight(
+                    output_path / "wkv_b2.input_tensor_b", torch_weights_v, (0, -3), mesh_device
+                ),
             },
         }
 
     @classmethod
     def _convert_metaweight(
-        cls, torch_metaweight: torch.Tensor, dims: tuple[int | None, int | None], mesh_device: ttnn.MeshDevice
-    ) -> WeightConfig:
-        return ttnn.as_tensor(
+        cls,
+        path: Path,
+        torch_metaweight: torch.Tensor,
+        dims: tuple[int | None, int | None],
+        mesh_device: ttnn.MeshDevice,
+    ) -> SavedWeight:
+        return shard_and_save(
+            path,
             torch_metaweight.transpose(-2, -1),
+            shard_dims=dims,
+            mesh_device=mesh_device,
             dtype=ttnn.bfloat8_b,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                mesh_device.shape,
-                dims,
-            ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -302,11 +300,9 @@ class MLA(AbstractModule):
         # Set up CCLs
 
         # Q
-        wq_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_device.shape),
+        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -368,6 +364,7 @@ class MLA(AbstractModule):
             "wkv_a_ag_prefill": wkv_a_ag_config,
             "wkv_a_r_prefill": wkv_a_r_config,
             "wo_ag_prefill": wo_ag_config,
+            "mesh_device": mesh_device,
         }
 
     @classmethod
@@ -568,11 +565,9 @@ class MLA(AbstractModule):
         # Set up CCLs
 
         # Q
-        wq_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -592,11 +587,9 @@ class MLA(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        wq_a2a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wq_a2a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -619,11 +612,9 @@ class MLA(AbstractModule):
                 packer_l1_acc=True,
             ),
         }
-        wkv_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wkv_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -636,11 +627,9 @@ class MLA(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
-        flash_mla_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        flash_mla_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=1,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -688,6 +677,7 @@ class MLA(AbstractModule):
             "flash_mla_ag_decode": flash_mla_ag_config,
             "flash_mla_rs_decode": flash_mla_rs_config,
             "wo_ag_decode": wo_ag_config,
+            "mesh_device": mesh_device,
         }
 
     @classmethod
@@ -725,9 +715,10 @@ class MLA(AbstractModule):
     @classmethod
     def create_page_table(
         cls,
-        page_table: torch.Tensor,
         paged_config: PagedAttentionConfig,
         mesh_device: ttnn.MeshDevice,
+        page_table: torch.Tensor | None = None,
+        batch_size: int = MAX_BATCH_SIZE,
     ) -> ttnn.Tensor:
         """Helper function to allocate the page table for MLA on device.
 
@@ -746,6 +737,15 @@ class MLA(AbstractModule):
             Device-allocated version of the page table representing the page table
         """  # TODO: update docs
         assert cls.is_device_supported(mesh_device), f"Mesh device shape {mesh_device.shape} must be supported by MLA."
+
+        if page_table is None:
+            max_num_blocks = paged_config.max_num_blocks
+            _, dp_factor = mesh_device.shape
+            batch_per_shard = even_int_div(batch_size, dp_factor)
+
+            page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
+            page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
+
         assert page_table.numel() == paged_config.max_num_blocks
 
         return ttnn.from_torch(
@@ -788,12 +788,13 @@ class MLA(AbstractModule):
 
         # CCL states setup (Must be in order of execution)
         get_rs_params = lambda axis: {
-            "from_remote_multi_device_global_semaphore": ccl.get_from_sem(axis=axis),
-            "to_remote_multi_device_global_semaphore": ccl.get_to_sem(axis=axis),
+            "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         get_ag_params = lambda axis: {
             "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
+            "barrier_semaphore": ccl.get_barrier_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         ccl_states_prefill = {
@@ -861,14 +862,17 @@ class MLA(AbstractModule):
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
-
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_decode"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_decode"])
 
         tt_q = RMSNorm.forward_decode(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])
 
+        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
+        tt_q = ttnn.to_layout(tt_q, ttnn.ROW_MAJOR_LAYOUT)
         tt_q = ttnn.reshape(tt_q, (bsz, 1, num_heads_local, qk_head_dim))
+        tt_q = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)
+
         tt_q_nope = ttnn.slice(tt_q, [0, 0, 0, 0], [bsz, 1, num_heads_local, qk_nope_head_dim])
         tt_q_rope = ttnn.slice(tt_q, [0, 0, 0, qk_nope_head_dim], [bsz, 1, num_heads_local, qk_head_dim])
 
@@ -903,7 +907,7 @@ class MLA(AbstractModule):
             tt_q, **cfg["wq_a2a_ag_decode"]
         )  # [1, num_heads, bsz_local, kv_lora_rank + qk_rope_head_dim]
         tt_q = ttnn.permute(tt_q, (0, 2, 1, 3))  # [1, bsz_local, num_heads, kv_lora_rank + qk_rope_head_dim]
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a2a_rs_decode"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a2a_rs_decode"])
         tt_q = tt_q * scale  # Scale the input tensor
 
         # KVPE Stuff
@@ -944,7 +948,7 @@ class MLA(AbstractModule):
         # FIXME: Reduce-Scatter here!! (tt_kvpe)
         tt_kvpe = ttnn.pad(tt_kvpe, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)
         tt_kvpe = ttnn.permute(tt_kvpe, (0, 2, 1, 3))  # [1, bsz, ttnn.TILE_SIZE, kv_lora_rank + qk_rope_head_dim]
-        tt_kvpe = ttnn.experimental.reduce_scatter_async(tt_kvpe, **cfg["wkv_a_rs_decode"])
+        tt_kvpe = ttnn.experimental.reduce_scatter_minimal_async(tt_kvpe, **cfg["wkv_a_rs_decode"])
         tt_kvpe = tt_kvpe[:, :, :1, :]  # [1, bsz_local, 1, kv_lora_rank + qk_rope_head_dim]
         tt_kvpe = tt_kvpe * scale  # Scale the input tensor
 
@@ -979,7 +983,7 @@ class MLA(AbstractModule):
             attn_out, **cfg["flash_mla_ag_decode"]
         )  # [1, bsz, num_heads, kv_lora_rank]
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, num_heads, bsz, kv_lora_rank]
-        attn_out = ttnn.experimental.reduce_scatter_async(
+        attn_out = ttnn.experimental.reduce_scatter_minimal_async(
             attn_out, **cfg["flash_mla_rs_decode"]
         )  # [1, num_heads_local, bsz, kv_lora_rank]
         attn_out = ttnn.permute(attn_out, (0, 2, 1, 3))  # [1, bsz, num_heads_local, kv_lora_rank]
@@ -993,7 +997,11 @@ class MLA(AbstractModule):
         v_out = ttnn.experimental.all_gather_async(v_out, **cfg["wo_ag_decode"])  # [1, num_heads, bsz, v_head_dim]
         v_out = ttnn.permute(v_out, (0, 2, 1, 3))  # [1, bsz, num_heads, v_head_dim]
 
+        # Bug: https://github.com/tenstorrent/tt-metal/issues/29932
+        v_out = ttnn.to_layout(v_out, ttnn.ROW_MAJOR_LAYOUT)
         v_out = ttnn.reshape(v_out, (1, 1, bsz, num_heads * v_head_dim))
+        v_out = ttnn.to_layout(v_out, ttnn.TILE_LAYOUT)
+
         out = ttnn.linear(v_out, **cfg["wo"])  # [1, 1, bsz, dim]
 
         return out
@@ -1039,8 +1047,11 @@ class MLA(AbstractModule):
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
 
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs_prefill"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_prefill"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_prefill"])
+
+        # Bug: https://github.com/tenstorrent/tt-metal/issues/29935
+        ttnn.synchronize_device(cfg["mesh_device"])
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"])

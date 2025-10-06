@@ -7,20 +7,22 @@
 namespace composite_common {
 
 bool use_composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
+    const ttnn::Tensor& input_tensor,
+    ttnn::ccl::Topology topology,
+    const int32_t dim,
+    std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.device();
-        const auto& mesh_view = mesh_device->get_view();
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
+    uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
+
+    // This is the same conditional topology update done inside the native op
+    if (num_devices == 2) {
+        topology = ttnn::ccl::Topology::Linear;
     }
 
     // Must scatter evenly
@@ -34,15 +36,25 @@ bool use_composite_reduce_scatter(
         return true;
     }
 
-    // Use composite if scattering on a dim that isn't 3
-    if (scatter_dim != 3) {
-        return true;
+    // Use composite if we don't support scattering on the provided dim
+    // with the provided topology
+    if (topology == ttnn::ccl::Topology::Linear) {
+        if (scatter_dim != 3) {
+            return true;
+        }
+    } else if (topology == ttnn::ccl::Topology::Ring) {
+        if (scatter_dim != 1 && scatter_dim != 2 && scatter_dim != 3) {
+            return true;
+        }
+    } else {
+        TT_FATAL(false, "reduce_scatter_minimal_async only supports linear or ring topology");
     }
 
-    // Use composite if tiled and scattering on padded dim 3
+    // Use composite if tiled and scattering on padded dim 2 or 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
-    return scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0;
+    return (scatter_dim == 3 && output_shape[scatter_dim] % tile_width != 0) ||
+           (scatter_dim == 2 && output_shape[scatter_dim] % tile_height != 0);
 }
 
 bool use_all_gather_async_llama_sharded(const ttnn::Tensor& input_tensor, const ttnn::MemoryConfig& output_mem_config) {
@@ -147,16 +159,37 @@ bool use_composite_all_gather(
     bool is_tiled_and_padded_on_gather_dim =
         input_tensor.layout() == ttnn::Layout::TILE && ((gather_dim == 2 && input_shape[2] % tile_height != 0) ||
                                                         (gather_dim == 3 && input_shape[3] % tile_width != 0));
-    if (is_tiled_and_padded_on_gather_dim) {
-        return true;
-    }
+    return is_tiled_and_padded_on_gather_dim;
+}
 
-    // Use composite if gathering on dim 0 or dim 1, and input_shape[0] != 1 or input_shape[1] != 1
-    if ((gather_dim == 0 || gather_dim == 1) && (input_shape[0] != 1 || input_shape[1] != 1)) {
-        return true;
-    }
+bool use_composite_all_to_all(
+    const ttnn::Tensor& input_tensor,
+    int32_t in_dim,
+    int32_t out_dim,
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
 
-    return false;
+    auto input_shape = input_tensor.logical_shape();
+
+    int32_t rank = input_tensor.logical_shape().rank();
+    in_dim = (in_dim < 0) ? rank + in_dim : in_dim;
+    out_dim = (out_dim < 0) ? rank + out_dim : out_dim;
+
+    bool is_tiled_and_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
+                                     (input_shape[2] % tile_height == 0 && input_shape[3] % tile_width == 0);
+
+    // the current native implementation works for very specific cases
+    bool use_native =
+        (input_tensor.layout() == ttnn::Layout::TILE &&
+         input_tensor.buffer()->buffer_type() == ttnn::BufferType::DRAM &&
+         input_tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED &&
+         (!memory_config.has_value() ||
+          memory_config.value().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED) &&
+         (in_dim == 2 || in_dim == 3) && (out_dim == 2 || out_dim == 3) && is_tiled_and_tile_aligned);
+
+    return !use_native;
 }
 
 ttnn::Tensor composite_all_gather(
@@ -175,15 +208,30 @@ ttnn::Tensor composite_all_gather(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
-    bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
-                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
-
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
     // and after re-tilizing
     ttnn::DataType input_dtype = input_tensor.dtype();
+    bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
+                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
     bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == ttnn::DataType::BFLOAT8_B;
+
     auto input_memory_config = input_tensor.memory_config();
+    TT_FATAL(
+        !(input_memory_config.is_sharded() && !memory_config.has_value()),
+        "If input memory config is sharded, then output memory config must be provided. Defaulting the output memory "
+        "config to the input sharded memory config will break the op as the input and output shapes are different.");
     auto output_memory_config = memory_config.value_or(input_memory_config);
+
+    if (input_memory_config.is_sharded()) {
+        /*
+         * If sharded to interleaved, convert to the final interleaved memory config.
+         * If sharded to sharded, use DRAM interleaved as the intermediate memory
+         * config for executing the composite.
+         */
+        auto intermediate_memory_config =
+            output_memory_config.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : output_memory_config;
+        input_tensor = ttnn::to_memory_config(input_tensor, intermediate_memory_config);
+    }
 
     // Convert to row major
     if (is_tiled_and_not_tile_aligned) {
@@ -195,9 +243,11 @@ ttnn::Tensor composite_all_gather(
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, input_memory_config, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+        input_tensor, num_links, input_tensor.memory_config(), ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
 
+    // Do the gather itself
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
+
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {
         all_gather_output_tensor = ttnn::to_layout(all_gather_output_tensor, ttnn::Layout::TILE);
@@ -208,7 +258,7 @@ ttnn::Tensor composite_all_gather(
         }
     }
 
-    if (input_memory_config.memory_layout() != output_memory_config.memory_layout()) {
+    if (output_memory_config.is_sharded()) {
         all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
     }
 
@@ -230,6 +280,107 @@ std::vector<ttnn::Tensor> composite_all_gather(
             composite_all_gather(input_tensors[i], dim, num_links, memory_config, subdevice_id, cluster_axis));
     }
     return output_tensors;
+}
+
+ttnn::Tensor composite_all_to_all(
+    ttnn::Tensor input_tensor,
+    int32_t in_dim,
+    int32_t out_dim,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+
+    auto input_shape = input_tensor.logical_shape();
+
+    int32_t rank = input_tensor.logical_shape().rank();
+    in_dim = (in_dim < 0) ? rank + in_dim : in_dim;
+    out_dim = (out_dim < 0) ? rank + out_dim : out_dim;
+
+    bool is_tiled_and_not_tile_aligned = input_tensor.layout() == ttnn::Layout::TILE &&
+                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
+
+    // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
+    // and after re-tilizing
+    ttnn::DataType input_dtype = input_tensor.dtype();
+    bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == ttnn::DataType::BFLOAT8_B;
+
+    bool is_sharded = input_tensor.is_sharded();
+    auto input_memory_config = input_tensor.memory_config();
+    auto interim_memory_config = is_sharded ? ttnn::DRAM_MEMORY_CONFIG : input_memory_config;
+    auto output_memory_config = memory_config.value_or(input_memory_config);
+
+    ttnn::Tensor temp_tensor;
+
+    // Convert to row major
+    if (is_tiled_and_not_tile_aligned) {
+        // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
+        if (convert_to_bfloat16_for_composite) {
+            temp_tensor = ttnn::typecast(input_tensor, ttnn::DataType::BFLOAT16);
+            input_tensor.deallocate();
+            input_tensor = temp_tensor;
+        }
+        temp_tensor = ttnn::to_layout(input_tensor, ttnn::Layout::ROW_MAJOR);
+        input_tensor.deallocate();
+        input_tensor = temp_tensor;
+    }
+
+    // Sharded input is challenging to work with, because we perform slice and concat separately
+    // and the user can't give us intermediate shard specs. So the most foolproof solution is
+    // to simply undo sharding by converting to DRAM interleaved storage.
+    if (is_sharded) {
+        temp_tensor = ttnn::to_memory_config(input_tensor, interim_memory_config);
+        input_tensor.deallocate();
+        input_tensor = temp_tensor;
+    }
+
+    // Step 1: make every device have a copy of every tensor
+    std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
+        input_tensor,
+        num_links,
+        interim_memory_config,
+        ttnn::ccl::Topology::Linear,
+        /* cluster_axis */ std::nullopt,
+        subdevice_id);
+    input_tensor.deallocate();
+
+    // Step 2: Slice out the index range each device cares about, along out_dim
+    for (size_t i = 0; i < broadcasted_tensors.size(); i++) {
+        temp_tensor = ttnn::mesh_partition(
+            broadcasted_tensors[i], out_dim, /* cluster_axis */ std::nullopt, interim_memory_config);
+        broadcasted_tensors[i].deallocate();
+        broadcasted_tensors[i] = temp_tensor;
+    }
+
+    // Step 3: Concatenate along in_dim
+    ttnn::Tensor output_tensor = ttnn::concat(broadcasted_tensors, in_dim, interim_memory_config);
+    for (auto& tensor : broadcasted_tensors) {
+        tensor.deallocate();
+    }
+
+    // Convert back to tiled
+    if (is_tiled_and_not_tile_aligned) {
+        temp_tensor = ttnn::to_layout(output_tensor, ttnn::Layout::TILE);
+        output_tensor.deallocate();
+        output_tensor = temp_tensor;
+        // If we had to convert the input dtype in order to execute the row-major composite op, convert back to the
+        // input dtype
+        if (convert_to_bfloat16_for_composite) {
+            temp_tensor = ttnn::typecast(output_tensor, input_dtype);
+            output_tensor.deallocate();
+            output_tensor = temp_tensor;
+        }
+    }
+
+    if (output_memory_config.memory_layout() != interim_memory_config.memory_layout()) {
+        temp_tensor = ttnn::to_memory_config(output_tensor, output_memory_config);
+        output_tensor.deallocate();
+        output_tensor = temp_tensor;
+    }
+
+    return output_tensor;
 }
 
 }  // namespace composite_common

@@ -104,6 +104,7 @@ class Yolov6l_Conv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         if self.reshape:

@@ -46,7 +46,11 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 
     # Gather analysis stats
     stats_collector = StatsCollector(log_file_path, test_id_to_name, test_type_attributes, verbose=verbose)
-    dm_stats, aggregate_stats = stats_collector.gather_analysis_stats()
+    stats = stats_collector.gather_stats_from_csv()
+    if not stats.get("devices"):
+        logger.info("No profiling data available.")
+        return
+    dm_stats, aggregate_stats = stats_collector.gather_analysis_stats(stats)
 
     # Print stats if explicitly requested
     stats_reporter = StatsReporter(

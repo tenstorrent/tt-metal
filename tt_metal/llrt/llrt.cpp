@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
@@ -44,7 +44,7 @@ void print_aerisc_training_status(chip_id_t device_id, const CoreCoord& virtual_
         device_id, virtual_core, rx_link_up_addr, sizeof(uint32_t))[0];
     log_critical(
         tt::LogMetal,
-        "Device {}: Virtual core {},Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
+        "Device {}: Virtual core {}, Port status: {:#x}, Retrain count: {:#x}, Rx link up: {:#x}",
         device_id,
         virtual_core.str(),
         port_status,
@@ -202,8 +202,7 @@ bool test_load_write_read_risc_binary(
     // Depending on the arch, active ethernet may be shared local memory with the base firmware
     // Primary risc is shared
     // TODO: Move this query into the HAL
-    bool local_mem_offset = processor_class_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-
+    bool local_mem_offset = processor_type_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
         uint64_t relo_addr =
@@ -241,7 +240,9 @@ bool is_active_eth_core(chip_id_t chip_id, const CoreCoord& core) {
     return active_eth_cores.find(logical_core_from_ethernet_core(chip_id, core)) != active_eth_cores.end();
 }
 
-static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord &core, int run_state) {
+namespace {
+
+bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreCoord& core, int run_state) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip_id, core);
     const auto& hal = tt_metal::MetalContext::instance().hal();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
@@ -270,6 +271,8 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
     };
     return get_mailbox_is_done(go_msg_addr);
 }
+
+}  // namespace
 
 void wait_until_cores_done(
     chip_id_t device_id, int run_state, std::unordered_set<CoreCoord> &not_done_phys_cores, int timeout_ms) {
@@ -395,11 +398,12 @@ void send_msg_to_eth_mailbox(
     const uint32_t msg = call | msg_val;
     log_debug(
         tt::LogLLRuntime,
-        "Device {}: Eth {} Mailbox {:#x} Command {:#x}",
+        "Device {}: Eth {} Mailbox {:#x} Command {:#x}, {}",
         device_id,
         virtual_core.str(),
         mailbox_addr,
-        msg);
+        msg,
+        fmt::join(args, ", "));
     tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
         std::vector<uint32_t>{msg}.data(), tt_cxy_pair(device_id, virtual_core), mailbox_addr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);

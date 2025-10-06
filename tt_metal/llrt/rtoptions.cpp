@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
 using std::vector;
@@ -26,18 +26,18 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
     "READ_DEBUG_DELAY",
     "WRITE_DEBUG_DELAY",
     "ATOMIC_DEBUG_DELAY",
-    "DISABLE_L1_DATA_CACHE",
+    "ENABLE_L1_DATA_CACHE",
 };
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
-static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
+constexpr auto TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
+constexpr auto TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
-static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
+constexpr auto TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
 // Env variable to override the core grid configuration
-static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
+constexpr auto TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -198,6 +198,16 @@ RunTimeOptions::RunTimeOptions() {
         this->enable_hw_cache_invalidation = true;
     }
 
+    // Parse RELIABILITY_MODE: "strict" or "relaxed"
+    if (const char* reliability_mode_str = getenv("RELIABILITY_MODE"); reliability_mode_str != nullptr) {
+        std::string mode(reliability_mode_str);
+        if (mode == "relaxed") {
+            reliability_mode = tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+        } else if (mode == "strict") {
+            reliability_mode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+        }
+    }
+
     if (std::getenv("TT_METAL_SIMULATOR")) {
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
         this->runtime_target_device_ = tt::TargetDevice::Simulator;
@@ -247,6 +257,11 @@ RunTimeOptions::RunTimeOptions() {
 
     if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
         this->enable_2_erisc_mode_with_fabric = true;
+    }
+
+    if (getenv("TT_METAL_MULTI_AERISC")) {
+        log_info(tt::LogMetal, "Enabling experimental multi-erisc mode");
+        this->enable_2_erisc_mode = true;
     }
 
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
@@ -385,6 +400,19 @@ void RunTimeOptions::ParseInspectorEnv() {
             inspector_settings.warn_on_write_exceptions = false;
         }
     }
+
+    const char* inspector_rpc_server_address_str = getenv("TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS");
+    if (inspector_rpc_server_address_str != nullptr) {
+        inspector_settings.rpc_server_address = std::string(inspector_rpc_server_address_str);
+    }
+
+    const char* inspector_rpc_str = getenv("TT_METAL_INSPECTOR_RPC");
+    if (inspector_rpc_str != nullptr) {
+        inspector_settings.rpc_server_enabled = true;
+        if (std::strncmp(inspector_rpc_str, "0", 1) == 0) {
+            inspector_settings.rpc_server_enabled = false;
+        }
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
@@ -407,7 +435,7 @@ void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_meta
         }
     }
     for (auto& core_type_and_cores : feature_targets[feature].cores) {
-        if (core_type_and_cores.second.size() > 0) {
+        if (!core_type_and_cores.second.empty()) {
             feature_targets[feature].enabled = true;
         }
     }
@@ -504,7 +532,7 @@ void RunTimeOptions::ParseFeatureChipIds(RunTimeDebugFeatures feature, const std
     }
 
     // Default is no chips are specified is all
-    if (chips.size() == 0) {
+    if (chips.empty()) {
         feature_targets[feature].all_chips = true;
     }
     feature_targets[feature].chip_ids = chips;
@@ -517,17 +545,13 @@ void RunTimeOptions::ParseFeatureRiscvMask(
     if (env_var_str != nullptr) {
         feature_targets[feature].processors = hal.parse_processor_set_spec(env_var_str);
     } else {
-        // Default is all RISCVs enabled.
-        bool default_disabled = (feature == RunTimeDebugFeatures::RunTimeDebugFeatureDisableL1DataCache);
-        if (!default_disabled) {
-            auto& processors = feature_targets[feature].processors;
-            uint32_t num_core_types = hal.get_programmable_core_type_count();
-            for (uint32_t core_type_index = 0; core_type_index < num_core_types; ++core_type_index) {
-                auto core_type = hal.get_programmable_core_type(core_type_index);
-                uint32_t num_processors = hal.get_num_risc_processors(core_type);
-                for (uint32_t processor_index = 0; processor_index < num_processors; ++processor_index) {
-                    processors.add(core_type, processor_index);
-                }
+        auto& processors = feature_targets[feature].processors;
+        uint32_t num_core_types = hal.get_programmable_core_type_count();
+        for (uint32_t core_type_index = 0; core_type_index < num_core_types; ++core_type_index) {
+            auto core_type = hal.get_programmable_core_type(core_type_index);
+            uint32_t num_processors = hal.get_num_risc_processors(core_type);
+            for (uint32_t processor_index = 0; processor_index < num_processors; ++processor_index) {
+                processors.add(core_type, processor_index);
             }
         }
     }
@@ -547,6 +571,23 @@ void RunTimeOptions::ParseFeaturePrependDeviceCoreRisc(RunTimeDebugFeatures feat
     char *env_var_str = std::getenv(env_var.c_str());
     feature_targets[feature].prepend_device_core_risc =
         (env_var_str != nullptr) ? (strcmp(env_var_str, "1") == 0) : true;
+}
+
+uint32_t RunTimeOptions::get_watcher_hash() const {
+    // These values will cause kernels / firmware to be recompiled if they change
+    // Only the ones which have #define on the device side need to be listed here
+    std::string hash_str = "";
+    hash_str += std::to_string(watcher_feature_disabled(watcher_waypoint_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_noc_sanitize_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_assert_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_pause_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_ring_buffer_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_stack_usage_str));
+    hash_str += std::to_string(watcher_feature_disabled(watcher_dispatch_str));
+    hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
+    hash_str += std::to_string(get_watcher_enabled());
+    std::hash<std::string> hash_fn;
+    return hash_fn(hash_str);
 }
 
 // Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor

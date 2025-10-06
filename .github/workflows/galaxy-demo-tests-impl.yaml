@@ -72,7 +72,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       - name: Save environment data
         if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy Llama3 demo tests') && !cancelled() }}

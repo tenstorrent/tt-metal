@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,7 @@ int main() {
     // We will create a distributed buffer with 8 shards of {32, 32} and distribute it across the devices in the mesh.
     auto shard_shape = Shape2D{32, 32};
     auto distributed_buffer_shape = Shape2D{32 * mesh_device->num_rows(), 32 * mesh_device->num_cols()};
-    uint32_t tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::UInt32);
+    uint32_t tile_size_bytes = tt::tile_size(tt::DataFormat::UInt32);
     uint32_t distributed_buffer_size_bytes = 64 * 128 * tile_size_bytes;
 
     auto local_buffer_config =

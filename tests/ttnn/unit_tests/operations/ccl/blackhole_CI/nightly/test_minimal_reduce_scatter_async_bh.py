@@ -8,7 +8,12 @@ import math
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
+from models.common.utility_functions import (
+    skip_for_blackhole,
+    skip_for_wormhole_b0,
+    skip_for_n_dev,
+    skip_for_n_or_less_dev,
+)
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.nightly.test_all_gather_nightly import validate_test
 
 
@@ -234,7 +239,9 @@ def run_reduce_scatter_impl(
     bh_1d_mesh_device.clear_loaded_sub_device_manager()
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
+@skip_for_n_dev(8)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
@@ -250,7 +257,7 @@ def run_reduce_scatter_impl(
         # Composite-RS tests
         (4, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
-        # (4, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16), #Issue 27619
+        (4, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -263,7 +270,7 @@ def run_reduce_scatter_impl(
         "batch_1",
         "composite_rs_test_one",
         "composite_rs_test_two",
-        # "composite_rs_test_three",
+        "composite_rs_test_three",
     ],
 )
 @pytest.mark.parametrize(
@@ -286,10 +293,9 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "use_barrier, use_persistent_buffers",
@@ -304,12 +310,10 @@ def run_reduce_scatter_impl(
     "device_params, rs_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
 )
-def test_reduce_scatter_async(
+def test_reduce_scatter_async_4dev_ring(
     bh_1d_mesh_device,
     num_devices,
     num_links,
@@ -346,23 +350,140 @@ def test_reduce_scatter_async(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype, is_training_shape",
+    [
+        (4, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (4, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (4, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (4, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (4, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (4, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (4, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        (4, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
+        # Composite-RS tests
+        (4, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
+        (4, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
+        # (4, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True), #Issue 27619
+    ],
+    ids=[
+        "padded_dim_2_test_one",
+        "padded_dim_2_test_two",
+        "batch_8",
+        "batch_4",
+        "batch_1_sd35_spatial",
+        "batch_1_sd35_prompt",
+        "batch_2",
+        "batch_1",
+        "composite_rs_test_one",
+        "composite_rs_test_two",
+        # "composite_rs_test_three",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_rs",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (True, 10),
+        (False, 1),
+    ],
+    ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "ones_tensor",
+    [
+        False,
+    ],
+    ids=["random"],
+)
+@pytest.mark.parametrize(
+    "use_barrier, use_persistent_buffers",
+    [
+        (True, True),
+        (True, False),
+        (False, True),
+    ],
+    ids=["barrier_with_persistent_buffers", "barrier_without_persistent_buffers", "no_barrier_with_persistent_buffers"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+)
+def test_reduce_scatter_async_line(
+    bh_1d_mesh_device,
+    num_devices,
+    num_links,
+    rs_input_shape,
+    dim,
+    layout,
+    rs_input_dtype,
+    is_training_shape,
+    mem_config_input,
+    mem_config_rs,
+    enable_trace,
+    num_iters,
+    ones_tensor,
+    use_barrier,
+    use_persistent_buffers,
+    rs_topology,
+):
+    validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
+    if is_training_shape and bh_1d_mesh_device.shape[0] == 8:
+        pytest.skip("8 device training shape test skipped for now, to be investigated")
+    if is_training_shape and enable_trace:
+        pytest.skip("We've seen ND PCC when running the composite-RS with trace")
+
+    run_reduce_scatter_impl(
+        bh_1d_mesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_rs,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        ones_tensor=ones_tensor,
+        use_barrier=use_barrier,
+        use_persistent_buffers=use_persistent_buffers,
+    )
+
+
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
         # Scatter on dim 0
-        # (4, [16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Scatter on dim 1
-        # (4, [1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # Scatter on dim 2
-        # (4, [1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        # (4, [16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (4, [16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         # # Scatter on dim 3
         (4, [1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (4, [16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -389,19 +510,16 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async_training_shapes(
     bh_1d_mesh_device,
@@ -418,6 +536,8 @@ def test_reduce_scatter_async_training_shapes(
     num_iters,
     ones_tensor,
 ):
+    if dim != 3:
+        pytest.skip("#26572: Can only operate on dim 3")
     validate_test(num_devices, rs_topology, bh_1d_mesh_device.shape, 0)
     run_reduce_scatter_impl(
         bh_1d_mesh_device,
@@ -438,7 +558,8 @@ def test_reduce_scatter_async_training_shapes(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",
@@ -501,10 +622,9 @@ def test_reduce_scatter_async_training_shapes(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -513,7 +633,6 @@ def test_reduce_scatter_async_training_shapes(
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 113664}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async_sharded_to_sharded(
     bh_1d_mesh_device,
@@ -584,7 +703,8 @@ def test_reduce_scatter_async_sharded_to_sharded(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",
@@ -628,10 +748,9 @@ def test_reduce_scatter_async_sharded_to_sharded(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -640,7 +759,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 113664}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async_interleaved_to_sharded(
     bh_1d_mesh_device,
@@ -701,7 +819,8 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     )
 
 
-@skip_for_wormhole_b0("This test is for blackhole")
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, layout, rs_input_dtype",
@@ -739,10 +858,9 @@ def test_reduce_scatter_async_interleaved_to_sharded(
 @pytest.mark.parametrize(
     "ones_tensor",
     [
-        True,
         False,
     ],
-    ids=["ones", "random"],
+    ids=["random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -751,7 +869,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 113664}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
 )
 def test_reduce_scatter_async_sharded_to_interleaved(
     bh_1d_mesh_device,

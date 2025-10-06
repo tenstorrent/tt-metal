@@ -13,6 +13,16 @@ import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from tests.scripts.common import get_updated_device_params
 
+RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        RESET_WEIGHT_CACHE_OPTION,
+        action="store_true",
+        help="Reset weight configs for tests",
+    )
+
 
 @pytest.fixture(scope="function")
 def mesh_device(request, device_params):
@@ -112,3 +122,20 @@ def set_deterministic_env():
     """
     torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
+
+
+@pytest.fixture(scope="session")
+def force_recalculate_weight_config(request):
+    """
+    Fixture to control whether weight configuration files should be recalculated.
+    """
+    return request.config.getoption(RESET_WEIGHT_CACHE_OPTION)
+
+
+@pytest.fixture(scope="session")
+def cache_path():
+    try:
+        default_cache = f"/localdev/{os.getlogin()}/deepseek-v3-cache"
+    except OSError:
+        default_cache = "/proj_sw/user_dev/deepseek-v3-cache"
+    return Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache))

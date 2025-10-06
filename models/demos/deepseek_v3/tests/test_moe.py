@@ -12,7 +12,12 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get_model_config, run_module_forward
+from models.demos.deepseek_v3.utils.test_utils import (
+    add_inv_scale_to_state_dict,
+    assert_hidden_dim_pcc,
+    get_model_config,
+    run_module_forward,
+)
 
 
 @pytest.fixture
@@ -32,6 +37,12 @@ def reference_model(hf_config):
     indirect=True,
 )
 @pytest.mark.parametrize(
+    "topk_fallback",
+    [
+        True,
+    ],
+)
+@pytest.mark.parametrize(
     "mode,seq_len",
     [
         ("decode", 128),
@@ -41,18 +52,22 @@ def reference_model(hf_config):
 def test_forward_pass(
     mode,
     seq_len,
-    set_deterministic_env,
     reference_model,
     hf_config,
     tmp_path,
     mesh_device,
     ccl,
+    set_deterministic_env,
+    topk_fallback,
 ):
     """Test forward pass against reference model."""
     batch_size = 1
 
     # Get state dict from actual model - pass directly to convert_weights
-    hf_state_dict = reference_model.state_dict()
+    state_dict = add_inv_scale_to_state_dict(
+        reference_model.state_dict(),
+        block_shape=hf_config.quantization_config["weight_block_size"],
+    )
 
     # Create input tensor
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
@@ -64,10 +79,10 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, [hf_state_dict], tmp_path, mesh_device)
+    weight_config = MoE.convert_weights(hf_config, (state_dict,), tmp_path, mesh_device)
 
     # Generate appropriate config using utility function
-    model_config = get_model_config(MoE, mode, hf_config, mesh_device)
+    model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
 
     # Create a new model state with CCL
     model_state = MoE.create_state(hf_config, mesh_device, ccl)

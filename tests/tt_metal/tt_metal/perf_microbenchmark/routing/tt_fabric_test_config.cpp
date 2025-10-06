@@ -160,7 +160,7 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
     ParsedTestConfig test_config;
 
     test_config.name = parse_scalar<std::string>(test_yaml["name"]);
-    log_info(tt::LogTest, "name: {}", test_config.name);
+    log_info(tt::LogTest, "Parsing test: {}", test_config.name);
 
     TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", test_config.name);
     test_config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
@@ -193,6 +193,16 @@ ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml
             high_level_patterns.push_back(parse_high_level_pattern_config(pattern_node));
         }
         test_config.patterns = high_level_patterns;
+    }
+
+    if (test_yaml["skip"]) {
+        const auto& skip_yaml = test_yaml["skip"];
+        TT_FATAL(skip_yaml.IsSequence(), "Expected 'skip' to be a sequence of platform strings.");
+        std::vector<std::string> skips;
+        for (const auto& s : skip_yaml) {
+            skips.push_back(parse_scalar<std::string>(s));
+        }
+        test_config.skip = std::move(skips);
     }
 
     if (test_yaml["senders"]) {

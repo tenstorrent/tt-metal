@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -119,4 +119,64 @@ std::vector<float> SafetensorSerialization::bytes_to_floats_copy(std::span<const
     std::memcpy(out.data(), bytes.data(), n * sizeof(float));
     return out;
 }
+std::vector<float> SafetensorSerialization::bytes_to_float_vec(
+    const std::span<const std::byte>& bytes, const std::string& dtype) {
+    std::vector<float> float_vec;
+    if (dtype == "BF16" || dtype == "BFLOAT16") {
+        if (bytes.size_bytes() % 2 != 0)
+            throw std::runtime_error("BF16 data size must be even");
+        const std::size_t n = bytes.size_bytes() / 2;
+        float_vec.reserve(n);
+        const uint16_t* bf16_data = reinterpret_cast<const uint16_t*>(bytes.data());
+        for (std::size_t i = 0; i < n; ++i) {
+            uint32_t tmp = static_cast<uint32_t>(bf16_data[i]) << 16;
+            float value;
+            std::memcpy(&value, &tmp, sizeof(value));
+            float_vec.push_back(value);
+        }
+    } else if (dtype == "F16" || dtype == "FLOAT16") {
+        if (bytes.size_bytes() % 2 != 0)
+            throw std::runtime_error("F16 data size must be even");
+        const std::size_t n = bytes.size_bytes() / 2;
+        float_vec.resize(n);
+        const uint16_t* p = reinterpret_cast<const uint16_t*>(bytes.data());
+        auto half2float = [](uint16_t h) -> float {
+            uint16_t he = (h & 0x7C00u) >> 10;  // exp
+            uint16_t hm = (h & 0x03FFu);        // mant
+            uint32_t s = (h & 0x8000u) << 16;
+            uint32_t e, m;
+            if (he == 0) {  // subnorm/zero
+                if (hm == 0) {
+                    e = 0;
+                    m = 0;
+                } else {
+                    int shift = 0;
+                    while ((hm & 0x0400u) == 0) {
+                        hm <<= 1;
+                        ++shift;
+                    }
+                    hm &= 0x03FFu;
+                    e = 127 - 15 - shift;
+                    m = (uint32_t)hm << 13;
+                }
+            } else if (he == 0x1Fu) {  // inf/NaN
+                e = 255;
+                m = (uint32_t)hm << 13;
+            } else {
+                e = (uint32_t)(he - 15 + 127);
+                m = (uint32_t)hm << 13;
+            }
+            uint32_t u = s | (e << 23) | m;
+            float f;
+            std::memcpy(&f, &u, sizeof(f));
+            return f;
+        };
+        for (size_t i = 0; i < n; ++i) float_vec[i] = half2float(p[i]);
+    } else if (dtype == "F32" || dtype == "FLOAT32") {
+        float_vec = serialization::SafetensorSerialization::bytes_to_floats_copy(bytes);
+    } else {
+        throw std::runtime_error(fmt::format("Unsupported dtype: {}", dtype));
+    }
+    return float_vec;
+};
 }  // namespace ttml::serialization

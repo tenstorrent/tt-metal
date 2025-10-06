@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import get_debug_tensor
+from models.common.utility_functions import get_debug_tensor
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from enum import Enum
 

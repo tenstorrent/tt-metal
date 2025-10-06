@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,6 +65,7 @@ enum class EnqueueCommandType {
 class Command {
 public:
     Command() = default;
+    virtual ~Command() = default;
     virtual void process() {};
     virtual EnqueueCommandType type() = 0;
 };
