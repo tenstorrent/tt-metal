@@ -2,9 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <cstddef>
+#include <utility>
 #include <vector>
 #include <stdexcept>
 #include "tt_metal/fabric/serialization/intermesh_connections_serialization.hpp"
+#include "mesh_graph.hpp"
 #include "protobuf/intermesh_connection_table.pb.h"
 
 namespace tt::tt_fabric {

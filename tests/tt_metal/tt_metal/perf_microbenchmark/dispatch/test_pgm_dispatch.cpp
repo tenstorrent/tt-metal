@@ -6,6 +6,9 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <stdint.h>
+#include <set>
+#include <memory>
+#include <stdexcept>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -18,6 +21,8 @@
 #include <random>
 #include <string>
 #include <tuple>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -30,6 +35,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "hal_types.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -37,12 +43,17 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/semaphore.hpp>
 #include <tt_stl/span.hpp>
+#include "mesh_workload.hpp"
+#include "mesh_command_queue.hpp"
+#include "mesh_trace_id.hpp"
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_align.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/math.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include "tt_stl/assert.hpp"
 #include <tt-metalium/sub_device.hpp>
 
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;

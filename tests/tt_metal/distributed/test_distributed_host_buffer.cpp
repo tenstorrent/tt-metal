@@ -3,13 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
-
-#include <tt_stl/span.hpp>
+#include <gtest/gtest.h>
 
 #include <functional>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include "mesh_coord.hpp"
+#include "host_buffer.hpp"
 
 namespace tt::tt_metal {
 namespace {

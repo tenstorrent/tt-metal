@@ -9,7 +9,6 @@
 #include <iostream>
 #include <mutex>
 #include <string>
-#include <chrono>
 #include <fstream>
 
 namespace tt::jit_build::utils {

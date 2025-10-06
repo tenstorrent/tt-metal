@@ -6,7 +6,10 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 
+#include <array>
+#include <cstdint>
 #include <impl/context/metal_context.hpp>
+#include <numeric>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
@@ -17,9 +20,15 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
 
-#include <tt-metalium/tt_metal.hpp>
+#include <utility>
+#include <vector>
 
+#include "maybe_remote.hpp"
+#include "routing_table_generator.hpp"
+#include "buffer_types.hpp"
+#include "shape2d.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_backend_api_types.hpp"
 
 namespace tt::tt_metal::distributed {
 

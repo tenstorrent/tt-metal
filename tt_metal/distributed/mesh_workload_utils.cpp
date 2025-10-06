@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "core_coord.hpp"
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
@@ -10,12 +11,13 @@
 #include <cstdint>
 #include <tt_stl/strong_type.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include "sub_device_types.hpp"
+#include "program/dispatch.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
-
-#include <umd/device/types/core_coordinates.hpp>
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_metal::distributed {
 

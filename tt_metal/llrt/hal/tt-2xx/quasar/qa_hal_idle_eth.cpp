@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <vector>
+#include <cstddef>
+#include <utility>
 #define HAL_BUILD tt::tt_metal::quasar::idle_eth
 #define COMPILE_FOR_ERISC
 
@@ -11,7 +15,6 @@ using namespace tt::tt_metal::quasar::idle_eth;
 
 #include <cstdint>
 
-#include <tt_stl/assert.hpp>
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"

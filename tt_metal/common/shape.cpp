@@ -4,12 +4,17 @@
 
 #include "shape.hpp"
 
+#include <cstdint>
+#include <cstddef>
+#include <array>
+#include <nlohmann/json_fwd.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <functional>
 #include <numeric>
 #include <ostream>
 #include <utility>
+#include "tt_stl/reflection.hpp"
 
 namespace tt::tt_metal {
 

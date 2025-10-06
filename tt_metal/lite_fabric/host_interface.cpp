@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "hw/inc/constants.hpp"
 #include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
 #include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
+#include <cstdint>
+#include <cstddef>
 
 namespace lite_fabric {
 

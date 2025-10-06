@@ -2,10 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "core_coord.hpp"
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
+#include <flatbuffers/buffer.h>
+#include <program_types_generated.h>
+#include <flatbuffers/flatbuffer_builder.h>
+#include "kernel_types.hpp"
+#include <base_types_generated.h>
+#include <flatbuffers/vector.h>
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
+#include <cstdint>
+#include <memory>
+#include "tt_stl/span.hpp"
+#include "sub_device_types.hpp"
+#include <cstddef>
 #include <tt_stl/overloaded.hpp>
+#include <vector>
+#include <variant>
+#include <utility>
+#include <type_traits>
 
 namespace tt::tt_metal {
 

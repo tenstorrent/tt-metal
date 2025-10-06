@@ -17,12 +17,14 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <thread>
 #include <tuple>
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -32,7 +34,6 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch/memcpy.hpp"
-#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -42,7 +43,6 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <umd/device/types/core_coordinates.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;

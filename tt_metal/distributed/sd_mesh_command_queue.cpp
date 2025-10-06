@@ -3,12 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sd_mesh_command_queue.hpp"
+#include "distributed/mesh_command_queue_base.hpp"
+#include "mesh_trace_id.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_coord.hpp"
+#include "buffer.hpp"
+#include "sub_device_types.hpp"
+#include "command_queue.hpp"
+#include "mesh_workload.hpp"
+#include "core_coord.hpp"
+#include "mesh_command_queue.hpp"
 #include "tt_metal/common/thread_pool.hpp"
+#include <cstdint>
+#include <functional>
+#include "tt_stl/assert.hpp"
+#include "tt_stl/span.hpp"
+#include "vector_aligned.hpp"
+#include <memory>
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
+#include <mutex>
+#include <optional>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/graph_tracking.hpp>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace tt::tt_metal::distributed {
 

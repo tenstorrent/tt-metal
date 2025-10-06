@@ -4,7 +4,10 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <cstdint>
 #include <filesystem>
+#include <string_view>
+#include <stdexcept>
 #include <vector>
 #include <string>
 #include <cstdio>

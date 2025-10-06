@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <fmt/base.h>
+#include <algorithm>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <cstring>
@@ -12,9 +13,9 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/shape.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

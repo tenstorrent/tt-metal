@@ -5,6 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <tt-metalium/command_queue.hpp>
@@ -14,15 +15,14 @@
 #include <cmath>
 #include <functional>
 #include <map>
-#include <memory>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "command_queue_fixture.hpp"
@@ -34,6 +34,9 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "mesh_command_queue.hpp"
+#include "mesh_buffer.hpp"
+#include "mesh_coord.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"

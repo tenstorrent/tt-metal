@@ -5,8 +5,6 @@
 #include <stdint.h>
 #include <algorithm>
 #include <cstddef>
-#include <iterator>
-#include <type_traits>
 #include <vector>
 
 #include <tt_stl/assert.hpp>

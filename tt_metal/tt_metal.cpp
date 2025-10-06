@@ -5,6 +5,11 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
+#include <enchantum/entries.hpp>
+#include <span>
+#include <string>
+#include <map>
+#include <initializer_list>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <device_pool.hpp>
@@ -21,13 +26,20 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
 
+#include "buffer.hpp"
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
+#include "core_coord.hpp"
+#include "cluster.hpp"
 #include "data_types.hpp"
+#include "hal/generated/dev_msgs.hpp"
+#include "hostdevcommon/common_values.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -54,7 +66,9 @@
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
+#include <vector>
 #include "get_platform_architecture.hpp"
+#include "tt_backend_api_types.hpp"
 
 namespace tt {
 

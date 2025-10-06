@@ -2,28 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <memory>
+#include <cstdint>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <exception>
-#include <map>
-#include <set>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
-#include "compile_program_with_kernel_path_env_var_fixture.hpp"
+#include "base_types.hpp"
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
+#include "mesh_workload.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 

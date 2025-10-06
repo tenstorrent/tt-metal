@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "node.hpp"
+#include <protobuf/node_config.pb.h>
 #include "node_types.hpp"
 
 #include <enchantum/enchantum.hpp>
 #include <stdexcept>
+#include <string>
 
 namespace tt::scaleout_tools {
 

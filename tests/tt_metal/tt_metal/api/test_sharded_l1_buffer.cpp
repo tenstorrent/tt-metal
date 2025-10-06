@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/format.h>
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <memory>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -19,12 +21,10 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
-#include "llrt.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/xy_pair.hpp>
 
 using namespace tt::tt_metal;
 

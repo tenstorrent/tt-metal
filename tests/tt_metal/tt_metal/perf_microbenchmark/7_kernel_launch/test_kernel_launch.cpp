@@ -4,12 +4,10 @@
 
 #include <chrono>
 #include <errno.h>
-#include <fmt/base.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <array>
 #include <cstring>
 #include <exception>

@@ -3,8 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
+#include <buffer_types_generated.h>
+#include "buffer_types.hpp"
+#include <cstdint>
+#include <flatbuffers/buffer.h>
+#include "circular_buffer_config.hpp"
+#include <flatbuffers/flatbuffer_builder.h>
+#include <vector>
+#include <cstddef>
+#include <base_types_generated.h>
+#include "buffer.hpp"
+#include <optional>
+#include "buffer_distribution_spec.hpp"
+#include <program_types_generated.h>
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
+#include "tt_stl/assert.hpp"
 
 namespace tt::tt_metal {
 

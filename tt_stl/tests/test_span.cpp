@@ -3,14 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
+#include <cstddef>
 #include <tt_stl/span.hpp>
-#include <memory>
-#include <set>
-#include <sstream>
-#include <string>
-#include <unordered_set>
-#include <utility>
 #include <cstdint>
+#include <vector>
 
 namespace tt::stl {
 namespace {

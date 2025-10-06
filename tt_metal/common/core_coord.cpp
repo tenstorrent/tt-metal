@@ -2,18 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/base.h>
+#include <sstream>
+#include <cstddef>
+#include <functional>
+#include <nlohmann/json_fwd.hpp>
 #include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
-#include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
 #include <limits>
-#include <map>
 #include <optional>
-#include <ostream>
 #include <set>
 #include <string>
 #include <utility>

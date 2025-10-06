@@ -4,8 +4,11 @@
 #include <kj/async-io.h>
 #include <capnp/rpc-twoparty.h>
 #include <gtest/gtest.h>
+#include <filesystem>
 #include <impl/debug/inspector/rpc_server_controller.hpp>
 #include <string>
+#include <kj/memory.h>
+#include "impl/debug/inspector/rpc.capnp.h"
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>

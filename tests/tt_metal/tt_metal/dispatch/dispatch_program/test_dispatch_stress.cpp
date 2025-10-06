@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <tt-metalium/allocator.hpp>
@@ -10,10 +9,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -21,6 +20,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "gtest/gtest.h"
+#include "mesh_workload.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>

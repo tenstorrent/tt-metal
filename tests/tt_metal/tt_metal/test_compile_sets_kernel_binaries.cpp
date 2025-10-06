@@ -4,9 +4,9 @@
 
 #include <errno.h>
 #include <fmt/base.h>
-#include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <sys/types.h>
+#include <enchantum/entries.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -27,7 +27,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include "jit_build/build.hpp"

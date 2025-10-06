@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <tt-metalium/host_api.hpp>
 #include <string>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_set>
 
 #include <tt-metalium/core_coord.hpp>
@@ -15,11 +15,13 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/coordinates/coordinate_manager.hpp>
 #include <umd/device/types/arch.hpp>
+#include <vector>
 
 using namespace tt;
 using namespace tt::test_utils;

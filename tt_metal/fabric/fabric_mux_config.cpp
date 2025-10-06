@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
+#include <cstdint>
+#include <utility>
 #include <vector>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include "hal_types.hpp"
+#include "fabric_edm_types.hpp"
+#include "fabric_types.hpp"
+#include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_stl/assert.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <enchantum/enchantum.hpp>
 

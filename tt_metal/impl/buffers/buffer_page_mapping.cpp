@@ -2,7 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <cstddef>
+#include <limits>
+#include <algorithm>
+#include <optional>
 #include <tt-metalium/buffer_page_mapping.hpp>
+#include <vector>
+#include "tt_stl/span.hpp"
+#include <utility>
 
 namespace tt::tt_metal {
 

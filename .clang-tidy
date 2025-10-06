@@ -186,6 +186,8 @@ Checks: >
   -readability-use-std-min-max
 
 CheckOptions:
+  - key: misc-include-cleaner.IgnoreHeaders
+    value: 'net/proto2/public/.*;yaml-cpp/.*;taskflow/.*'
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
   - key: portability-simd-intrinsics.Suggest

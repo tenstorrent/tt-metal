@@ -6,7 +6,10 @@
 
 #include <fmt/base.h>
 #include <enchantum/enchantum.hpp>
+#include <string>
+#include <stdexcept>
 #include <string_view>
+#include <umd/device/types/arch.hpp>
 
 std::string tt::get_string(tt::ARCH arch) {
     switch (arch) {

@@ -3,8 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
+#include <flatbuffers/buffer.h>
+#include <flatbuffers/flatbuffer_builder.h>
+#include "core_coord.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_socket.hpp"
+#include <flatbuffers/vector.h>
+#include "buffer_types.hpp"
+#include "distributed/mesh_socket_utils.hpp"
 #include "socket_peer_descriptor_generated.h"
+#include "tt-metalium/serialized_descriptors/mesh_coordinate_generated.h"
+#include <optional>
+#include <cstdint>
+#include "tt_stl/assert.hpp"
+#include "sub_device_types.hpp"
 #include <tt-metalium/distributed_context.hpp>
+#include <vector>
 
 namespace tt::tt_metal::distributed {
 namespace {

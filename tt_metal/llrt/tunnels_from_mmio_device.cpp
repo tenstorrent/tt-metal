@@ -4,7 +4,16 @@
 
 #include "tunnels_from_mmio_device.hpp"
 
+#include <memory>
+#include <map>
+#include <algorithm>
+#include <tt-logger/tt-logger.hpp>
+#include <cstdint>
 #include <tt_stl/assert.hpp>
+#include <unordered_set>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/cluster.hpp>
+#include <vector>
 
 namespace tt::llrt {
 

@@ -4,12 +4,15 @@
 
 #include "trace_buffer.hpp"
 
+#include <cstdint>
 #include <device.hpp>
+#include <memory>
 #include <tt_metal.hpp>
 #include <utility>
 
 #include "buffer.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
 

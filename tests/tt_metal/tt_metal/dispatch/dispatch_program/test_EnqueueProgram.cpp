@@ -19,7 +19,6 @@
 #include <vector>
 
 #include <fmt/base.h>
-#include <enchantum/enchantum.hpp>
 #include <gtest/gtest.h>
 
 #include <tt-logger/tt-logger.hpp>
@@ -46,9 +45,14 @@
 #include "buffer_types.hpp"
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
+#include "distributed.hpp"
 #include "env_lib.hpp"
+#include "hal.hpp"
+#include "fabric_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include "llrt.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_command_queue.hpp"
+#include "mesh_buffer.hpp"
 #include "multi_command_queue_fixture.hpp"
 #include "random_program_fixture.hpp"
 #include <umd/device/types/core_coordinates.hpp>
@@ -57,7 +61,7 @@
 
 // Access to internal API: ProgramImpl::get_cb_base_addr, get_kernel
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"  // NOLINT(misc-include-cleaner)
 
 namespace tt {
 namespace tt_metal {

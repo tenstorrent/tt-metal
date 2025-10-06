@@ -7,14 +7,23 @@
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <bitset>
+#include <cstdint>
 #include <cstdlib>
-#include <functional>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
+#include <string>
+#include <umd/device/simulation/simulation_chip.hpp>
+#include <umd/device/soc_descriptor.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
+#include "dispatch_core_common.hpp"
+#include "fabric_types.hpp"
+#include "core_coord.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
 #include "metal_soc_descriptor.h"
@@ -26,6 +35,8 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include <vector>
+#include <utility>
 
 namespace tt {
 

@@ -2,9 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <graph_tracking.hpp>
 
+#include <memory>
+#include <mutex>
 #include <tt_stl/assert.hpp>
+#include "core_coord.hpp"
+#include "mesh_buffer.hpp"
+#include <vector>
 
 namespace tt {
 namespace tt_metal {

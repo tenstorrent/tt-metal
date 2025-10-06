@@ -2,10 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 #include <stdexcept>
 #include "tt_metal/fabric/serialization/router_port_directions.hpp"
+#include "mesh_graph.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include "protobuf/router_port_directions.pb.h"
+#include "routing_table_generator.hpp"
 
 namespace tt::tt_fabric {
 

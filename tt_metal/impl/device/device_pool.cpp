@@ -2,13 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include <device_pool.hpp>
+#include <bits/pthreadtypes.h>
 #include <numa.h>
 #include <pthread.h>
 #include <sched.h>
+#include <mutex>
+#include <memory>
 #include <tracy/Tracy.hpp>
 #include <tt_metal.hpp>
-#include <umd/device/types/arch.hpp>
 #include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
 #include <algorithm>
 #include <chrono>
@@ -16,6 +19,7 @@
 #include <future>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -24,8 +28,8 @@
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
-#include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include "fabric_types.hpp"
+#include "hal/generated/dev_msgs.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
@@ -40,6 +44,7 @@
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/common/executor.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <vector>
 
 using namespace tt::tt_metal;
 

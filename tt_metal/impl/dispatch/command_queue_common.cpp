@@ -3,11 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "command_queue_common.hpp"
+#include "device.hpp"
 #include "dispatch_settings.hpp"
 
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "sub_device_types.hpp"
 
-#include <umd/device/types/core_coordinates.hpp>
+#include <cstdint>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 

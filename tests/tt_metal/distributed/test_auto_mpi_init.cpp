@@ -3,8 +3,6 @@
 
 #include <gtest/gtest.h>
 #include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/device.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed {

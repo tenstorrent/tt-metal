@@ -4,6 +4,8 @@
 
 #include <fmt/base.h>
 #include <math.h>
+#include <cstdint>
+#include <bit>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <algorithm>
@@ -11,6 +13,7 @@
 #include <set>
 
 #include <tt_stl/assert.hpp>
+#include <vector>
 #include "test_golden_impls.hpp"
 #include "tests/tt_metal/test_utils/packing.hpp"
 

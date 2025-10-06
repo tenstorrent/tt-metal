@@ -3,16 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
-#include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <cstddef>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <unistd.h>
 #include <functional>
 #include <map>
 #include <memory>
-#include <ostream>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -28,10 +27,9 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -46,7 +44,6 @@ namespace tt::tt_metal {
 
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::matmul {
 

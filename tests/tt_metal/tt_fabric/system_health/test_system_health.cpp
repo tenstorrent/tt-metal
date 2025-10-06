@@ -2,20 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <cstdint>
+#include <cstddef>
 #include <enchantum/enchantum.hpp>
+#include <ios>
+#include <enchantum/entries.hpp>
 #include <map>
+#include <string>
+#include <sstream>
+#include <ostream>
+#include <optional>
 #include <tuple>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include <unordered_map>
 #include <utility>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_graph.hpp>
+#include "core_coord.hpp"
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
+#include <vector>
 
 namespace tt::tt_fabric {
 namespace system_health_tests {

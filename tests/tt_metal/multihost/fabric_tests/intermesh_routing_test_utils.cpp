@@ -4,20 +4,34 @@
 
 #include <chrono>
 
-#include <iostream>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <map>
 #include <random>
+#include <gtest/gtest.h>
 #include <stdint.h>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
-#include "tt_metal/fabric/erisc_datamover_builder.hpp"
+#include "hal_types.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "distributed_context.hpp"
+#include "fabric_edm_types.hpp"
+#include "tt_metal.hpp"
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <vector>
+#include <umd/device/types/core_coordinates.hpp>
+#include <unordered_map>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
-#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/tt_fabric/common/fabric_fixture.hpp"
+#include "tt_stl/assert.hpp"
 #include "intermesh_routing_test_utils.hpp"
 
 namespace tt::tt_fabric {

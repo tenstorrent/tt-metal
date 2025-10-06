@@ -4,21 +4,29 @@
 
 #include "fd_kernel.hpp"
 
+#include <cstdint>
 #include <host_api.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <string>
+#include <map>
 #include <utility>
 #include <variant>
 
+#include "core_coord.hpp"
 #include "data_types.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include "dispatch/system_memory_manager.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_stl/assert.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <vector>
 
 using namespace tt::tt_metal;
 

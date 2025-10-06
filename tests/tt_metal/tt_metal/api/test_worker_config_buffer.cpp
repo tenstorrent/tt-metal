@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>

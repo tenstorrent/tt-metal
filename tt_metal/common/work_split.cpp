@@ -6,6 +6,7 @@
 // Contains utility functions for partitioning work between multiple cores.
 //
 
+#include <cmath>
 #include <tt_stl/assert.hpp>
 #include <core_coord.hpp>
 #include <algorithm>

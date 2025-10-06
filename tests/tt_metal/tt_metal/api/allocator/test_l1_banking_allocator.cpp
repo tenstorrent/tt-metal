@@ -21,6 +21,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
+#include "mesh_buffer.hpp"
 
 using namespace tt::tt_metal;
 namespace unit_tests::test_l1_banking_allocator {

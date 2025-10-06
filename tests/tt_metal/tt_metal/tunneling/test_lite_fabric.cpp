@@ -2,25 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/ranges.h>
 #include <gtest/gtest.h>
+#include <memory>
+#include <cstdlib>
+#include <string>
+#include <filesystem>
+#include <stdexcept>
 #include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 #include <enchantum/enchantum.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/fabric.hpp>
 
 #include "context/metal_context.hpp"
 #include "distributed.hpp"
 #include "fabric_types.hpp"
-#include "llrt/hal.hpp"
-#include "tt_cluster.hpp"
+#include "tt_backend_api_types.hpp"
+#include "mesh_config.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/lite_fabric/host_util.hpp"

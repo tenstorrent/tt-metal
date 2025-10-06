@@ -5,6 +5,12 @@
 // this programing example is based on the vecadd single core example in the
 // contributed folder it illustarted using multiple cores to perform vector
 // addition the program will use 4 cores to perform the vector addition
+#include <string>
+#include <iostream>
+#include <ostream>
+#include <cstdlib>
+#include <fmt/base.h>
+#include <map>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -18,7 +24,19 @@
 #include <memory>
 #include <random>
 #include <string_view>
+#include <variant>
+#include <unordered_map>
+#include <utility>
 #include <vector>
+#include "tt-metalium/mesh_buffer.hpp"
+#include "tt-metalium/constants.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "tt-metalium/tt_backend_api_types.hpp"
+#include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/mesh_coord.hpp"
+#include "tt-metalium/mesh_command_queue.hpp"
+#include "tt-metalium/data_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

@@ -6,14 +6,25 @@
 
 #include <ctype.h>
 #include <stdio.h>
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <set>
+#include <functional>
 #include <stdexcept>
 #include <string>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <vector>
+#include "dispatch_core_common.hpp"
+#include "fabric_types.hpp"
+#include "tt_target_device.hpp"
+#include "hal.hpp"
+#include "core_coord.hpp"
 
 using std::vector;
 

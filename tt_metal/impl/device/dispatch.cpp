@@ -3,11 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dispatch.hpp"
+#include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include "device.hpp"
+#include "core_coord.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
+#include "dispatch/kernels/cq_commands.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include "hal_types.hpp"
+#include "tt_align.hpp"
+#include "tt_stl/assert.hpp"
+#include "dispatch/topology.hpp"
+#include "sub_device_types.hpp"
 #include <tt-metalium/math.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt {
 namespace tt_metal {

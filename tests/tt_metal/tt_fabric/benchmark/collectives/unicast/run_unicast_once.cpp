@@ -3,18 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <fmt/format.h>
-#include <algorithm>
 #include <chrono>
-#include <filesystem>
-#include <fstream>
-#include <iomanip>
+#include <cstdint>
+#include <cstddef>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <ios>
+#include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tests/tt_metal/tt_fabric/common/utils.hpp"
+#include "fabric.hpp"
+#include "core_coord.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_buffer.hpp"
+#include "buffer_types.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "data_types.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "mesh_workload.hpp"
+#include "tt_backend_api_types.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
+#include "tt_stl/assert.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>

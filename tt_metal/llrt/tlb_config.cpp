@@ -5,10 +5,9 @@
 #include "tlb_config.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <algorithm>
 #include <cstdint>
-#include <string>
-#include <unordered_map>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/tlb.hpp>
 #include <vector>
 
 #include "core_coord.hpp"

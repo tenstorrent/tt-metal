@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
-#include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
@@ -17,7 +15,6 @@
 #include <map>
 #include <memory>
 #include <numeric>
-#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -34,7 +31,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -42,7 +38,6 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt_stl/strong_type.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"

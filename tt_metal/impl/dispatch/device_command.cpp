@@ -4,17 +4,24 @@
 
 #include "device_command.hpp"
 
+#include <cstdint>
 #include <cstring>
 
+#include <limits>
 #include <random>
-#include <chrono>
 
-#include <tt_stl/aligned_allocator.hpp>
 #include <tt_stl/assert.hpp>
+#include <type_traits>
+#include <utility>
+#include <vector>
+#include <tuple>
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/memcpy.hpp"
 #include "dispatch_settings.hpp"
+#include "hal_types.hpp"
 #include "tt_align.hpp"
+#include "vector_aligned.hpp"
+#include "tt_stl/span.hpp"
 
 namespace tt::tt_metal {
 

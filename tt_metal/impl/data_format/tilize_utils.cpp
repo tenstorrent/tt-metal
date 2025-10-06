@@ -2,8 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <optional>
+#include <cstring>
+#include <iostream>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/bfloat16.hpp>  // NOLINT(misc-include-cleaner)
 #include <tt-metalium/tilize_utils.hpp>
 #include <cstddef>
 #include <ostream>
@@ -11,6 +15,7 @@
 #include <tt_stl/assert.hpp>
 #include "constants.hpp"
 #include <tt_stl/span.hpp>
+#include <vector>
 
 std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {
     switch (layout) {

@@ -9,6 +9,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device.hpp>
 #include "erisc_datamover_builder.hpp"
+#include "data_types.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -17,18 +18,26 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <functional>
 #include <iterator>
 #include <numeric>
 #include <optional>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
+#include "hostdevcommon/fabric_common.h"
+#include "fabric_types.hpp"
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "tt_align.hpp"
+#include "routing_table_generator.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
+#include "tt_stl/indestructible.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 

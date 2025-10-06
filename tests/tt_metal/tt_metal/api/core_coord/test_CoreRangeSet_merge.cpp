@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/core_coord.hpp>
-#include <functional>
 #include <set>
 #include <vector>
 

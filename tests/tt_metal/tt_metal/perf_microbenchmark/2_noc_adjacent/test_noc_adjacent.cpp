@@ -10,7 +10,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <array>
 #include <cstring>
 #include <exception>

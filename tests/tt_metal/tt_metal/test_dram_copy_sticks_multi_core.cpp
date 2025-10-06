@@ -14,8 +14,6 @@
 #include <cstring>
 #include <exception>
 #include <iostream>
-#include <map>
-#include <memory>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -28,8 +26,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {

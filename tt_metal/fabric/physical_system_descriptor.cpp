@@ -2,20 +2,45 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bits/posix1_lim.h>
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
+#include <memory>
+#include <cstdint>
+#include <fstream>
+#include <iterator>
+#include <cstddef>
+#include <optional>
+#include <map>
+#include <enchantum/enchantum.hpp>
+#include <iostream>
+#include <ostream>
 #include <set>
 
+#include <string>
+#include <string_view>
+#include <type_traits>
 #include <umd/device/cluster.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/arch.hpp>
+#include <unordered_set>
+#include <unordered_map>
+#include <vector>
+#include <utility>
+#include <umd/device/types/core_coordinates.hpp>
 
+#include "hal_types.hpp"
 #include "tt_metal/llrt/tunnels_from_mmio_device.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include "tt_stl/assert.hpp"
+#include "tt_stl/span.hpp"
 
 namespace tt::tt_metal {
 

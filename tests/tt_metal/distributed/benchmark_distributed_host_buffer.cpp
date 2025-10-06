@@ -4,11 +4,17 @@
 
 #include <benchmark/benchmark.h>
 
+#include <cstddef>
+#include <functional>
+#include <iterator>
 #include <tt-metalium/distributed_host_buffer.hpp>
 
+#include <utility>
 #include <vector>
 #include <numeric>
 #include <algorithm>
+#include "mesh_coord.hpp"
+#include "host_buffer.hpp"
 
 namespace tt::tt_metal {
 namespace {

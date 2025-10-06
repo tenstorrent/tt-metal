@@ -5,25 +5,29 @@
 #include "l1_banking_allocator.hpp"
 
 #include <allocator.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer_types.hpp>
 #include <core_coord.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <random>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "bank_manager.hpp"
+#include "core_descriptor.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
+#include "metal_soc_descriptor.h"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/tt_align.hpp>
 

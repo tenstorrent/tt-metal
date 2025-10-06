@@ -4,8 +4,8 @@
 
 #include <chrono>
 #include <emmintrin.h>
-#include <fmt/base.h>
 #include <stdlib.h>
+#include <ios>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/event.hpp>
@@ -21,6 +21,8 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -30,12 +32,11 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
+#include "mesh_coord.hpp"
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"

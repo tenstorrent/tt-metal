@@ -3,6 +3,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_fabric_test_config.hpp"
+#include <vector>
+#include <string>
+#include "test_common.hpp"
+#include <fstream>
+#include "tt_stl/assert.hpp"
+#include "routing/tt_fabric_test_common_types.hpp"
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include "fabric_types.hpp"
+#include <utility>
+#include "routing/tt_fabric_test_interfaces.hpp"
+#include <unordered_map>
+#include "mesh_graph.hpp"
+#include <cstdint>
+#include <tt-logger/tt-logger.hpp>
+#include <optional>
+#include "fabric_edm_types.hpp"
+#include <filesystem>
+#include <variant>
+#include "fabric_edm_packet_header.hpp"
+#include <algorithm>
+#include "core_coord.hpp"
+#include <cstddef>
 
 namespace tt::tt_fabric::fabric_tests {
 

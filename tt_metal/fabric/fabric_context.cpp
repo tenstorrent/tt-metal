@@ -2,7 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <cstddef>
+#include <memory>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
@@ -10,9 +15,14 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <enchantum/enchantum.hpp>
+#include "cluster.hpp"
 #include "erisc_datamover_builder.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "fabric_edm_packet_header.hpp"
+#include "hostdevcommon/fabric_common.h"
+#include "fabric_host_utils.hpp"
+#include "mesh_graph.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "impl/context/metal_context.hpp"
 

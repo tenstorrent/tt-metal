@@ -3,12 +3,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "buffer_distribution_spec.hpp"
+#include <cstddef>
+#include <cstdint>
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
+#include <tuple>
 #include <utility>
+#include "buffer_page_mapping.hpp"
+#include "shape.hpp"
+#include "shape2d.hpp"
+#include "tt_stl/small_vector.hpp"
+#include "core_coord.hpp"
+#include "buffer_types.hpp"
+#include <vector>
 
 namespace tt::tt_metal {
 

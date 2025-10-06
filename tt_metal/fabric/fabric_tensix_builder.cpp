@@ -4,21 +4,40 @@
 
 #include "fabric_tensix_builder.hpp"
 
+#include <cstddef>
+#include <set>
+#include <cstdint>
+#include <memory>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include "dispatch/system_memory_manager.hpp"
+#include "hostdevcommon/fabric_common.h"
+#include "cluster.hpp"
+#include "dispatch_core_common.hpp"
+#include "core_coord.hpp"
+#include "fabric.hpp"
+#include "hal_types.hpp"
+#include "fabric_edm_types.hpp"
+#include "erisc_datamover_builder.hpp"
+#include "fabric_edm_packet_header.hpp"
+#include "data_types.hpp"
+#include "host_api.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/device_pool.hpp>
+#include "mesh_graph.hpp"
+#include "kernel_types.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
-#include "tt_align.hpp"
 #include <bit>
 #include <algorithm>
+#include <unordered_map>
+#include <umd/device/types/core_coordinates.hpp>
 #include <utility>
+#include <vector>
 
 namespace tt::tt_fabric {
 

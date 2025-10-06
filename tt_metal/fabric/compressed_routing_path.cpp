@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "compressed_routing_path.hpp"
+#include <cstdint>
 #include <cstring>
+#include "hostdevcommon/fabric_common.h"
 
 namespace tt::tt_fabric {
 

@@ -5,14 +5,31 @@
 // Note: The sender kernels in One To All write the same transaction_size_bytes amount of data to the same location
 // num_of_transactions times
 
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
+#include "bfloat16.hpp"
 #include "multi_device_fixture.hpp"
+#include <cstdint>
+#include <memory>
+#include <cstddef>
+#include <tt-logger/tt-logger.hpp>
+#include <string>
+#include <chrono>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include "tt_backend_api_types.hpp"
+#include <vector>
+#include "tt_metal.hpp"
+#include <utility>
+#include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
 #include "test_one_to_all.hpp"
+#include <gtest/gtest.h>
 
 namespace tt::tt_metal {
 

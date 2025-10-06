@@ -5,7 +5,15 @@
 #include "cabling_generator.hpp"
 
 #include <board/board.hpp>
+#include <cmath>
 #include <connector/connector.hpp>
+#include <iterator>
+#include <cstdint>
+#include <memory>
+#include <cstddef>
+#include <iomanip>
+#include <cstdlib>
+#include <functional>
 #include <node/node_types.hpp>
 #include <node/node.hpp>
 
@@ -14,9 +22,17 @@
 #include <filesystem>
 #include <fstream>
 #include <google/protobuf/text_format.h>
+#include <string>
+#include <stdexcept>
+#include <ostream>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt_stl/reflection.hpp>
-#include <tt_stl/span.hpp>
+#include <unordered_map>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <utility>
+#include <tuple>
+#include <vector>
+#include <umd/device/types/arch.hpp>
 
 // Add protobuf includes
 #include "protobuf/cluster_config.pb.h"

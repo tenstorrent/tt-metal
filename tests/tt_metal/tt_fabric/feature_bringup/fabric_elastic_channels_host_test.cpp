@@ -5,6 +5,11 @@
 #include <assert.h>
 #include <fmt/base.h>
 #include <stdint.h>
+#include <memory>
+#include <stdexcept>
+#include <cctype>
+#include <limits>
+#include <functional>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -16,11 +21,12 @@
 #include <numeric>
 #include <string>
 #include <thread>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
-#include <chrono>
 #include <cstring>
 #include <iostream>
 
@@ -32,6 +38,10 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "fabric.hpp"
+#include "fabric_types.hpp"
+#include "hal_types.hpp"
+#include "tt_align.hpp"
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>

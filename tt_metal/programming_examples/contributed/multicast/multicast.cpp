@@ -9,15 +9,22 @@
  these coordinates as desired.
 */
 
+#include <string>
+#include <fmt/base.h>
+#include <cstdlib>
+#include <unistd.h>
+#include <stdio.h>
+#include <cstddef>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <cstdint>
+#include <variant>
+#include <utility>
 #include <vector>
 #include <memory>
-#include <iostream>
 #include <tt-metalium/tt_metal.hpp>
 
 // Optional: For verbose host-side tile verification prints.
@@ -26,6 +33,16 @@
 // Optional: For a delay between device kernel's termination and host kernel's tile verification prints (clean output).
 #include <thread>
 #include <chrono>
+#include "tt-metalium/mesh_buffer.hpp"
+#include "tt-metalium/constants.hpp"
+#include "tt-metalium/circular_buffer_config.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "tt-metalium/tt_backend_api_types.hpp"
+#include "tt-metalium/mesh_command_queue.hpp"
+#include "tt-metalium/mesh_coord.hpp"
+#include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/data_types.hpp"
+#include "tt-metalium/base_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

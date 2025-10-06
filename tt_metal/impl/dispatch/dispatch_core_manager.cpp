@@ -5,9 +5,10 @@
 #include "dispatch_core_manager.hpp"
 
 #include <algorithm>
-#include <functional>
+#include <cstdint>
 #include <list>
-#include <unordered_set>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
@@ -17,6 +18,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
 

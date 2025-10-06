@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <tt-metalium/bfloat16.hpp>
@@ -14,7 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_buffer.hpp>

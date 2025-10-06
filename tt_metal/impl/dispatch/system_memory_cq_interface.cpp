@@ -4,8 +4,10 @@
 
 #include "system_memory_cq_interface.hpp"
 
+#include <cstdint>
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_settings.hpp"
 

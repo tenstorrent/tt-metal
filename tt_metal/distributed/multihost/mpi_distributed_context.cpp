@@ -6,11 +6,17 @@
 #include <mpi.h>
 #include <mpi-ext.h>
 
-#include <algorithm>
+#include <cstddef>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <optional>
 #include <tt_stl/assert.hpp>
+#include "distributed_context.hpp"
+#include <utility>
+#include "tt_stl/span.hpp"
 
 // Use MPIX_ERR_PROC_FAILED as a proxy to detect whether OpenMPI was built with
 // ULFM extensions.

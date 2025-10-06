@@ -5,6 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <tt-metalium/host_api.hpp>
@@ -16,6 +17,7 @@
 #include <memory>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -35,8 +37,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
-#include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
@@ -47,7 +49,6 @@ using std::map;
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 
 namespace unit_tests::sfpu_util {
 

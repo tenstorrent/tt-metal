@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cassert>
 #include <chrono>
 #include <emmintrin.h>
 #include <fmt/base.h>
 #include <stdio.h>
 #include <cstdint>
+#include <ios>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -22,8 +24,9 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <umd/device/driver_atomics.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_map>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -35,8 +38,6 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/dispatch/command_queue_common.hpp"

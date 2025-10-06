@@ -11,13 +11,11 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <map>
-#include <memory>
 #include <tuple>
 #include <utility>
 #include <variant>

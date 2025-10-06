@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <vector>
+#include <cstddef>
+#include "tt_memory.h"
+#include <utility>
 #define HAL_BUILD tt::tt_metal::wormhole::active_eth
 #define COMPILE_FOR_ERISC
 

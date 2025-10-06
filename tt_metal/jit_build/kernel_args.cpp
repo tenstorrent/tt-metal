@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <ios>
 #include <tt_stl/assert.hpp>
 #include "jit_build_utils.hpp"
 #include <cstddef>

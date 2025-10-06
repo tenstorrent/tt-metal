@@ -2,31 +2,42 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstddef>
+#include <cstdlib>
+#include <memory>
+#include <filesystem>
+#include <fstream>
+#include <ios>
 #include <string>
 #include <optional>
-#include <chrono>
 #include <stdint.h>
+#include <utility>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include <map>
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include "fabric_types.hpp"
+#include "hal_types.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/fabric.hpp>
-#include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "hostdevcommon/fabric_common.h"
+#include "mesh_coord.hpp"
+#include "mesh_workload.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "test_common.hpp"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/impl/profiler/profiler_paths.hpp"
 
 const std::string mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 const std::string drainer_kernel_src =

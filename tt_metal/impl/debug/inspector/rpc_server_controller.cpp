@@ -5,9 +5,18 @@
 #include "rpc_server_controller.hpp"
 #include <kj/async-io.h>
 #include <capnp/rpc-twoparty.h>
+#include <string>
+#include <mutex>
+#include <stdexcept>
+#include <kj/memory.h>
+#include <sys/types.h>
+#include <kj/exception.h>
+#include <exception>
 #include <tt-logger/tt-logger.hpp>
 #include <chrono>
 #include <thread>
+#include <utility>
+#include "impl/debug/inspector/rpc_server_generated.hpp"
 
 namespace tt::tt_metal::inspector {
 

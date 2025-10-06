@@ -2,15 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <cstddef>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include "lightmetal/lightmetal_capture.hpp"
-#include "flatbuffers/flatbuffers.h"
+#include <flatbuffers/buffer.h>
 #include "command_generated.h"
 #include "light_metal_binary_generated.h"
+#include "lightmetal_binary.hpp"
 #include "trace/trace_buffer.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/program.hpp>
+#include <vector>
+#include <utility>
 
 #include "impl/program/program_impl.hpp"
 

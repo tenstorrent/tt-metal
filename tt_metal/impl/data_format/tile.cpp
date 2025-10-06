@@ -2,11 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
+#include <cstdint>
 #include <tt-metalium/tile.hpp>
 #include <algorithm>
 #include <stdexcept>
 
 #include <tt_stl/assert.hpp>
+#include "constants.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "math.hpp"

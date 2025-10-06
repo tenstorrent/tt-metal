@@ -4,18 +4,23 @@
 
 #include <allocator.hpp>
 #include <buffer.hpp>
+#include <cstdint>
+#include <cstddef>
 #include <enchantum/enchantum.hpp>
-#include <functional>
-#include <string>
-#include <string_view>
+#include <fstream>
+#include <memory>
+#include <optional>
 #include <mutex>
 
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
+#include "hal_types.hpp"
+#include "core_coord.hpp"
 #include "impl/allocator/bank_manager.hpp"
 #include "impl/allocator/allocator_types.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <vector>
+#include <unordered_set>
 
 namespace tt {
 

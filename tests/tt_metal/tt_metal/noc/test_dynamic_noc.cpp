@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
+#include <memory>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
@@ -25,7 +25,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "mesh_coord.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include "mesh_workload.hpp"
 
 namespace tt::tt_metal {
 

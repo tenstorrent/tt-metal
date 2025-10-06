@@ -4,13 +4,14 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <exception>
 #include <optional>
+#include <ostream>
 #include <string>
+#include <utility>
 #include <vector>
-#include <sstream>
 
 #include <tt-metalium/maybe_remote.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {

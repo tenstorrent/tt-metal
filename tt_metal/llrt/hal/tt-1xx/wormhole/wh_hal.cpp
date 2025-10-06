@@ -2,10 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <memory>
 #include <numeric>
 #include <string>
+#include <vector>
 
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "hal_types.hpp"
@@ -15,8 +18,10 @@
 #include "noc/noc_parameters.h"
 #include "tensix.h"
 #include "wormhole/wh_hal.hpp"
+#include <fmt/format.h>
 #include "impl/context/metal_context.hpp"
 #include "hal_1xx_common.hpp"
+#include "tt_stl/assert.hpp"
 
 namespace {
 

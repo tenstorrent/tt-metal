@@ -9,6 +9,7 @@
 #include <exception>
 #include <set>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -23,7 +24,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include "impl/kernels/kernel_impl.hpp"
+#include "impl/kernels/kernel_impl.hpp"  // NOLINT(misc-include-cleaner)
 #include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {

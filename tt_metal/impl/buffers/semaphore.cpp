@@ -5,6 +5,7 @@
 #include <semaphore.hpp>
 #include <stdint.h>
 
+#include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>

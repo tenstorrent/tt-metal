@@ -3,7 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
+#include "buffer_types.hpp"
+#include <buffer_types_generated.h>
+#include "circular_buffer_config.hpp"
+#include "buffer.hpp"
+#include <optional>
+#include <cstdint>
+#include <array>
+#include "circular_buffer_constants.h"
+#include "flatbuffer/base_types_from_flatbuffer.hpp"
+#include <unordered_set>
+#include "core_coord.hpp"
+#include "buffer_distribution_spec.hpp"
+#include <vector>
+#include <utility>
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
+#include "tt_stl/assert.hpp"
+#include "tt_backend_api_types.hpp"
+#include "tile.hpp"
+#include "shape.hpp"
+#include "tt_stl/small_vector.hpp"
 
 namespace tt::tt_metal {
 
