@@ -281,20 +281,27 @@ void kernel_main() {
                 noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
                 noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
-                        for (uint32_t i = 1; i < num_mcast_cores; ++i) {
-                            uint64_t noc_means_addr =
-                                get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_means_ptr);
-                            uint64_t noc_vars_addr =
-                                get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_vars_ptr);
-                            noc_async_read_one_packet(noc_means_addr, global_means_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES, NOC_L1_READ_ALIGNMENT_BYTES);
-                            noc_async_read_one_packet(noc_vars_addr, global_vars_ptr + i * NOC_L1_READ_ALIGNMENT_BYTES, NOC_L1_READ_ALIGNMENT_BYTES);
-                        }
-                        noc_async_read_barrier();
-                    }
+                for (uint32_t i = 1; i < num_mcast_cores; ++i) {
+                    uint64_t noc_means_addr = get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_means_ptr);
+                    uint64_t noc_vars_addr = get_noc_addr(noc_coord_x[i], noc_coord_y[i], global_vars_ptr);
+                    noc_async_read_one_packet(
+                        noc_means_addr,
+                        global_means_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES,
+                        NOC_DRAM_READ_ALIGNMENT_BYTES);
+                    noc_async_read_one_packet(
+                        noc_vars_addr,
+                        global_vars_ptr + i * NOC_DRAM_READ_ALIGNMENT_BYTES,
+                        NOC_DRAM_READ_ALIGNMENT_BYTES);
+                }
+                noc_async_read_barrier();
+            }
 
-                    // Read mean and variance arrays from cb_ex_global, then combine using Welford
-                    constexpr uint32_t stride = NOC_L1_READ_ALIGNMENT_BYTES / 2;
-                    auto global_result = combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, stride>(p_global_means, p_global_vars);
+            cb_pop_front(cb_ex_partial, 2);
+
+            // Read mean and variance arrays from cb_ex_global, then combine using Welford
+            auto global_result =
+                combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, 16>(
+                    p_global_means, p_global_vars);
 
             // Write this to cb_ex_global
             p_global_means[0] = global_result.mean;
