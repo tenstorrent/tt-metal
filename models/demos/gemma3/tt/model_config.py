@@ -386,7 +386,6 @@ class ModelArgs:
     def __init__(
         self,
         mesh_device,
-        model_location_generator,
         instruct=False,
         dummy_weights=False,
         max_batch_size=1,
@@ -440,11 +439,7 @@ class ModelArgs:
             self.model_name = os.path.basename(LLAMA_DIR.strip("/"))  # May be overridden by config
             assert False  # stojko temp - this should not be called FOR NOW
         elif HF_MODEL:
-            model_version = os.getenv("HF_MODEL")
-
-            self.CKPT_DIR = str(
-                model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
-            )
+            self.CKPT_DIR = os.getenv("HF_MODEL")
 
             self.TOKENIZER_PATH = self.CKPT_DIR
             if not self.CACHE_PATH:

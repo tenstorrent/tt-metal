@@ -44,7 +44,6 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device, model_l
 
     tt_model_args = ModelArgs(
         device,
-        model_location_generator=model_location_generator,
         max_batch_size=batch_size,
         max_seq_len=128,
     )
