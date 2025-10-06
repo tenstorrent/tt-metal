@@ -152,8 +152,8 @@ function extractSignificantTokens(str) {
     .filter(segment => segment.replace(/\s+/g, '').length > 1); // Removes segments that are 1 character or less without spaces
 }
 
-function getNeedleTail(needle) {
-  const tokens = extractSignificantTokens(needle);
+function getJobNameComponentTail(component) {
+  const tokens = extractSignificantTokens(component);
   return tokens.length ? tokens[tokens.length - 1] : undefined; // Returns the last token in the array
 }
 
@@ -166,23 +166,24 @@ function findOwnerForLabel(label) {
 
     if (Array.isArray(mapping.contains)) { // If the mapping's contains parameter is an array
       for (const entry of mapping.contains) {
-        if (!entry || typeof entry.needle !== 'string') continue; // If the entry is not an object or the needle is not a string, continue
-        const needle = entry.needle;
-        if (lbl.includes(needle)) { // If the label includes the needle
-          return normalizeOwners(entry.owner); // Return the normalized owners
-        }
-        // Fuzzy match: try last token from needle
-        const tail = getNeedleTail(needle); // Get the last token from the needle
-        if (tail && labelTokens.includes(tail)) { // If the tail is not empty and the label tokens include the tail
+        // Backward-compat: accept both "job-name-component" and legacy "needle" keys
+        const component = (entry && typeof entry["job-name-component"] === 'string' && entry["job-name-component"]) || (entry && typeof entry.needle === 'string' && entry.needle) || undefined;
+        if (!component) continue; // skip if missing
+        if (lbl.includes(component)) { // direct substring match
           return normalizeOwners(entry.owner);
         }
-        // Additional heuristic: if label tokens end with the last two tokens of the needle
-        const needleTokens = extractSignificantTokens(needle);
-        if (needleTokens.length >= 2 && labelTokens.length >= 2) { // If the needle tokens are at least 2 and the label tokens are at least 2
-          const needleTailPair = needleTokens.slice(-2).join(' '); // Get the last two tokens from the needle
-          const labelTailPair = labelTokens.slice(-2).join(' '); // Get the last two tokens from the label
-          if (needleTailPair === labelTailPair) { // If the needle tail pair is the same as the label tail pair
-            return normalizeOwners(entry.owner); // Basically, if the last two pieces of the label and the needle are the same, define a match. This heuristic may be flawed
+        // Fuzzy match: try last token from the component
+        const tail = getJobNameComponentTail(component);
+        if (tail && labelTokens.includes(tail)) {
+          return normalizeOwners(entry.owner);
+        }
+        // Additional heuristic: if label tokens end with the last two tokens of the component
+        const componentTokens = extractSignificantTokens(component);
+        if (componentTokens.length >= 2 && labelTokens.length >= 2) {
+          const componentTailPair = componentTokens.slice(-2).join(' ');
+          const labelTailPair = labelTokens.slice(-2).join(' ');
+          if (componentTailPair === labelTailPair) {
+            return normalizeOwners(entry.owner);
           }
         }
       }
