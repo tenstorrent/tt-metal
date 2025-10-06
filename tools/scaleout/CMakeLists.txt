@@ -81,10 +81,10 @@ target_include_directories(big_mesh_cabling_gen SYSTEM PRIVATE ${CMAKE_BINARY_DI
 
 target_link_libraries(big_mesh_cabling_gen PRIVATE scaleout_tools protobuf::libprotobuf)  
 
-add_executable(cabling_generator src/cabling_generator.cpp)
+add_executable(run_cabling_generator src/run_cabling_generator.cpp)
 
-set_target_properties(cabling_generator PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools/scaleout)
+set_target_properties(run_cabling_generator PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools/scaleout)
 
-target_include_directories(cabling_generator SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
+target_include_directories(run_cabling_generator SYSTEM PRIVATE ${CMAKE_BINARY_DIR}/tools/scaleout)
 
-target_link_libraries(cabling_generator PRIVATE scaleout_tools protobuf::libprotobuf)  
+target_link_libraries(run_cabling_generator PRIVATE scaleout_tools protobuf::libprotobuf)  
