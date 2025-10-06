@@ -424,7 +424,9 @@ process_mcast_in0_program_and_create_override_variables(
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
+    mm_kernel_in0_sender_writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    mm_kernel_in1_sender_writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -1216,8 +1218,11 @@ process_mcast_in1_program_and_create_override_variables(
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_defines;
+    mm_kernel_in0_sender_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    mm_kernel_in1_sender_writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
+    mm_kernel_in1_receiver_writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
@@ -3225,7 +3230,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
+    mm_kernel_in0_sender_writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    mm_kernel_in1_sender_writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
 
     mm_kernel_defines["FUSE_ACTIVATION"] = "0";
     if (packer_l1_acc_en) {

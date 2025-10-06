@@ -513,9 +513,13 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_sharded_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_interleaved_defines;
+    mm_kernel_in0_sender_interleaved_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
+    mm_kernel_in1_sender_writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
+    mm_kernel_in1_receiver_writer_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
+    mm_kernel_in1_receiver_writer_other_noc_setup_defines["PROFILE_NOC_EVENTS_OVERRIDE"] = "1";
     if (bias_buffer != nullptr) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
