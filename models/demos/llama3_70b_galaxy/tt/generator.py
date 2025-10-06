@@ -193,14 +193,12 @@ class Generator:
         self, tokens, page_table, user_id, last_token_idx, kv_cache=None, tt_out_logits_saved=None, batch_size=1
     ):
         seq_len = tokens.shape[-1]
-
         prefill_input, tt_user_id, page_table_tt, _ = self.model.prepare_inputs_prefill(
             tokens,
             user_id=user_id,
             page_table=page_table,
             batch_size=batch_size,
         )
-
         tt_toks = self.model.ttnn_prefill_forward(
             prefill_input,
             rot_mats=None,
@@ -212,7 +210,13 @@ class Generator:
         )
 
         tt_toks = self.model.process_output_prefill(
-            tt_toks, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
+            tt_toks,
+            last_token_idx=last_token_idx,
+            page_table=page_table_tt,
+            kv_cache=kv_cache,
+            user_id=tt_user_id,
+            batch_size=batch_size,
+            tt_out_logits_saved=tt_out_logits_saved,
         )
 
         return tt_toks
@@ -250,8 +254,17 @@ class Generator:
             page_table=page_table,
             batch_size=batch_size,
         )
+        breakpoint()
+        _, user_id, tt_page_table, tt_chunk_page_table = self.trace_inputs_prefill[trace_key]
+
         toks = self.model.process_output_prefill(
-            tt_out_trace, last_token_idx=last_token_idx, tt_out_logits_saved=tt_out_logits_saved
+            tt_out_trace,
+            last_token_idx=last_token_idx,
+            page_table=tt_page_table,
+            kv_cache=kv_cache,
+            user_id=user_id,
+            batch_size=batch_size,
+            tt_out_logits_saved=tt_out_logits_saved,
         )
         return toks
 

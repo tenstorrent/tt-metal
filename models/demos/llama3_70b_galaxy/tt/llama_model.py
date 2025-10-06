@@ -408,12 +408,49 @@ class TtTransformer(LightweightModule):
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
-    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
+    def process_output_prefill(
+        self, tt_out, last_token_idx, page_table, kv_cache, user_id, batch_size, tt_out_logits_saved=None
+    ):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
+
+        # attn_norm_out , _  = self.layers[0].attention_norm(tt_out, None, "prefill")
+        # h = tt_out
+        breakpoint()
+        attn_out = self.layers[0].attention.forward(
+            tt_out,
+            None,
+            self.tt_rot_mats_prefill,
+            user_id,
+            "prefill",
+            page_table=page_table,
+            chunk_page_table=None,
+            chunk_start_idx=None,
+            kv_cache=kv_cache[0],
+            batch_size=batch_size,
+        )
+        first_residual_pt = torch.load("first_residual.pt")
+        first_residual_tt = ttnn.from_torch(
+            first_residual_pt,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(3, 1), mesh_shape=(8, 4)),
+            device=self.mesh_device,
+        )
+
+        h = ttnn.add(first_residual_tt, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # , dtype=ttnn.bfloat16)
+
+        # second_residual_pt = torch.load("second_residual.pt")
+        # h = ttnn.from_torch(second_residual_pt,layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(3,1), mesh_shape=(8,4)), device=self.mesh_device)
+
+        ff_in_sharded, _ = self.layers[0].ff_norm(h, None, "prefill")
+        ff_out = self.layers[0].feed_forward.forward(ff_in_sharded, "prefill")
+        tt_out = ttnn.add(ff_out, h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # h.deallocate(True)
+
         x, _ = self.norm(tt_out, res=None, mode="prefill")
+        # Previous output not needed after norm
         if isinstance(last_token_idx, list):
             # batched prefill: split the output tensor by the batch size and do the processing for each batch in a loop
             batch_size = len(last_token_idx)
@@ -619,23 +656,26 @@ class TtTransformer(LightweightModule):
         if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
-        h = None
-        # x needs to be in bfloat16_b as it gets reused as the residual tensor
-        for i, layer in enumerate(self.layers):
-            x, h = layer(
-                x,
-                h,
-                current_pos,
-                rot_mats,
-                user_id,
-                mode,
-                page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache[i] if kv_cache is not None else None,
-                batch_size=batch_size,
-            )
-        # ttnn.deallocate(h)
+        if mode == "decode":
+            h = None
+            # x needs to be in bfloat16_b as it gets reused as the residual tensor
+            for i, layer in enumerate(self.layers):
+                x, h = layer(
+                    x,
+                    h,
+                    current_pos,
+                    rot_mats,
+                    user_id,
+                    mode,
+                    page_table,
+                    chunk_page_table=chunk_page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    kv_cache=kv_cache[i] if kv_cache is not None else None,
+                    batch_size=batch_size,
+                )
+        if mode == "prefill":
+            x, _ = self.layers[0].attention_norm(x, None, "prefill")
+
         if mode == "decode":
             ttnn.deallocate(garbage_tensor)
 

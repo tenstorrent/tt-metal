@@ -238,7 +238,7 @@ def create_tt_model(
         (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
             True,  # instruct mode
-            16,  # repeat_batches
+            6,  # repeat_batches
             128 * 1024,  # max_seq_len
             1,  # batch_size
             1024,  # max_generated_tokens
@@ -249,8 +249,8 @@ def create_tt_model(
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
-            80,  # num layers
-            False,  # print_outputs
+            1,  # num layers
+            True,  # print_outputs
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
@@ -899,7 +899,6 @@ def test_demo_text(
         top_1_accs = []
         read_events = []
         tt_out_toks = []
-
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
