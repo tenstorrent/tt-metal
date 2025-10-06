@@ -360,27 +360,61 @@ Tensor FoldOperation::invoke(
         if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
             TT_THROW("fold op does not support non height-sharding!");
         }
+        auto sharded_input_tensor = input_tensor;
+
+        // Apply padding if needed
         if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
-            TT_THROW("Padding is not supported for L1 sharded folding");
+            auto input_shape = sharded_input_tensor.logical_shape();
+            auto padded_shape = tt::tt_metal::Array4D(
+                {input_shape[0], input_shape[1] + 2 * pad_h, input_shape[2] + 2 * pad_w, input_shape[3] + 2 * pad_c});
+            // Create sharded memory config for the padded tensor
+            auto shard_spec = sharded_input_tensor.shard_spec().value();
+            auto pad_mem_config =
+                create_sharded_memory_config(ttnn::Shape(padded_shape), shard_spec.grid, shard_spec.orientation);
+
+            // Use the SmallVector API for consistency
+            ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+            padding_spec.push_back({0, 0});          // batch dimension
+            padding_spec.push_back({pad_h, pad_h});  // height dimension
+            padding_spec.push_back({pad_w, pad_w});  // width dimension
+            padding_spec.push_back({pad_c, pad_c});  // channel dimension
+
+            sharded_input_tensor = ttnn::pad(sharded_input_tensor, padding_spec, 0.0f, true, pad_mem_config);
         }
-        auto sharded_input_tensor = reshard_if_needed(input_tensor, stride_h, stride_w);
+        // Reshard after padding
+        sharded_input_tensor = reshard_if_needed(sharded_input_tensor, stride_h, stride_w);
+
         return ttnn::prim::fold(sharded_input_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
     }
     if (input_tensor.memory_config().is_dram()) {
-        if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
-            TT_THROW("Padding is not supported for DRAM folding");
-        }
-        auto batch_size = input_tensor.logical_shape()[0];
-        auto input_height = input_tensor.logical_shape()[1];
-        auto input_width = input_tensor.logical_shape()[2];
-        auto in_channels = input_tensor.logical_shape()[3];
         auto fold_input_tensor = input_tensor;
+
+        // Apply padding if needed
+        if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
+            // Use the SmallVector API for consistency
+            ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+            padding_spec.push_back({0, 0});          // batch dimension
+            padding_spec.push_back({pad_h, pad_h});  // height dimension
+            padding_spec.push_back({pad_w, pad_w});  // width dimension
+            padding_spec.push_back({pad_c, pad_c});  // channel dimension
+
+            fold_input_tensor = ttnn::pad(
+                fold_input_tensor,
+                padding_spec,
+                0.0f,
+                true,  // use_multicore=true to match working test_pad_rm behavior
+                std::nullopt);
+        }
+        auto batch_size = fold_input_tensor.logical_shape()[0];
+        auto input_height = fold_input_tensor.logical_shape()[1];
+        auto input_width = fold_input_tensor.logical_shape()[2];
+        auto in_channels = fold_input_tensor.logical_shape()[3];
+
         if (in_channels % 32 == 0 && fold_input_tensor.layout() == Layout::TILE) {
             // Convert to row-major layout for 32-channel aligned tensors to leverage faster untilize+RM fold path
-            fold_input_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
+            fold_input_tensor = ttnn::to_layout(fold_input_tensor, Layout::ROW_MAJOR);
         }
-
-        auto output_tensor = ttnn::prim::fold(fold_input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
+        auto output_tensor = ttnn::prim::fold(fold_input_tensor, stride_h, stride_w, output_shape, 0, 0, 0);
         if (fold_input_tensor.layout() == Layout::TILE) {
             return ttnn::reshape(
                 output_tensor,
