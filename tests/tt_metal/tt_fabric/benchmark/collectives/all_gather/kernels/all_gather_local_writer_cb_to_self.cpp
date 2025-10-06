@@ -26,7 +26,7 @@ void kernel_main() {
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
 
         const uint64_t self_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
-        noc_async_write(self_noc_addr, src_l1_addr, PAGE_SIZE);
+        noc_async_write(src_l1_addr, self_noc_addr, PAGE_SIZE);
 
         cb_pop_front(CB_ID, 1);
     }
