@@ -6,7 +6,7 @@ import ttnn
 from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
 import torch
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )
