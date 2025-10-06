@@ -77,7 +77,7 @@ jobs:
           # Stable set (CIv2)
           STABLE_CIv2='[
             {"model":"yolov8s"},
-            {"model":"vadv2"}
+            {"model":"vadv2"},
             {"model":"gemma-3-4b-it"},
           ]'
 
@@ -190,19 +190,17 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
-            -e TT_GH_CI_INFRA=1
             ${{ matrix.test-config.model == 'stable_diffusion_xl_base' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
             ${{ matrix.test-config.model == 'stable_diffusion' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           # stojko - tag -> gemma is here               pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
+          # stojko - TODO put gemma back here because of the perf test that still does it on old civ1 way
           run_args: |
             if [[ "${{ matrix.test-config.model }}" == *"ttt"* ]]; then
               pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.test-config.model }}
             elif [[ "${{ matrix.test-config.model }}" == *"qwen25_vl"* ]]; then
               pytest tests/nightly/single_card/qwen25_vl -k ${{ matrix.test-config.model }}
-            elif [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
-              pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
             else
               pytest tests/nightly/single_card/${{ matrix.test-config.model }}
             fi
@@ -302,8 +300,12 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run frequent reg tests scripts
         timeout-minutes: ${{ matrix.test-config.timeout || 30 }}
+        # tag - mstojko - add it here
         run: |
-          pytest tests/nightly/single_card/${{ matrix.test-config.model }}
+          if [[ "${{ matrix.test-config.model }}" == *"gemma-3"* ]]; then
+            pytest tests/nightly/single_card/gemma3 -k ${{ matrix.test-config.model }}
+          else
+            pytest tests/nightly/single_card/${{ matrix.test-config.model }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
