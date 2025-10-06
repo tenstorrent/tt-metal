@@ -31,6 +31,8 @@
 #include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
+#include "impl/context/metal_context.hpp"  // NOLINT(misc-include-cleaner)
+#include "tracy/Tracy.hpp"  // NOLINT(misc-include-cleaner)
 #include "sub_device_types.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
