@@ -54,45 +54,43 @@ class GroupNormalizationLayer:
 
     def forward(self, hidden_states, B, C, H, W):
         if self.sharded:
-            return self._apply_sharded_norm(hidden_states, B, C, H, W)
+            # Configure sharded memory layout
+            grid_coord = ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1)
+            shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+            shard_shape = B * H * W // self.core_grid.x, C // self.core_grid.y
+            shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+            memory_config = ttnn.MemoryConfig(
+                ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+            )
+
+            # Convert to sharded layout
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+            hidden_states = ttnn.to_memory_config(hidden_states, memory_config)
+
+            inplace = True
+            num_out_blocks = None
         else:
-            return self._apply_DRAM_norm(hidden_states)
+            # Use DRAM memory config
+            memory_config = ttnn.DRAM_MEMORY_CONFIG
+            inplace = False
+            num_out_blocks = self.num_out_blocks
 
-    def _apply_sharded_norm(self, hidden_states, B, C, H, W):
-        grid_coord = ttnn.CoreCoord(self.core_grid.x - 1, self.core_grid.y - 1)
-        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_shape = B * H * W // self.core_grid.x, C // self.core_grid.y
-        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-        )
-        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
-        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
-
+        # Apply group normalization
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
             input_mask=self.input_mask,
             weight=self.gamma_t,
             bias=self.beta_t,
-            memory_config=sharded_mem_config,
+            memory_config=memory_config,
             core_grid=self.core_grid,
             epsilon=self.norm_eps,
-            inplace=True,
+            inplace=inplace,
+            num_out_blocks=num_out_blocks,
         )
-        return ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
-    def _apply_DRAM_norm(self, hidden_states):
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask,
-            weight=self.gamma_t,
-            bias=self.beta_t,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.core_grid,
-            epsilon=self.norm_eps,
-            inplace=False,
-            num_out_blocks=self.num_out_blocks,
-        )
-        return ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        # Convert back to DRAM if sharded
+        if self.sharded:
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
+        return hidden_states
