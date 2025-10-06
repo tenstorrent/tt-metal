@@ -131,6 +131,7 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
     printf("sender coord x y: %u ,%u\n", sender_coord.coords()[0], sender_coord.coords()[1]);
     bool is_sender = self_coord == sender_coord;
     printf("is_sender: %d, with %u %u\n", is_sender, sender_coord.coords()[0], sender_coord.coords()[1]);
+    printf("barrier semaophore address: %lu\n", barrier_semaphore.address());
 
     // KERNEL CREATION
     // Reader
@@ -312,6 +313,7 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
             log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", barrier_semaphore.address());
+            printf("barrier semaphore address: %lu\n", barrier_semaphore.address());
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
