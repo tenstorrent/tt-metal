@@ -84,6 +84,11 @@ void kernel_main() {
                     }
                 }
                 noc_async_read_barrier();
+#endif
+                // Critical to performance for sender to push data to compute before mcasting
+                // This frees sender to start next read earlier
+                cb_push_back(cb_id_in1, in1_block_num_tiles);
+#ifndef SKIP_IN1
 
                 noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
                 noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
@@ -100,8 +105,6 @@ void kernel_main() {
                 noc_semaphore_set_multicast(
                     in1_mcast_receiver_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
 #endif
-
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
             }
             // We have an output block to write out
             cb_wait_front(cb_id_out, out_block_num_tiles);
