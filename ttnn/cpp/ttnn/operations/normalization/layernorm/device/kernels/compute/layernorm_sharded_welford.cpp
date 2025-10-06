@@ -47,12 +47,12 @@ inline To bit_cast(const From& from) noexcept {
 // Get the set size of the next block in the Welford combine.
 inline auto get_next_set_size(
     const uint32_t block,
-    const uint32_t num_blocks_reduce,
+    const uint32_t num_blocks_combine,
     const bool is_second_stage_reader,
     const uint32_t num_blocks_first_stage,
-    const uint32_t second_stage_W,
+    const uint32_t second_stage_w,
     const uint32_t block_w,
-    const uint32_t last_tile_W) {
+    const uint32_t last_block_w) {
     if (is_second_stage_reader) {
         // The next block is either one of the second-stage
         // blocks from our core column  or one of the
@@ -61,13 +61,13 @@ inline auto get_next_set_size(
         // readers in a two-stage reduce get the reduce results
         // from its core column (for row major) streamed in last
         // (after the results for its core row)
-        return block >= num_blocks_first_stage ? second_stage_W : block_w;
+        return block >= num_blocks_first_stage ? second_stage_w : block_w;
     }
 
     // We're either not doing a two-stage reduce or we're
     // not a second stage reader, so the next block will either
     // be a full block or a partial one if it's the last
-    return block == num_blocks_reduce - 1 ? last_tile_W : block_w;
+    return block == num_blocks_combine - 1 ? last_block_w : block_w;
 }
 }  // namespace
 void MAIN {
@@ -88,7 +88,7 @@ void MAIN {
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t num_blocks_second_stage = get_compile_time_arg_val(13);
     constexpr uint32_t tile_width = get_compile_time_arg_val(14);
-    constexpr uint32_t last_tile_W = get_compile_time_arg_val(15);
+    constexpr uint32_t last_tile_w = get_compile_time_arg_val(15);
     constexpr uint32_t W = get_compile_time_arg_val(16);
     constexpr uint32_t eps = get_compile_time_arg_val(17);
 
@@ -99,35 +99,28 @@ void MAIN {
     // This value is the same for all cores, except ones that have padding tiles
     // in them. In that case, don't reduce over the padding elements.
     const uint32_t num_reduce_tiles_per_block_h = get_arg_val<uint32_t>(0);
-    const uint32_t partial_reduce_W = (num_reduce_tiles_per_block_h - 1) * tile_width + last_tile_W;
+    const uint32_t partial_reduce_W = (num_reduce_tiles_per_block_h - 1) * tile_width + last_tile_w;
 
+    // This is the number of tile rows to process
     const uint32_t num_tiles_per_allgather_worker = is_allgather_worker ? get_arg_val<uint32_t>(1) : 0;
+
+    // These are for two-stage reductions
     const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
     const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
-    uint32_t first_stage_W = use_two_stage_reduce ? num_blocks_first_stage * tile_width
-                                                  : (num_blocks_first_stage - 1) * tile_width + last_tile_W;
-    uint32_t second_stage_W = use_two_stage_reduce ? (num_blocks_first_stage - 1) * tile_width + last_tile_W : 0;
-    uint32_t num_blocks_reduce;
-    uint32_t combine_W;
-    if (is_second_stage_reader) {
-        // If we're the second stage reader, we're reducing the
-        // entire tensor width
-        num_blocks_reduce = num_blocks_first_stage + num_blocks_second_stage - 1;
-        combine_W = first_stage_W + second_stage_W;
-    } else {
-        // Either we're part of a two-stage reduce and not a reader,
-        // or we're part of a single-stage reduce. Reduce width is
-        // only along our row (or column)
-        num_blocks_reduce = num_blocks_first_stage;
-        combine_W = first_stage_W;
-    }
+    constexpr uint32_t block_w = block_wt * tile_width;
+    constexpr uint32_t last_block_w = block_w - tile_width + last_tile_w;
+    uint32_t first_stage_w =
+        use_two_stage_reduce ? num_blocks_first_stage * block_w : (num_blocks_first_stage - 1) * block_w + last_block_w;
+    uint32_t second_stage_w = use_two_stage_reduce ? (num_blocks_first_stage - 1) * block_w + last_block_w : 0;
 
-    DPRINT << "num_blocks_reduce: " << num_blocks_reduce << ENDL();
-    DPRINT << "combine_W: " << combine_W << ENDL();
-    DPRINT << "first_stage_W: " << first_stage_W << ENDL();
-    DPRINT << "second_stage_W: " << second_stage_W << ENDL();
-    DPRINT << "last_tile_W: " << last_tile_W << ENDL();
-    DPRINT << "W: " << W << ENDL();
+    // The number of blocks to combine.
+    // If we're the second stage reader, we're reducing the
+    // entire tensor width.
+    // If we're part of a two-stage reduce and not a reader,
+    // or we're part of a single-stage reduce, we're reducing
+    // width is only along our row
+    uint32_t num_blocks_combine =
+        is_second_stage_reader ? num_blocks_first_stage + num_blocks_second_stage - 1 : num_blocks_first_stage;
 
     // Number of tiles for block_ht results (interleaved mean and var)
     const uint32_t num_block_ht_result_tiles = 2 * block_ht;
@@ -199,10 +192,10 @@ void MAIN {
 #endif  // FUSE_PRE_ADD
 
     // Compute E[x] and Var[x] using Welford's algorithm
-    constexpr uint32_t block_w = block_wt * tile_width;
     const uint32_t num_partial_tiles = num_block_ht_result_tiles;
-    DPRINT << "block_w: " << block_w << ENDL();
-    DPRINT << "num_partial_tiles: " << num_partial_tiles << ENDL();
+    // DPRINT << "block_w: " << block_w << ENDL();
+    // DPRINT << "num_partial_tiles: " << num_partial_tiles << ENDL();
+    // DPRINT << "partial_reduce_W: " << partial_reduce_W << ENDL();
 
     reconfig_data_format_srca(cb_in);
 
@@ -228,6 +221,9 @@ void MAIN {
         index_h_offset += block_wt;
     }
     cb_push_back(cb_ex_partial, num_partial_tiles);
+    cb_wait_front(cb_ex_partial, num_partial_tiles);
+    // tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
+    // tt::compute::common::print_full_tile(cb_ex_partial, 1, true);
 
     reconfig_data_format_srca(cb_ex_partial);
 
@@ -258,7 +254,7 @@ void MAIN {
             fill_tile(m2_acc_dst, 0.f);
 
             uint32_t acc_n = 0;
-            for (uint32_t b = 0; b < num_blocks_reduce; b++) {
+            for (uint32_t b = 0; b < num_blocks_combine; b++) {
                 // Wait for 1 mean tile and 1 var tile
                 cb_wait_front(cb_ex_external, 2);
 
@@ -274,15 +270,15 @@ void MAIN {
                 const float n_a = acc_n;
                 // TODO RM: This should use a runtime arg where
                 // only the last core in each row has a reduced width
-                // const float n_b = b == num_blocks_reduce - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
+                // const float n_b = b == num_blocks_combine - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
                 const float n_b = get_next_set_size(
                     b,
-                    num_blocks_reduce,
+                    num_blocks_combine,
                     is_second_stage_reader,
                     num_blocks_first_stage,
-                    second_stage_W,
+                    second_stage_w,
                     block_w,
-                    last_tile_W);
+                    last_block_w);
 
                 DPRINT << "n_a: " << n_a << ENDL();
                 DPRINT << "n_b: " << n_b << ENDL();
@@ -346,6 +342,8 @@ void MAIN {
             }
 
             // Convert final M2 to var
+            // DPRINT << "acc_n: " << acc_n << ENDL();
+            // DPRINT << "1.f / acc_n: " << 1.f / acc_n << ENDL();
             binop_with_scalar_tile_init();
             mul_unary_tile(m2_acc_dst, bit_cast<uint32_t>(1.f / acc_n));
 
@@ -396,22 +394,6 @@ void MAIN {
         cb_push_back(cb_ex, 2 * num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, 2 * num_tiles_per_allgather_worker);
     }
-
-    // Transpose mean and 1/sqrt(Var + eps) to columns
-    // in chunks of num_dest_regs
-    // DPRINT << "num_block_ht_result_tiles: " << num_block_ht_result_tiles << ENDL();
-    // DPRINT << "num_blocks_reduce: " << num_blocks_reduce << ENDL();
-    // DPRINT << "num_tiles_per_allgather_worker: " << num_tiles_per_allgather_worker << ENDL();
-    // DPRINT << "block_ht: " << block_ht << ENDL();
-    // DPRINT << "block_wt: " << block_wt << ENDL();
-    // DPRINT << "tile_width: " << tile_width << ENDL();
-    // DPRINT << "num_subblocks_w: " << num_subblocks_w << ENDL();
-    // DPRINT << "subblock_wt: " << subblock_wt << ENDL();
-    // DPRINT << "num_reduce_tiles_per_block_h: " << num_reduce_tiles_per_block_h << ENDL();
-    // DPRINT << "num_blocks_second_stage: " << num_blocks_second_stage << ENDL();
-    // DPRINT << "num_tiles_per_block: " << num_tiles_per_block << ENDL();
-    // DPRINT << "W: " << W << ENDL();
-    // DPRINT << "last_tile_data_width: " << last_tile_data_width << ENDL();
 
     cb_wait_front(cb_ex_global, num_block_ht_result_tiles);
     cb_reserve_back(cb_transpose, num_block_ht_result_tiles);
