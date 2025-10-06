@@ -58,7 +58,7 @@ def main():
 
         # Operation 4: add scalar to result3 (this will hang if infinite loop is present)
         print("Step 4: result3 + 1.0 (may hang if infinite loop is active)")
-        final_result = ttnn.add(result3, 1.0)
+        final_result = ttnn.add(result3, 1.2)
 
         print("=== Operation chain complete ===")
 

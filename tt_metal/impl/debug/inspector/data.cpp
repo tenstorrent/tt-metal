@@ -41,7 +41,7 @@ Data::Data()
 
 Data::~Data() {
     // Serialize operation tracking before shutting down
-    dbg_serialize_operations();
+    serialize_rpc();
     rpc_server_controller.stop();
 }
 

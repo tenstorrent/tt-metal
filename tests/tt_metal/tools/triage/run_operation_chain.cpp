@@ -2,33 +2,34 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// This test runs a simple operation chain similar to tests/tt_metal/tools/triage/run_operation_chain.py
-// It is used to to verify operation tracking works for C++ code
+// This is a standalone C++ version of run_operation_chain.py
+// It runs the same operation chain to verify operation tracking and callstack generation
+//
+// NOTE: This binary is built by CMake (see tests/tt_metal/tools/triage/CMakeLists.txt)
+// Output: build/test/tools/triage/run_operation_chain_cpp
+//
+// The binary is compiled WITHOUT unity build to preserve debug symbols for addr2line.
+// This allows proper callstack resolution when debugging operations.
 
-#include <gtest/gtest.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 // Include ttnn headers
-#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"  // for arange and other creation ops
-#include "ttnn/operations/functions.hpp"          // for random and other functions
-#include "ttnn/api/ttnn/tensor/tensor.hpp"
-#include "ttnn/api/ttnn/tensor/shape/shape.hpp"
+#include <ttnn/operations/eltwise/binary/binary.hpp>
+#include <ttnn/operations/creation.hpp>
+#include <ttnn/operations/functions.hpp>
+#include <ttnn/tensor/tensor.hpp>
+#include <ttnn/tensor/shape/shape.hpp>
 
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
 
-#include "common_test_utils.hpp"
-
 using namespace tt::tt_metal;
 
-namespace ttnn::operations::test {
-
-TEST(InspectorOperationTracking, CppOperationChain) {
+int main() {
     // Set up environment for inspector
     setenv("TT_METAL_INSPECTOR_LOG_PATH", "generated/inspector", 1);
 
@@ -71,9 +72,9 @@ TEST(InspectorOperationTracking, CppOperationChain) {
         std::cout << "Step 3: result2 - tensor_c" << std::endl;
         auto result3 = ttnn::subtract(result2, tensor_c);
 
-        // Operation 4: add scalar 1.0 to result3 (matching Python: ttnn.add(result3, 1.0))
-        std::cout << "Step 4: result3 + 1.0" << std::endl;
-        auto final_result = ttnn::add(result3, 1.0f);
+        // Operation 4: add scalar 1.2 to result3 (matching Python: ttnn.add(result3, 1.2))
+        std::cout << "Step 4: result3 + 1.2" << std::endl;
+        auto final_result = ttnn::add(result3, 1.2f);
 
         std::cout << "=== Operation chain complete ===" << std::endl;
 
@@ -82,15 +83,18 @@ TEST(InspectorOperationTracking, CppOperationChain) {
 
         // Basic verification that we got a result with correct shape
         auto result_shape = host_result.logical_shape();
-        EXPECT_EQ(result_shape[0], 1);
-        EXPECT_EQ(result_shape[1], 1);
-        EXPECT_EQ(result_shape[2], 32);
-        EXPECT_EQ(result_shape[3], 64);
+        if (result_shape[0] != 1 || result_shape[1] != 1 || result_shape[2] != 32 || result_shape[3] != 64) {
+            std::cerr << "ERROR: Unexpected result shape!" << std::endl;
+            device->close();
+            return 1;
+        }
 
         std::cout << "=== Test completed successfully ===" << std::endl;
 
     } catch (const std::exception& e) {
-        FAIL() << "Test failed with exception: " << e.what();
+        std::cerr << "Test failed with exception: " << e.what() << std::endl;
+        device->close();
+        return 1;
     }
 
     // Close device
@@ -98,6 +102,6 @@ TEST(InspectorOperationTracking, CppOperationChain) {
 
     // Note: The actual ops.yaml file will be generated when the Inspector
     // destructor is called at program exit.
-}
 
-}  // namespace ttnn::operations::test
+    return 0;
+}

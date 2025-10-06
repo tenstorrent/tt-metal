@@ -9,12 +9,13 @@ Usage:
 
 Options:
     --max-width=<width>    Maximum column width for wrapping text [default: 120]
-    --verbose              Show detailed argument information (default: concise)
+    --verbose              Show full raw argument information (default: summary)
 
 Description:
     Dumps core location and kernel config host-assigned ID for all operations in a table format.
     If Inspector RPC is available, shows operation names and details.
-    By default shows concise argument info, use --verbose for full details.
+    By default shows summary of arguments (shapes, types, memory config).
+    Use --verbose for full raw argument details.
 """
 
 from triage import ScriptConfig, triage_field, run_script
@@ -31,7 +32,7 @@ except ImportError:
     print("Please run 'scripts/install_debugger.sh' to install the required debugging dependencies.")
     exit(1)
 
-import re, textwrap
+import re, textwrap, subprocess, shutil
 
 script_config = ScriptConfig(
     data_provider=False,
@@ -126,6 +127,88 @@ def format_text_concise(text: str) -> str:
             formatted_lines.append(" " * original_indent + key_info)
 
     return "\n".join(formatted_lines)
+
+
+def resolve_cpp_callstack(callstack: str) -> str:
+    """Try to resolve C++ callstack addresses to source locations using addr2line.
+
+    Expects callstack format like: [binary(+0x123)] <- [binary(+0x456)]
+    Returns enhanced callstack with file:line if debug symbols are available.
+    """
+    # Check if this looks like a C++ callstack (contains addresses)
+    if not re.search(r"\[.*\(?\+?0x[0-9a-fA-F]+\)?.*\]", callstack):
+        return callstack
+
+    # Try to find llvm-addr2line first (better DWARF 5 support), then fall back to addr2line
+    addr2line_cmd = None
+    for cmd in ["llvm-addr2line-17", "llvm-addr2line", "addr2line"]:
+        if shutil.which(cmd):
+            addr2line_cmd = cmd
+            break
+
+    if not addr2line_cmd:
+        return callstack
+
+    # Extract all [binary(+0xoffset)] patterns
+    pattern = r"\[([^\(]+)\(\+?(0x[0-9a-fA-F]+)\)\]"
+    matches = re.findall(pattern, callstack)
+
+    if not matches:
+        return callstack
+
+    resolved_parts = []
+    for binary, offset in matches:
+        binary = binary.strip()
+
+        # Try to resolve using addr2line with -i flag for inline frames
+        try:
+            result = subprocess.run(
+                [addr2line_cmd, "-e", binary, "-f", "-C", "-i", offset], capture_output=True, text=True, timeout=1
+            )
+
+            if result.returncode == 0:
+                lines = result.stdout.strip().split("\n")
+
+                # With -i flag, we get pairs of (function, location) for each inline frame
+                # Parse all frames and find the most relevant user code
+                best_location = None
+                for i in range(0, len(lines), 2):
+                    if i + 1 >= len(lines):
+                        break
+
+                    # function = lines[i]  # Not currently used, but available if needed
+                    location = lines[i + 1]
+
+                    # Check if we got valid debug info (not "??")
+                    if location != "??:?" and location != "??:0":
+                        # Skip standard library and internal framework code
+                        if any(skip in location for skip in ["/include/c++/", "/bits/", "/spdlog/", "/reflect"]):
+                            continue
+
+                        # This looks like user code - keep it as the best match
+                        if "/" in location:
+                            # Get relative path from tests/ or common location
+                            for prefix in ["/tests/", "/ttnn/", "/tt_metal/"]:
+                                if prefix in location:
+                                    location = location[location.find(prefix) + 1 :]
+                                    break
+                            else:
+                                # Just use the filename
+                                location = location.split("/")[-1]
+
+                        best_location = location
+                        break  # Found user code, use this frame
+
+                if best_location:
+                    resolved_parts.append(f"{best_location}")
+                    continue
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            pass
+
+        # Fallback to original format if resolution failed
+        resolved_parts.append(f"[{binary}(+{offset})]")
+
+    return " <- ".join(resolved_parts) if resolved_parts else callstack
 
 
 def extract_key_info(arg_description: str) -> str:
@@ -320,7 +403,8 @@ script_config = ScriptConfig(
 @dataclass
 class DumpOpsData:
     dev_core: str = triage_field("Dev/Core")
-    host_info: str = triage_field("Operation", preserve_indentation_serializer)
+    operation: str = triage_field("Operation")
+    callstack_and_args: str = triage_field("Callstack / Arguments", preserve_indentation_serializer)
 
 
 def format_ops_table(ops_data: list[DumpOpsData], use_mapping: bool = False) -> str:
@@ -416,7 +500,7 @@ def fetch_operations_from_inspector(inspector) -> dict:
                     mapping[op.deviceOperationId] = {
                         "device_operation_id": op.deviceOperationId,
                         "operation_name": op.operationName,
-                        "call_stack": op.callstack,
+                        "callstack": op.callstack,
                         "arguments": op.arguments,
                     }
             return mapping
@@ -436,6 +520,7 @@ def dump_ops(
     dispatcher_data: DispatcherData,
     max_width: int = 100,
     verbose: bool = False,
+    summary: bool = False,
     inspector_data=None,
 ) -> tuple[list[DumpOpsData], list[tuple[int, str]]]:
     """Extract core location and host ID for all operations.
@@ -498,71 +583,124 @@ def dump_ops(
                     callstack = mapping.get("callstack", "")
                     args = mapping.get("arguments", "")
 
-                # Format host info based on whether we have mapping data
+                # Format operation name for the Operation column
                 if operation_name:
-                    # Show operation name as primary info
-                    if verbose:
-                        # In verbose mode, show operation name + args + callstack
-                        host_info_lines = [operation_name]
-
-                        # Add arguments if available (they contain tensor shapes)
-                        if args:
-                            # Format arguments nicely
-                            arg_lines = args.split("\n")
-                            for arg_line in arg_lines:
-                                if arg_line.strip():
-                                    # Indent arguments
-                                    host_info_lines.append(f"  {arg_line}")
-
-                        # Add callstack if available
-                        if callstack:
-                            host_info_lines.append("  Callstack:")
-                            # Limit callstack to first 3 frames in table view
-                            stack_lines = callstack.split("\n")[:3]
-                            for stack_line in stack_lines:
-                                if stack_line.strip():
-                                    host_info_lines.append(f"    {stack_line.strip()}")
-                            if len(callstack.split("\n")) > 3:
-                                host_info_lines.append("    ...")
-
-                        # Wrap long lines
-                        wrapped_lines = []
-                        for line in host_info_lines:
-                            if len(line) <= max_width:
-                                wrapped_lines.append(line)
-                            else:
-                                # Detect original indentation and preserve it
-                                original_indent = len(line) - len(line.lstrip())
-                                indent_str = line[:original_indent]
-
-                                # Wrap this line, preserving original indentation for continuation
-                                wrapped = textwrap.fill(line, width=max_width, subsequent_indent=indent_str + "  ")
-                                wrapped_lines.append(wrapped)
-
-                        host_info = "\n".join(wrapped_lines)
-                    else:
-                        # In concise mode, show operation name and first tensor shape if available
-                        if args and "Tensor[shape=" in args:
-                            # Extract first tensor shape
-                            import re
-
-                            shape_match = re.search(r"shape=\(([^)]+)\)", args)
-                            if shape_match:
-                                host_info = f"{operation_name} [{shape_match.group(1)}]"
-                            else:
-                                host_info = operation_name
-                        else:
-                            host_info = operation_name
+                    operation_display = operation_name
                 else:
                     # No mapping available, just show the ID
-                    host_info = str(kernel_config_host_id)
+                    operation_display = f"ID: {kernel_config_host_id}"
+
+                # Format callstack and arguments for the combined column
+                callstack_args_lines = []
+
+                # Add callstack if available
+                if callstack:
+                    # Try to resolve C++ addresses to source locations if debug symbols are available
+                    resolved_callstack = resolve_cpp_callstack(callstack)
+                    callstack_args_lines.append(f"Callstack: {resolved_callstack}")
+
+                # Add arguments based on mode
+                if args:
+                    if summary:
+                        # Summary mode: extract and show each argument on its own line
+                        import re
+
+                        # Split arguments by top-level commas (but not commas inside parentheses/brackets)
+                        # Simple approach: find commas that are not inside any brackets
+                        bracket_depth = 0
+                        paren_depth = 0
+                        arg_parts = []
+                        current_arg = []
+
+                        for char in args:
+                            if char == "(" or char == "[":
+                                paren_depth += 1
+                                bracket_depth += 1
+                                current_arg.append(char)
+                            elif char == ")" or char == "]":
+                                paren_depth -= 1
+                                bracket_depth -= 1
+                                current_arg.append(char)
+                            elif char == "," and bracket_depth == 0:
+                                # This is a top-level comma - split here
+                                arg_parts.append("".join(current_arg).strip())
+                                current_arg = []
+                            else:
+                                current_arg.append(char)
+
+                        # Don't forget the last argument
+                        if current_arg:
+                            arg_parts.append("".join(current_arg).strip())
+
+                        # Parse each argument
+                        arguments = []
+                        for arg in arg_parts:
+                            if not arg:
+                                continue
+
+                            # Check if this is a tensor (contains "logical_shape=Shape")
+                            shape_match = re.search(r"logical_shape=Shape\(\[([^\]]+)\]\)", arg)
+                            if shape_match:
+                                shape = shape_match.group(1)
+                                properties = []
+
+                                # Extract data type
+                                dtype_match = re.search(r"dtype=DataType::(\w+)", arg)
+                                if dtype_match:
+                                    properties.append(dtype_match.group(1))
+
+                                # Extract memory layout
+                                layout_match = re.search(r"memory_layout=TensorMemoryLayout::(\w+)", arg)
+                                if layout_match:
+                                    properties.append(layout_match.group(1))
+
+                                # Extract buffer type
+                                buffer_match = re.search(r"buffer_type=BufferType::(\w+)", arg)
+                                if buffer_match:
+                                    properties.append(buffer_match.group(1))
+
+                                if properties:
+                                    arguments.append(f"  Tensor[{shape}] ({', '.join(properties)})")
+                                else:
+                                    arguments.append(f"  Tensor[{shape}]")
+                            else:
+                                # Non-tensor argument - show compact representation
+                                # Could be a scalar, enum, etc.
+                                if len(arg) <= 50:
+                                    arguments.append(f"  {arg}")
+                                else:
+                                    arguments.append(f"  {arg[:47]}...")
+
+                        if arguments:
+                            callstack_args_lines.append("Arguments:")
+                            callstack_args_lines.extend(arguments)
+                        else:
+                            callstack_args_lines.append(f"Arguments: {args[:80]}...")
+                    else:
+                        # Full mode: wrap long argument lines
+                        if len(args) <= max_width - 11:  # 11 is length of "Arguments: "
+                            callstack_args_lines.append(f"Arguments: {args}")
+                        else:
+                            # Wrap the arguments text
+                            wrapped = textwrap.fill(
+                                args,
+                                width=max_width - 11,  # Account for "Arguments: " prefix
+                                initial_indent="Arguments: ",
+                                subsequent_indent="           ",  # 11 spaces to align with "Arguments: "
+                                break_long_words=False,
+                                break_on_hyphens=False,
+                            )
+                            callstack_args_lines.append(wrapped)
+
+                callstack_args_info = "\n".join(callstack_args_lines) if callstack_args_lines else "No details"
 
                 # Combine device ID and core location into a single string
                 dev_core = f"{device._id} / {location.to_str('logical')}"
 
                 ops_data = DumpOpsData(
                     dev_core=dev_core,
-                    host_info=host_info,
+                    operation=operation_display,
+                    callstack_and_args=callstack_args_info,
                 )
                 result.append(ops_data)
 
@@ -573,6 +711,8 @@ def run(args, context: Context):
     """Run the dump_ops script."""
     max_width = int(args["--max-width"]) if args["--max-width"] else 100
     verbose = args["--verbose"]
+    # Default to summary mode unless verbose is requested
+    summary = not verbose
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     inspector_data = get_inspector_data(args, context)
@@ -581,7 +721,7 @@ def run(args, context: Context):
     all_ops_data = []
     all_host_id_op_names = []
     for device in run_checks.devices:
-        device_ops, host_id_op_names = dump_ops(device, dispatcher_data, max_width, verbose, inspector_data)
+        device_ops, host_id_op_names = dump_ops(device, dispatcher_data, max_width, verbose, summary, inspector_data)
         all_ops_data.extend(device_ops)
         all_host_id_op_names.extend(host_id_op_names)
 

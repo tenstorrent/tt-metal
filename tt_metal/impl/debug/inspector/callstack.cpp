@@ -212,8 +212,29 @@ std::string get_cpp_callstack() {
                         std::string path = symbol_str.substr(0, path_end);
                         // Trim whitespace
                         path.erase(path.find_last_not_of(" \t") + 1);
-                        std::filesystem::path binary_path(path);
-                        func_info = "[" + binary_path.filename().string() + "]";
+
+                        // Extract the binary path and offset separately
+                        // Format: /path/to/binary(+0xoffset)
+                        size_t paren_pos = path.find('(');
+                        std::string binary_part = (paren_pos != std::string::npos) ? path.substr(0, paren_pos) : path;
+                        std::string offset_part = (paren_pos != std::string::npos) ? path.substr(paren_pos) : "";
+
+                        // Make the binary path relative to current working directory for addr2line
+                        std::filesystem::path binary_path(binary_part);
+                        std::string relative_path;
+                        try {
+                            std::filesystem::path cwd = std::filesystem::current_path();
+                            if (binary_path.is_absolute()) {
+                                relative_path = std::filesystem::relative(binary_path, cwd).string();
+                            } else {
+                                relative_path = binary_path.string();
+                            }
+                        } catch (...) {
+                            // If relative path fails, just use filename
+                            relative_path = binary_path.filename().string();
+                        }
+
+                        func_info = "[" + relative_path + offset_part + "]";
                     } else {
                         continue;  // Skip this frame if we can't extract any info
                     }
