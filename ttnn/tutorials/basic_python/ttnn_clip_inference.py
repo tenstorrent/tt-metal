@@ -205,18 +205,6 @@ def main():
             self.prefix = prefix
             self.layers = []
 
-            # Use regex to find all layer indices in the state dictionary
-            layer_pattern = re.compile(f"{prefix}\.layers\.(\d+)\.")
-
-            # Count number of transformer layers by finding unique layer indices
-            layers_ids = set()
-            for k in state_dict.keys():
-                re_match = re.search(layer_pattern, k)
-                if re_match:
-                    layers_ids.add(re_match.group(1))
-
-            num_layers = len(layers_ids)
-
             # Initialize each transformer layer with converted weights
             self.layers = [
                 ResidualAttentionBlock(
@@ -411,7 +399,7 @@ def main():
             num_vision_layers = 12  # Hardcoded value for CLIP-ViT-base-patch32
             self.visual = VisionTransformer(state_dict, num_vision_layers=num_vision_layers)
 
-            num_text_layers = 8  # Hardcoded value for CLIP-ViT-base-patch32
+            num_text_layers = 12  # Hardcoded value for CLIP-ViT-base-patch32
             self.transformer = Transformer(
                 state_dict,
                 num_layers=num_text_layers,
