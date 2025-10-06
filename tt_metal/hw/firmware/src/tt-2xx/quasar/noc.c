@@ -32,19 +32,6 @@
 #include "arc_fw_noc.h"
 #endif
 
-///
-
-#include <stdarg.h>
-#include <stdio.h>
-
-void LOG_C(const char* format, ...) {
-    va_list args;
-    va_start(args, format);
-    vfprintf(stdout, format, args);
-    va_end(args);
-    fflush(stdout);
-}
-
 static uint32_t active_cmd_buf = 0;
 static uint32_t active_noc_instance = 0;
 
