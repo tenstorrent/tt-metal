@@ -468,7 +468,7 @@ public:
         generate_comparison_statistics();
 
         // Generate comparison statistics CSV file
-        generate_comparison_summary_csv();
+        generate_comparison_statistics_csv();
 
         validate_against_golden();
     }
@@ -576,7 +576,8 @@ public:
         }
 
         // Copy CSV files to CI artifacts directory
-        for (const std::filesystem::path& csv_filepath : {csv_file_path_, csv_summary_file_path_, diff_csv_file_path_}) {
+        for (const std::filesystem::path& csv_filepath :
+             {csv_file_path_, csv_summary_file_path_, diff_csv_file_path_, comparison_statistics_csv_file_path_}) {
             try {
                 std::filesystem::copy_file(
                     csv_filepath,
@@ -1486,7 +1487,7 @@ private:
 
     void generate_comparison_statistics();
 
-    void generate_comparison_summary_csv();
+    void generate_comparison_statistics_csv();
 
     void validate_against_golden() {
         if (comparison_results_.empty()) {
@@ -1551,4 +1552,5 @@ private:
     // Golden CSV comparison statistics
     std::unordered_map<Topology, SpeedupsByTopology> speedups_per_topology_;
     double overall_geomean_speedup_ = 1.0;
+    std::filesystem::path comparison_statistics_csv_file_path_;
 };
