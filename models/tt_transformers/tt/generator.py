@@ -174,6 +174,20 @@ class Generator:
 
         return tt_out_trace
 
+    def should_enable_trace(self, prefill_seq_len, prefill_ids, model_id):
+        """
+        This function is used to determine if trace should be enabled for the prefill.
+        For this PR, we only covered the models that don't have sliding window.
+        If you add new code that affects the input to the prefill_forward, you need to disable trace for that model if you don't support tracing for that feature.
+        """
+        if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
+            return False
+        if prefill_ids.shape[-1] > self.model_args[model_id].max_prefill_chunk_size:
+            return False
+        if hasattr(self.model_args[model_id], "sliding_window"):
+            return False
+        return True
+
     # Note: This function is called by vLLM
     def prefill_forward_text(
         self,
@@ -215,11 +229,7 @@ class Generator:
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
 
-            if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
-                enable_trace = False
-            use_chunked_prefill = prefill_ids.shape[-1] > self.model_args[model_id].max_prefill_chunk_size
-            if use_chunked_prefill:
-                enable_trace = False
+            enable_trace = self.should_enable_trace(prefill_seq_len, prefill_ids, model_id)
             logger.info(
                 f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[model_id].max_prefill_chunk_size}, enable trace: {enable_trace}"
             )
