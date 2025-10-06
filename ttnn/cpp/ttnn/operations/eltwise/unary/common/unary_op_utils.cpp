@@ -273,9 +273,23 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "rpow_tile_init();", fmt::format("rpow_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             break;
         case UnaryOpType::SUB_UNARY_SFPU:
-            op_init_and_name = {
-                "binop_with_scalar_tile_init();",
-                fmt::format("sub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            if (input_dtype == DataType::INT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format(
+                        "sub_unary_tile_int32({}, {}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(static_cast<int32_t>(param0_raw)))};
+            } else if (input_dtype == DataType::UINT32) {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    // TODO: Use uint32_t tile API here once implemented #27621
+                    fmt::format("sub_unary_tile_int32({}, {}u);", idst, (uint)param0_raw)};
+            } else {
+                op_init_and_name = {
+                    "binop_with_scalar_tile_init();",
+                    fmt::format("sub_unary_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+            }
             break;
         case UnaryOpType::ADD_UNARY_SFPU:
             TT_FATAL(
