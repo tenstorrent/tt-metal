@@ -116,7 +116,7 @@ Tensor handle_ttt_case(
         log_info(tt::LogOp, "Where LLK - TTT");
         return ttnn::prim::where(condition, t_true, t_false, output_dtype, memory_config, output);
     }
-    return Tensor();  // Invalid tensor to indicate fallback needed
+    return ternary_utils::where_impl(condition, t_true, t_false, memory_config, std::move(output));
 }
 
 // Helper function to handle TTS case
@@ -139,7 +139,7 @@ Tensor handle_tts_case(
         log_info(tt::LogOp, "Where LLK - TTS");
         return ttnn::prim::where(condition, t_true, scalar_false, output_dtype, memory_config, output);
     }
-    return Tensor();  // Invalid tensor to indicate fallback needed
+    return ternary_utils::where_impl(condition, t_true, scalar_false, memory_config, std::move(output));
 }
 
 // Helper function to handle TST case
@@ -162,7 +162,7 @@ Tensor handle_tst_case(
         log_info(tt::LogOp, "Where LLK - TST");
         return ttnn::prim::where(condition, scalar_true, t_false, output_dtype, memory_config, output);
     }
-    return Tensor();  // Invalid tensor to indicate fallback needed
+    return ternary_utils::where_impl(condition, scalar_true, t_false, memory_config, std::move(output));
 }
 
 // Helper function to handle TSS case
