@@ -250,7 +250,9 @@ def main():
 
             self.proj = ttnn.typecast(state_dict["visual_projection.weight"], dtype=ttnn.bfloat16)
 
-            # self.conv1_weights = ttnn.typecast(s, dtype=ttnn.bfloat16)
+            # Weights preparation for convolution (ttnn.conv2d) must be done on host (CPU)
+            # To that end, we move convolution weights from device to host and perform its
+            # layout to Row-Major, which is the preferred layout for TT-NN convolution kernels.
             self.conv1_weights = ttnn.from_device(state_dict[conv2_state_dict_name])
             self.conv1_weights = ttnn.to_dtype(self.conv1_weights, dtype=ttnn.bfloat16)
             self.conv1_weights = ttnn.to_layout(self.conv1_weights, layout=ttnn.ROW_MAJOR_LAYOUT)
