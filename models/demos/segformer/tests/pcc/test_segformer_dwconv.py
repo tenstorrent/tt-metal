@@ -74,7 +74,7 @@ def test_segformer_dw_conv(
         device=None,
     )
 
-    ttnn_model = TtSegformerDWConv(parameters, dim)
+    ttnn_model = TtSegformerDWConv(parameters, dim, activation=None)
 
     ttnn_output = ttnn_model(
         device,
