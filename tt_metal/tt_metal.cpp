@@ -934,6 +934,9 @@ std::string SerializeClusterDescriptor() {
     return path.string();
 }
 
+// This function is used to set a default root directory for the tt_metal library.
+void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
+
 IDevice* CreateDevice(
     chip_id_t device_id,
     const uint8_t num_hw_cqs,
