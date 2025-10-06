@@ -31,14 +31,13 @@ import inspect
 import os
 import utils
 from collections.abc import Iterable
+from pathlib import Path
 
 
 def find_install_debugger_script() -> str:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    install_script = os.path.abspath(
-        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "scripts", "install_debugger.sh")
-    )
-    return install_script
+    script_path = Path(__file__).resolve()
+    install_script = script_path.parent.parent.parent / "scripts" / "install_debugger.sh"
+    return str(install_script)
 
 
 try:
