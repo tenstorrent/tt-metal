@@ -210,10 +210,20 @@ void py_module(nb::module_& m) {
                 auto_context.initialize_distributed_context(argc, argv.data());
             },
             nb::arg("args"));
-        py_auto_context.def("get_distributed_context", &AutoContext::get_distributed_context);
+        py_auto_context.def(
+            "get_distributed_context",
+            [](AutoContext& self) -> tt::tt_metal::distributed::multihost::DistributedContext* {
+                return self.get_distributed_context().get();
+            },
+            nb::rv_policy::reference);
         py_auto_context.def("get_profiler", &AutoContext::get_profiler);
         py_auto_context.def("close_profiler", &AutoContext::close_profiler);
         py_auto_context.def("get_ccl_resources", &AutoContext::get_ccl_resources);
+
+        // Socket manager controls
+        py_auto_context.def(
+            "initialize_socket_manager", &AutoContext::initialize_socket_manager, nb::arg("socket_type"));
+        py_auto_context.def("get_socket_manager", &AutoContext::get_socket_manager, nb::rv_policy::reference);
     }
 }
 
