@@ -224,7 +224,7 @@ void noc_transfer(TransferParams* p) {
 
             NOC_WRITE_REG(
                 NOC_NIU_BRCST_LO_REG_ADDR,
-                (uint32_t)(shifted_value | brcst_value_lo.val & 0xEFF));  // upper 10 bits not used.
+                (uint32_t)(shifted_value | (brcst_value_lo.val & 0xEFF)));  // upper 10 bits not used.
             NOC_WRITE_REG(NOC_NIU_BRCST_HI_REG_ADDR, (uint32_t)(p->multicast_hi));
         } else {
             NOC_WRITE_REG(NOC_NIU_BRCST_LO_REG_ADDR, brcst_value_lo.val);
