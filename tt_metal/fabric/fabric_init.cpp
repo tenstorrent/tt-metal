@@ -2,12 +2,30 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "dispatch/system_memory_manager.hpp"
+#include "cluster.hpp"
+#include "data_types.hpp"
 #include "fabric.hpp"
 
+#include <algorithm>
+#include <cstdint>
+#include <set>
+#include <tt-logger/tt-logger.hpp>
+#include <memory>
+#include <map>
+#include <string>
+#include <cstddef>
 #include <umd/device/types/arch.hpp>
+#include <utility>
+#include <unordered_map>
+#include <umd/device/types/core_coordinates.hpp>
 #include <variant>
+#include <vector>
 
 #include "erisc_datamover_builder.hpp"
+#include "fabric_types.hpp"
+#include "host_api.hpp"
+#include "kernel_types.hpp"
 #include "tt_metal.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
@@ -19,6 +37,7 @@
 #include "hostdevcommon/fabric_common.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
+#include "tt_stl/assert.hpp"
 #include <fmt/ranges.h>
 
 // hack for test_basic_fabric_apis.cpp

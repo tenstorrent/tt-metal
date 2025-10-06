@@ -5,6 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <stdint.h>
+#include <ios>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -28,10 +29,10 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
+#include "hal_types.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
 #include "impl/dispatch/dispatch_settings.hpp"
 #include <tt-metalium/kernel_types.hpp>
-#include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/program.hpp>

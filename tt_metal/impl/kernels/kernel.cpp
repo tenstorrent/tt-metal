@@ -3,11 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <core_coord.hpp>
+#include <cstdint>
 #include <device.hpp>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <functional>
+#include <enchantum/entries.hpp>
 #include <kernel_types.hpp>
 #include <enchantum/enchantum.hpp>
+#include <string>
+#include <map>
+#include <optional>
+#include <ostream>
 #include <tt_stl/tt_stl/reflection.hpp>
 #include <algorithm>
 #include <cstring>
@@ -15,6 +22,7 @@
 #include <set>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 #include <tt_stl/assert.hpp>
@@ -28,11 +36,12 @@
 #include <tt_stl/span.hpp>
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
+#include "runtime_args_data.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
+#include <vector>
 #include "kernel_impl.hpp"
 
 namespace tt {

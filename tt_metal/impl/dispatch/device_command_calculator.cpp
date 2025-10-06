@@ -5,9 +5,14 @@
 #include "device_command_calculator.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <type_traits>
+#include <vector>
+#include <utility>
 
 #include "dispatch/kernels/cq_commands.hpp"
-#include "hal.hpp"
+#include "tt_align.hpp"
+#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 

@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
+#include <memory>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -16,10 +17,10 @@
 #include "debug_tools_test_utils.hpp"
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
+#include "mesh_workload.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are properly buffered before being displayed to the user.

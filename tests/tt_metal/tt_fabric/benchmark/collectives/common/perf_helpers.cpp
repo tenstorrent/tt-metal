@@ -6,9 +6,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <numeric>
 
 #include <tt-metalium/device_pool.hpp>
+#include <vector>
+#include "device.hpp"
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric::bench {
 

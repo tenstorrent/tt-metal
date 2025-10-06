@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+#include <cstdint>
+#include <optional>
 #include <tt-metalium/bfloat4.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
-#include <functional>
-#include <random>
 #include <vector>
 #include <simde/x86/avx2.h>
+#include <simde/x86/sse2.h>
 
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"

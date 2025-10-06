@@ -3,15 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
 #include <memory>
-#include <stdexcept>
-#include <iostream>
-#include <typeinfo>
 #include <filesystem>
 
 #include "fabric_fixture.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include "fabric_types.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace {

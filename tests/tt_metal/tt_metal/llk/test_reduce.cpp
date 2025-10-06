@@ -22,7 +22,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
@@ -36,6 +35,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
+#include "mesh_workload.hpp"
+#include "mesh_coord.hpp"
+#include "mesh_buffer.hpp"
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"

@@ -2,17 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <memory>
+#include <numeric>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
+#include "fabric_edm_types.hpp"
+#include "hal_types.hpp"
+#include "fabric_types.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <array>
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <unordered_map>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -22,8 +32,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_fixture.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "tt_backend_api_types.hpp"
 #include "utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>

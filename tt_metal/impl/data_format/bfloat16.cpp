@@ -2,12 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <stdint.h>
+#include <bit>
+#include <cstddef>
+#include <string>
+#include <cstring>
 #include <tt-metalium/bfloat16.hpp>
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <iostream>
 #include <random>
+#include <utility>
 #include <vector>
 
 #include <tt_stl/assert.hpp>

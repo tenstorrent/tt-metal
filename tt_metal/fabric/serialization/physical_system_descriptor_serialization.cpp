@@ -6,12 +6,22 @@
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "protobuf/physical_system_descriptor.pb.h"
 
-#include <umd/device/cluster.hpp>
+#include <cstdint>
+#include <string>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <iostream>
+#include <ostream>
+#include <cstddef>
+#include <iterator>
 
 #include <google/protobuf/text_format.h>
-#include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <fstream>
-#include <sstream>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <vector>
+#include <utility>
+#include <unordered_map>
 
 namespace tt::tt_metal {
 

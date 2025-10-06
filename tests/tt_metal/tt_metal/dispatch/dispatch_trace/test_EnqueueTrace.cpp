@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <stdlib.h>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
@@ -26,9 +25,12 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "dispatch_test_utils.hpp"
+#include "distributed.hpp"
 #include "env_lib.hpp"
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
+#include "mesh_buffer.hpp"
+#include "mesh_trace_id.hpp"
 #include "trace/trace_buffer.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "multi_command_queue_fixture.hpp"
@@ -36,7 +38,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/common/scoped_timer.hpp"
 #include <umd/device/types/core_coordinates.hpp>
-#include "distributed/mesh_trace.hpp"
+#include "distributed/mesh_trace.hpp"  // NOLINT(misc-include-cleaner)
 
 // Access to internal API: ProgramImpl::get_id
 #include "impl/program/program_impl.hpp"

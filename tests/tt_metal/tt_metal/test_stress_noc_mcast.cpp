@@ -8,17 +8,13 @@
 //  - rapidly grid of tensix workers generates random noc traffic
 //  - does not verify correct transactions, just runs til termination
 
-#include <fmt/base.h>
 #include <stdlib.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <cstdint>
-#include <map>
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 

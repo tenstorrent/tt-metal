@@ -2,15 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <optional>
 #include <tt-metalium/distributed.hpp>
-#include <utility>
 
 #include "device.hpp"
 #include "mesh_device.hpp"
+#include "mesh_event.hpp"
 #include "mesh_trace.hpp"
+#include "mesh_workload.hpp"
+#include "mesh_trace_id.hpp"
 #include "mesh_workload_impl.hpp"
+#include "sub_device_types.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include "tt_stl/span.hpp"
 
 namespace tt::tt_metal::distributed {
 

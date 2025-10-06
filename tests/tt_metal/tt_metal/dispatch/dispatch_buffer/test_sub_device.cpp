@@ -12,7 +12,6 @@
 #include <exception>
 #include <memory>
 #include <optional>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -21,11 +20,9 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "llrt.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 

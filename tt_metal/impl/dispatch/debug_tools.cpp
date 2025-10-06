@@ -4,8 +4,10 @@
 
 #include "debug_tools.hpp"
 
+#include <fmt/format.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <string>

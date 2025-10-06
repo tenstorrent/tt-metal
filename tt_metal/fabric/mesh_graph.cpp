@@ -4,21 +4,38 @@
 
 #include "mesh_graph.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <yaml-cpp/yaml.h>
 #include <array>
+#include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
+#include <numeric>
 #include <optional>
 
+#include <string_view>
+#include <string>
+#include <sstream>
+#include <ostream>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <llrt/tt_cluster.hpp>
+#include <llrt/tt_cluster.hpp>  // NOLINT(misc-include-cleaner)
+#include <umd/device/types/arch.hpp>
+#include <tuple>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_graph_descriptor.hpp>
+#include "tt_stl/reflection.hpp"
+#include <unordered_map>
+#include "fabric_types.hpp"
+#include <utility>
+#include <vector>
+#include <variant>
 #include <protobuf/mesh_graph_descriptor.pb.h>
 
 // Implementation of hash function for port_id_t

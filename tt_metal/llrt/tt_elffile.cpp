@@ -4,6 +4,11 @@
 
 #include "tt_elffile.hpp"
 
+#include <cstdint>
+#include <span>
+#include <string>
+#include <string_view>
+#include <cstddef>
 #include <tt_stl/assert.hpp>
 #include <elf.h>
 #include <errno.h>
@@ -18,6 +23,7 @@
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
+#include <vector>
 
 // Verify some knowledge of, and compatibilty with, RiscV
 #ifndef EM_RISCV

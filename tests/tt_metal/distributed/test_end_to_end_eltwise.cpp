@@ -1,9 +1,16 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <cstdint>
+#include <array>
+#include <chrono>
+#include <cstddef>
 #include <functional>
 
-
+#include <memory>
+#include <optional>
+#include <string>
+#include <map>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -14,9 +21,20 @@
 #include <gmock/gmock.h>
 #include <gmock/gmock-matchers.h>
 
+#include "hal_types.hpp"
+#include "circular_buffer_config.hpp"
+#include "data_types.hpp"
+#include "buffer_types.hpp"
+#include "constants.hpp"
 #include "host_api.hpp"
+#include "mesh_buffer.hpp"
+#include "hostdevcommon/kernel_structs.h"
+#include "mesh_event.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_backend_api_types.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <vector>
+#include <utility>
 
 namespace tt::tt_metal {
 

@@ -4,14 +4,20 @@
 
 #include <algorithm>
 
+#include <cstdint>
+#include <cstddef>
 #include <tt_stl/assert.hpp>
+#include "core_coord.hpp"
 #include "device.hpp"
+#include "dispatch/dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "llrt/hal.hpp"
 #include "hal_types.hpp"
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include <tt_stl/strong_type.hpp>
+#include <unordered_map>
+#include <vector>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace_buffer.hpp"
 #include "tt_align.hpp"

@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <vector>
+#include <cstddef>
+#include "tt_stl/enum.hpp"
+#include <utility>
 #define HAL_BUILD tt::tt_metal::quasar::active_eth
 #define COMPILE_FOR_ERISC
 
@@ -14,7 +19,6 @@ using namespace tt::tt_metal::quasar::active_eth;
 #include "quasar/qa_hal.hpp"
 #include "quasar/qa_hal_eth_asserts.hpp"
 #include "dev_mem_map.h"
-#include "eth_l1_address_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"

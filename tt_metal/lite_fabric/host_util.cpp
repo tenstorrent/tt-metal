@@ -3,14 +3,29 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "host_util.hpp"
-#include <enchantum/entries.hpp>
+#include <cstdint>
+#include <chrono>
+#include <fmt/format.h>
+#include <cstddef>
+#include <cstdlib>
+#include <thread>
+#include <filesystem>
+#include <ios>
+#include <stdexcept>
 #include <tt-logger/tt-logger.hpp>
 #include <fstream>
+#include "tt_cluster.hpp"
+#include "hal.hpp"
 #include "tt_metal/lite_fabric/build.hpp"
 #include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
 #include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/tensix_soft_reset_options.hpp>
+#include <type_traits>
+#include <vector>
 
 namespace {
 

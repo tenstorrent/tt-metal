@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
+#include <cstddef>
+#include <optional>
 #include <tt-metalium/blockfloat_common.hpp>
 #include <tt_stl/span.hpp>
 #include <array>

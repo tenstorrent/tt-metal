@@ -2,22 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <fmt/format.h>
 #include <limits.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <string>
 #include <unordered_map>
 #include <enchantum/enchantum.hpp>
 
 #include <tt_stl/assert.hpp>
 #include "fmt/base.h"
+#include "hal/generated/dev_msgs.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "size_literals.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
 

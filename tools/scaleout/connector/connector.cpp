@@ -5,7 +5,10 @@
 #include "connector.hpp"
 
 #include <cassert>
+#include <stdexcept>
+#include <cstddef>
 #include <vector>
+#include "board/board.hpp"
 
 namespace tt::scaleout_tools {
 

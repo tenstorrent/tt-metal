@@ -4,7 +4,6 @@
 
 #include "tt_metal/distributed/system_mesh_translation_map.hpp"
 
-#include <optional>
 #include <unordered_set>
 #include <utility>
 #include <vector>

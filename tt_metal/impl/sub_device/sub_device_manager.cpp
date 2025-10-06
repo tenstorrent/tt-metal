@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include <cstdint>
+#include <atomic>
+#include <memory>
+#include <optional>
+#include <cstddef>
 #include <tt_stl/assert.hpp>
 #include <device.hpp>
 #include <host_api.hpp>
@@ -15,12 +20,14 @@
 #include <vector>
 
 #include "core_coord.hpp"
+#include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt_stl/strong_type.hpp>
 #include "sub_device_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/allocator/allocator_types.hpp"
+#include "mesh_trace_id.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "distributed/mesh_trace.hpp"

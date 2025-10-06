@@ -4,12 +4,18 @@
 
 #include <buffer.hpp>
 #include <circular_buffer.hpp>
+#include <cstdint>
 #include <global_circular_buffer.hpp>
 #include <array>
+#include <optional>
 #include <string>
 
 #include <tt_stl/assert.hpp>
+#include "circular_buffer_config.hpp"
 #include "circular_buffer_constants.h"
+#include "core_coord.hpp"
+#include "program_descriptors.hpp"
+#include "hal_types.hpp"
 #include "tile.hpp"
 
 namespace tt {

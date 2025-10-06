@@ -1,2 +1,2 @@
 InheritParentConfig: true
-Checks: -misc-use-anonymous-namespace, -misc-include-cleaner
+Checks: -misc-use-anonymous-namespace

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <random>
 
 #include <gtest/gtest.h>

@@ -5,8 +5,10 @@
 #include "build_env_manager.hpp"
 
 #include <limits.h>
-#include <enchantum/enchantum.hpp>
+#include <cstdint>
 #include <math.h>
+#include <functional>
+#include <mutex>
 #include <tracy/Tracy.hpp>
 #include <bitset>
 #include <cstddef>
@@ -19,13 +21,13 @@
 #include "core_coord.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch_core_common.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
 #include "metal_soc_descriptor.h"
 #include "dispatch/system_memory_manager.hpp"
 #include <umd/device/types/core_coordinates.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
 

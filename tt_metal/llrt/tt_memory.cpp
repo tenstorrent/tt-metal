@@ -4,10 +4,16 @@
 
 #include "tt_memory.h"
 
+#include <string>
+#include <cstdlib>
+#include <exception>
+#include <tt-logger/tt-logger.hpp>
+#include <functional>
 #include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <span>
+#include <vector>
 
 #include "tt_elffile.hpp"
 

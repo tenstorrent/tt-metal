@@ -4,7 +4,6 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <boost/move/utility_core.hpp>
 #include <mesh_coord.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>

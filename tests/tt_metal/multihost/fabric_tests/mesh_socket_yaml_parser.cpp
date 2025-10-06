@@ -2,19 +2,29 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <filesystem>
+#include <cstddef>
+#include <cstdint>
 #include <fstream>
-#include <sstream>
-#include <algorithm>
+#include <optional>
 #include <random>
 #include <set>
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
+#include "fabric_edm_types.hpp"
+#include "mesh_coord.hpp"
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_context.hpp"
 
+#include <string>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/test_utils/test_common.hpp"
+#include "tt_stl/assert.hpp"
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/tt_stl/caseless_comparison.hpp>
+#include <vector>
+#include <utility>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_fabric::mesh_socket_tests {
 

@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <sys/types.h>
+#include <cstddef>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -29,15 +30,13 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_metal/test_utils/df/float32.hpp"
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 using std::vector;
 using namespace tt;
 using namespace tt::test_utils;
-using namespace tt::test_utils::df;
 using namespace tt::tt_metal;
 
 namespace unit_tests::dram::direct {

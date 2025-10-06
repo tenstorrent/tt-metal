@@ -4,18 +4,22 @@
 
 #include "watcher_server.hpp"
 
-#include <unistd.h>
+#include <stdio.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <condition_variable>
 #include <filesystem>
 #include <future>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -24,10 +28,10 @@
 #include "debug/ring_buffer.h"
 #include "debug_helpers.hpp"
 #include "hal_types.hpp"
+#include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "metal_soc_descriptor.h"
-#include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>

@@ -1,16 +1,19 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <gtest/gtest.h>
+#include <fmt/format.h>
+#include <fmt/base.h>
 #include <iostream>
 #include <string>
-#include <vector>
+#include <tt-logger/tt-logger.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <filesystem>
 
-#include <tt-metalium/tt_metal.hpp>
+#include "fabric_types.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 

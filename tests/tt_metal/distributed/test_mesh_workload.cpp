@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdint.h>
+#include <thread>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -13,10 +13,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <cmath>
 #include <cstdlib>
-#include <exception>
 #include <map>
 #include <memory>
-#include <optional>
 #include <random>
 #include <stdexcept>
 #include <unordered_map>
@@ -34,7 +32,6 @@
 #include <tt-metalium/device.hpp>
 #include "env_lib.hpp"
 #include "gmock/gmock.h"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
@@ -43,9 +40,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/semaphore.hpp>
-#include <tt_stl/span.hpp>
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>

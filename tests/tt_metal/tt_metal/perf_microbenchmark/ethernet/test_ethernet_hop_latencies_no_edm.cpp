@@ -21,8 +21,10 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -33,13 +35,14 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "mesh_graph.hpp"
+#include "hal_types.hpp"
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/control_plane.hpp>
 
 using tt::tt_metal::IDevice;
 using tt::tt_metal::distributed::MeshCoordinate;

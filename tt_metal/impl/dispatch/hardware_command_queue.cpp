@@ -3,22 +3,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hardware_command_queue.hpp"
+#include <sched.h>
+#include <pthread.h>
 
+#include <cstdint>
+#include <bit>
+#include <cstddef>
 #include <device.hpp>
 #include <event.hpp>
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
+#include <functional>
+#include <memory>
+#include <thread>
+#include <optional>
+#include <mutex>
 #include <tt-metalium/program.hpp>
+#include "core_coord.hpp"
+#include "buffer.hpp"
+#include "dispatch/command_queue_common.hpp"
+#include "program/program_impl.hpp"
 #include "sub_device_types.hpp"
 #include "trace/trace_buffer.hpp"
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <algorithm>
-#include <array>
-#include <type_traits>
+#include <tuple>
+#include <umd/device/types/core_coordinates.hpp>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -42,6 +57,8 @@
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
+#include "vector_aligned.hpp"
+#include "tt_stl/span.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {

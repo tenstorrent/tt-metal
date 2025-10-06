@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_common_types.hpp"
+#include "tt_stl/assert.hpp"
+#include <string>
+#include <enchantum/enchantum.hpp>
+#include <tt-logger/tt-logger.hpp>
+#include <cstdint>
 
 namespace tt::tt_fabric::fabric_tests {
 

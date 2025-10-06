@@ -3,14 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include <atomic>
+#include <cstddef>
 #include <device.hpp>
 #include <memory_reporter.hpp>
 #include <stdint.h>
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <reflect>
+#include <string>
 #include <utility>
-#include <enchantum/enchantum.hpp>
 
 #include "buffer_types.hpp"
 #include "tt_metal/detail/reports/report_utils.hpp"

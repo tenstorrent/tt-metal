@@ -3,29 +3,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstddef>
+#include <algorithm>
+#include <array>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
-#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 #include <optional>
-#include <set>
+#include <unordered_map>
+#include <umd/device/types/core_coordinates.hpp>
+#include <unordered_set>
 #include <vector>
 
+#include "hostdevcommon/fabric_common.h"
+#include "fabric_types.hpp"
+#include "host_api.hpp"
+#include "fabric_edm_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/kernels/kernel_impl.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include "impl/kernels/kernel_impl.hpp"  // NOLINT(misc-include-cleaner)
 
 #include "fabric_host_utils.hpp"
 #include "fabric_context.hpp"
+#include "kernel_types.hpp"
 
 namespace tt {
 namespace tt_metal {

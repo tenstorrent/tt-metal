@@ -3,20 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "bank_manager.hpp"
+#include <sys/types.h>
 
+#include <cstdint>
+#include <cstddef>
 #include <enchantum/enchantum.hpp>
+#include <memory>
+#include <optional>
+#include <fstream>
 #include <tt-metalium/allocator.hpp>
-#include <limits>
-#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <algorithm>
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include <tt_stl/assert.hpp>
 #include "buffer_types.hpp"
+#include "hal_types.hpp"
+#include "core_coord.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <vector>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
+#include "tt_stl/small_vector.hpp"
 
 namespace tt {
 

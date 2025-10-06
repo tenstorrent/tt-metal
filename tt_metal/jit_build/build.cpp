@@ -7,11 +7,16 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <functional>
 #include <iterator>
+#include <map>
+#include <sstream>
 #include <string>
 #include <string_view>
 
@@ -23,7 +28,9 @@
 #include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
 #include "env_lib.hpp"
+#include "hal.hpp"
 #include "hal_types.hpp"
+#include "hostdevcommon/profiler_common.h"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/kernel_args.hpp"
 #include "jit_build_settings.hpp"
@@ -31,9 +38,12 @@
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
+#include "rtoptions.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
 #include <umd/device/types/arch.hpp>
+#include <vector>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 

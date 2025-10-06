@@ -2,17 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gmock/gmock.h>
-#include <memory>
-#include <optional>
-#include <string>
+#include <gtest/gtest.h>
+#include <set>
 #include <vector>
 
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 
+#include "fabric_types.hpp"
+#include "mesh_config.hpp"
+#include "routing_table_generator.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed {

@@ -4,21 +4,18 @@
 
 #include <gtest/gtest.h>
 // Now include the actual ControlPlane header with friend declaration
-#include <tt-metalium/control_plane.hpp>
+#include <cstddef>
+#include <exception>
 #include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>  // chip_id_t
 
-#include <filesystem>
 #include <functional>
-#include <memory>
+#include <utility>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
 #include <set>
-#include <string>
-
-#include "fabric_fixture.hpp"
 
 namespace tt::tt_fabric {
 

@@ -3,31 +3,38 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include <optional>
+#include <cstdint>
+#include <array>
+#include <cstddef>
+#include <ostream>
+#include <memory>
+#include <limits>
+#include <nlohmann/json_fwd.hpp>
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
-#include <enchantum/enchantum.hpp>
 #include <math.hpp>
-#include <nlohmann/json.hpp>
 #include <tt_stl/reflection.hpp>
-#include <tt_stl/overloaded.hpp>
 #include <algorithm>
 #include <atomic>
-#include <map>
-#include <mutex>
-#include <string>
-#include <string_view>
+#include <tuple>
+#include <umd/device/types/core_coordinates.hpp>
 #include <utility>
 
+#include "buffer_distribution_spec.hpp"
+#include "buffer_page_mapping.hpp"
+#include "core_coord.hpp"
 #include "fmt/base.h"
+#include "hal_types.hpp"
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "impl/context/metal_context.hpp"
-#include "tracy/Tracy.hpp"
+#include "sub_device_types.hpp"
 #include "tt_align.hpp"
 #include <tt-metalium/allocator.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
 namespace {

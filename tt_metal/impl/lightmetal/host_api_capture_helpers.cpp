@@ -2,22 +2,40 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <memory>
+#include <cstdint>
+#include <tt-logger/tt-logger.hpp>
+#include <optional>
+#include <functional>
+#include <cstddef>
+#include <string>
 #include <tt_stl/overloaded.hpp>
 #include <circular_buffer_config.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
+#include "buffer.hpp"
+#include "bfloat16.hpp"
+#include "core_coord.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
 #include <kernel_types.hpp>
+#include <variant>
+#include <vector>
 #include "lightmetal/host_api_capture_helpers.hpp"
+#include <flatbuffers/buffer.h>
+#include <base_types_generated.h>
+#include <flatbuffers/vector.h>
 #include "command_generated.h"
+#include "hal_types.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
-#include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 
 #include "impl/program/program_impl.hpp"
+#include "sub_device_types.hpp"
+#include "tt_stl/assert.hpp"
+#include "tt_stl/span.hpp"
 
 namespace tt::tt_metal {
 

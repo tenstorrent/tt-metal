@@ -20,6 +20,7 @@
 #include <optional>
 #include <string>
 #include <tuple>
+#include <umd/device/types/arch.hpp>
 #include <variant>
 #include <vector>
 
@@ -33,7 +34,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>

@@ -15,13 +15,11 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
-#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <tuple>
-#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -33,6 +31,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
+#include "mesh_buffer.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -43,8 +42,8 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "mesh_workload.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal {

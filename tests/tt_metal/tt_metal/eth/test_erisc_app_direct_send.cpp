@@ -2,21 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <stdlib.h>
+#include <memory>
+#include <enchantum/entries.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <iterator>
-#include <enchantum/enchantum.hpp>
 #include <map>
 #include <string>
 #include <thread>
 #include <tuple>
-#include <unordered_set>
+#include <umd/device/types/arch.hpp>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -29,20 +29,18 @@
 #include "device_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build/build.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "mesh_device.hpp"
+#include "mesh_workload.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/xy_pair.hpp>
 #include "eth_test_common.hpp"
 
 namespace {
