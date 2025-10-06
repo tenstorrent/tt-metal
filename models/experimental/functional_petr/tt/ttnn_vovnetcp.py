@@ -127,6 +127,7 @@ class ttnn_osa_module:
     def __call__(self, device, x):
         identity_feat = x
         output = []
+        input_shape = x.shape
         if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         output.append(x)
@@ -195,6 +196,41 @@ class ttnn_osa_module:
         if self.identity:
             x = x + identity_feat
 
+        # Debug shape before returning
+        print(f"OSA module {self.module_name} output shape: {x.shape}")
+
+        # Ensure we're maintaining 4D shape
+        if len(x.shape) != 4:
+            print(f"ERROR: {self.module_name} produced non-4D tensor: {x.shape}")
+
+        if len(x.shape) == 4 and x.shape[1] == 1 and x.shape[2] > 100:
+            batch_size = x.shape[0]
+            channels = x.shape[3]
+            total_spatial = x.shape[2]
+
+            # Determine expected dimensions based on module name
+            if "OSA2" in self.module_name:
+                height, width = 80, 200
+            elif "OSA3" in self.module_name:
+                height, width = 40, 100
+            elif "OSA4" in self.module_name:
+                height, width = 20, 50
+            elif "OSA5" in self.module_name:
+                height, width = 10, 25
+            else:
+                # Fallback: try to use input dimensions
+                if self.identity and len(input_shape) == 4:
+                    height, width = input_shape[1], input_shape[2]
+                else:
+                    # Last resort: try to factor the total
+                    height = int(total_spatial**0.5)
+                    width = total_spatial // height
+
+            if height * width == total_spatial:
+                x = ttnn.reshape(x, (batch_size, height, width, channels))
+                print(f"Fixed shape in {self.module_name}: from [1, 1, {total_spatial}, {channels}] to {x.shape}")
+
+        print(f"OSA module {self.module_name} output shape: {x.shape}")
         return x
 
 
@@ -332,7 +368,10 @@ class ttnn_VoVNetCP:
         )
         x = ttnn.from_torch(stem.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
         stage2 = self.stage2(device, x)
+
         stage3 = self.stage3(device, stage2)
+        # stage3 = ttnn.reshape(stage3, (1, 512, 40, 100))
+        print("stage3", stage3.shape)
         stage4 = self.stage4(device, stage3)
         stage5 = self.stage5(device, stage4)
 
