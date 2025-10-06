@@ -62,7 +62,6 @@ void kernel_main() {
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
-    if (is_sender) {
         auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
         auto scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
         auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
@@ -129,96 +128,89 @@ void kernel_main() {
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
-        // noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
-        // noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+        DPRINT << "num total targets: " << num_total_targets << ENDL();
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
         // 1. mcast via fabric to remote tensor addresses
-        uint32_t tile_id = tile_id_start;
-        while (tile_id < tile_id_end) {
-            cb_wait_front(cb0_id, packet_size_in_pages);
-            size_t l1_read_addr = get_read_ptr(cb0_id);
+        if (is_sender) {
+            uint32_t tile_id = tile_id_start;
+            while (tile_id < tile_id_end) {
+                cb_wait_front(cb0_id, packet_size_in_pages);
+                size_t l1_read_addr = get_read_ptr(cb0_id);
 
-            uint32_t num_pages_read = 0;
-            uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
-            while (num_pages_read < num_pages_to_read) {
-                // scatter-write currently only supports up to 2 distinct addresses
-                uint32_t num_pages_for_current_packet = std::min<uint32_t>(num_pages_to_read - num_pages_read, 2);
-                if (num_pages_for_current_packet == 1) {
-                    noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(tile_id, 0), tensor0_page_size);
-                    fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                        fabric_connection,
-                        unicast_route_id,
-                        l1_read_addr,
-                        tt::tt_fabric::NocUnicastCommandHeader{
-                            linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id, 0)});
-                    noc_async_writes_flushed();
-                    l1_read_addr += tensor0_page_size;
-                    tile_id++;
-                    num_pages_read++;
-                } else if (num_pages_for_current_packet == 2) {
-                    noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(tile_id, 0), tensor0_page_size);
-                    noc_async_write(
-                        l1_read_addr + tensor0_page_size,
-                        tensor0_addrgen.get_noc_addr(tile_id + 1, 0),
-                        tensor0_page_size);
-                    fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                        fabric_connection,
-                        scatter_route_id,
-                        l1_read_addr,
-                        tt::tt_fabric::NocUnicastScatterCommandHeader{
-                            {linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id, 0),
-                             linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id + 1, 0)},
-                            static_cast<uint16_t>(tensor0_page_size)},  // ignore
-                        tensor0_page_size * 2);                         // ignore
-                    noc_async_writes_flushed();
-                    l1_read_addr += tensor0_page_size * 2;
-                    tile_id += 2;
-                    num_pages_read += 2;
-                } else {
-                    ASSERT(false);
+                uint32_t num_pages_read = 0;
+                uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
+                while (num_pages_read < num_pages_to_read) {
+                    // scatter-write currently only supports up to 2 distinct addresses
+                    uint32_t num_pages_for_current_packet = std::min<uint32_t>(num_pages_to_read - num_pages_read, 2);
+                    if (num_pages_for_current_packet == 1) {
+                        noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(tile_id, 0), tensor0_page_size);
+                        fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                            fabric_connection,
+                            unicast_route_id,
+                            l1_read_addr,
+                            tt::tt_fabric::NocUnicastCommandHeader{
+                                linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id, 0)});
+                        noc_async_writes_flushed();
+                        l1_read_addr += tensor0_page_size;
+                        tile_id++;
+                        num_pages_read++;
+                    } else if (num_pages_for_current_packet == 2) {
+                        noc_async_write(l1_read_addr, tensor0_addrgen.get_noc_addr(tile_id, 0), tensor0_page_size);
+                        noc_async_write(
+                            l1_read_addr + tensor0_page_size,
+                            tensor0_addrgen.get_noc_addr(tile_id + 1, 0),
+                            tensor0_page_size);
+                        fabric_multicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                            fabric_connection,
+                            scatter_route_id,
+                            l1_read_addr,
+                            tt::tt_fabric::NocUnicastScatterCommandHeader{
+                                {linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id, 0),
+                                 linear::addrgen_detail::get_noc_address(tensor0_addrgen, tile_id + 1, 0)},
+                                static_cast<uint16_t>(tensor0_page_size)},  // ignore
+                            tensor0_page_size * 2);                         // ignore
+                        noc_async_writes_flushed();
+                        l1_read_addr += tensor0_page_size * 2;
+                        tile_id += 2;
+                        num_pages_read += 2;
+                    } else {
+                        ASSERT(false);
+                    }
                 }
+                cb_pop_front(cb0_id, packet_size_in_pages);
             }
-            cb_pop_front(cb0_id, packet_size_in_pages);
-        }
-        // 2. mcast output ready semaphore
-        uint64_t out_ready_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0, 0});
-        // increment locally
-        uint64_t out_ready_sem_noc_addr =
-            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-        noc_semaphore_inc(out_ready_sem_noc_addr, 1);
+            // 2. mcast output ready semaphore
+            uint64_t out_ready_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_connection,
+                sem_route_id,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0, 0});
+            // increment locally
+            uint64_t out_ready_sem_noc_addr =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+            noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
-        // 3. wait for mcast output ready semaphore
-        if (wait_output_semaphore && !is_sender) {
-            volatile tt_l1_ptr uint32_t* sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
-            noc_semaphore_wait(sem_ptr, out_ready_sem_wait_value);
-        }
+            close_connections(fabric_connection);
 
-        // 4. global semaphore reset
-        if (reset_global_semaphore && !is_sender) {
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
-        }
+            noc_async_write_barrier();
+        } else {
+            // 3. wait for mcast output ready semaphore
+            if (wait_output_semaphore) {
+                volatile tt_l1_ptr uint32_t* sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
+                noc_semaphore_wait(sem_ptr, out_ready_sem_wait_value);
+            }
 
-        close_connections(fabric_connection);
+            // 4. global semaphore reset
+            if (reset_global_semaphore) {
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
+            }
+            close_connections(fabric_connection);
 
-        noc_async_write_barrier();
-    } else {
-        // 3. wait for mcast output ready semaphore
-        if (wait_output_semaphore) {
-            volatile tt_l1_ptr uint32_t* sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
-            noc_semaphore_wait(sem_ptr, out_ready_sem_wait_value);
+            noc_async_write_barrier();
         }
-
-        // 4. global semaphore reset
-        if (reset_global_semaphore) {
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
-        }
-    }
     DPRINT << "WRITER tile done" << ENDL();
 }
