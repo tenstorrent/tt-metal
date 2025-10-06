@@ -556,8 +556,8 @@ void py_module(py::module& module) {
                   - Input A
                   - Input B
                 * - MatmulMultiCoreReuseProgramConfig
-                  - Interleaved (L1/DRAM), Height or Block Sharded (L1)
-                  - Interleaved (L1/DRAM), Height or Block Sharded (L1)
+                  - Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)
+                  - Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)
                 * - MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
                   - Width Sharded (L1)
                   - Width Sharded (DRAM)
