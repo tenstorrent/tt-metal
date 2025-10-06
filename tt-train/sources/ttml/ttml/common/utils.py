@@ -38,7 +38,7 @@ def initialize_device(yaml_config: dict):
     Args:
         yaml_config: Dictionary containing device configuration
     """
-    from config import DeviceConfig
+    from ttml.common.config import DeviceConfig
 
     device_config = DeviceConfig(yaml_config)
     ttml.core.distributed.enable_fabric(device_config.total_devices())
