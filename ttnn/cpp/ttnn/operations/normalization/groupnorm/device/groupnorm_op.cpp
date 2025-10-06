@@ -262,7 +262,7 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
                 uint32_t batch = a.padded_shape()[0];
 
-                return groupnorm_multi_core(
+                return groupnorm_multi_core_mcast(
                     a,
                     gamma,
                     beta,
