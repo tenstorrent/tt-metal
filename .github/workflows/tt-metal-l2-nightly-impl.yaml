@@ -371,7 +371,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ttnn nightly bos tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: ttnn nightly bos conv tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
         ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
@@ -400,7 +400,7 @@ jobs:
           owner: U052J2QDDKQ # Pavle Josipovic
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-  
+
   ttnn-bos-group_norm-tests:
     if: ${{ inputs.run_ttnn-bos-tests }}
     container:
@@ -421,7 +421,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ttnn nightly bos tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: ttnn nightly bos group norm tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
         ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
