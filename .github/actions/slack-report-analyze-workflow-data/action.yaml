@@ -18,10 +18,11 @@ runs:
       shell: bash
       env:
         ALERT_RAW: ${{ inputs.alert_all_message }}
+        REGRESSED_RAW: ${{ inputs.regressed_workflows }}
       run: |
         set -euo pipefail
         tmp_file="$(mktemp)"
-        printf "%s" '${{ inputs.regressed_workflows }}' > "$tmp_file"
+        printf '%s' "$REGRESSED_RAW" > "$tmp_file"
         if ! jq -e . "$tmp_file" >/dev/null 2>&1; then
           echo "payload={\"text\":\"Failed to parse regression list\"}" >> "$GITHUB_OUTPUT"
           exit 0
