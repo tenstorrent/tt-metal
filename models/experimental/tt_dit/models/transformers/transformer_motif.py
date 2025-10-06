@@ -313,7 +313,7 @@ class MotifTransformer(Module):
 
         tokens = state.pop("register_tokens", None)
         if tokens is not None:
-            token_num, _ = tokens.shape
+            _, token_num, _ = tokens.shape
             assert token_num == self.register_token_num
 
             mask = torch.zeros_like(tokens)
