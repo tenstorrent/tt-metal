@@ -183,177 +183,124 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
-
-        CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)1, (std::size_t)core.y};
-        CoreCoord right_core = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
-        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)1};
-        CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)grid_size.y - 1};
-
-        auto left_core_physical = device->worker_core_from_logical_core(left_core);
-        auto left_core_plus_one_physical = device->worker_core_from_logical_core(left_core_plus_one);
-        auto right_core_physical = device->worker_core_from_logical_core(right_core);
-        auto top_core_physical = device->worker_core_from_logical_core(top_core);
-        auto top_core_plus_one_physical = device->worker_core_from_logical_core(top_core_plus_one);
-        auto bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
         uint32_t in0_idx = core.y;
         uint32_t in1_idx = core.x;
 
-        auto in0_mcast_sender = left_core_physical;
-        auto in1_mcast_sender = top_core_physical;
+        CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
+        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
 
-        auto in0_mcast_start = left_core_plus_one_physical;
-        auto in0_mcast_end = right_core_physical;
-        if (in0_noc == tt::tt_metal::NOC::NOC_1) {
-            std::swap(in0_mcast_start, in0_mcast_end);
+        std::vector<CoreCoord> in0_core_order;
+        in0_core_order.push_back(left_core);
+        for (uint32_t in0_worker_idx = 1; in0_worker_idx < grid_size.x; in0_worker_idx++) {
+            CoreCoord in0_worker_core = {(std::size_t)0, (std::size_t)core.y};
+            if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+                in0_worker_core.x = grid_size.x - in0_worker_idx;
+            } else {
+                in0_worker_core.x = in0_worker_idx;
+            }
+            in0_core_order.push_back(in0_worker_core);
         }
-
-        auto in1_mcast_start = bottom_core_physical;
-        auto in1_mcast_end = top_core_plus_one_physical;
-        if (in1_noc == tt::tt_metal::NOC::NOC_0) {
-            std::swap(in1_mcast_start, in1_mcast_end);
+        std::vector<CoreCoord> in1_core_order;
+        in1_core_order.push_back(top_core);
+        for (uint32_t in1_worker_idx = 1; in1_worker_idx < grid_size.y; in1_worker_idx++) {
+            CoreCoord in1_worker_core = {(std::size_t)core.x, (std::size_t)0};
+            if (in1_noc == tt::tt_metal::NOC::NOC_0) {
+                in1_worker_core.y = grid_size.y - in1_worker_idx;
+            } else {
+                in1_worker_core.y = in1_worker_idx;
+            }
+            in1_core_order.push_back(in1_worker_core);
         }
+        auto in0_prev_core = in0_core_order.at((std::size_t)std::max((int32_t)core.x - 1, 0));
+        auto in0_next_core = in0_core_order.at((std::size_t)std::min(core.x + 1, grid_size.x - 1));
+        auto in1_prev_core = in1_core_order.at((std::size_t)std::max((int32_t)core.y - 1, 0));
+        auto in1_next_core = in1_core_order.at((std::size_t)std::min(core.y + 1, grid_size.y - 1));
 
-        if (in1_idx == 0) {
-            // in0 sender
-            std::vector<uint32_t> in0_sender_compile_time_args = {
-                M_blocks_per_core * core.y,
-                M_blocks_per_core * (core.y + 1) - 1,
-                K_tiles,
-                N_blocks_per_core * core.x,
-                N_blocks_per_core * (core.x + 1) - 1,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                input_tile_size,
-                in0_mcast_sender_semaphore_id,
-                in0_mcast_receiver_semaphore_id,
-                grid_size.y - 1};
-            tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
-            auto in0_sender_kernels_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
-                core,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = in0_noc,
-                    .compile_args = in0_sender_compile_time_args,
-                    .defines = defines});
-            reader_kernel_ids.push_back(in0_sender_kernels_id);
+        auto in0_prev_core_physical = device->worker_core_from_logical_core(in0_prev_core);
+        ;
+        auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
+        ;
+        auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
+        ;
+        auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
+        ;
 
-            std::vector<uint32_t> in0_sender_args = {
-                input_addr,
-                (std::uint32_t)in0_mcast_start.x,  // in0_mcast_dest_noc_start_x
-                (std::uint32_t)in0_mcast_start.y,  // in0_mcast_dest_noc_start_y
-                (std::uint32_t)in0_mcast_end.x,    // in0_mcast_dest_noc_end_x
-                (std::uint32_t)in0_mcast_end.y,    // in0_mcast_dest_noc_end_y
-            };
-            SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_sender_args);
-        } else {
-            // in0 receiver
-            std::vector<uint32_t> in0_receiver_compile_time_args = {
-                M_blocks_per_core * core.y,
-                M_blocks_per_core * (core.y + 1) - 1,
-                K_tiles,
-                N_blocks_per_core * core.x,
-                N_blocks_per_core * (core.x + 1) - 1,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                input_tile_size,
-                in0_mcast_sender_semaphore_id,
-                in0_mcast_receiver_semaphore_id};
-            auto in0_receiver_kernels_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_receiver.cpp",
-                core,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = in0_noc,
-                    .compile_args = in0_receiver_compile_time_args,
-                    .defines = defines});
-            reader_kernel_ids.push_back(in0_receiver_kernels_id);
+        // in0 sender
+        std::vector<uint32_t> in0_sender_compile_time_args = {
+            (in1_idx == 0) ? true : false,
+            (in1_idx == in0_core_order.at(grid_size.x - 1).x) ? true : false,
+            M_blocks_per_core * core.y,
+            M_blocks_per_core * (core.y + 1) - 1,
+            K_tiles,
+            N_blocks_per_core * core.x,
+            N_blocks_per_core * (core.x + 1) - 1,
+            M_block_tiles,
+            K_block_tiles,
+            N_block_tiles,
+            input_tile_size,
+            in0_mcast_sender_semaphore_id,
+            in0_mcast_receiver_semaphore_id,
+            1};
+        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
+        auto in0_sender_kernels_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
+            core,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+                .compile_args = in0_sender_compile_time_args,
+                .defines = defines});
+        reader_kernel_ids.push_back(in0_sender_kernels_id);
 
-            std::vector<uint32_t> in0_receiver_args = {
-                (std::uint32_t)in0_mcast_sender.x,  // in0_mcast_sender_noc_x
-                (std::uint32_t)in0_mcast_sender.y   // in0_mcast_sender_noc_y
-            };
-            SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_receiver_args);
-        }
+        std::vector<uint32_t> in0_sender_args = {
+            input_addr,
+            (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
+            (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
+            (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
+            (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
+        };
+        SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_sender_args);
 
-        if (in0_idx == 0) {
-            // in1 sender
-            std::vector<uint32_t> in1_sender_compile_time_args = {
-                M_blocks_per_core * core.y,
-                M_blocks_per_core * (core.y + 1) - 1,
-                K_tiles,
-                N_tiles,
-                N_blocks_per_core * core.x,
-                N_blocks_per_core * (core.x + 1) - 1,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                input_tile_size,
-                in1_mcast_sender_semaphore_id,
-                in1_mcast_receiver_semaphore_id,
-                grid_size.x - 1};
-            tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
-            tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
-            auto in1_sender_kernels_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
-                core,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = in1_noc,
-                    .compile_args = in1_sender_compile_time_args,
-                    .defines = defines});
-            writer_kernel_ids.push_back(in1_sender_kernels_id);
+        // in1 sender
+        std::vector<uint32_t> in1_sender_compile_time_args = {
+            (in0_idx == 0) ? true : false,
+            (in0_idx == in1_core_order.at(grid_size.y - 1).y) ? true : false,
+            M_blocks_per_core * core.y,
+            M_blocks_per_core * (core.y + 1) - 1,
+            K_tiles,
+            N_tiles,
+            N_blocks_per_core * core.x,
+            N_blocks_per_core * (core.x + 1) - 1,
+            M_block_tiles,
+            K_block_tiles,
+            N_block_tiles,
+            input_tile_size,
+            in1_mcast_sender_semaphore_id,
+            in1_mcast_receiver_semaphore_id,
+            1};
+        tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
+        auto in1_sender_kernels_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
+            core,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = in1_noc,
+                .compile_args = in1_sender_compile_time_args,
+                .defines = defines});
+        writer_kernel_ids.push_back(in1_sender_kernels_id);
 
-            std::vector<uint32_t> in1_sender_args = {
-                weight_addr,
-                out_addr,
-                (std::uint32_t)in1_mcast_start.x,  // in1_mcast_dest_noc_start_x
-                (std::uint32_t)in1_mcast_start.y,  // in1_mcast_dest_noc_start_y
-                (std::uint32_t)in1_mcast_end.x,    // in1_mcast_dest_noc_end_x
-                (std::uint32_t)in1_mcast_end.y,    // in1_mcast_dest_noc_end_y
-            };
-            SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_sender_args);
-        } else {
-            // in1 receiver
-            std::vector<uint32_t> in1_receiver_compile_time_args = {
-                M_blocks_per_core * core.y,
-                M_blocks_per_core * (core.y + 1) - 1,
-                K_tiles,
-                N_tiles,
-                N_blocks_per_core * core.x,
-                N_blocks_per_core * (core.x + 1) - 1,
-                M_block_tiles,
-                K_block_tiles,
-                N_block_tiles,
-                input_tile_size,
-                in1_mcast_sender_semaphore_id,
-                in1_mcast_receiver_semaphore_id};
-            tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_receiver_compile_time_args);
-            auto in1_receiver_kernels_id = CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_receiver_out.cpp",
-                core,
-                tt::tt_metal::DataMovementConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = in1_noc,
-                    .compile_args = in1_receiver_compile_time_args,
-                    .defines = defines});
-            writer_kernel_ids.push_back(in1_receiver_kernels_id);
-
-            std::vector<uint32_t> in1_receiver_args = {
-                out_addr,
-                (std::uint32_t)in1_mcast_sender.x,  // in1_mcast_sender_noc_x
-                (std::uint32_t)in1_mcast_sender.y,  // in1_mcast_sender_noc_y
-            };
-            SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_receiver_args);
-        }
+        std::vector<uint32_t> in1_sender_args = {
+            weight_addr,
+            out_addr,
+            (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
+            (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
+            (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
+            (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
+        };
+        SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_sender_args);
 
         std::vector<uint32_t> compute_compile_time_args = {
             M_blocks_per_core * core.y,
