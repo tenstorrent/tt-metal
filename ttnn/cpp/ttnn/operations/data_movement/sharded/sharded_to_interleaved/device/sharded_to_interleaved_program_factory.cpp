@@ -11,6 +11,7 @@
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_op.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;

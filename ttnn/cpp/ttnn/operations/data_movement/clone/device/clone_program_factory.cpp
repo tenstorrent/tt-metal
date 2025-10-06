@@ -6,6 +6,7 @@
 
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
