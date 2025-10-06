@@ -442,7 +442,6 @@ class ModelArgs:
         elif HF_MODEL:
             model_version = os.getenv("HF_MODEL")
 
-            model_version = "gemma-3-4b-it_mstojko"
             self.CKPT_DIR = str(
                 model_location_generator(model_version, download_if_ci_v2=True, ci_v2_timeout_in_s=1800)
             )

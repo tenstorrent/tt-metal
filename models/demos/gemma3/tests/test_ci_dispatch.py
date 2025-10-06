@@ -24,7 +24,7 @@ def test_ci_dispatch(model_weights, is_ci_env):
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
         [
-            "models/demos/gemma3/tests/test_mmp.py",  # tag stojko
+            "models/demos/gemma3/tests/test_mmp.py",
             # "models/demos/siglip/tests/test_attention.py",
             # "models/demos/gemma3/tests/test_patch_embedding.py",
             # "models/demos/gemma3/tests/test_vision_attention.py",

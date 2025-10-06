@@ -37,7 +37,10 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device, model_l
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    logger.info("================================= stojkooooo - " + os.getenv("TT_GH_CI_INFRA"))
+    tmp_mstojko = os.getenv("TT_GH_CI_INFRA")
+    if tmp_mstojko is None:
+        tmp_mstojko = "None"
+    logger.info("================================= stojkooooo - " + tmp_mstojko)
 
     tt_model_args = ModelArgs(
         device,
