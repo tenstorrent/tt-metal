@@ -351,7 +351,7 @@ void TestContext::calculate_overall_geomean_speedup() {
             return result.speedup;
         });
     overall_geomean_speedup_ = calculate_geomean_speedup(speedups);
-    log_info(tt::LogTest, "Overall geomean speedup: {:.6f}", overall_geomean_speedup_);
+    log_info(tt::LogTest, "Overall Geomean Speedup: {:.6f}", overall_geomean_speedup_);
 }
 
 std::vector<double> TestContext::concatenate_topology_speedups(const SpeedupsByTopology& topology_speedups) {
@@ -378,7 +378,7 @@ void TestContext::calculate_geomean_speedup_by_topology() {
             topology_speedups.geomean_speedup_by_packet_size[packet_size] = calculate_geomean_speedup(speedups);
             log_info(
                 tt::LogTest,
-                "Topology: {}, Packet Size: {}, Geomean Speedup: {}",
+                "Topology: {}, Packet Size: {}, Geomean Speedup: {:.6f}",
                 topology,
                 packet_size,
                 topology_speedups.geomean_speedup_by_packet_size[packet_size]);
@@ -387,7 +387,7 @@ void TestContext::calculate_geomean_speedup_by_topology() {
             topology_speedups.geomean_speedup_by_ntype[ntype] = calculate_geomean_speedup(speedups);
             log_info(
                 tt::LogTest,
-                "Topology: {}, NType: {}, Geomean Speedup: {}",
+                "Topology: {}, NType: {}, Geomean Speedup: {:.6f}",
                 topology,
                 ntype,
                 topology_speedups.geomean_speedup_by_ntype[ntype]);
@@ -396,7 +396,10 @@ void TestContext::calculate_geomean_speedup_by_topology() {
         const std::vector<double> concatenated_speedups = concatenate_topology_speedups(topology_speedups);
         topology_speedups.topology_geomean_speedup = calculate_geomean_speedup(concatenated_speedups);
         log_info(
-            tt::LogTest, "Topology: {}, Geomean Speedup: {}", topology, topology_speedups.topology_geomean_speedup);
+            tt::LogTest,
+            "Topology: {}, Overall Geomean Speedup: {:.6f}",
+            topology,
+            topology_speedups.topology_geomean_speedup);
     }
 }
 
@@ -406,13 +409,56 @@ void TestContext::generate_comparison_statistics() {
     // Classify speedup values by topology
     organize_speedups_by_topology();
 
-    // Calculate geometric mean speedup
-    calculate_overall_geomean_speedup();
-
     // Calculate geometric mean speedup by topology, packet size, and ntype
     calculate_geomean_speedup_by_topology();
+
+    // Calculate geometric mean speedup
+    calculate_overall_geomean_speedup();
 }
 
-void TestContext::generate_comparison_summary_csv() {
-    // TODO: Implement
+void TestContext::generate_comparison_statistics_csv() {
+    std::ostringstream comparison_statistics_oss;
+    auto arch_name = tt::tt_metal::hal::get_arch_name();
+    comparison_statistics_oss << "comparison_statistics_" << arch_name << ".csv";
+    // Output directory already set in initialize_bandwidth_results_csv_file()
+    std::filesystem::path output_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / output_dir;
+    comparison_statistics_csv_file_path_ = output_path / comparison_statistics_oss.str();
+
+    // Create detailed CSV file with header
+    std::ofstream comparison_statistics_csv_stream(
+        comparison_statistics_csv_file_path_, std::ios::out | std::ios::trunc);
+    if (!comparison_statistics_csv_stream.is_open()) {
+        log_error(
+            tt::LogTest,
+            "Failed to create comparison statistics CSV file: {}",
+            comparison_statistics_csv_file_path_.string());
+        return;
+    }
+    // Write detailed header
+    comparison_statistics_csv_stream << "topology,packet_size,ntype,geomean_speedup\n";
+    log_info(
+        tt::LogTest, "Initialized comparison statistics CSV file: {}", comparison_statistics_csv_file_path_.string());
+
+    // Write most specific speedups first, then overall geomean speedup
+    for (const auto& [topology, topology_speedups] : speedups_per_topology_) {
+        std::string topology_str = std::string(enchantum::to_string(topology));
+        for (const auto& [packet_size, speedup] : topology_speedups.geomean_speedup_by_packet_size) {
+            comparison_statistics_csv_stream << topology_str << "," << packet_size << "," << "ALL" << "," << speedup
+                                             << "\n";
+        }
+        for (const auto& [ntype, speedup] : topology_speedups.geomean_speedup_by_ntype) {
+            std::string ntype_str = std::string(enchantum::to_string(ntype));
+            comparison_statistics_csv_stream << topology_str << "," << "ALL" << "," << ntype_str << "," << speedup
+                                             << "\n";
+        }
+        comparison_statistics_csv_stream << topology_str << "," << "ALL" << "," << "ALL" << ","
+                                         << topology_speedups.topology_geomean_speedup << "\n";
+    }
+    comparison_statistics_csv_stream << "Overall," << "ALL" << "," << "ALL" << "," << overall_geomean_speedup_ << "\n";
+    comparison_statistics_csv_stream.close();
+    log_info(
+        tt::LogTest,
+        "Comparison statistics CSV results appended to: {}",
+        comparison_statistics_csv_file_path_.string());
 }
