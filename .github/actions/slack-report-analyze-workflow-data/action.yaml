@@ -16,6 +16,8 @@ runs:
     - name: Build Slack message from regressions
       id: build
       shell: bash
+      env:
+        ALERT_RAW: ${{ inputs.alert_all_message }}
       run: |
         set -euo pipefail
         tmp_file="$(mktemp)"
@@ -44,7 +46,6 @@ runs:
         # MINIMAL CHANGE: Define message parts and build a Block Kit payload
         # 1. Define the components of the message as separate variables
         HEADER="Aggregate Workflow Data run: <https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|this run>"
-        ALERT_RAW='${{ inputs.alert_all_message }}'
         ALERT=$(printf '%b' "$ALERT_RAW") # Safely interprets newlines like \n
 
         # 2. Build the payload using blocks for guaranteed line breaks, with text fallback
