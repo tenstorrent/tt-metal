@@ -31,7 +31,7 @@ class ImageCNN(nn.Module):
     def __init__(self, architecture, normalize=True, out_features=512):
         super().__init__()
         self.normalize = normalize
-        self.features = timm.create_model(architecture, pretrained=True)
+        self.features = timm.create_model(architecture, pretrained=False)
         self.features.fc = None
         # Delete parts of the networks we don't want
         if architecture.startswith("regnet"):  # Rename modules so we can use the same code

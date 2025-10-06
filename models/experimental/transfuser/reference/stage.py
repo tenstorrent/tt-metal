@@ -18,7 +18,7 @@ class RegNet(nn.Module):
         assert architecture.startswith("regnet"), f"Only RegNet architecture supported, got: {architecture}"
 
         self.normalize = normalize
-        self.features = timm.create_model(architecture, pretrained=True)
+        self.features = timm.create_model(architecture, pretrained=False)
 
         self.features.fc = None
 
