@@ -24,6 +24,7 @@
 #include "tt_fabric_test_allocator.hpp"
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_fabric_telemetry.hpp"
+#include "tt_fabric_test_results.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -63,6 +64,12 @@ using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
 using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
 
+using BandwidthResult = tt::tt_fabric::fabric_tests::BandwidthResult;
+using BandwidthResultSummary = tt::tt_fabric::fabric_tests::BandwidthResultSummary;
+using GoldenCsvEntry = tt::tt_fabric::fabric_tests::GoldenCsvEntry;
+using ComparisonResult = tt::tt_fabric::fabric_tests::ComparisonResult;
+using PostComparisonAnalyzer = tt::tt_fabric::fabric_tests::PostComparisonAnalyzer;
+
 // Helper functions for parsing traffic pattern parameters
 using tt::tt_fabric::fabric_tests::fetch_first_traffic_pattern;
 using tt::tt_fabric::fabric_tests::fetch_pattern_ftype;
@@ -92,81 +99,6 @@ const std::unordered_map<BandwidthStatistics, std::string> BandwidthStatisticsHe
 
 // Access to internal API: ProgramImpl::num_kernel
 #include "impl/program/program_impl.hpp"
-
-// Bandwidth measurement result structures
-struct BandwidthResult {
-    uint32_t num_devices;
-    uint32_t device_id;
-    RoutingDirection direction;
-    uint32_t total_traffic_count;
-    uint32_t num_packets;
-    uint32_t packet_size;
-    uint64_t cycles;
-    double bandwidth_GB_s;
-    double packets_per_second;
-    std::optional<double> telemetry_bw_GB_s_min;
-    std::optional<double> telemetry_bw_GB_s_avg;
-    std::optional<double> telemetry_bw_GB_s_max;
-};
-
-struct BandwidthResultSummary {
-    std::string test_name;
-    uint32_t num_iterations;
-    std::string ftype;
-    std::string ntype;
-    std::string topology;
-    uint32_t num_links;
-    uint32_t num_packets;
-    std::vector<uint32_t> num_devices;
-    uint32_t packet_size;
-    std::vector<double> cycles_vector;
-    std::vector<double> bandwidth_vector_GB_s;
-    std::vector<double> packets_per_second_vector;
-    std::vector<double> statistics_vector; // Stores the calculated statistics for each test
-};
-
-// Golden CSV comparison structures
-struct GoldenCsvEntry {
-    std::string test_name;
-    std::string ftype;
-    std::string ntype;
-    std::string topology;
-    std::string num_devices;
-    uint32_t num_links{};
-    uint32_t packet_size{};
-    uint32_t num_iterations{};
-    double cycles{};
-    double bandwidth_GB_s{};
-    double packets_per_second{};
-    double tolerance_percent{};  // Per-test tolerance percentage
-};
-
-struct ComparisonResult {
-    double speedup() const { return current_bandwidth_GB_s / golden_bandwidth_GB_s; }
-
-    std::string test_name;
-    std::string ftype;
-    std::string ntype;
-    std::string topology;
-    std::string num_devices;
-    uint32_t num_links{};
-    uint32_t packet_size{};
-    uint32_t num_iterations{};
-    double current_bandwidth_GB_s{};
-    double golden_bandwidth_GB_s{};
-    double difference_percent{};
-    bool within_tolerance{};
-    std::string status;
-};
-
-struct SpeedupsByTopology {
-    Topology topology;
-    double topology_geomean_speedup{};
-    std::unordered_map<uint32_t, std::vector<double>> speedups_by_packet_size;
-    std::unordered_map<uint32_t, double> geomean_speedup_by_packet_size;
-    std::unordered_map<NocSendType, std::vector<double>> speedups_by_ntype;
-    std::unordered_map<NocSendType, double> geomean_speedup_by_ntype;
-};
 
 class TestContext {
 public:
@@ -466,10 +398,12 @@ public:
         compare_summary_results_with_golden();
 
         // Generate statistics based on golden comparison
-        generate_comparison_statistics();
+        PostComparisonAnalyzer post_comparison_analyzer(comparison_results_);
+        post_comparison_analyzer.generate_comparison_statistics();
 
         // Generate comparison statistics CSV file
-        generate_comparison_statistics_csv();
+        set_comparison_statistics_csv_file_path();
+        post_comparison_analyzer.generate_comparison_statistics_csv(comparison_statistics_csv_file_path_);
 
         validate_against_golden();
     }
@@ -1369,13 +1303,9 @@ private:
         double test_tolerance = 1.0;  // Default tolerance for no golden case
         if (golden_it != golden_csv_entries_.end()) {
             comp_result.golden_bandwidth_GB_s = golden_it->bandwidth_GB_s;
-            comp_result.difference_percent = ((comp_result.current_bandwidth_GB_s - comp_result.golden_bandwidth_GB_s) /
-                                              comp_result.golden_bandwidth_GB_s) *
-                                             100.0;
-
             // Use per-test tolerance from golden CSV instead of global tolerance
             test_tolerance = golden_it->tolerance_percent;
-            comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= test_tolerance;
+            comp_result.within_tolerance = std::abs(comp_result.difference_percent()) <= test_tolerance;
 
             if (comp_result.within_tolerance) {
                 comp_result.status = "PASS";
@@ -1385,14 +1315,14 @@ private:
         } else {
             log_warning(tt::LogTest, "Golden CSV entry not found for test {}", comp_result.test_name);
             comp_result.golden_bandwidth_GB_s = 0.0;
-            comp_result.difference_percent = 0.0;
+            // Set within_tolerance explicitly to prevent an edge case, where golden is not found and test result is
+            // 0.0, which would cause subsequent within_tolerance checks to be true
             comp_result.within_tolerance = false;
             comp_result.status = "NO_GOLDEN";
         }
     }
 
-    ComparisonResult create_comparison_result(
-        const BandwidthResultSummary& test_result, double test_result_avg_bandwidth);
+    ComparisonResult create_comparison_result(const BandwidthResultSummary& test_result);
 
     std::string convert_num_devices_to_string(const std::vector<uint32_t>& num_devices);
 
@@ -1428,7 +1358,7 @@ private:
             auto golden_it = fetch_corresponding_golden_entry(test_result);
 
             // Compare the test result with the golden entry
-            ComparisonResult comp_result = create_comparison_result(test_result, test_result_avg_bandwidth);
+            ComparisonResult comp_result = create_comparison_result(test_result);
             populate_comparison_result_bandwidth(test_result_avg_bandwidth, comp_result, golden_it);
             comparison_results_.push_back(comp_result);
 
@@ -1438,7 +1368,7 @@ private:
                     acceptable_tolerance = golden_it->tolerance_percent;
                 }
                 std::string csv_format_string = generate_failed_test_format_string(
-                    test_result, test_result_avg_bandwidth, comp_result.difference_percent, acceptable_tolerance);
+                    test_result, test_result_avg_bandwidth, comp_result.difference_percent(), acceptable_tolerance);
                 all_failed_tests_.push_back(csv_format_string);
             }
         }
@@ -1467,25 +1397,11 @@ private:
                             << ",\"" << result.num_devices << "\"," << result.num_links << "," << result.packet_size
                             << "," << result.num_iterations << "," << std::fixed << std::setprecision(6)
                             << result.current_bandwidth_GB_s << "," << result.golden_bandwidth_GB_s << ","
-                            << std::setprecision(2) << result.difference_percent << "," << result.status << "\n";
+                            << std::setprecision(2) << result.difference_percent() << "," << result.status << "\n";
         }
         diff_csv_stream.close();
         log_info(tt::LogTest, "Comparison diff CSV results appended to: {}", diff_csv_file_path_.string());
     }
-
-    void organize_speedups_by_topology();
-
-    double calculate_geomean_speedup(const std::vector<double>& speedups);
-
-    void calculate_overall_geomean_speedup();
-
-    std::vector<double> concatenate_topology_speedups(const SpeedupsByTopology& topology_speedups);
-
-    void calculate_geomean_speedup_by_topology();
-
-    void generate_comparison_statistics();
-
-    void generate_comparison_statistics_csv();
 
     void validate_against_golden() {
         if (comparison_results_.empty()) {
@@ -1503,6 +1419,8 @@ private:
             log_info(tt::LogTest, "All tests passed golden comparison using per-test tolerance values");
         }
     }
+
+    void set_comparison_statistics_csv_file_path();
 
     // Track sync cores for each device
     std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;
@@ -1548,7 +1466,5 @@ private:
     bool has_test_failures_ = false;  // Track if any tests failed validation
 
     // Golden CSV comparison statistics
-    std::unordered_map<Topology, SpeedupsByTopology> speedups_per_topology_;
-    double overall_geomean_speedup_ = 1.0;
     std::filesystem::path comparison_statistics_csv_file_path_;
 };
