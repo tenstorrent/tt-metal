@@ -732,14 +732,6 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
 
 
-try:
-    from tracy import signpost
-
-    use_signpost = True
-except ModuleNotFoundError:
-    use_signpost = False
-
-
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, shard",
     [

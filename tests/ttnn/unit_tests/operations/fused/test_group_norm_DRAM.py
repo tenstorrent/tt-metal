@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+import math
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import is_blackhole
@@ -284,9 +285,6 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
-
-
-import math
 
 
 def _nearest_32_per_core(x, core):
