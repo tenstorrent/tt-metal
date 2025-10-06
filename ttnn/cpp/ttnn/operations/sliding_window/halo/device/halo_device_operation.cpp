@@ -133,8 +133,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         // for small stick sizes alignment can cause the shards to be larger than the number of sticks, thus
         // we must account for alignment when computing the size delta between input and output shards
         uint32_t aligned_delta_size =
-            align_buffer(this->max_out_nsticks_per_core_ * output_width_bytes) / output_width_bytes -
-            align_buffer(this->in_nsticks_per_core_ * input_width_bytes) / input_width_bytes;
+            (align_buffer(this->max_out_nsticks_per_core_ * output_width_bytes) / output_width_bytes) -
+            (align_buffer(this->in_nsticks_per_core_ * input_width_bytes) / input_width_bytes);
         int32_t in_out_shard_size_delta = (this->in_place_ && is_in_tiled)
                                               ? 0
                                               : aligned_delta_size;  // for in place with tilized data we untilize

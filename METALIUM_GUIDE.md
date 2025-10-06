@@ -399,7 +399,7 @@ Following setting the arguments, the program is added to a `MeshWorkload` and is
 
 ```c++
 MeshWorkload workload;
-AddProgramToMeshWorkload(workload, std::move(program), MeshCoordinateRange(device->shape()));
+workload.add_program(MeshCoordinateRange(device->shape()), std::move(program));
 EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 std::vector<bfloat16> c_data(n_tiles * elements_per_tile, 0.0f);
 EnqueueReadMeshBuffer(cq, c, c_data, /*blocking=*/true);
@@ -517,7 +517,7 @@ While Metalium supports custom vectorized computation implementations, developer
 
 Fast dispatch implements asynchronous command queuing by dedicating one RISC-V core per queue on the device to process queued operations. Unlike GPUs that use specialized on-chip schedulers built into the GPU-host runtime, Tenstorrent assigns one RISC-V core per command queue for command processing. This core is typically placed on an unused Ethernet tile, which minimizes impact on computational performance while taking advantage of the architecture's ability for any core to access any other core.
 
-When fast dispatch is disabled (by setting the `TT_METAL_SLOW_DISPATCH_MODE` environment variable to `1`), the asynchronous dispatch mechanism is bypassed. This disables command queue functionality and prevents asynchronous I/O operations between the host and device. In slow dispatch mode, the CPU must wait for each operation to complete before proceeding to the next instruction. Synchronous API calls such as `ReadFromBuffer` must be used instead of their asynchronous counterparts like `EnqueueReadBuffer`.
+When fast dispatch is disabled (by setting the `TT_METAL_SLOW_DISPATCH_MODE` environment variable to `1`), the asynchronous dispatch mechanism is bypassed. This disables command queue functionality and prevents asynchronous I/O operations between the host and device. In slow dispatch mode, the CPU must wait for each operation to complete before proceeding to the next instruction. Synchronous API calls such as `ReadFromBuffer` must be used instead of their asynchronous counterparts like `EnqueueReadMeshBuffer`.
 
 Fast dispatch is much faster - Slow dispatch forces the host CPU to actively manage all operations, including data transfers to and from the device. This creates significant CPU overhead and prevents the host from performing other tasks while waiting for device operations. Fast dispatch stores command sequences in host memory and allows the device to fetch and execute them independently. Freeing the CPU to handle other work (or simply idle and reduce power) while the device processes commands, resulting in better overall system utilization.
 
@@ -526,7 +526,7 @@ Fast dispatch is much faster - Slow dispatch forces the host CPU to actively man
 
 ```c++
 // Fast dispatch. Can be async or the process waits until completion
-EnqueueReadBuffer(queue, buffer, host_ptr, /*blocking=*/false);
+EnqueueReadMeshBuffer(queue, buffer, host_ptr, /*blocking=*/false);
 
 // Slow dispatch. No queue. But also CPU has to do all the job
 ReadFromBuffer(buffer, host_ptr);
@@ -537,8 +537,9 @@ Unlike OpenCL's command queue which optionally supports out-of-order execution, 
 ```c++
 // Wait for the current tail operation on queue 0 to complete
 // before proceeding on command queue 1
-auto event = EnqueueRecordEvent(device->command_queue(0));
-EnqueueWaitForEvent(device->command_queue(1), event);
+auto event = std::make_shared<Event>();
+device->command_queue(0).enqueue_record_event(event);
+device->command_queue(1).enqueue_wait_for_event(event);
 ```
 
 ### SPMD in Metalium

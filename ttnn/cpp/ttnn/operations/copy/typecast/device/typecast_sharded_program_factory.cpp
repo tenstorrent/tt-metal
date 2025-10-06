@@ -6,7 +6,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::copy::program {
@@ -39,8 +38,8 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
     tt::DataFormat act_df = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    uint32_t input_tile_size = tt::tt_metal::detail::TileSize(act_df);
-    uint32_t output_tile_size = tt::tt_metal::detail::TileSize(out_df);
+    uint32_t input_tile_size = tt::tile_size(act_df);
+    uint32_t output_tile_size = tt::tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 

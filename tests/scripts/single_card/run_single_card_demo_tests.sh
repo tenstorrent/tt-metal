@@ -187,11 +187,6 @@ run_distilbert_func() {
 
 }
 
-run_covnet_mnist_func() {
-
-  pytest models/demos/convnet_mnist/demo/demo.py
-
-}
 
 run_mnist_func() {
 

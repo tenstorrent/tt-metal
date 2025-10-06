@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,7 @@ TILE_HEIGHT = 32
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
+        ([1, 4, 4, 2], [1, 4, 128, 2], 2),
         ([8, 8, 8, 8], [8, 8, 8, 8], -1),
         ([32, 64, 128], [32, 64, 128], -1),
         ([64, 128, 256], [64, 128, 128], -1),

@@ -15,7 +15,6 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -154,7 +153,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     // concat info
     uint32_t single_tile_size =
-        tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
+        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
 
     auto face_shape = temp_tensor.tensor_spec().tile().get_face_shape();
     auto face_h = face_shape[0];
@@ -173,7 +172,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages =
-        input_tensor_num_pages / num_links +
+        (input_tensor_num_pages / num_links) +
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -356,7 +355,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
                                 // semaphore
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto output_cores_vec = corerange_to_cores(output_interm_tensor_cores, std::nullopt, true);
-    auto cores_per_device = output_cores_vec.size() + ring_size - 1 / ring_size;
+    auto cores_per_device = output_cores_vec.size() + ring_size - (1 / ring_size);
     uint32_t start_core_index_for_device = output_cores_vec.size() / ring_size * ring_index;
     uint32_t end_core_index_for_device = start_core_index_for_device + cores_per_device;
 
@@ -386,7 +385,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         uint32_t remainder = input_tensor_num_pages % num_links;
         bool add_remainder = link == num_links - 1;
         uint32_t input_tile_id_start = link * base_pages_per_worker;
-        uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + add_remainder * remainder;
+        uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + (add_remainder * remainder);
 
         uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
         uint32_t input_first_core_tile_start_offset = input_tile_id_start % input_tensor_shard_num_pages;
@@ -542,7 +541,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         is_worker_core = is_worker_core || (core.x == 3 && core.y == 0);
         if (is_worker_core == 0) {
             std::vector<uint32_t> reader_runtime_args;
-            reader_runtime_args.reserve(6 + 2 * in_num_cores);
+            reader_runtime_args.reserve(6 + (2 * in_num_cores));
             reader_runtime_args = {
                 q_start_addr, input_tensor.buffer()->address(), concat_semaphore_id, concat_semaphore_id2};
 

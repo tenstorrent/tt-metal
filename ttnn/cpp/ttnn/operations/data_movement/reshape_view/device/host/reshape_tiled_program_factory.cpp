@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 #include "ttnn/operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -54,7 +53,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> page_index_to_tensor_idxs(
 
 inline auto idxs_to_reshaped_idxs(
     const uint32_t c1, const uint32_t h1, const uint32_t w1, const Shape& shape1, const Shape& shape2) {
-    const uint32_t flat_offset = c1 * shape1[-2] * shape1[-1] + h1 * shape1[-1] + w1;
+    const uint32_t flat_offset = (c1 * shape1[-2] * shape1[-1]) + (h1 * shape1[-1]) + w1;
 
     const uint32_t c2 = flat_offset / (shape2[-2] * shape2[-1]);
     const uint32_t hw2 = flat_offset % (shape2[-2] * shape2[-1]);
@@ -72,7 +71,7 @@ uint32_t tensor_idxs_to_page_idx(
     const Shape& shape,
     const std::array<uint32_t, 2>& tile_shape,
     const Dims& tile_dims) {
-    return c * tile_dims.c + h / tile_shape[0] * tile_dims.w + w / tile_shape[1];
+    return (c * tile_dims.c) + (h / tile_shape[0] * tile_dims.w) + (w / tile_shape[1]);
 }
 
 uint32_t tensor_idxs_to_faced_tile_offset(
@@ -90,9 +89,9 @@ uint32_t tensor_idxs_to_faced_tile_offset(
     const uint32_t intra_face_h = intra_tile_h % face_shape[0];
     const uint32_t intra_face_w = intra_tile_w % face_shape[1];
 
-    const uint32_t faceoffset = hf * face_dim_w + wf;
+    const uint32_t faceoffset = (hf * face_dim_w) + wf;
 
-    return faceoffset * (face_shape[0] * face_shape[1]) + intra_face_h * face_shape[1] + intra_face_w;
+    return (faceoffset * (face_shape[0] * face_shape[1])) + (intra_face_h * face_shape[1]) + intra_face_w;
 }
 
 struct TileIterator {

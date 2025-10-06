@@ -17,7 +17,7 @@
 #include <websocketpp/server.hpp>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 
 #include <telemetry/telemetry_subscriber.hpp>
 #include <server/collection_endpoint.hpp>

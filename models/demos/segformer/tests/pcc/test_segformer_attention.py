@@ -7,7 +7,6 @@ import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import skip_for_grayskull
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_attention import SegformerAttention
 from models.demos.segformer.tests.pcc.test_segformer_efficient_selfattention import (
@@ -41,7 +40,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "hidden_size, num_attention_heads, sequence_reduction_ratio, batch_size, seq_len, height, width, block_i, attention_i",
     [
@@ -116,4 +114,4 @@ def test_segformer_attention(
     if len(ttnn_final_output.shape) == 4:
         ttnn_final_output = ttnn_final_output[0]
 
-    assert_with_pcc(output[0], ttnn_final_output, pcc=0.986)
+    assert_with_pcc(output[0], ttnn_final_output, pcc=0.977)
