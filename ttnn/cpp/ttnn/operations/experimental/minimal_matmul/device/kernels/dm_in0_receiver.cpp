@@ -42,8 +42,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_sem_addrs[0]);
 
-    const uint64_t in0_mcast_sender_semaphore_noc_addr =
-        get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_ack_sem_addrs[0]);
+    const uint64_t in0_sender_base_noc_addr = get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, 0);
 
     DPRINT << "in0recv: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
@@ -56,9 +55,12 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 #ifndef SKIP_IN0
-                noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
-                noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
-                noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+                volatile tt_l1_ptr uint32_t* in0_valid_sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_sem_addrs[0]);
+                uint64_t in0_ack_sem_noc_addr = in0_sender_base_noc_addr | in0_ack_sem_addrs[0];
+                noc_semaphore_set(in0_valid_sem_ptr, INVALID);
+                noc_semaphore_inc(in0_ack_sem_noc_addr, 1);
+                noc_semaphore_wait(in0_valid_sem_ptr, VALID);
 #endif
 
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
