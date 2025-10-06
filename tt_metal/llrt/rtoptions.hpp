@@ -31,6 +31,9 @@ namespace tt {
 
 namespace llrt {
 
+inline std::string g_root_dir;
+inline std::once_flag g_root_once;
+
 // Enumerates the debug features that can be enabled at runtime. These features allow for
 // fine-grained control over targeted cores, chips, harts, etc.
 enum RunTimeDebugFeatures {
@@ -92,7 +95,7 @@ struct InspectorSettings {
 };
 
 class RunTimeOptions {
-    bool is_root_dir_env_var_set = false;
+    bool is_root_dir_set = false;
     std::string root_dir;
 
     bool is_cache_dir_env_var_set = false;
@@ -219,7 +222,8 @@ public:
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
-    bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
+    bool is_root_dir_specified() const { return this->is_root_dir_set; }
+    static void set_root_dir(const std::string& root_dir);
     const std::string& get_root_dir() const;
 
     bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }

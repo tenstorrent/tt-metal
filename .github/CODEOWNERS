@@ -125,7 +125,6 @@ tests/didt/ @rdjogoTT @ttmtrajkovic @tenstorrent/metalium-codeowners-large-chang
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core @tenstorrent/metalium-codeowners-large-changes
 ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT @tenstorrent/metalium-codeowners-large-changes
-ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-codeowners-large-changes
