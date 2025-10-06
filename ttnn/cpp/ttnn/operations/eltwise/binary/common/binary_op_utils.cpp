@@ -141,11 +141,11 @@ std::map<std::string, std::string> get_defines(
             break;
         case BinaryOpType::HYPOT:
             // Hypot: sqrt(a^2 + b^2)
-            defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0"));
-            defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN1_0"));
+            defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN0_0", "0", input_dtype));
+            defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "PRE_IN1_0", "0", input_dtype));
             op_name = "add_tiles";
             op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst));
+            defines.merge(get_defines(UnaryOpType::SQRT, std::nullopt, "0", idst, input_dtype));
             break;
         default: TT_THROW("Undefined op type {}", op_type);
     }

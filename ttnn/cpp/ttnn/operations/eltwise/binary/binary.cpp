@@ -11,7 +11,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn::operations::binary {
 namespace detail {
@@ -719,6 +718,25 @@ Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
         lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationHypot<binary_op_type>::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::invoke_binary_ng(
+        input_tensor_a,
+        input_tensor_b,
+        binary_op_type,
+        std::nullopt,
+        memory_config,
+        optional_output_tensor,
+        {},      // no post_activations
+        {},      // no lhs_activations
+        {},      // no rhs_activations
+        false);  // legacy_flag
+}
+
 template struct BinaryOperation<BinaryOpType::ADD>;
 template struct InplaceBinaryOperation<BinaryOpType::ADD>;
 template struct BinaryOperation<BinaryOpType::SUB>;
@@ -769,7 +787,6 @@ template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_OR>;
 template struct InplaceLogicalBinary<BinaryOpType::LOGICAL_XOR>;
 
 template struct BinaryOperationSfpu<BinaryOpType::POWER>;
-template struct BinaryOperationSfpu<BinaryOpType::HYPOT>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_AND>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_OR>;
@@ -783,29 +800,6 @@ template struct BinaryOperationSfpu<BinaryOpType::LCM>;
 
 template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
-
-// BinaryOperationHypot implementations
-// Simple interface following addalpha/subalpha pattern - no activations, no dtype, hardcoded use_legacy=false
-template <BinaryOpType binary_op_type>
-Tensor BinaryOperationHypot<binary_op_type>::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    // Clean interface: directly call binary_ng, no activations, use default dtype
-    return detail::invoke_binary_ng(
-        input_tensor_a,
-        input_tensor_b,
-        BinaryOpType::HYPOT,
-        std::nullopt,  // use default dtype
-        memory_config,
-        optional_output_tensor,
-        {},      // no post_activations
-        {},      // no lhs_activations
-        {},      // no rhs_activations
-        false);  // always use new binary_ng path
-}
-
 template struct BinaryOperationHypot<BinaryOpType::HYPOT>;
 
 }  // namespace ttnn::operations::binary

@@ -2152,7 +2152,6 @@ void py_module(py::module& module) {
         ttnn::prim::binary,
         R"doc(Applied binary operation on :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
 
-    // Hypot binding - using bind_binary_composite (clean interface without activations or dtype)
     detail::bind_binary_composite(
         module,
         ttnn::hypot,

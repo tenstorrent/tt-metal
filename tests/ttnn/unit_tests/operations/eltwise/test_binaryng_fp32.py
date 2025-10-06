@@ -170,15 +170,15 @@ def test_hypot_multi_dtype(device, dtype):
     torch_dtype_map = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
     torch_dtype = torch_dtype_map[dtype]
 
-    x_torch = torch.tensor([[3.0, 4.0, 5.0, 12.0]], dtype=torch_dtype)
-    y_torch = torch.tensor([[4.0, 3.0, 12.0, 5.0]], dtype=torch_dtype)
+    x_torch = torch.tensor([[3.0, 5.0, 3.14159, 0.5773, 1.41421, 2.71828, 0.001, 100.25]], dtype=torch_dtype)
+    y_torch = torch.tensor([[4.0, 12.0, 2.71828, 1.73205, 1.73205, 3.14159, 999.999, 0.333]], dtype=torch_dtype)
     golden_fn = ttnn.get_golden_function(ttnn.hypot)
     z_torch = golden_fn(x_torch, y_torch)
     x_tt = ttnn.from_torch(x_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_hypot = ttnn.hypot(x_tt, y_tt)  # Clean interface - no use_legacy, no activations, no dtype
+    z_tt_hypot = ttnn.hypot(x_tt, y_tt)
 
-    assert_with_ulp(z_tt_hypot, z_torch)
+    assert_with_ulp(z_tt_hypot, z_torch, ulp_threshold=1)
 
 
 def test_add_fp32_activ(device):

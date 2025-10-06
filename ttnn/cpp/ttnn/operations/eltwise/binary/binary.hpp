@@ -8,7 +8,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
 namespace operations::binary {
@@ -162,11 +161,6 @@ struct BinaryOperationSubalpha {
         const std::optional<Tensor>& output = std::nullopt);
 };
 
-/**
- * @brief Performs element-wise hypot operation: sqrt(a^2 + b^2).
- * When inputs are Tensors, the supported dtypes are float32 and bfloat16.
- * Clean interface without activation parameters (uses bind_binary_composite).
- */
 template <BinaryOpType binary_op_type>
 struct BinaryOperationHypot {
     static Tensor invoke(

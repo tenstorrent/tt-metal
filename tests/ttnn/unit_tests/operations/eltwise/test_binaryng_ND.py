@@ -7,6 +7,7 @@ import pytest
 import torch
 import random
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -94,9 +95,7 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
         output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if ttnn_fn == ttnn.hypot:
-        from tests.ttnn.utils_for_testing import assert_with_ulp
-
-        assert_with_ulp(output_tensor, torch_output_tensor)
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=2)
     else:
         output_tensor = ttnn.to_torch(output_tensor)
         assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
