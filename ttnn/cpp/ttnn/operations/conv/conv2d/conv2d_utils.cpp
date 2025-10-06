@@ -729,6 +729,11 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             flattened_padded_input_shape[3];
         if (padding_needed && !is_mm_conv && !input_tensor.is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR) {
             ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
+            log_warning(
+                tt::LogOp,
+                "Padding input tensor with {} channels, padding will be performed using risc-v cores, this probably a "
+                "perf issue, consider providing input tensors to conv2d where input channels are already multiple of 8",
+                padding_needed);
             input_tensor = ttnn::pad(input_tensor, pad_spec, 0.0f);
         }
 
