@@ -259,28 +259,66 @@ class FeedForward(nn.Module):
         return self.w2(F.gelu(self.w1(x)) * self.w3(x))
 
 
+class Gate(nn.Module):
+    def __init__(self, num_experts=8):
+        super().__init__()
+        self.num_experts = num_experts
+        self.gate = nn.Linear(8192, num_experts, bias=False)
+        self.top_k = 2
+
+    def forward(self, x):
+        gate_logits = self.gate(x)
+        topk_logits, topk_idx = torch.topk(gate_logits, self.top_k, dim=-1)
+        topk_weights = F.softmax(topk_logits, dim=-1, dtype=torch.float32).to(x.dtype)
+        weights = torch.zeros(B, S, T, E, dtype=x.dtype, device=x.device)
+        weights.scatter_(dim=-1, index=topk_idx, src=topk_weights)
+        return weights
+
+
 class MoE(nn.Module):
     def __init__(self, num_experts=8, gate=False):
         super().__init__()
         self.num_experts = num_experts
         self.experts = nn.ModuleList([FeedForward(hidden_dim=16384, dim=8192) for _ in range(num_experts)])
-        self.gate = nn.Linear(dim, num_experts, bias=False) if gate else None
+        self.gate = nn.Linear(8192, num_experts, bias=False) if gate else None
         self.top_k = 2
 
     def forward(self, x):
+        """
+        x: (B, S, T, H)  e.g. (1, 1, 32, 8192)
+        gate(x): (B, S, T, E)  where E = num_experts
+        each expert(x): (B, S, T, H)
+        """
+        B, S, T, H = x.shape
+        E = self.num_experts
+
         if self.gate is not None:
-            gate_logits = self.gate(x)
-            weights, selected_experts = torch.topk(gate_logits, self.top_k, dim=-1)
-            weights = F.softmax(weights, dim=-1, dtype=torch.float).to(x.dtype)
+            gate_logits = self.gate(x)  # (B, S, T, E)
+
+            # If your gate returns (B, T, E), add back the singleton stream dim:
+            if gate_logits.dim() == 3:
+                gate_logits = gate_logits.unsqueeze(1)  # -> (B, 1, T, E)
+
+            topk_weights = F.softmax(gate_logits, dim=-1, dtype=torch.float32).to(x.dtype)  # (B, S, T, K)
+            topk_logits, topk_idx = torch.topk(topk_weights, self.top_k, dim=-1)  # (B, S, T, K), (B, S, T, K)
+
+            # Scatter top-k weights back into full (B, S, T, E)
+            weights = torch.zeros(B, S, T, E, dtype=x.dtype, device=x.device)  # (B, S, T, E)
+            weights.scatter_(dim=-1, index=topk_idx, src=topk_logits)  # fill only selected experts
         else:
-            # always use all experts
-            weights = torch.ones((x.shape[0], self.num_experts, 1), dtype=torch.float, device=x.device)
-        # results = torch.zeros_like(x)
-        results = []
-        for i, expert in enumerate(self.experts):
-            # results += expert(x) * weights[:, i, None]
-            results.append(expert(x))
-        return results
+            # Uniform mix over all experts
+            weights = torch.full((B, S, T, E), 1.0 / E, dtype=x.dtype, device=x.device)
+
+        print(weights)
+        print(topk_idx)
+
+        # return weights, topk_weights, topk_idx
+        # Weighted sum across experts
+        y = torch.zeros_like(x)  # (B, S, T, H)
+        for e, expert in enumerate(self.experts):
+            y = y + expert(x) * weights[..., e].unsqueeze(-1)  # (B, S, T, H) * (B, S, T, 1)
+
+        return y
 
 
 class TransformerBlock(nn.Module):
@@ -291,6 +329,7 @@ class TransformerBlock(nn.Module):
         self.head_dim = 128
         self.attention = Attention()
         self.feed_forward = FeedForward()
+        self.moe = MoE(num_experts=8, gate=True)
         self.layer_id = layer_id
         self.attention_norm = RMSNorm(8192, eps=1e-5)
         self.ffn_norm = RMSNorm(8192, eps=1e-5)
@@ -308,7 +347,7 @@ class TransformerBlock(nn.Module):
         h = h + at
         res = h
         fin = self.ffn_norm(h)
-        out = res + self.feed_forward(fin)
+        out = res + self.feed_forward(fin) + self.moe(fin)
         return out
 
 

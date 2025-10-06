@@ -76,9 +76,11 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
+    skip_reshape=False,
 ):
     # TG: all_reduce
     # Cast to CCL dtype
+    original_shape = input_tensor.shape
     if input_tensor.dtype != dtype:
         input_tensor = ttnn.to_memory_config(input_tensor, ttnn.L1_MEMORY_CONFIG, dtype)  # typecast and to interleaved
         if sharded and memory_config is not None:
@@ -151,7 +153,8 @@ def tt_all_reduce(
         )
 
     # Reshape the reduced tensor to the original shape
-    reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
+    if not skip_reshape:
+        reduced_tensor = ttnn.reshape(reduced_tensor, original_shape)
 
     return reduced_tensor
 

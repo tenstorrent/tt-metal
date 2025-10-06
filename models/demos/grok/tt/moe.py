@@ -6,13 +6,29 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
+from models.demos.grok.tt.ccl import tt_all_reduce
+from ttnn import ReplicateTensorToMesh
 
 
-class TtGrokMoeLayer(LightweightModule):
-    def __init__(self, mesh_device, state_dict, experts, args, layer_num, dtype):
+def topk_router(g, experts_per_token):
+    compute_config = ttnn.init_device_compute_kernel_config(
+        g.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    expert_weights = ttnn.softmax(g, dim=-1, numeric_stable=True, compute_kernel_config=compute_config)
+    expert_weights, expert_indices = ttnn.topk(expert_weights, k=experts_per_token, dim=-1, sorted=True)
+    router_scores = ttnn.scatter(ttnn.zeros_like(g), dim=-1, index=expert_indices, src=expert_weights)
+    return router_scores, expert_weights, expert_indices
+
+
+class TtMoE(LightweightModule):
+    def __init__(self, mesh_device, tt_ccl, state_dict, experts, args, layer_num, dtype):
         super().__init__()
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.experts = experts
         self.args = args
         self.dtype = dtype
@@ -24,37 +40,25 @@ class TtGrokMoeLayer(LightweightModule):
         # Simplified cache naming for minimal implementation
         cache_name = None
 
-        self.num_devices = 8
         # Prepare gate tensor - pad to 64 for top-k operation compatibility
         gates_tensor = (
+            # torch.nn.functional.pad(state_dict[gate_name].permute(1, 0), (0, 56), "constant", 0)
+            # state_dict[gate_name].permute(1, 0)
             torch.nn.functional.pad(state_dict[gate_name].permute(1, 0), (0, 56), "constant", 0)
             .unsqueeze(0)
             .unsqueeze(0)
         )
 
-        # Create device-specific gate tensors (same pattern as Mixtral)
-        gates_tensor_list = []
-        for dev in range(self.num_devices):
-            i, j = 0, dev
-            gates_tensor_dev = gates_tensor.clone()
-            gates_tensor_dev[:, :, :, [i, j]] = gates_tensor_dev[:, :, :, [j, i]]
-            gates_tensor_list.append(gates_tensor_dev)
-
         self.gates_H8 = ttnn.as_tensor(
-            torch.cat(gates_tensor_list, dim=1),
+            gates_tensor,
             dtype=ttnn.bfloat16,
             layout=self.model_config["GATE_W_LAYOUT_TILE_EXPERTS"],
             memory_config=self.model_config["GATE_WEIGHTS_MEMCFG_EXPERTS"],
             # cache_file_name=cache_name,  # Simplified for minimal implementation
             device=self.mesh_device,
-            mesh_mapper=ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=(8, 4)),
         )
 
-        self.tile_size = 32
-        self.compute_kernel = args.compute_kernel_config_hifi2
-        self.compute_kernel_reduce = args.compute_kernel_config_hifi2
-
-        # Top-8 mask for expert selection (mask out experts beyond 8)
         top8_mask = torch.full((1, 1, 1, 64), fill_value=torch.finfo(torch.float).min)
         top8_mask[:, :, :, :8] = 0.0
         self.top8_mask_11B_64 = ttnn.from_torch(
@@ -66,29 +70,9 @@ class TtGrokMoeLayer(LightweightModule):
         )
         self.top8_mask_11B_64 = ttnn.sum(self.top8_mask_11B_64, dim=2, keepdim=True)
 
-        # Top-2 mask for final expert selection (Grok uses top-2 experts per token)
-        top2_mask = torch.full((1, 1, 1, 32), fill_value=torch.finfo(torch.float).min)
-        top2_mask[:, :, :, :2] = 0.0
-        self.top2_mask_11BB = ttnn.from_torch(
-            top2_mask,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
-        )
-        self.top2_mask_11BB = ttnn.sum(self.top2_mask_11BB, dim=2, keepdim=True)
-
-        # Reduction mask for final output aggregation
-        reduce_mask_torch = torch.zeros(1, 1, self.tile_size, self.tile_size * 8)
-        for i in range(self.tile_size):
-            reduce_mask_torch[:, :, i, range(i, self.tile_size * 8, self.tile_size)] = 1
-        self.reduce_mask = ttnn.from_torch(
-            reduce_mask_torch,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            mesh_mapper=ReplicateTensorToMesh(mesh_device),
-        )
+        self.tile_size = 32
+        self.compute_kernel = args.compute_kernel_config_hifi2
+        self.compute_kernel_reduce = args.compute_kernel_config_hifi2
 
     def forward(self, inputs):
         """
@@ -107,32 +91,31 @@ class TtGrokMoeLayer(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
         )
-
-        # Mask out experts beyond the 8 available experts
+        gate_logits_1SB8 = tt_all_reduce(
+            gate_logits_1SB8,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=1,
+            dim=2,
+            use_composite=True,
+            skip_reshape=True,
+        )
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
 
-        # Get top-2 expert weights (decode mode only)
-        weights_1SB1 = ttnn.moe(gate_logits_1SB8, self.top8_mask_11B_64, self.top2_mask_11BB, 32)
+        router_scores, expert_weights, expert_indices = topk_router(gate_logits_1SB8, 2)
+        router_scores = router_scores[:, :, :, :8]
+        router_scores = ttnn.permute(router_scores, (0, 3, 2, 1))
+        print(expert_indices)
+        print(expert_weights)
 
         gate_logits_1SB8.deallocate()
 
         # Apply expert MLP
         expert_output = expert_i_HH(input_i_1SBH)
+        # expert_output = input_i_1SBH
 
         # Apply expert weights
-        results_11BH = ttnn.mul(expert_output, weights_1SB1)
+        results_11BH = ttnn.mul(expert_output, router_scores)
+        results_11BH = ttnn.sum(results_11BH, dim=1, keepdim=True)
 
-        expert_output.deallocate(True)
-        weights_1SB1.deallocate(True)
-
-        # Simplified all-gather and reduction for decode mode
-        # Note: This is a simplified version - in practice you might need more sophisticated
-        # communication patterns depending on your mesh configuration
-        output_11BH_gathered = results_11BH  # Simplified - no actual all-gather for minimal implementation
-
-        # Final reduction
-        output_11BH_reduced = ttnn.matmul(
-            self.reduce_mask, output_11BH_gathered, compute_kernel_config=self.compute_kernel_reduce
-        )
-
-        return output_11BH_reduced
+        return results_11BH

@@ -71,6 +71,8 @@ class ExpertMLP(LightweightModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Simplified for mode="decode", TG=True, dim=8192 only
 
+        x = ttnn.repeat(x, repeat_dims=(1, 8, 1, 1))
+
         layer_num = max(self.layer_num, 0)  # cross_block uses the configutation of the first decoder
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
@@ -196,18 +198,5 @@ class ExpertMLP(LightweightModule):
             use_composite=True,  # dim=8192
             topology=self.args.ccl_topology(),
         )
-
-        # Ensure dim 0 and 1 are 1
-        original_shape = w2_out_reduced.shape
-        # w2_out_reduced = ttnn.reshape(
-        #     w2_out_reduced, (1, original_shape[-2], original_shape[-4] * original_shape[-3], original_shape[-1])
-        # )
-        # breakpoint()
-        # Always decode mode
-        # w2_out_reduced = ttnn.to_memory_config(
-        #     w2_out_reduced,
-        #     self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-        # )
-        # breakpoint()
 
         return w2_out_reduced
