@@ -160,9 +160,6 @@ jobs:
       matrix:
         test-group: ${{ fromJSON(needs.define-demo-tests.outputs.demo-tests) }}
     name: ${{ matrix.test-group.name }}-${{ matrix.test-group.runner-label }}-${{ (matrix.test-group.performance && 'perf') || 'func' }}
-    env:
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
@@ -177,23 +174,37 @@ jobs:
               inputs.extra-tag
             ))
       }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+        HF_HUB_CACHE: ${{ (!matrix.test-group.civ2-compatible && '/mnt/MLPerf/huggingface/hub') || '' }}
+        HTTP_PROXY: ${{ (matrix.test-group.civ2-compatible && env.HTTP_PROXY) || '' }}
+        HTTPS_PROXY: ${{ (matrix.test-group.civ2-compatible && env.HTTPS_PROXY) || '' }}
+        NO_PROXY: ${{ (matrix.test-group.civ2-compatible && env.NO_PROXY) || '' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: >-
+        --device /dev/tenstorrent -e TT_GH_CI_INFRA=1 --cap-add=ALL --security-opt seccomp=unconfined --ulimit nproc=65536:65536 --ulimit nofile=65536:65536
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: ⬇️ Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
         timeout-minutes: 10
         with:
-          name: ${{ inputs.build-artifact-name }}
-      - name: Extract files
-        run: tar -xvf ttm_any.tar
-      - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
-        timeout-minutes: 10
-        with:
-          name: ${{ inputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Check for invalid performance + civ2-compatible combination
         if: ${{ matrix.test-group.performance && matrix.test-group.civ2-compatible }}
         run: |
@@ -207,44 +218,15 @@ jobs:
       - uses: ./.github/actions/ensure-active-weka-mount
         if: ${{ !matrix.test-group.civ2-compatible }}
       - name: Run demo regression tests
-        uses: ./.github/actions/docker-run
         timeout-minutes: 60
-        env:
-          LOGURU_LEVEL: INFO
-        with:
-          docker_image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e ARCH_NAME=${{ inputs.arch }}
-            ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA=1' || '' }}
-            ${{ !matrix.test-group.civ2-compatible && '-e HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub' || '' }}
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            --cap-add=ALL
-            --security-opt seccomp=unconfined
-            --ulimit nproc=65536:65536
-            --ulimit nofile=65536:65536
-          install_wheel: true
-          forward_civ2_proxy_env_vars: ${{ matrix.test-group.civ2-compatible }}
-          run_args: |
-            source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
-            ${{ matrix.test-group.cmd }}
+        shell: bash
+        run: |
+          source ${{ github.workspace }}/tests/scripts/single_card/run_single_card_demo_tests.sh
+          ${{ matrix.test-group.cmd }}
       - name: Save environment data
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' && matrix.test-group.name != 'mobilenetv2' }}
-        uses: ./.github/actions/docker-run
-        env:
-          LOGURU_LEVEL: INFO
-        with:
-          docker_image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e ARCH_NAME=${{ inputs.arch }}
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-          install_wheel: true
-          run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+        shell: bash
+        run: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
         if: ${{ matrix.test-group.runner-label == 'N300' && matrix.test-group.performance && !cancelled() && matrix.test-group.name != 'whisper' && matrix.test-group.name != 'mobilenetv2' }}
         uses: ./.github/actions/upload-data-via-sftp
