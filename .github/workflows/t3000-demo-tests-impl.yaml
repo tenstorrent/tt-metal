@@ -80,11 +80,13 @@ jobs:
         run: |
           set -euxo pipefail
           apt-get update
-          # Install kernel-specific tools first
-          apt-get install -y --no-install-recommends linux-tools-common
-          # Try to install kernel-specific version, fallback to generic if not available
-          apt-get install -y --no-install-recommends "linux-tools-$(uname -r)" "linux-cloud-tools-$(uname -r)" || \
-          apt-get install -y --no-install-recommends linux-tools-generic linux-cloud-tools-generic
+          # Install kernel-specific tools for 5.4.0-216
+          apt-get install -y --no-install-recommends \
+            linux-tools-common \
+            linux-tools-5.4.0-216-generic \
+            linux-cloud-tools-5.4.0-216-generic \
+            linux-tools-generic \
+            linux-cloud-tools-generic
           # Verify installation
           command -v cpupower
       - name: Enable Performance mode
