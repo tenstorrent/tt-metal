@@ -48,7 +48,7 @@ void kernel_main() {
 
     // COMPILE TIME ARGS
     constexpr uint32_t cb_id_in1 = 1;
-
+    constexpr uint32_t one_tile = 1;
     // WRITER
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
 
@@ -63,12 +63,12 @@ void kernel_main() {
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
     uint32_t l1_write_addr_in1;
-#endif
+#endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
-#endif
+#endif  // OUT_SHARDED
 
 #if not defined IN1_SHARDED or not defined OUT_SHARDED
     for (uint32_t b = 0; b < batch; ++b) {
@@ -77,14 +77,28 @@ void kernel_main() {
         for (uint32_t block = 0; block < num_blocks; ++block) {
             cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
+#ifdef INTERMEDIATE_CB_READ
+            constexpr uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+            cb_reserve_back(in1_intermediate_cb_index, one_tile);
+            uint32_t l1_write_addr_helper = get_write_ptr(in1_intermediate_cb_index);
+#endif  // INTERMEDIATE_CB_READ
+
             l1_write_addr_in1 = get_write_ptr(cb_id_in1);
 
             uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_block_start_tile_id;
             for (uint32_t h = 0; h < in1_block_h; ++h) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for (uint32_t w = 0; w < in1_block_w; ++w) {
+#ifndef INTERMEDIATE_CB_READ
                     noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_in1);
-
+#else
+                    noc_async_read_tile(in1_tensor_tile_id, s1, l1_write_addr_helper);
+                    noc_async_read_barrier();
+                    memcpy(
+                        /*dst=*/reinterpret_cast<void*>(l1_write_addr_in1),
+                        /*src=*/reinterpret_cast<const void*>(l1_write_addr_helper),
+                        /*size=*/in1_single_tile_size_bytes);
+#endif  // INTERMEDIATE_CB_READ
                     l1_write_addr_in1 += in1_single_tile_size_bytes;
                     in1_tensor_tile_id += in1_tensor_stride_w;
                 }
@@ -95,11 +109,17 @@ void kernel_main() {
             noc_async_read_barrier();
 
             cb_push_back(cb_id_in1, in1_block_num_tiles);
+#ifdef INTERMEDIATE_CB_READ
+            // Clean up helper CB
+            cb_push_back(in1_intermediate_cb_index, one_tile);
+            cb_wait_front(in1_intermediate_cb_index, one_tile);
+            cb_pop_front(in1_intermediate_cb_index, one_tile);
+#endif  // INTERMEDIATE_CB_READ
         }
         if (bcast_B == 0) {
             in1_tensor_start_tile_id += KtNt;
         }
-#endif
+#endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
         // WRITER
@@ -131,11 +151,11 @@ void kernel_main() {
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
         }
         out_tensor_start_tile_id += MtNt;
-#endif
+#endif  // OUT_SHARDED
     }
-#endif
+#endif  // not defined IN1_SHARDED or not defined OUT_SHARDED
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out0, batch * out_num_subblocks_h * out_num_subblocks_w * out_subblock_w * out_subblock_h);
-#endif
+#endif  // OUT_SHARDED
 }
