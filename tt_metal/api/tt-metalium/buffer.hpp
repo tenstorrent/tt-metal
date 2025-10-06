@@ -320,8 +320,6 @@ private:
     static std::atomic<size_t> next_unique_id;
 };
 
-UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer);
-
 using HostDataType = std::variant<
     const std::shared_ptr<std::vector<uint8_t>>,
     const std::shared_ptr<std::vector<uint16_t>>,
