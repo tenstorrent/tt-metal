@@ -192,7 +192,7 @@ def main():
             return x
 
     class Transformer:
-        def __init__(self, state_dict, num_heads, attention_mask=None, prefix=""):
+        def __init__(self, state_dict, num_layers, num_heads, attention_mask=None, prefix=""):
             """
             Initialize a generic Transformer that can be used for both text and vision encoding.
 
@@ -233,7 +233,7 @@ def main():
             return x
 
     class VisionTransformer:
-        def __init__(self, state_dict):
+        def __init__(self, state_dict, num_vision_layers):
             self.output_dim = 0
 
             conv2_state_dict_name = "vision_model.embeddings.patch_embedding.weight"
@@ -241,14 +241,9 @@ def main():
             self.patch_size = state_dict[conv2_state_dict_name].shape[-1]
             self.vision_heads = self.vision_width // 64
 
-            self.class_embedding = ttnn.typecast(
-                state_dict["vision_model.embeddings.class_embedding"], dtype=ttnn.bfloat16
-            )
-            self.positional_embedding = ttnn.typecast(
-                state_dict["vision_model.embeddings.position_embedding.weight"], dtype=ttnn.bfloat16
-            )
-
-            self.proj = ttnn.typecast(state_dict["visual_projection.weight"], dtype=ttnn.bfloat16)
+            self.class_embedding = state_dict["vision_model.embeddings.class_embedding"]
+            self.positional_embedding = state_dict["vision_model.embeddings.position_embedding.weight"]
+            self.proj = state_dict["visual_projection.weight"]
 
             # Weights preparation for convolution (ttnn.conv2d) must be done on host (CPU)
             # To that end, we move convolution weights from device to host and perform its
@@ -266,7 +261,11 @@ def main():
             self.ln_post_bias = state_dict["vision_model.post_layernorm.bias"]
 
             self.transformer = Transformer(
-                state_dict, self.vision_heads, attention_mask=None, prefix="vision_model.encoder"
+                state_dict,
+                num_layers=num_vision_layers,
+                num_heads=self.vision_heads,
+                attention_mask=None,
+                prefix="vision_model.encoder",
             )
 
         def forward(self, x):
@@ -409,10 +408,16 @@ def main():
 
             self.logit_scale = state_dict["logit_scale"].item()
 
-            self.visual = VisionTransformer(state_dict)
+            num_vision_layers = 12  # Hardcoded value for CLIP-ViT-base-patch32
+            self.visual = VisionTransformer(state_dict, num_vision_layers=num_vision_layers)
 
+            num_text_layers = 8  # Hardcoded value for CLIP-ViT-base-patch32
             self.transformer = Transformer(
-                state_dict, transformer_heads, attention_mask=self.build_attention_mask(), prefix="text_model.encoder"
+                state_dict,
+                num_layers=num_text_layers,
+                num_heads=transformer_heads,
+                attention_mask=self.build_attention_mask(),
+                prefix="text_model.encoder",
             )
 
         def build_attention_mask(self):
