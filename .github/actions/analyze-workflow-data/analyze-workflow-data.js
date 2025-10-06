@@ -260,13 +260,24 @@ function resolveOwnersForSnippet(snippet, workflowName) {
     }
     // Apply infra policy: if no owners or test missing/NA, infra is sole owner
     const testName = (snippet && snippet.test) ? snippet.test : 'NA';
-    if (!normalized.length || !testName || testName === 'NA') {
+    const hadOriginalOwners = normalized.length > 0;
+    if (!testName || testName === 'NA') {
+      // Missing/NA test: infra is the only owner; preserve original owners for report context
       snippet.owner = [DEFAULT_INFRA_OWNER];
+      snippet.owner_source = hadOriginalOwners ? 'infra_due_to_missing_test' : 'infra_due_to_missing_test_no_original';
+      if (hadOriginalOwners) snippet.original_owners = normalized;
+    } else if (!hadOriginalOwners) {
+      // No mapping owners found: default to infra only
+      snippet.owner = [DEFAULT_INFRA_OWNER];
+      snippet.owner_source = 'infra_due_to_no_owner';
     } else {
+      // Normal case: keep resolved owners
       snippet.owner = normalized;
+      snippet.owner_source = 'resolved_mapping';
     }
   } catch (_) {
     snippet.owner = [DEFAULT_INFRA_OWNER];
+    snippet.owner_source = 'infra_due_to_error';
   }
 }
 
@@ -328,6 +339,11 @@ function renderErrorsTable(errorSnippets) {
     if (obj && Array.isArray(obj.owner) && obj.owner.length) {
       const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
       if (names.length) ownerDisplay = names.join(', ');
+      // If owner is infra-only due to missing test, surface original pipeline owner for human context
+      if (obj.owner_source && String(obj.owner_source).startsWith('infra_due_to_missing_test') && Array.isArray(obj.original_owners) && obj.original_owners.length) {
+        const origNames = obj.original_owners.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
+        if (origNames.length) ownerDisplay = `${DEFAULT_INFRA_OWNER.name} (from ${origNames.join(', ')})`;
+      }
     }
     const ownerEsc = escapeHtml(ownerDisplay);
     // Force exactly two lines: compute a break point (prefer comma, else space near middle), NBSP around words
