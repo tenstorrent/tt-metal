@@ -1161,9 +1161,17 @@ async function run() {
     if (failedWorkflows.length > 0) {
       const mention = (owners) => {
         const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
-        const ids = arr.map(o => (o && o.id) ? `<@${o.id}>` : '').filter(Boolean);
-        return ids.length ? ids.join(' ') : '';
-      }; // create a function that takes in an array of owners and returns a string of owner mentions (as slack IDs)
+        const parts = arr.map(o => {
+          if (!o || !o.id) return '';
+          const id = String(o.id);
+          if (id.startsWith('S')) {
+            const fallback = o.name ? `@${o.name}` : '@team';
+            return `<!subteam^${id}|${fallback}>`;
+          }
+          return `<@${id}>`;
+        }).filter(Boolean);
+        return parts.length ? parts.join(' ') : '';
+      }; // format owners into Slack mentions; supports user groups (S-ids)
 
       // create a list of all the failing workflows with their owner information for slack messaging
       const failingItems = [];
