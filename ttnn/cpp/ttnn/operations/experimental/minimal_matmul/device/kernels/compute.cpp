@@ -135,6 +135,8 @@ void MAIN {
         DPRINT << "compute: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
                << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL());
 
+    bool reuse_in0_block = false;
+    bool reuse_in1_block = false;
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
             // Accumulation buffer
@@ -159,9 +161,31 @@ void MAIN {
                     subblock_h,
                     subblock_w,
                     k_block > 0);
-                cb_pop_front(in0_cb, in0_block_num_tiles);
-                cb_pop_front(in1_cb, in1_block_num_tiles);
+
+                if (k_block == K_num_blocks - 1) {
+                    /**
+                     * On next iteration we're going to get some reuse on in0 or in1
+                     * Therefore you should not pop one of them
+                     *
+                     */
+                    if (n_block < N_end_block) {
+                        // going to stride on N, so reuse in0
+                        reuse_in0_block = true;
+                    } else {
+                        // going to stride on M, so reuse in1
+                        reuse_in1_block = true;
+                    }
+                }
+                if (!reuse_in0_block) {
+                    cb_pop_front(in0_cb, in0_block_num_tiles);
+                }
+                if (!reuse_in1_block) {
+                    cb_pop_front(in1_cb, in1_block_num_tiles);
+                }
+                reuse_in0_block = false;
+                reuse_in1_block = false;
             }
+
             cb_push_back(intermediate_cb, out_block_num_tiles);
             cb_wait_front(intermediate_cb, out_block_num_tiles);
             // safe_print_full_tile(intermediate_cb);
