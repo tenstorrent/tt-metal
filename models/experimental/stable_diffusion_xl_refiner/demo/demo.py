@@ -257,11 +257,11 @@ def generate_with_refiner_compare(
         )
 
         # Convert noise outputs back to torch tensors for CFG calculation
-        noise_uncond = ttnn.to_torch(noise_uncond.cpu())
+        noise_uncond = ttnn.to_torch(noise_uncond)
         noise_uncond = noise_uncond.reshape(B, H, W, C)
         noise_uncond = torch.permute(noise_uncond, (0, 3, 1, 2))
 
-        noise_cond = ttnn.to_torch(noise_cond.cpu())
+        noise_cond = ttnn.to_torch(noise_cond)
         noise_cond = noise_cond.reshape(B, H, W, C)
         noise_cond = torch.permute(noise_cond, (0, 3, 1, 2))
 
