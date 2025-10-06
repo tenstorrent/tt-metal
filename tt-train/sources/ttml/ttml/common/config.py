@@ -64,5 +64,39 @@ class TrainingConfig:
         self.eval_every = int(tc.get("eval_every", 200))
         self.gradient_accumulation_steps = int(tc.get("gradient_accumulation_steps", 1))
 
-        tcfg = tc.get("transformer_config", yaml_config.get("transformer_config", {}))
-        self.seq_len = int(tcfg.get("max_sequence_length", 256))
+        self.transformer_config = TransformerConfig(tc.get("transformer_config", {}))
+        self.seq_len = int(self.transformer_config.max_sequence_length)
+
+
+class TransformerConfig:
+    """Configuration for transformer model hyperparameters."""
+
+    def __init__(self, yaml_config: dict):
+        """Initialize transformer configuration from YAML config.
+
+        Args:
+            yaml_config: Dictionary containing configuration
+        """
+
+        # Base parameters
+        self.runner_type = yaml_config.get("runner_type", "default")
+        self.num_heads = int(yaml_config.get("num_heads", 6))
+        self.embedding_dim = int(yaml_config.get("embedding_dim", 384))
+        self.dropout_prob = float(yaml_config.get("dropout_prob", 0.2))
+        self.num_blocks = int(yaml_config.get("num_blocks", 6))
+        self.vocab_size = int(yaml_config.get("vocab_size", 96))
+        self.weight_tying = yaml_config.get("weight_tying", None)
+        self.max_sequence_length = int(yaml_config.get("max_sequence_length", 128))
+
+        # Llama-specific
+        self.intermediate_dim = yaml_config.get("intermediate_dim", None)
+        self.theta = yaml_config.get("theta", None)
+        self.num_groups = yaml_config.get("num_groups", 3)
+
+        # RoPE
+        self.rope = yaml_config.get("rope_scaling", None)
+        if self.rope:
+            self.scaling_factor = self.rope.get("scaling_factor", None)
+            self.high_freq_factor = self.rope.get("high_freq_factor", None)
+            self.low_freq_factor = self.rope.get("low_freq_factor", None)
+            self.original_context_length = self.rope.get("original_context_length", None)
