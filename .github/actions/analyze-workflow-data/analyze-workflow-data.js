@@ -460,6 +460,29 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
     await core.startGroup(`Extracting error snippets for run ${runId}`); // start a group to log the error snippets (we log this to the console)
     let snippets = [];
 
+    // Helper: filter out generic exit-code snippets when a job has more specific errors
+    const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(s.trim());
+    const filterGenericExitSnippets = (arr) => {
+      try {
+        const byJob = new Map();
+        for (const sn of (arr || [])) {
+          const job = (sn && sn.job) ? String(sn.job) : '';
+          if (!byJob.has(job)) byJob.set(job, []);
+          byJob.get(job).push(sn);
+        }
+        const out = [];
+        for (const [job, list] of byJob.entries()) {
+          const hasNonGeneric = list.some(sn => !isGenericExit(sn && sn.snippet));
+          if (hasNonGeneric) {
+            for (const sn of list) { if (!isGenericExit(sn && sn.snippet)) out.push(sn); }
+          } else {
+            out.push(...list);
+          }
+        }
+        return out;
+      } catch (_) { return arr || []; }
+    };
+
     // If logs (gtest) are available for this run, parse them and return. This leaves pytest/others unchanged.
     try {
       const runLogsDir = logsDirPath || getLogsDirForRunId(runId);
@@ -588,7 +611,9 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             }
             core.info(`[GTEST] Total snippets before cap: ${out.length}, after dedupe: ${unique.length}`);
             snippets = unique.slice(0, Math.max(1, Math.min(maxSnippets, unique.length)));
-            core.info(`[GTEST] Collected ${snippets.length} gtest snippet(s) from logs for run ${runId}`);
+            // Apply generic-exit filter per job
+            snippets = filterGenericExitSnippets(snippets);
+            core.info(`[GTEST] Collected ${snippets.length} gtest snippet(s) from logs for run ${runId} (after filtering)`);
             // Do not attach owners here; ownership resolution is performed later
             return snippets;
           } else {
@@ -626,7 +651,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
               const dedupeKey = `${job}|${title}|${levelLc}|${msgTrim}`;
               if (seen.has(dedupeKey)) continue;
               seen.add(dedupeKey);
-              snippets.push({ label, snippet: message });
+              snippets.push({ label, job, snippet: message });
               if (snippets.length >= maxSnippets) break;
             }
           }
@@ -639,7 +664,8 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
     // Do not attach owners here; ownership resolution is performed later
 
     core.info(`Total snippets collected from annotations: ${snippets.length}`);
-    return snippets || [];
+    // Apply generic-exit filter per job before returning
+    return filterGenericExitSnippets(snippets || []);
   } catch (e) {
     core.info(`Failed to obtain run logs for ${runId}: ${e.message}`);
     return [];
