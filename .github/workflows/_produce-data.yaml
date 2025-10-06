@@ -34,7 +34,7 @@ on:
       - "(T3K) T3000 unit tests"
       - "(T3K) T3000 fast tests"
       - "(T3K) Choose your pipeline"
-      - "(TG) Choose your pipeline"
+      - "(Galaxy) Choose your pipeline"
       - "ttnn - Run sweeps"
       - "Blackhole post-commit tests"
       - "(Blackhole) Blackhole nightly tests"
@@ -47,7 +47,6 @@ on:
       - "Build test and publish upstream tests"
       - "Multi-Host Deployment (Physical)"
       - "Galaxy Multi-user Isolation Tests"
-      - "Galaxy Quick"
       - "Galaxy demo tests"
       - "Galaxy frequent tests"
       - "Galaxy model perf tests"
@@ -56,6 +55,10 @@ on:
       - "Galaxy Stress"
       - "Galaxy unit tests"
       - "Git bisect dispatch"
+      - "(Galaxy) Quick"
+      - "(Galaxy) APC fast tests"
+      - "(Galaxy) DeepSeek tests"
+
     types:
       - completed
 
