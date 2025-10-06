@@ -147,7 +147,7 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-n150-stable
-      test_splits: 3
+      test_splits: 4
       pytest_markers: "not perf and not nightly"
 
   setup-and-test-blackhole:
@@ -160,8 +160,28 @@ jobs:
     with:
       docker_image: ${{ needs.build-images.outputs.docker-image }}
       runs_on: tt-ubuntu-2204-p150b-stable
-      test_splits: 3
+      test_splits: 4
       pytest_markers: "not perf and not nightly"
+
+  perf-tests:
+    name: "⚡ Performance tests (${{ matrix.target }})"
+    uses: ./.github/workflows/setup-and-test.yml
+    needs: [build-images, detect-changes]
+    if: ${{ needs.detect-changes.outputs.performance == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: Wormhole
+            runs_on: tt-ubuntu-2204-n150-stable
+          - target: Blackhole
+            runs_on: tt-ubuntu-2204-p150b-stable
+    with:
+      docker_image: ${{ needs.build-images.outputs.docker-image }}
+      runs_on: ${{ matrix.runs_on }}
+      test_splits: 4
+      pytest_markers: "perf"
+      timeout_minutes: 120
 
   check-all-green:
     name: "✅ Check all green"
@@ -171,10 +191,11 @@ jobs:
       - build-images
       - setup-and-test-wormhole
       - setup-and-test-blackhole
+      - perf-tests
     runs-on: ubuntu-latest
     steps:
       - name: Check if the required jobs succeeded or failed
         uses: re-actors/alls-green@release/v1
         with:
           jobs: ${{ toJSON(needs) }}
-          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole
+          allowed-skips: setup-and-test-wormhole, setup-and-test-blackhole, perf-tests

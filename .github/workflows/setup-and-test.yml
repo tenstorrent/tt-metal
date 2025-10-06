@@ -106,7 +106,9 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
+          name: >-
+            ${{ (contains(inputs.pytest_markers, 'perf') && !contains(inputs.pytest_markers, 'not perf'))
+                && 'perf-' || '' }}junit-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}
           path: tests/python_tests/pytest-report-${{ env.CHIP_ARCH }}-${{ matrix.test_group }}.xml
 
       # Step 7: Publish the test results

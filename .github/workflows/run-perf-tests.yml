@@ -1,8 +1,6 @@
 name: 🚀 Run Performance Tests
 
 on:
-  pull_request:
-    types: [labeled, synchronize]
   workflow_dispatch:
   workflow_call:
 
