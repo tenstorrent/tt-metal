@@ -53,14 +53,16 @@ class Conv:
         # Check for small spatial dimensions that might cause issues
         is_small_spatial = input_height < 32 or input_width < 32
 
-        if input_tensor.shape[3] == 1024 or input_tensor.shape[3] == 384:
-            input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            input_tensor = ttnn.from_device(input_tensor)
+        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # if input_tensor.shape[3] == 1024 or input_tensor.shape[3] == 384:
+        #     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # else:
+        #     input_tensor = ttnn.from_device(input_tensor)
 
         # check input is in interleaved format
         if hasattr(input_tensor, "memory_config") and input_tensor.memory_config().is_sharded():
-            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            # input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
         # check weights are also properly formatted
         if hasattr(self.weights, "memory_config") and self.weights.memory_config().is_sharded():
@@ -204,7 +206,7 @@ class Conv:
 
         # Post-processing
         if hasattr(output_tensor, "memory_config") and output_tensor.memory_config().is_sharded():
-            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.DRAM_MEMORY_CONFIG)
 
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
         output_tensor = ttnn.reshape(output_tensor, (batch_size, _out_height, _out_width, output_tensor.shape[3]))

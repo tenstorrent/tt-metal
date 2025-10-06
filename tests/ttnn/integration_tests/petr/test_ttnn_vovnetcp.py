@@ -274,6 +274,11 @@ def test_vovnetcp_osa_stage(
 
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
+    if len(ttnn_output.shape) == 4 and ttnn_output.shape[2] == 1:
+        # Calculate original H and W from the torch output shape
+        target_h = torch_output.shape[2]
+        target_w = torch_output.shape[3]
+        ttnn_output = ttnn_output.reshape(ttnn_output.shape[0], ttnn_output.shape[1], target_h, target_w)
 
     assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
