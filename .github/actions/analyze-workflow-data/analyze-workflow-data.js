@@ -1258,7 +1258,7 @@ async function run() {
         const commitShort = info?.head_sha ? info.head_sha.substring(0, 7) : undefined; // get the short sha of the latest pipeline run
         changes.push({ name, previous, current, change, run_id: info?.id, run_url: info?.url, created_at: info?.created_at, workflow_url: workflowUrl, workflow_path: info?.path, aggregate_run_url: aggregateRunUrl, commit_sha: info?.head_sha, commit_short: commitShort, commit_url: commitUrl }); // push the change into the changes array
         if (change === 'success_to_fail' && info) { // if the change is a success to fail, push the change into the regressed details array. Each item represents a pipeline with its latest failing run.
-          regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, workflow_path: info.path, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
+          regressedDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, workflow_path: info.path, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl, owners: [] });
         }
         else if (change === 'stayed_failing' && info) { // if the change is a stayed failing, push the change into the stayed failing details array. this is for the latest run
           stayedFailingDetails.push({ name, run_id: info.id, run_url: info.url, created_at: info.created_at, workflow_url: workflowUrl, workflow_path: info.path, aggregate_run_url: aggregateRunUrl, commit_sha: info.head_sha, commit_short: commitShort, commit_url: commitUrl });
@@ -1310,6 +1310,36 @@ async function run() {
           } else {
             item.error_snippets = [];
           }
+          // Derive owners from error snippets or fallback to workflow label mapping
+          try {
+            const ownerSet = new Map();
+            for (const e of (item.error_snippets || [])) {
+              if (Array.isArray(e.owner)) {
+                for (const o of e.owner) {
+                  if (!o) continue;
+                  const key = `${o.id || ''}|${o.name || ''}`;
+                  ownerSet.set(key, o);
+                }
+              }
+            }
+            let ownersArr = Array.from(ownerSet.values());
+            if (ownersArr.length === 0) {
+              ownersArr = findOwnerForLabel(item.name) || [];
+            }
+            // Normalize owners to objects with id/name, dedup by id|name
+            const normalized = [];
+            const seenOwners = new Set();
+            for (const o of (ownersArr || [])) {
+              if (!o) continue;
+              const id = o.id || undefined;
+              const name = o.name || undefined;
+              const k = `${id || ''}|${name || ''}`;
+              if (seenOwners.has(k)) continue;
+              seenOwners.add(k);
+              normalized.push({ id, name });
+            }
+            item.owners = normalized;
+          } catch (_) { item.owners = []; }
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
           // Mirror into the corresponding change entry
