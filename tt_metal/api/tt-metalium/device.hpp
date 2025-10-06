@@ -20,6 +20,7 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -42,6 +43,7 @@ size: bytes
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 enum class BufferType;
 
+class Allocator;
 class Buffer;
 class Program;
 class SubDevice;
