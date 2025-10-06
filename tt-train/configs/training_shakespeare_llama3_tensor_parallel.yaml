@@ -21,6 +21,13 @@ training_config:
     vocab_size: 96
     max_sequence_length: 256
     runner_type: default
+    theta: 500000
+    weight_tying: "enabled"
+    rope_scaling:
+      scaling_factor: 32.0
+      high_freq_factor: 4.0
+      low_freq_factor: 1.0
+      original_context_length: 8192
 eval_config:
   repetition_penalty: 1.0
   temperature: 0.7

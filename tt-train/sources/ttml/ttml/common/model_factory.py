@@ -4,8 +4,8 @@
 
 """Factory for creating transformer models from configuration."""
 import ttml
-from config import DeviceConfig
-from utils import round_up_to_tile
+from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.utils import round_up_to_tile
 
 
 def adjust_vocab_size(vocab_size: int, enable_tp: bool, total_devices: int) -> int:
@@ -51,7 +51,7 @@ class TransformerModelFactory:
         self.device_config = DeviceConfig(yaml_config)
         training_config = yaml_config.get("training_config", {})
         self.model_type = training_config.get("model_type", "gpt2")
-        self.transformer_config = training_config.get("transformer_config", {})
+        self.transformer_config = TransformerConfig(training_config.get("transformer_config", {}))
 
     def _create_gpt2(self):
         """Create GPT-2 model from configuration.
@@ -60,16 +60,22 @@ class TransformerModelFactory:
             GPT-2 model instance
         """
         gcfg = ttml.models.gpt2.GPT2TransformerConfig()
-        gcfg.num_heads = self.transformer_config.get("num_heads", 6)
-        gcfg.embedding_dim = self.transformer_config.get("embedding_dim", 384)
-        gcfg.num_blocks = self.transformer_config.get("num_blocks", 6)
-        vs = self.transformer_config.get("vocab_size", 256)
+        gcfg.num_heads = self.transformer_config.num_heads
+        gcfg.embedding_dim = self.transformer_config.embedding_dim
+        gcfg.num_blocks = self.transformer_config.num_blocks
+        vs = self.transformer_config.vocab_size
         gcfg.vocab_size = adjust_vocab_size(vs, self.device_config.enable_tp, self.device_config.total_devices())
-        gcfg.max_sequence_length = self.transformer_config.get("max_sequence_length", 256)
-        gcfg.dropout_prob = self.transformer_config.get("dropout_prob", 0.2)
-        # Optional runner type: accept enum or string names; fallback to defaults if absent
-        if "runner_type" in self.transformer_config:
-            gcfg.runner_type = map_runner_type(self.transformer_config["runner_type"])  # type: ignore[arg-type]
+        gcfg.max_sequence_length = self.transformer_config.max_sequence_length
+        gcfg.dropout_prob = self.transformer_config.dropout_prob
+        gcfg.runner_type = map_runner_type(self.transformer_config.runner_type)  # type: ignore[arg-type]
+
+        if self.transformer_config.weight_tying:
+            gcfg.weight_tying = (
+                ttml.models.WeightTyingType.Enabled
+                if "enabled" in self.transformer_config.weight_tying
+                else ttml.models.WeightTyingType.Disabled
+            )
+
         if self.device_config.enable_tp:
             return ttml.models.distributed.gpt2.create_gpt2_model(gcfg)
         return ttml.models.gpt2.create_gpt2_model(gcfg)
@@ -84,39 +90,42 @@ class TransformerModelFactory:
         tc = self.transformer_config
 
         # Core fields with sensible defaults
-        lcfg.num_heads = tc.get("num_heads", 6)
-        lcfg.num_groups = tc.get("num_groups", 3)
-        lcfg.embedding_dim = tc.get("embedding_dim", 384)
-        lcfg.num_blocks = tc.get("num_blocks", 6)
-        vs = tc.get("vocab_size", 256)
+        lcfg.num_heads = self.transformer_config.num_heads
+        lcfg.num_groups = self.transformer_config.num_groups
+        lcfg.embedding_dim = self.transformer_config.embedding_dim
+        lcfg.num_blocks = self.transformer_config.num_blocks
+        vs = self.transformer_config.vocab_size
         lcfg.vocab_size = adjust_vocab_size(vs, self.device_config.enable_tp, self.device_config.total_devices())
-        lcfg.max_sequence_length = tc.get("max_sequence_length", 256)
-        lcfg.dropout_prob = tc.get("dropout_prob", 0.0)
+        lcfg.max_sequence_length = self.transformer_config.max_sequence_length
+        lcfg.dropout_prob = self.transformer_config.dropout_prob
 
         # Optional fields
-        if "intermediate_dim" in tc:
-            lcfg.intermediate_dim = tc["intermediate_dim"]
-        if "theta" in tc:
-            lcfg.theta = tc["theta"]
+        if self.transformer_config.intermediate_dim:
+            lcfg.intermediate_dim = self.transformer_config.intermediate_dim
+        if self.transformer_config.theta:
+            lcfg.theta = self.transformer_config.theta
 
         # Runner type (simple mapping like GPT2)
-        rt = tc.get("runner_type", "default")
-        lcfg.runner_type = map_runner_type(rt)
+        lcfg.runner_type = map_runner_type(self.transformer_config.runner_type)
 
-        if "weight_tying" in tc:
-            lcfg.weight_tying = tc["weight_tying"]
+        if self.transformer_config.weight_tying:
+            lcfg.weight_tying = (
+                ttml.models.WeightTyingType.Enabled
+                if "enabled" in self.transformer_config.weight_tying
+                else ttml.models.WeightTyingType.Disabled
+            )
 
         # Optional RoPE scaling from nested block
-        rope = tc.get("rope_scaling")
+        rope = self.transformer_config.rope
         if rope:
-            if "scaling_factor" in rope:
-                lcfg.scaling_factor = rope["scaling_factor"]
-            if "high_freq_factor" in rope:
-                lcfg.high_freq_factor = rope["high_freq_factor"]
-            if "low_freq_factor" in rope:
-                lcfg.low_freq_factor = rope["low_freq_factor"]
-            if "original_context_length" in rope:
-                lcfg.original_context_length = rope["original_context_length"]
+            if self.transformer_config.scaling_factor:
+                lcfg.scaling_factor = self.transformer_config.scaling_factor
+            if self.transformer_config.high_freq_factor:
+                lcfg.high_freq_factor = self.transformer_config.high_freq_factor
+            if self.transformer_config.low_freq_factor:
+                lcfg.low_freq_factor = self.transformer_config.low_freq_factor
+            if self.transformer_config.original_context_length:
+                lcfg.original_context_length = self.transformer_config.original_context_length
 
         if self.device_config.enable_tp:
             return ttml.models.distributed.llama.create_llama_model(lcfg)

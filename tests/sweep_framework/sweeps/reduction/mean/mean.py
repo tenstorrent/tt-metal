@@ -119,7 +119,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    op_output_tensor = ttnn.mean(input_tensor_a, dim=dim, memory_config=output_memory_config)
+    op_output_tensor = ttnn.mean(input_tensor_a, dim=dim, keepdim=keepdim, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
     expected_pcc = 0.999
