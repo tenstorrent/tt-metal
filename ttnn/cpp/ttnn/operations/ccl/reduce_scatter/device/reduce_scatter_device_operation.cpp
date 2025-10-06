@@ -58,7 +58,7 @@ ReduceScatterDeviceOperation::spec_return_value_t ReduceScatterDeviceOperation::
     output_shape[operation_attributes.dim] /= target_ring_size;
     // For now default to tt::tt_metal::BufferType::DRAM to prevent CB overflows.
     // TODO: add L1 estimation similar to the one in all_to_all_dispatch and choose to use L1 as an intermediate buffer
-    // if enough space is available. L1 estimation has to be done outside the program cache
+    // if enough space is available #30043. L1 estimation has to be done outside the program cache
     auto mem_config = operation_attributes.memory_config;
     auto intermediate_mem_config =
         MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM);
