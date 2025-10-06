@@ -12,6 +12,7 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
@@ -330,12 +331,38 @@ Tensor FoldOperation::invoke(
     bool use_transpose_as_fold,
     const std::optional<const ttnn::Shape>& output_shape,
     uint32_t pad_c,
-    uint32_t pad_h,
-    uint32_t pad_w,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     const std::optional<CoreRangeSet>& core_grid,
     const std::optional<MemoryConfig>& override_memory_config) {
+    // Convert variant padding to individual padding values
+    // padding_n4 format: [top, bottom, left, right]
+    std::array<uint32_t, 4> padding_n4 = ttnn::operations::sliding_window::get_pair_n4_padding(padding);
+    uint32_t pad_top = padding_n4[0];
+    uint32_t pad_bottom = padding_n4[1];
+    uint32_t pad_left = padding_n4[2];
+    uint32_t pad_right = padding_n4[3];
+
+    auto apply_padding = [&](const Tensor& tensor,
+                             const std::optional<MemoryConfig>& memory_config = std::nullopt) -> Tensor {
+        if (pad_top != 0 || pad_bottom != 0 || pad_left != 0 || pad_right != 0 || pad_c != 0) {
+            ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+            padding_spec.push_back({0, 0});
+            padding_spec.push_back({pad_top, pad_bottom});
+            padding_spec.push_back({pad_left, pad_right});
+            padding_spec.push_back({pad_c, pad_c});
+
+            return ttnn::pad(tensor, padding_spec, 0.0f, true, memory_config);
+        }
+        return tensor;
+    };
+
+    // For legacy support for transpose-based fold, use symmetric padding values
+    uint32_t pad_h = pad_top;
+    uint32_t pad_w = pad_left;
     Tensor input_tensor = input_tensor_;
+    // use_transpose_as_fold approach can be removed once #29514 is solved.
     if (use_transpose_as_fold) {
+        // For transpose-based fold, extract symmetric padding values for backward compatibility
         if (input_tensor.is_sharded()) {
             if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 return fold_with_transpose_sharded_(
@@ -363,23 +390,19 @@ Tensor FoldOperation::invoke(
         auto sharded_input_tensor = input_tensor;
 
         // Apply padding if needed
-        if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
+        if (pad_top != 0 || pad_bottom != 0 || pad_left != 0 || pad_right != 0 || pad_c != 0) {
             auto input_shape = sharded_input_tensor.logical_shape();
             auto padded_shape = tt::tt_metal::Array4D(
-                {input_shape[0], input_shape[1] + 2 * pad_h, input_shape[2] + 2 * pad_w, input_shape[3] + 2 * pad_c});
+                {input_shape[0],
+                 input_shape[1] + pad_top + pad_bottom,
+                 input_shape[2] + pad_left + pad_right,
+                 input_shape[3] + 2 * pad_c});
             // Create sharded memory config for the padded tensor
             auto shard_spec = sharded_input_tensor.shard_spec().value();
             auto pad_mem_config =
                 create_sharded_memory_config(ttnn::Shape(padded_shape), shard_spec.grid, shard_spec.orientation);
 
-            // Use the SmallVector API for consistency
-            ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
-            padding_spec.push_back({0, 0});          // batch dimension
-            padding_spec.push_back({pad_h, pad_h});  // height dimension
-            padding_spec.push_back({pad_w, pad_w});  // width dimension
-            padding_spec.push_back({pad_c, pad_c});  // channel dimension
-
-            sharded_input_tensor = ttnn::pad(sharded_input_tensor, padding_spec, 0.0f, true, pad_mem_config);
+            sharded_input_tensor = apply_padding(sharded_input_tensor, pad_mem_config);
         }
         // Reshard after padding
         sharded_input_tensor = reshard_if_needed(sharded_input_tensor, stride_h, stride_w);
@@ -390,21 +413,7 @@ Tensor FoldOperation::invoke(
         auto fold_input_tensor = input_tensor;
 
         // Apply padding if needed
-        if (pad_h != 0 || pad_w != 0 || pad_c != 0) {
-            // Use the SmallVector API for consistency
-            ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
-            padding_spec.push_back({0, 0});          // batch dimension
-            padding_spec.push_back({pad_h, pad_h});  // height dimension
-            padding_spec.push_back({pad_w, pad_w});  // width dimension
-            padding_spec.push_back({pad_c, pad_c});  // channel dimension
-
-            fold_input_tensor = ttnn::pad(
-                fold_input_tensor,
-                padding_spec,
-                0.0f,
-                true,  // use_multicore=true to match working test_pad_rm behavior
-                std::nullopt);
-        }
+        fold_input_tensor = apply_padding(fold_input_tensor);
         auto batch_size = fold_input_tensor.logical_shape()[0];
         auto input_height = fold_input_tensor.logical_shape()[1];
         auto input_width = fold_input_tensor.logical_shape()[2];
@@ -423,6 +432,7 @@ Tensor FoldOperation::invoke(
         }
         return output_tensor;
     }
+    // Fallback case: use symmetric padding for primitive fold operation
     return ttnn::prim::fold(input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 
