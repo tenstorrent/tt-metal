@@ -216,10 +216,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args() const 
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
-    ct_args.push_back(0);  // num_upstream_routers - unused by default
-    ct_args.push_back(0);  // fabric_router_sync_address - unused by default
     append_default_stream_ids_to_ct_args(ct_args);
-    append_default_persistent_channel_flags_to_ct_args(ct_args);
     return ct_args;
 }
 
@@ -233,10 +230,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_compile_time_args_for_rela
     fabric_endpoint_status_address_ = fabric_router_config.edm_status_address;
 
     auto ct_args = get_fabric_mux_compile_time_main_args(fabric_router_config);
-    ct_args.push_back(0);  // num_upstream_routers - unused by default
-    ct_args.push_back(0);  // fabric_router_sync_address - unused by default
     append_default_stream_ids_to_ct_args(ct_args);
-    append_default_persistent_channel_flags_to_ct_args(ct_args);
     return ct_args;
 }
 
@@ -250,7 +244,7 @@ std::vector<uint32_t> FabricMuxConfig::get_fabric_mux_run_time_args(
 
     auto regions_to_clear = get_memory_regions_to_clear();
     const auto num_regions_to_clear = regions_to_clear.size();
-    args.reserve(num_regions_to_clear * 2 + 1);
+    args.reserve((num_regions_to_clear * 2) + 1);
     args.push_back(static_cast<uint32_t>(num_regions_to_clear));
     for (const auto& [address, size] : regions_to_clear) {
         args.push_back(static_cast<uint32_t>(address));

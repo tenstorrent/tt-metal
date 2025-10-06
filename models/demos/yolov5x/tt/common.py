@@ -43,7 +43,8 @@ class TtYOLOv5xConv2D:
         auto_shard=False,
         deallocate_activation=False,
         reshard_if_not_optimal=False,
-        enable_act_double_buffer=False,
+        enable_act_double_buffer=True,
+        enable_weights_double_buffer=False,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -60,6 +61,7 @@ class TtYOLOv5xConv2D:
         self.deallocate_activation = deallocate_activation
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.auto_shard = auto_shard
+        self.enable_weights_double_buffer = enable_weights_double_buffer
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
@@ -83,12 +85,13 @@ class TtYOLOv5xConv2D:
             activation=activation,
             output_layout=ttnn.TILE_LAYOUT,
             enable_act_double_buffer=self.enable_act_double_buffer,
+            enable_weights_double_buffer=self.enable_weights_double_buffer,
         )
+
         if auto_shard:
             self.conv_config.shard_layout = None
 
-        config_override = None
-        config_override = {"act_block_h": 64} if conv.in_channels == 3 or conv.in_channels == 6 else None
+        config_override = {"act_block_h": 64} if conv.in_channels == 3 or conv.in_channels == 6 else config_override
         if config_override and "act_block_h" in config_override:
             self.conv_config.act_block_h_override = config_override["act_block_h"]
 
@@ -133,6 +136,8 @@ class TtYOLOv5xConv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=ttnn.bfloat8_b,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         return x
 
@@ -155,6 +160,7 @@ class TtnnBottleneck:
             parameters.cv1.conv,
             self.conv_pt.cv1.conv,
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            shard_layout=shard_layout,
         )
 
         self.cv2 = TtYOLOv5xConv2D(

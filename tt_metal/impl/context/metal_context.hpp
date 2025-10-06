@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/allocator_types.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <llrt/hal.hpp>
 #include <llrt/rtoptions.hpp>
@@ -19,6 +18,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/debug/dprint_server.hpp>
 #include <impl/debug/watcher_server.hpp>
+#include <impl/allocator/allocator_types.hpp>
 
 #include <array>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -91,6 +91,7 @@ public:
     tt_fabric::FabricConfig get_fabric_config() const;
 
     distributed::multihost::DistributedContext& global_distributed_context();
+    std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
 
     // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
