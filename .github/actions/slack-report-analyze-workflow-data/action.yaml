@@ -42,6 +42,12 @@ runs:
               )
             else "<!subteam^S0985AN7TC5|metal infra team>" end;
 
+          def origOwnerNote(item):
+            # If we forced infra due to missing test and have original owner names, include them as plain text
+            if (item.original_owner_names_for_generic_exit | type) == "array" and (item.original_owner_names_for_generic_exit | length) > 0 then
+              " (error owner unclear. original owners: " + (item.original_owner_names_for_generic_exit | join(", ")) + ")"
+            else "" end;
+
           if (type=="array" and length==0) then
             "✅ No new regressions."
           elif (type=="array") then
@@ -50,7 +56,7 @@ runs:
               + (if .workflow_url then " — <" + .workflow_url + "|workflow>" else "" end)
               + (if .run_url then " — <" + .run_url + "|run>" else "" end)
               + (if .commit_url and .commit_short then " — <" + .commit_url + "|" + .commit_short + ">" else "" end)
-              + " " + mentionOwners(.owners)
+              + " " + mentionOwners(.owners) + origOwnerNote(.)
             ) | join("\n"))
           else
             "Malformed regressions payload"

@@ -1236,6 +1236,8 @@ async function run() {
           errorSnippetsCache.set(latestFail.id, errs); // cache the error snippets for reuse
           // Infer job/test and resolve owners per snippet, then aggregate
           const ownerSet = new Map();
+          const genericExitOrigOwners = new Map(); // key by name to dedupe
+          const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(String(s).trim());
           for (const sn of (errs || [])) {
             const inferred = inferJobAndTestFromSnippet(sn);
             if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
@@ -1247,8 +1249,18 @@ async function run() {
                 ownerSet.set(k, o);
               }
             }
+            // Capture original pipeline owners for generic-exit + infra override case (names only, never mentions)
+            if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && isGenericExit(sn.snippet) && Array.isArray(sn.original_owners)) {
+              for (const oo of sn.original_owners) {
+                const nm = (oo && (oo.name || oo.id)) || '';
+                if (nm) genericExitOrigOwners.set(nm, true);
+              }
+            }
           }
           owners = Array.from(ownerSet.values());
+          // Build optional note for original owners (names only)
+          const origNames = Array.from(genericExitOrigOwners.keys());
+          var originalOwnersNote = origNames.length ? ` (pipeline owner: ${origNames.join(', ')})` : '';
         } catch (_) { /* ignore */ }
         // Fallback: try to resolve owners from the workflow name
         if (!owners || owners.length === 0) {
@@ -1258,10 +1270,10 @@ async function run() {
         const ownerNamesText = (() => {
           const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
           const names = arr.map(o => (o && (o.name || o.id)) ? (o.name || o.id) : '').filter(Boolean);
-          return names.length ? names.join(', ') : (DEFAULT_INFRA_OWNER.name);
+          return (names.length ? names.join(', ') : (DEFAULT_INFRA_OWNER.name)) + (typeof originalOwnersNote === 'string' ? originalOwnersNote : '');
         })();
-        const fallbackMention = `<@${DEFAULT_INFRA_OWNER.id}>`;
-        const ownerMentions = alertAll ? (mention(owners) || fallbackMention) : ownerNamesText; // conditionally ping owners only if alertAll is true
+        const fallbackMention = `<!subteam^${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}>`;
+        const ownerMentions = alertAll ? ((mention(owners) || fallbackMention) + (typeof originalOwnersNote === 'string' ? originalOwnersNote : '')) : ownerNamesText; // conditionally ping owners only if alertAll is true
         const wfUrl = getWorkflowLink(github.context, runs[0]?.path); // get the workflow url link for the pipeline run (can use any run to get the workflow link)
         failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}`.trim()); // the run is failing because if it wasn't the for loop would have continued earlier
       }
@@ -1383,6 +1395,8 @@ async function run() {
             }
             // Aggregate owners across snippets for this regression item
             const ownerSet = new Map();
+            const genericExitOrigOwners = new Map();
+            const isGenericExit = (s) => typeof s === 'string' && /^Process completed with exit code 1\.?$/i.test(String(s).trim());
             for (const sn of (item.error_snippets || [])) {
               if (Array.isArray(sn.owner)) {
                 for (const o of sn.owner) {
@@ -1391,12 +1405,19 @@ async function run() {
                   ownerSet.set(k, o);
                 }
               }
+              if (sn.owner_source && String(sn.owner_source).startsWith('infra_due_to_missing_test') && isGenericExit(sn.snippet) && Array.isArray(sn.original_owners)) {
+                for (const oo of sn.original_owners) {
+                  const nm = (oo && (oo.name || oo.id)) || '';
+                  if (nm) genericExitOrigOwners.set(nm, true);
+                }
+              }
             }
             let owners = Array.from(ownerSet.values());
             if (!owners.length) {
               owners = findOwnerForLabel(item.name) || [DEFAULT_INFRA_OWNER];
             }
             item.owners = owners;
+            item.original_owner_names_for_generic_exit = Array.from(genericExitOrigOwners.keys());
           } catch (_) { /* ignore */ }
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
