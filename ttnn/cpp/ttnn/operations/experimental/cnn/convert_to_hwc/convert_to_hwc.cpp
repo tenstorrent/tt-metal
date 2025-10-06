@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "convert_to_hwc.hpp"
-
 #include "device/convert_to_hwc_op.hpp"
 
 namespace ttnn::operations::experimental::cnn {
@@ -16,14 +15,21 @@ static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Ten
         input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
         "Input tensor must be width sharded");
 
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto C = input_shape[-2];
-
+    // const auto& input_shape = input_tensor.logical_shape();
     const auto& input_shard_spec = input_memory_config.shard_spec().value();
+    const auto input_shard_height = input_shard_spec.shape[0];
     const auto input_shard_width = input_shard_spec.shape[1];
-    const auto output_shard_height = input_shard_width;  // HW dimension per core stays the same
 
-    const std::array<uint32_t, 2> output_shard_shape = {output_shard_height, C};
+    const auto output_shard_height = input_shard_width;                   // HW dimension per core stays the same
+    const auto output_shard_width = tt::round_up(input_shard_height, 8);  // deduce rounding from element size
+
+    const std::array<uint32_t, 2> output_shard_shape = {output_shard_height, output_shard_width};
+    log_info(
+        tt::LogType::LogAlways,
+        "input_shard_shape={}, output_shard_shape={}",
+        input_shard_spec.shape,
+        output_shard_shape);
+
     auto output_shard_spec =
         tt::tt_metal::ShardSpec(input_shard_spec.grid, output_shard_shape, input_shard_spec.orientation);
 

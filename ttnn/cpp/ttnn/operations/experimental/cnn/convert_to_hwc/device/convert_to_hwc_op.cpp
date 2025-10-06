@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "convert_to_hwc_op.hpp"
-
 #include "convert_to_hwc_program_factory.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <cmath>
 
 namespace ttnn::operations::experimental::cnn {
 
@@ -37,11 +37,15 @@ void ConvertToHWC::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> ConvertToHWC::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& shape = input_tensors.at(0).logical_shape();
-    const auto B = shape[0];
-    const auto C = shape[2];
-    const auto HW = shape[3];
+    const int B = shape[0];
+    const int C = shape[2];
+    const int HW = shape[3];
+
+    // Output needs to be multiple of 8 since this is what conv expects (also to guarantee aligned copies)
+    const auto output_channels = tt::round_up(C, 8);  // TODO: Get this from the dtype
+
     return {TensorSpec(
-        Shape({B, 1, HW, C}),
+        Shape({B, 1, HW, output_channels}),
         tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR), memory_config))};
 }
 

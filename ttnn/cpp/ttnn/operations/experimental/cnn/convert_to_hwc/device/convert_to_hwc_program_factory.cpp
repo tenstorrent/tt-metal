@@ -18,14 +18,15 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
 
     // If we are pulling from DRAM we infer the shard shape by using the output shard spec
     const bool is_input_in_dram = a.buffer()->core_type() == CoreType::DRAM;
-    const uint32_t input_shard_height = is_input_in_dram ? output.shard_spec()->shape[1] : a.shard_spec()->shape[0];
+
+    const uint32_t input_shard_height = is_input_in_dram ? a.logical_shape()[-2] : a.shard_spec()->shape[0];
     const uint32_t input_shard_width = is_input_in_dram ? output.shard_spec()->shape[0] : a.shard_spec()->shape[1];
     const CoreRangeSet input_core_grid = is_input_in_dram ? output.shard_spec()->grid : a.shard_spec()->grid;
     const std::vector<CoreCoord> input_cores = corerange_to_cores(
         input_core_grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
     TT_FATAL(input_shard_height <= TILE_HEIGHT, "Shard height must be 32 or smaller");
-    TT_FATAL(input_shard_height % 8 == 0, "Shard height must be mutliple of 8");
+    // TT_FATAL(input_shard_height % 8 == 0, "Shard height must be mutliple of 8");
     TT_FATAL(input_shard_width % TILE_WIDTH == 0, "Shard width must be multiple of tile width");
 
     const auto create_circular_buffer = [&program, &input_core_grid](
@@ -80,6 +81,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
     const uint32_t total_tiles_writer1 = total_tiles_per_core - total_tiles_writer0;
     uint32_t output_stride_sticks = TILE_WIDTH;  // needed to stride output address when doing split writers
 
+    const uint32_t output_shard_height = output.shard_spec()->shape[0];
+    const uint32_t output_shard_width = output.shard_spec()->shape[1];
+
     const auto dram_input_cores = corerange_to_cores(
         a.shard_spec()->grid, std::nullopt, a.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     const auto remote_core_type = a.buffer()->core_type();
@@ -104,8 +108,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_id,
         cb_in_transpose_id0,
         cb_out_id,
-        input_shard_height,
-        input_shard_width,
+        output_shard_width,
+        output_shard_height,
         total_tiles_writer0,
         output_stride_sticks,
         0,
@@ -120,8 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_id,
         cb_in_transpose_id1,
         cb_out_id,
-        input_shard_height,
-        input_shard_width,
+        output_shard_width,
+        output_shard_height,
         total_tiles_writer1,
         output_stride_sticks,
         output_stride_sticks,
