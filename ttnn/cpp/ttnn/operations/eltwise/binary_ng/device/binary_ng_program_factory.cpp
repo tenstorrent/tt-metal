@@ -133,7 +133,6 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 
 class ShardShapeGenerator {
     CoreCoord end_core;
-    CoreCoord last_data_core;  // Last core that actually contains data
     bool row_major{};
     TensorMemoryLayout memory_layout{TensorMemoryLayout::INTERLEAVED};
     std::array<uint32_t, 2> shard_shape{};
@@ -166,23 +165,10 @@ public:
             shard_shape[0] - (tt::round_up(unrolled_Ht, shard_shape[0]) - unrolled_Ht),
             shard_shape[1] - (tt::round_up(Wt, shard_shape[1]) - Wt),
         };
-
-        // For BLOCK_SHARDED, calculate the last core that actually contains data
-        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            auto grid_start = shard_spec.grid.ranges().begin()->start_coord;
-            uint32_t num_shards_height = tt::div_up(unrolled_Ht, shard_shape[0]);
-            uint32_t num_shards_width = tt::div_up(Wt, shard_shape[1]);
-            last_data_core = row_major
-                                 ? CoreCoord(grid_start.x + num_shards_width - 1, grid_start.y + num_shards_height - 1)
-                                 : CoreCoord(grid_start.x + num_shards_height - 1, grid_start.y + num_shards_width - 1);
-        } else {
-            last_data_core = end_core;
-        }
     }
     std::array<uint32_t, 2> operator()(CoreCoord core) const {
         const unsigned majorDim = row_major ? 1 : 0;
         const unsigned minorDim = row_major ? 0 : 1;
-
         auto current_shape = shard_shape;
         if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             if (core == end_core) {
@@ -190,20 +176,19 @@ public:
                 current_shape[minorDim] = last_shard_shape[minorDim];
             }
         } else if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            // For BLOCK_SHARDED, edges can have uneven shards, not just the end_core
-            // Use last_data_core instead of end_core to avoid considering empty cores
+            // For BLOCK_SHARDED, edges can have uneven shards
             if (row_major) {
-                if (core.x == last_data_core.x) {
+                if (core.x == end_core.x) {
                     current_shape[1] = last_shard_shape[1];  // width
                 }
-                if (core.y == last_data_core.y) {
+                if (core.y == end_core.y) {
                     current_shape[0] = last_shard_shape[0];  // height
                 }
             } else {  // col_major
-                if (core.y == last_data_core.y) {
+                if (core.y == end_core.y) {
                     current_shape[1] = last_shard_shape[1];  // width
                 }
-                if (core.x == last_data_core.x) {
+                if (core.x == end_core.x) {
                     current_shape[0] = last_shard_shape[0];  // height
                 }
             }
@@ -211,6 +196,17 @@ public:
         return current_shape;
     }
 };
+
+inline auto is_uneven(const Tensor& t) {
+    if (not t.is_sharded()) {
+        return false;
+    }
+
+    const auto& shape = t.padded_shape();
+    const auto& shard = t.shard_spec()->shape;
+
+    return (shape[-4] * shape[-3] * shape[-2] % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
 
 bool is_native_L1_sharding(
     const BinaryNgDeviceOperation::tensor_args_t& tensor_args,
@@ -226,6 +222,9 @@ bool is_native_L1_sharding(
 
     // a and b identical shape, no broadcast on any dimension
     if (b.has_value() && a.logical_shape() == b->logical_shape()) {
+        if (is_uneven(a) || is_uneven(*b) || is_uneven(c)) {
+            return false;
+        }
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
             return true;
         }
@@ -365,10 +364,10 @@ void set_or_update_runtime_arguments(
         uint32_t c_current_shard_width = 0;
         if (has_sharding) {
             auto c_shard_shape = c_shard_shape_generator(core);
-            c_num_tiles = c_shard_shape[0] * c_shard_shape[1];
-            c_current_shard_width = c_shard_shape[1];
+            c_num_tiles = c_shard_shape[0] * c_shard_shape[1];  // actual
+            c_current_shard_width = c_shard_shape[1];           // actual
             auto a_shard_shape = a_shard_shape_generator(core);
-            a_num_tiles = a_shard_shape[0] * a_shard_shape[1];
+            a_num_tiles = a_shard_shape[0] * a_shard_shape[1];  // actual
             if (is_native_L1_sharding(tensor_args, c, operation_attributes)) {
                 c_start_id =
                     (i / num_shards_per_width) * (c_shard_height * cWt) + (i % num_shards_per_width) * c_shard_width;
@@ -393,7 +392,7 @@ void set_or_update_runtime_arguments(
         if (b.has_value()) {
             if (has_sharding) {
                 auto b_shard_shape = b_shard_shape_generator(core);
-                b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
+                b_num_tiles = b_shard_shape[0] * b_shard_shape[1];  // actual
             }
             std::array writer_runtime_args = {
                 c.buffer()->address(), c_start_id, c_num_tiles, c_current_shard_width, cD, cN, cC, cHt, cWt, cND};
@@ -718,7 +717,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         program,
         all_device_cores,
         c_single_tile_size,
-        c_sharded ? c_num_tiles_per_shard : 2,
+        (c_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes))
+            ? c_num_tiles_per_shard
+            : 2,
         c_data_format,
         (c_sharded && CMAKE_UNIQUE_NAMESPACE::is_native_L1_sharding(tensor_args, c, operation_attributes)) ? c_buffer
                                                                                                            : nullptr);
