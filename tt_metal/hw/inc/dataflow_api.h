@@ -2364,21 +2364,33 @@ struct noc_traits_t;
 
 class Noc {
 private:
+    template <typename Src, typename SrcArgs>
+    uint64_t get_noc_src_addr(const Src& src, const SrcArgs& args) const {
+        return uint64_t{noc_traits_t<Src>::template get_src_addr<false>(src, *this, args)};
+    }
+
+    template <typename Dst, typename DstArgs>
+    uint64_t get_noc_dst_addr(const Dst& dst, const DstArgs& args) const {
+        return uint64_t{noc_traits_t<Dst>::template get_dst_addr<false>(dst, *this, args)};
+    }
+
+    template <typename Src, typename SrcArgs>
+    uint32_t get_local_l1_src_addr(const Src& src, const SrcArgs& args) const {
+        return uint32_t{noc_traits_t<Src>::template get_src_addr<true>(src, *this, args)};
+    }
+    template <typename Dst, typename DstArgs>
+    uint32_t get_local_l1_dst_addr(const Dst& dst, const DstArgs& args) const {
+        return uint32_t{noc_traits_t<Dst>::template get_dst_addr<true>(dst, *this, args)};
+    }
+
+public:
     template <typename T>
     using src_args_t = typename noc_traits_t<T>::src_args_type;
     template <typename T>
     using dst_args_t = typename noc_traits_t<T>::dst_args_type;
+    template <typename T>
+    using shard_args_t = typename noc_traits_t<T>::shard_args_type;
 
-    template <typename Src>
-    auto get_src_ptr(const Src& src, const src_args_t<Src>& src_args) const {
-        return noc_traits_t<Src>::src_addr(src, *this, src_args);
-    }
-    template <typename Dst>
-    auto get_dst_ptr(const Dst& dst, const dst_args_t<Dst>& dst_args) const {
-        return noc_traits_t<Dst>::dst_addr(dst, *this, dst_args);
-    }
-
-public:
     explicit Noc(uint8_t noc_id) : noc_id_(noc_id) {}
 
     uint8_t get_noc_id() const { return noc_id_; }
@@ -2387,16 +2399,18 @@ public:
         typename Src,
         typename Dst,
         uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1,
-        bool enable_noc_tracing = true>
+        bool enable_noc_tracing = true,
+        typename SrcArgs = src_args_t<Src>,
+        typename DstArgs = dst_args_t<Dst>>
     void async_read(
         const Src& src,
         const Dst& dst,
         uint32_t size_bytes,
-        const src_args_t<Src>& src_args,
-        const dst_args_t<Dst>& dst_args,
+        const SrcArgs& src_args,
+        const DstArgs& dst_args,
         uint32_t read_req_vc = NOC_UNICAST_WRITE_VC) const {
-        uint64_t src_noc_addr{get_src_ptr(src, src_args)};
-        uint32_t dst_local_l1_addr{get_dst_ptr(dst, dst_args)};
+        uint64_t src_noc_addr{get_noc_src_addr(src, src_args)};
+        uint32_t dst_local_l1_addr{get_local_l1_dst_addr(dst, dst_args)};
         noc_async_read<max_page_size, enable_noc_tracing>(src_noc_addr, dst_local_l1_addr, size_bytes, noc_id_, read_req_vc);
     }
 
@@ -2412,9 +2426,32 @@ public:
         const src_args_t<Src>& src_args,
         const dst_args_t<Dst>& dst_args,
         uint32_t vc = NOC_UNICAST_WRITE_VC) const {
-        uint32_t src_local_l1_addr{get_src_ptr(src, src_args)};
-        uint64_t dst_noc_addr{get_dst_ptr(dst, dst_args)};
+        uint32_t src_local_l1_addr{get_local_l1_src_addr(src, src_args)};
+        uint64_t dst_noc_addr{get_noc_dst_addr(dst, dst_args)};
         noc_async_write<max_page_size, enable_noc_tracing>(src_local_l1_addr, dst_noc_addr, size_bytes, noc_id_, vc);
+    }
+
+    // async_read_shard and async_write_shard are almost identical to async_read and async_write,
+    // except that it infers the transfer size from TensorAccessor.
+    // (Could also spell out Src == TensorAccessor<DSpecT>.)
+    template <typename Src, typename Dst, typename DstArgs>
+    void async_read_shard(
+        const Src& src, const Dst& dst, shard_args_t<Src> src_shard_args, const DstArgs& dst_args) const {
+        uint64_t src_noc_addr{get_noc_src_addr(src, src_shard_args)};
+        uint32_t dst_local_l1_addr{get_local_l1_dst_addr(dst, dst_args)};
+        uint32_t size_bytes = src.page_size * src.dspec().shard_volume();
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size_bytes, -1);
+        noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(src_noc_addr, dst_local_l1_addr, size_bytes, noc_id_);
+    }
+
+    template <typename Src, typename Dst, typename SrcArgs = src_args_t<Src>>
+    void async_write_shard(
+        const Src& src, const Dst& dst, const SrcArgs& src_args, shard_args_t<Dst> dst_shard_args) const {
+        uint32_t src_local_l1_addr{get_local_l1_src_addr(src, src_args)};
+        uint64_t dst_noc_addr{get_noc_dst_addr(dst, dst_shard_args)};
+        uint32_t size_bytes = dst.page_size * dst.dspec().shard_volume();
+        RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size_bytes, NOC_UNICAST_WRITE_VC);
+        noc_async_write<NOC_MAX_BURST_SIZE + 1, false>(src_local_l1_addr, dst_noc_addr, size_bytes, noc_id_);
     }
 
     void async_read_barrier() const { noc_async_read_barrier(noc_id_); }
@@ -2468,12 +2505,21 @@ template <>
 struct noc_traits_t<CircularBuffer> {
     struct src_args_type {};
     struct dst_args_type {};
-    static auto src_addr(const CircularBuffer& src, const Noc&, const src_args_type&) { return src.get_read_ptr(); }
-    static auto dst_addr(const CircularBuffer& dst, const Noc&, const dst_args_type&) { return dst.get_write_ptr(); }
+    template <bool is_l1_address>
+    static auto get_src_addr(const CircularBuffer& src, const Noc&, const src_args_type&) {
+        static_assert(is_l1_address, "CircularBuffer can only be used as L1 source");
+        return src.get_read_ptr();
+    }
+    template <bool is_l1_address>
+    static auto get_dst_addr(const CircularBuffer& dst, const Noc&, const dst_args_type&) {
+        static_assert(is_l1_address, "CircularBuffer can only be used as L1 destination");
+        return dst.get_write_ptr();
+    }
 };
 
 template <typename DSpecT>
 struct noc_traits_t<TensorAccessor<DSpecT>> {
+    using AddrGen = TensorAccessor<DSpecT>;
     struct src_args_type {
         uint32_t page_id{};
         uint32_t offset_bytes = 0;
@@ -2482,11 +2528,53 @@ struct noc_traits_t<TensorAccessor<DSpecT>> {
         uint32_t page_id{};
         uint32_t offset_bytes = 0;
     };
-    static auto src_addr(const TensorAccessor<DSpecT>& src, const Noc& noc, const src_args_type& args) {
-        return src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+    // This is currently a draft.  Could split shard_args_type into shard_src/shard_dst types similar to above.
+    struct shard_args_type {
+        uint32_t shard_id{};
+        uint32_t offset_bytes = 0;
+    };
+    template <bool is_l1_address = true>
+    static auto get_src_addr(const AddrGen& src, const Noc& noc, const src_args_type& args) {
+        uint64_t noc_addr{src.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id())};
+        if constexpr (is_l1_address) {
+            ASSERT(src.is_local_addr(noc_addr));
+            return static_cast<uint32_t>(noc_addr);
+        } else {
+            return noc_addr;
+        }
     }
-    static auto dst_addr(const TensorAccessor<DSpecT>& dst, const Noc& noc, const dst_args_type& args) {
-        return dst.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id());
+    template <bool is_l1_address = true>
+    static auto get_dst_addr(const AddrGen& dst, const Noc& noc, const dst_args_type& args) {
+        uint64_t noc_addr{dst.get_noc_addr(args.page_id, args.offset_bytes, noc.get_noc_id())};
+        if constexpr (is_l1_address) {
+            ASSERT(dst.is_local_addr(noc_addr));
+            return static_cast<uint32_t>(noc_addr);
+        } else {
+            return noc_addr;
+        }
+    }
+    template <bool is_l1_address = true>
+    static auto get_src_addr(const AddrGen& src, const Noc& noc, const shard_args_type& args) {
+        uint64_t noc_addr{src.get_shard_noc_addr(args.shard_id, args.offset_bytes, noc.get_noc_id())};
+        if constexpr (is_l1_address) {
+            ASSERT(src.is_local_shard(args.shard_id));
+            ASSERT(src.is_local_addr(noc_addr));
+            return static_cast<uint32_t>(noc_addr);
+        } else {
+            return noc_addr;
+        }
+    }
+    template <bool is_l1_address = true>
+    static auto get_dst_addr(const AddrGen& dst, const Noc& noc, const shard_args_type& args) {
+        // same as get_src_addr
+        uint64_t noc_addr{dst.get_shard_noc_addr(args.shard_id, args.offset_bytes, noc.get_noc_id())};
+        if constexpr (is_l1_address) {
+            ASSERT(dst.is_local_shard(args.shard_id));
+            ASSERT(dst.is_local_addr(noc_addr));
+            return static_cast<uint32_t>(noc_addr);
+        } else {
+            return noc_addr;
+        }
     }
 };
 

@@ -25,23 +25,30 @@ void kernel_main() {
     auto tensor_accessor_src = TensorAccessor(args_src, input_base_address, page_size);
     auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address, page_size);
 
+    experimental::Noc noc(noc_index);
+
     for (uint32_t i = 0; i < num_shards; ++i) {
         uint32_t shard_id = first_shard_id + i * num_cores;
-        auto noc_addr_src = tensor_accessor_src.get_shard_noc_addr(shard_id);
-        auto noc_addr_dst = tensor_accessor_dst.get_shard_noc_addr(shard_id);
-
-        ASSERT(tensor_accessor_src.is_local_shard(shard_id));
-        ASSERT(tensor_accessor_dst.is_local_shard(shard_id));
-        ASSERT(tensor_accessor_src.is_local_addr(noc_addr_src));
-        ASSERT(tensor_accessor_dst.is_local_addr(noc_addr_dst));
 
         // For the purpose of tesing, every second shard is read, and every other is written.
         if (i % 2 == 0) {
-            noc_async_read_shard(shard_id, tensor_accessor_src, noc_addr_dst);
-            noc_async_read_barrier();
+            noc.async_read_shard(
+                tensor_accessor_src,
+                tensor_accessor_dst,
+                {shard_id},
+                // Use experimental::Noc::dst_args_t here will use get_noc_addr() instead
+                // of get_shard_noc_addr() for dst.
+                // The syntax seems a bit cumbersome.  Thoughts?
+                // (Also, must specify type for this arg to avoid confusion)
+                experimental::Noc::shard_args_t<decltype(tensor_accessor_dst)>{shard_id});
+            noc.async_read_barrier();
         } else {
-            noc_async_write_shard(shard_id, tensor_accessor_dst, noc_addr_src);
-            noc_async_write_barrier();
+            noc.async_write_shard(
+                tensor_accessor_src,
+                tensor_accessor_dst,
+                experimental::Noc::shard_args_t<decltype(tensor_accessor_src)>{shard_id},
+                {shard_id});
+            noc.async_write_barrier();
         }
     }
 }
