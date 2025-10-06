@@ -123,7 +123,7 @@ void kernel_main() {
                     out_read_ptr += input_tile_size;
                 }
             }
-            noc_async_write_barrier();
+            noc_async_writes_flushed();
 #endif
 
             cb_pop_front(cb_id_out, out_block_num_tiles);
