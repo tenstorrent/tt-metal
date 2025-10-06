@@ -430,25 +430,6 @@ function renderCommitsTable(commits) {
   ].join('\n');
 }
 
-// I'm keeping this because it's still useful for debugging
-// function renderRawCommitUrlsTable(commits) {
-//   if (!Array.isArray(commits) || commits.length === 0) {
-//     return '_None_';
-//   }
-//   const rows = commits.map(c => {
-//     const url = c.url || (c.sha ? `https://github.com/${github.context.repo.owner}/${github.context.repo.repo}/commit/${c.sha}` : '');
-//     // Wrap the URL in backticks to avoid GitHub auto-shortening to repo@shortSHA
-//     // This renders the full raw URL text without hyperlinking
-//     return `| \`${url}\` |`;
-//   }).join('\n');
-//   return [
-//     '| URL |',
-//     '|-----|',
-//     rows,
-//     ''
-//   ].join('\n');
-// }
-
 /**
  * Fetches PR information associated with a commit.
  *
