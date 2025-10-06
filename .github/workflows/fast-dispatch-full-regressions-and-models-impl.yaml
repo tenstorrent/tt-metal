@@ -69,7 +69,6 @@ jobs:
             {"model":"vovnet"},
             {"model":"ufld_v2"},
             {"model":"yolov12x"},
-            {"model":"gemma-3-4b-it"},
             {"model":"ttt-mistral-7B-v0.3"},
             {"model":"stable_diffusion_xl_base","timeout":45},
             {"model":"stable_diffusion","timeout":45}
@@ -79,6 +78,7 @@ jobs:
           STABLE_CIv2='[
             {"model":"yolov8s"},
             {"model":"vadv2"}
+            {"model":"gemma-3-4b-it"},
           ]'
 
           # Unstable set (explicit commands)
