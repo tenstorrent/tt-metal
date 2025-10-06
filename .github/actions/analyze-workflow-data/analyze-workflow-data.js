@@ -197,6 +197,79 @@ function findOwnerForLabel(label) {
 
 // START OF CODE FOR ERROR HANDLING
 
+// Helper: infer job/test from a snippet's existing fields, label, and message
+function inferJobAndTestFromSnippet(snippet) {
+  try {
+    const rawLabel = (snippet && snippet.label) ? String(snippet.label) : '';
+    const rawSnippet = (snippet && snippet.snippet) ? String(snippet.snippet) : '';
+    let jobName = (snippet && typeof snippet.job === 'string') ? snippet.job : '';
+    let testName = (snippet && typeof snippet.test === 'string') ? snippet.test : '';
+
+    // 1) Parse from label when needed
+    if (!jobName || !testName) {
+      if (rawLabel && rawLabel.includes(':')) {
+        const idx = rawLabel.indexOf(':');
+        const left = rawLabel.slice(0, idx).trim();
+        const right = rawLabel.slice(idx + 1).trim();
+        if (!jobName) jobName = left;
+        if (!testName && right) testName = right.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
+      }
+    }
+
+    // 2) Fallback heuristics based on snippet body
+    if (!testName) {
+      const trimmed = rawSnippet.replace(/^\s+/, '');
+      const generic = /(lost\s+connection|timeout|timed\s*out|connection\s+reset|network\s+is\s+unreachable|no\s+space\s+left|killed\s+by|out\s+of\s+memory)/i;
+      const ib = trimmed.indexOf('[');
+      const ispace = trimmed.indexOf(' ');
+      const endWord = (ispace === -1 && ib === -1) ? trimmed.length : Math.min(...[ispace, ib].filter(v => v !== -1));
+      const firstToken = trimmed.slice(0, Math.max(0, endWord)).trim();
+      if (generic.test(trimmed)) testName = 'NA';
+      else if (firstToken && /test/i.test(firstToken)) testName = firstToken;
+      else if (ib !== -1) testName = trimmed.slice(0, ib).trim() || 'NA';
+      else testName = 'NA';
+    }
+
+    // 3) Final fallback for job from label
+    if (!jobName) jobName = rawLabel || '';
+    return { job: jobName.replace(/\s*\[[^\]]+\]\s*$/, ''), test: testName };
+  } catch (_) {
+    return { job: (snippet && snippet.job) || '', test: (snippet && snippet.test) || 'NA' };
+  }
+}
+
+// Helper: resolve owners for a snippet after test has been inferred
+function resolveOwnersForSnippet(snippet, workflowName) {
+  try {
+    // Do not set owners here if already present; we recompute from mapping
+    const label = (snippet && snippet.label) ? String(snippet.label) : '';
+    const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
+    const cleaned = stripBracketSuffix(label || '');
+    let ownersArr = findOwnerForLabel(cleaned) || findOwnerForLabel(label || '') || [];
+    // Normalize and dedupe
+    const normalized = [];
+    const seenOwners = new Set();
+    for (const o of (ownersArr || [])) {
+      if (!o) continue;
+      const id = o.id || undefined;
+      const name = o.name || undefined;
+      const k = `${id || ''}|${name || ''}`;
+      if (seenOwners.has(k)) continue;
+      seenOwners.add(k);
+      normalized.push({ id, name });
+    }
+    // Apply infra policy: if no owners or test missing/NA, infra is sole owner
+    const testName = (snippet && snippet.test) ? snippet.test : 'NA';
+    if (!normalized.length || !testName || testName === 'NA') {
+      snippet.owner = [DEFAULT_INFRA_OWNER];
+    } else {
+      snippet.owner = normalized;
+    }
+  } catch (_) {
+    snippet.owner = [DEFAULT_INFRA_OWNER];
+  }
+}
+
 function renderErrorsTable(errorSnippets) {
   if (!Array.isArray(errorSnippets) || errorSnippets.length === 0) {
     return '<p><em>No error info found</em></p>';
@@ -205,60 +278,12 @@ function renderErrorsTable(errorSnippets) {
   const rows = errorSnippets.map(obj => {
     const rawLabel = (obj && obj.label) ? String(obj.label) : '';
     const rawSnippet = (obj && obj.snippet) ? String(obj.snippet) : '';
-    let errorForDisplay = rawSnippet;
-
-    // --- RESTRUCTURED PARSING LOGIC ---
-    // 1. Start with explicitly provided job/test names (from gtest logs)
+    // Rendering-only: rely on precomputed job/test/owner; do minimal fallbacks for display
     let jobName = (obj && typeof obj.job === 'string') ? obj.job : '';
     let testName = (obj && typeof obj.test === 'string') ? obj.test : '';
-
-    // 2. If job/test names are missing, try parsing from the label (for annotations)
-    if (!jobName || !testName) {
-      if (rawLabel && rawLabel.includes(':')) {
-        const idx = rawLabel.indexOf(':');
-        const left = rawLabel.slice(0, idx).trim();
-        const right = rawLabel.slice(idx + 1).trim();
-        if (!jobName) {
-          jobName = left;
-        }
-        if (!testName && right) {
-          // Clean up the test name by removing status indicators like [failure]
-          testName = right.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
-        }
-      }
-    }
-
-    // 3. FALLBACK: If testName is *still* not found, try to infer it from the snippet.
-    // This block is now correctly scoped to only run when truly necessary.
-    if (!testName) {
-      const trimmed = rawSnippet.replace(/^\s+/, '');
-      const generic = /(lost\s+connection|timeout|timed\s*out|connection\s+reset|network\s+is\s+unreachable|no\s+space\s+left|killed\s+by|out\s+of\s+memory)/i;
-      const ib = trimmed.indexOf('[');
-      const ispace = trimmed.indexOf(' ');
-      const endWord = (ispace === -1 && ib === -1) ? trimmed.length : Math.min(...[ispace, ib].filter(v => v !== -1));
-      const firstToken = trimmed.slice(0, Math.max(0, endWord)).trim();
-
-      if (generic.test(trimmed)) {
-        testName = 'NA';
-        errorForDisplay = rawSnippet;
-      } else if (firstToken && /test/i.test(firstToken)) {
-        testName = firstToken;
-        errorForDisplay = trimmed.slice(endWord).trim() || rawSnippet;
-      } else if (ib !== -1) {
-        const upto = trimmed.slice(0, ib).trim();
-        testName = upto || 'NA';
-        errorForDisplay = trimmed.slice(ib).trim();
-      } else {
-        testName = 'NA';
-        errorForDisplay = rawSnippet;
-      }
-    }
-
-    // 4. Final fallback for jobName if it's still empty
-    if (!jobName) {
-      jobName = rawLabel || '';
-    }
-    // --- END OF RESTRUCTURED LOGIC ---
+    if (!jobName) jobName = rawLabel || '';
+    if (!testName) testName = 'NA';
+    const errorForDisplay = rawSnippet;
 
     // Aesthetics: drop trailing bracketed status like [failure] or [error]
     jobName = jobName.replace(/\s*\[[^\]]+\]\s*$/, '');
@@ -300,18 +325,8 @@ function renderErrorsTable(errorSnippets) {
     const testEsc = escapeHtml(testName).replace(/\r?\n/g, ' ⇥ ');
     const snippetOneLine = escapeHtml(errorForDisplay || '').replace(/\r?\n/g, ' ⇥ ');
     let ownerDisplay = 'no owner found';
-    let ownersList = [];
     if (obj && Array.isArray(obj.owner) && obj.owner.length) {
-      ownersList = obj.owner.slice();
-    }
-    // If test name is NA, include infra in addition to existing owners
-    if (!testName || testName === 'NA') {
-      const seen = new Set(ownersList.map(o => `${o?.id || ''}|${o?.name || ''}`));
-      const key = `${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}`;
-      if (!seen.has(key)) ownersList.push(DEFAULT_INFRA_OWNER);
-    }
-    if (ownersList.length) {
-      const names = ownersList.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
+      const names = obj.owner.map(o => (o && (o.name || o.id)) || '').filter(Boolean);
       if (names.length) ownerDisplay = names.join(', ');
     }
     const ownerEsc = escapeHtml(ownerDisplay);
@@ -500,6 +515,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
                       }
                     }
                     if (!labelName) labelName = lastSeenTestName || 'unknown gtest';
+                    // Do not assign owners here; only return raw snippet with inferred job/test via label for hint
                     out.push({ label: `${jobName}: ${labelName}`, job: jobName, test: labelName, snippet: msg });
                     snippetsAdded++;
                     core.info(`[GTEST]     Added snippet for '${labelName}' (len=${msg.length}) @ line ${lineNo}`);
@@ -573,27 +589,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
             core.info(`[GTEST] Total snippets before cap: ${out.length}, after dedupe: ${unique.length}`);
             snippets = unique.slice(0, Math.max(1, Math.min(maxSnippets, unique.length)));
             core.info(`[GTEST] Collected ${snippets.length} gtest snippet(s) from logs for run ${runId}`);
-            // Attach owners for gtest too
-            try {
-              const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
-              for (const it of snippets) {
-                if (!it) continue;
-                // Attach owners from label mapping if none present
-                const cleaned = stripBracketSuffix(it.label || '');
-                const mapped = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
-                if (mapped && !it.owner) it.owner = mapped;
-                // If test name is NA/missing, include infra owner in addition to any found owners
-                if (!it.test || it.test === 'NA') {
-                  if (Array.isArray(it.owner) && it.owner.length) {
-                    const key = `${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}`;
-                    const seen = new Set(it.owner.map(o => `${o?.id || ''}|${o?.name || ''}`));
-                    if (!seen.has(key)) it.owner = [...it.owner, DEFAULT_INFRA_OWNER];
-                  } else {
-                    it.owner = [DEFAULT_INFRA_OWNER];
-                  }
-                }
-              }
-            } catch (_) { /* ignore */ }
+            // Do not attach owners here; ownership resolution is performed later
             return snippets;
           } else {
             core.info(`[GTEST] No snippets extracted from logs for run ${runId}`);
@@ -640,27 +636,7 @@ async function fetchErrorSnippetsForRun(runId, maxSnippets = 50, logsDirPath = u
       }
     }
     // Fallback: none (we no longer parse logs). If needed, could fallback to logs here.
-    // Attach owners based on mapping; strip trailing bracketed levels (e.g., [failure]) for matching
-    try {
-      const stripBracketSuffix = (s) => (typeof s === 'string' ? s.replace(/\s*\[[^\]]+\]\s*$/, '').trim() : s);
-      for (const it of snippets) {
-        if (!it) continue;
-        // Attach owners from label mapping if none present
-        const cleaned = stripBracketSuffix(it.label || '');
-        const mapped = findOwnerForLabel(cleaned) || findOwnerForLabel(it.label || '');
-        if (mapped && !it.owner) it.owner = mapped;
-        // If test name is NA/missing, include infra owner alongside any existing owners
-        if (!it.test || it.test === 'NA') {
-          if (Array.isArray(it.owner) && it.owner.length) {
-            const key = `${DEFAULT_INFRA_OWNER.id}|${DEFAULT_INFRA_OWNER.name}`;
-            const seen = new Set(it.owner.map(o => `${o?.id || ''}|${o?.name || ''}`));
-            if (!seen.has(key)) it.owner = [...it.owner, DEFAULT_INFRA_OWNER];
-          } else {
-            it.owner = [DEFAULT_INFRA_OWNER];
-          }
-        }
-      }
-    } catch (_) { /* ignore */ }
+    // Do not attach owners here; ownership resolution is performed later
 
     core.info(`Total snippets collected from annotations: ${snippets.length}`);
     return snippets || [];
@@ -1344,41 +1320,14 @@ async function run() {
           } else {
             item.error_snippets = [];
           }
-          // Derive owners from error snippets or fallback to workflow label mapping
+          // Infer job/test and resolve owners for each snippet
           try {
-            const ownerSet = new Map();
-            for (const e of (item.error_snippets || [])) {
-              if (Array.isArray(e.owner)) {
-                for (const o of e.owner) {
-                  if (!o) continue;
-                  const key = `${o.id || ''}|${o.name || ''}`;
-                  ownerSet.set(key, o);
-                }
-              }
+            for (const sn of (item.error_snippets || [])) {
+              const inferred = inferJobAndTestFromSnippet(sn);
+              if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
+              resolveOwnersForSnippet(sn, item.name);
             }
-            let ownersArr = Array.from(ownerSet.values());
-            if (ownersArr.length === 0) {
-              ownersArr = findOwnerForLabel(item.name) || [];
-            }
-            // Normalize owners to objects with id/name, dedup by id|name
-            const normalized = [];
-            const seenOwners = new Set();
-            for (const o of (ownersArr || [])) {
-              if (!o) continue;
-              const id = o.id || undefined;
-              const name = o.name || undefined;
-              const k = `${id || ''}|${name || ''}`;
-              if (seenOwners.has(k)) continue;
-              seenOwners.add(k);
-              normalized.push({ id, name });
-            }
-            // If no error snippets were found, force owner to infra team for Slack ping
-            if (!Array.isArray(item.error_snippets) || item.error_snippets.length === 0) {
-              item.owners = [DEFAULT_INFRA_OWNER];
-            } else {
-              item.owners = normalized;
-            }
-          } catch (_) { item.owners = []; }
+          } catch (_) { /* ignore */ }
           // Omit repeated errors logic (simplified)
           item.repeated_errors = [];
           // Mirror into the corresponding change entry
@@ -1443,41 +1392,14 @@ async function run() {
           } else {
             item.error_snippets = [];
           }
-          // Derive owners from error snippets or fallback to workflow label mapping; default to infra when none
+          // Infer job/test and resolve owners for each snippet
           try {
-            const ownerSet = new Map();
-            for (const e of (item.error_snippets || [])) {
-              if (Array.isArray(e.owner)) {
-                for (const o of e.owner) {
-                  if (!o) continue;
-                  const key = `${o.id || ''}|${o.name || ''}`;
-                  ownerSet.set(key, o);
-                }
-              }
+            for (const sn of (item.error_snippets || [])) {
+              const inferred = inferJobAndTestFromSnippet(sn);
+              if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
+              resolveOwnersForSnippet(sn, item.name);
             }
-            let ownersArr = Array.from(ownerSet.values());
-            if (ownersArr.length === 0) {
-              ownersArr = findOwnerForLabel(item.name) || [];
-            }
-            // Normalize and dedupe
-            const normalized = [];
-            const seenOwners = new Set();
-            for (const o of (ownersArr || [])) {
-              if (!o) continue;
-              const id = o.id || undefined;
-              const name = o.name || undefined;
-              const k = `${id || ''}|${name || ''}`;
-              if (seenOwners.has(k)) continue;
-              seenOwners.add(k);
-              normalized.push({ id, name });
-            }
-            // If no error info, force infra owner so Slack can ping
-            if (!Array.isArray(item.error_snippets) || item.error_snippets.length === 0) {
-              item.owners = [DEFAULT_INFRA_OWNER];
-            } else {
-              item.owners = normalized;
-            }
-          } catch (_) { item.owners = [DEFAULT_INFRA_OWNER]; }
+          } catch (_) { /* ignore */ }
           // Omit repeated errors (simplified)
           item.repeated_errors = [];
         }
