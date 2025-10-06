@@ -35,6 +35,14 @@ bool use_composite_all_to_all(
     int32_t out_dim,
     const std::optional<ttnn::MemoryConfig>& memory_config);
 
+ttnn::Tensor composite_reduce_scatter(
+    ttnn::Tensor input_tensor,
+    int32_t dim,
+    uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<uint32_t> cluster_axis);
+
 ttnn::Tensor composite_all_gather(
     ttnn::Tensor input_tensor,
     int32_t dim,
