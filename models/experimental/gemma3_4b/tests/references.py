@@ -206,6 +206,8 @@ def reference_vision_encoder(model_args):
 
 
 def map_vision_meta_to_hf_keys(loaded_weights):
+    # tag mstojko - this one is still bad but it is called in this file so maybe its ok?
+    assert False
     language_weights = {
         key[len("language_model.") :]: tensor
         for key, tensor in loaded_weights.items()
