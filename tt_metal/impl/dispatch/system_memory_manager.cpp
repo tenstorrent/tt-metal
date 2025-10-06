@@ -403,16 +403,31 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             return;
         }
         ZoneScopedN("wait_for_fetch_q_space");
-        // Loop until space frees up
-        while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
+
+        // Body of the operation
+        auto fetch_operation_body = [&]() {
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
-        }
+        };
+
+        // Condition to check if should continue waiting
+        auto fetch_wait_condition = [&]() -> bool {
+            return this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id];
+        };
+
+        // Handler for timeout
+        auto fetch_on_timeout = [&]() {
+            TT_THROW("TIMEOUT: device timeout in fetch queue wait, potential hang detected");
+        };
+
+        auto timeout_duration =
+            tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations();
+
+        loop_and_wait_with_timeout(fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration);
     };
 
     wait_for_fetch_q_space();
-
     // Wrap FetchQ if possible
     uint32_t prefetch_q_base = MetalContext::instance().dispatch_mem_map().get_device_command_queue_addr(
         CommandQueueDeviceAddrType::UNRESERVED);
