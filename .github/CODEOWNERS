@@ -25,6 +25,7 @@ conftest.py @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeown
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tests/scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tests/scripts/run_profiler_regressions.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
+tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra @tenstorrent/metalium-codeowners-large-changes
 
 # TT-STL
