@@ -143,15 +143,12 @@ static std::vector<Tensor> pool2d_invoke(
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
 
-        // This is the code path of the non sharded input tensor, this means that input channels
-        // can be whatever number here so we need to have the shard_width aligned to the l1 memory alignment
-        // which is 16, in case shard_width is multiple of 16 or 32 we will take largest number possible. We are
-        // aligning it by changing the padded shape of the tensor.
-        uint32_t input_channels_alignment = is_in_tiled ? tt::constants::TILE_WIDTH : 16U;
-        if (input_tensor.memory_config().is_sharded() && input_tensor.layout() == Layout::ROW_MAJOR) {
-            const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
-            input_channels_alignment = (shard_width % tt::constants::TILE_WIDTH == 0) ? tt::constants::TILE_WIDTH : 16U;
-        }
+        uint32_t input_channels_alignment = conv::get_input_channels_alignment(
+            shard_layout,
+            input_tensor.layout(),
+            input_tensor.memory_config().buffer_type(),
+            false,
+            input_tensor.memory_config());
 
         ttnn::Shape input_tensor_shape = input_tensor.padded_shape();
 
