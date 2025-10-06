@@ -65,6 +65,9 @@ int main(int argc, char** argv) {
     uint32_t compute_input = 0;
     std::tie(compute_input, input_args) =
         test_args::get_command_option_uint32_and_remaining_args(input_args, "--compute", 0);
+    bool measure_cb_timings = false;
+    std::tie(measure_cb_timings, input_args) =
+        test_args::has_command_option_and_remaining_args(input_args, "--measure-cb-timings");
 
     bool pass = true;
     bool multibank = true;
@@ -146,9 +149,7 @@ int main(int argc, char** argv) {
                     .set_page_size(ouput_cb_index, single_tile_size);
             tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-            std::map<std::string, std::string> reader_defines = {
-                {"TEST_READER_DEFINE", "1"},
-            };
+            std::map<std::string, std::string> reader_defines;
             uint32_t reader_wait_time = 0;
             if (reader_input == 9999) {
                 reader_defines["READER_NOC"] = "1";
@@ -156,16 +157,20 @@ int main(int argc, char** argv) {
                 reader_defines["READER_RISCV_WAIT"] = "1";
                 reader_wait_time = reader_input;
             }
+            if (!measure_cb_timings) {
+                reader_defines["MEASURE_CB_TIMINGS_SKIP"] = "1";
+            }
 
-            std::map<std::string, std::string> writer_defines = {
-                {"TEST_WRITER_DEFINE", "1"},
-            };
+            std::map<std::string, std::string> writer_defines;
             uint32_t writer_wait_time = 0;
             if (writer_input == 9999) {
                 writer_defines["WRITER_NOC"] = "1";
             } else if (writer_input > 0) {
                 writer_defines["WRITER_RISCV_WAIT"] = "1";
                 writer_wait_time = writer_input;
+            }
+            if (!measure_cb_timings) {
+                writer_defines["MEASURE_CB_TIMINGS_SKIP"] = "1";
             }
 
             auto binary_reader_kernel = tt_metal::CreateKernel(
@@ -201,6 +206,10 @@ int main(int argc, char** argv) {
                 compute_defines["COMPUTE_RISCV_WAIT"] = "1";
                 compute_wait_time = compute_input;
             }
+            if (!measure_cb_timings) {
+                compute_defines["MEASURE_CB_TIMINGS_SKIP"] = "1";
+            }
+
             auto eltwise_binary_kernel = tt_metal::CreateKernel(
                 program,
                 "tt_metal/kernels/compute/eltwise_binary.cpp",

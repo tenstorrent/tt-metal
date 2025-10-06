@@ -243,12 +243,12 @@ class perf_analysis(default_setup):
         "core_reader_cb_reserve_back": {
             "across": "core",
             "type": "sum",
-            "marker": {"risc": "ANY", "zone_name": "CB-READER-RESERVE-BACK"},
+            "marker": {"risc": "NCRISC", "zone_name": "CB-READER-RESERVE-BACK"},
         },
-        "core_reader_cb_wait_front": {
+        "core_writer_cb_wait_front": {
             "across": "core",
             "type": "sum",
-            "marker": {"risc": "ANY", "zone_name": "CB-WRITER-WAIT-FRONT"},
+            "marker": {"risc": "BRISC", "zone_name": "CB-WRITER-WAIT-FRONT"},
         },
     }
 

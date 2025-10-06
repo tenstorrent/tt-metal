@@ -18,7 +18,9 @@ using namespace ckernel;
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     // TODO(MO): Manually uncomment until issue #6619 is resolved
-    // DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+#ifndef MEASURE_CB_TIMINGS_SKIP
+    DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+#endif
     std::uint32_t output = operand;
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
