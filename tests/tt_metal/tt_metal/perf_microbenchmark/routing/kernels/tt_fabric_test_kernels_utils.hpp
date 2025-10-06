@@ -502,6 +502,17 @@ struct NocScatterWriteSenderOperations {
 };
 
 /* ****************************************************************************
+ * MuxCachedInfo
+ * Cached information needed to wait for mux readiness before connecting
+ * *****************************************************************************/
+struct MuxCachedInfo {
+    uint8_t mux_x = 0;
+    uint8_t mux_y = 0;
+    size_t mux_status_address = 0;
+    size_t local_mux_status_address = 0;
+};
+
+/* ****************************************************************************
  * FabricConnectionArray: Unified connection management for sender and receiver
  *
  * Provides type-erased storage for both WorkerToFabricEdmSender and
@@ -524,6 +535,9 @@ struct FabricConnectionArray {
     // Type-erased storage for connections (sized for maximum)
     alignas(std::max_align_t) std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
     std::array<bool, MAX_NUM_FABRIC_CONNECTIONS> is_mux;
+
+    // Cached mux info for wait_for_fabric_endpoint_ready
+    std::array<MuxCachedInfo, MAX_NUM_FABRIC_CONNECTIONS> mux_cached_info;
 
     // Actual number of connections in use (set at initialization, bounds-checked in kernel)
     uint8_t num_connections = 0;
@@ -548,9 +562,9 @@ struct FabricConnectionArray {
 
             if (is_mux[i]) {
                 // Initialize mux connection using placement new
-                uint8_t mux_x = get_arg_val<uint32_t>(rt_args_idx++);
-                uint8_t mux_y = get_arg_val<uint32_t>(rt_args_idx++);
-                uint8_t mux_channel_id = get_arg_val<uint32_t>(rt_args_idx++);
+                mux_cached_info[i].mux_x = get_arg_val<uint32_t>(rt_args_idx++);
+                mux_cached_info[i].mux_y = get_arg_val<uint32_t>(rt_args_idx++);
+                uint8_t worker_stream_id = get_arg_val<uint32_t>(rt_args_idx++);
                 uint8_t mux_num_buffers_per_channel = get_arg_val<uint32_t>(rt_args_idx++);
                 size_t mux_channel_buffer_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
                 size_t mux_channel_base_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -558,14 +572,16 @@ struct FabricConnectionArray {
                 size_t mux_connection_handshake_address = get_arg_val<uint32_t>(rt_args_idx++);
                 size_t mux_flow_control_address = get_arg_val<uint32_t>(rt_args_idx++);
                 size_t mux_buffer_index_address = get_arg_val<uint32_t>(rt_args_idx++);
+                mux_cached_info[i].mux_status_address = get_arg_val<uint32_t>(rt_args_idx++);
 
                 // Allocate local semaphore addresses for this mux connection (cursor-based)
                 const auto mux_local_addrs = memory_map.get_mux_local_addresses_for_connection();
+                mux_cached_info[i].local_mux_status_address = mux_local_addrs.status_buffer_address;
 
                 auto conn = build_connection_to_fabric_endpoint<NUM_BUFFERS>(
-                    mux_x,
-                    mux_y,
-                    mux_channel_id,
+                    mux_cached_info[i].mux_x,
+                    mux_cached_info[i].mux_y,
+                    worker_stream_id,
                     mux_num_buffers_per_channel,
                     mux_channel_buffer_size_bytes,
                     mux_channel_base_address,
@@ -589,6 +605,12 @@ struct FabricConnectionArray {
     FORCE_INLINE void open_all() {
         for (uint8_t i = 0; i < num_connections; i++) {
             if (is_mux[i]) {
+                // Wait for mux to be ready before connecting
+                const auto& info = mux_cached_info[i];
+                DPRINT << "Waiting for mux to be ready before connecting" << ENDL();
+                tt::tt_fabric::wait_for_fabric_endpoint_ready(
+                    info.mux_x, info.mux_y, info.mux_status_address, info.local_mux_status_address);
+                DPRINT << "Mux is ready, opening connection" << ENDL();
                 get_mux_connection(i).open();
             } else {
                 get_fabric_connection(i).open();
@@ -2050,7 +2072,11 @@ struct ReceiverKernelConfig {
     TrafficValidationConfigBase** traffic_configs() { return traffic_configs_.data(); }
 
     // Credit connection lifecycle methods
-    void open_credit_connections() { credit_connections.open_all(); }
+    void open_credit_connections() {
+        DPRINT << "receiver opening credit connections" << ENDL();
+        credit_connections.open_all();
+        DPRINT << "receiver opened credit connections" << ENDL();
+    }
 
     void close_credit_connections() {
         // Automatically flush any remaining credits before closing
@@ -2091,6 +2117,7 @@ private:
 
         // Parse credit connections from runtime args (memory map needed for mux local addresses)
         credit_connections.num_connections = NUM_CREDIT_CONNECTIONS;
+        DPRINT << "num credit connections: " << (uint32_t)NUM_CREDIT_CONNECTIONS << ENDL();
         credit_connections.parse_from_args(rt_args_idx, this->memory_map);
 
         // Parse traffic config to credit connection mapping
@@ -2162,8 +2189,9 @@ template <
     bool USE_DYNAMIC_ROUTING,
     uint8_t NUM_LOCAL_SYNC_CORES>
 struct SyncKernelConfig {
-    static SyncKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
-        return SyncKernelConfig(common_map, rt_args_idx);
+    static SyncKernelConfig build_from_args(
+        const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
+        return SyncKernelConfig(common_map, rt_args_idx, local_args_idx);
     }
 
     void global_sync(uint8_t sync_iter) {
@@ -2218,10 +2246,7 @@ struct SyncKernelConfig {
     }
 
 private:
-    SyncKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
-        // Use separate indices for runtime args vs local args
-        size_t local_args_idx = 0;  // Start from 0 for local args
-
+    SyncKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx, size_t& local_args_idx) {
         // Parse memory map args from runtime args using pre-parsed common map
         this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
 

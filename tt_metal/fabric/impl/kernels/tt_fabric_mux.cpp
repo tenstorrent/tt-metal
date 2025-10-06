@@ -242,7 +242,6 @@ void kernel_main() {
     }
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
-    DPRINT << "Mux is ready for traffic" << ENDL();
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
     uint32_t heartbeat = 0;

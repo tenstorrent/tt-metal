@@ -100,6 +100,12 @@ void FabricConnectionManager::process(
                 }
             }
 
+            log_info(
+                tt::LogTest,
+                "FabricConnectionManager::process: num_full_size_channels={} num_header_only_channels={}",
+                num_full_size_channels,
+                num_header_only_channels);
+
             const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
             const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
             const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -282,18 +288,19 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
             const auto& mux_config = mux_config_it->second;
             const auto channel_type = get_required_channel_type(worker_type);
 
-            // kernel will allocate 3 local semaphores
+            // kernel will allocate local semaphores (including status buffer for wait)
             std::vector<uint32_t> mux_rt_args = {
                 mux_virtual_core.x,
                 mux_virtual_core.y,
-                channel_id,
+                mux_config->get_channel_credits_stream_id(channel_type, channel_id),
                 mux_config->get_num_buffers(channel_type),
                 static_cast<uint32_t>(mux_config->get_buffer_size_bytes(channel_type)),
                 static_cast<uint32_t>(mux_config->get_channel_base_address(channel_type, channel_id)),
                 static_cast<uint32_t>(mux_config->get_connection_info_address(channel_type, channel_id)),
                 static_cast<uint32_t>(mux_config->get_connection_handshake_address(channel_type, channel_id)),
                 static_cast<uint32_t>(mux_config->get_flow_control_address(channel_type, channel_id)),
-                static_cast<uint32_t>(mux_config->get_buffer_index_address(channel_type, channel_id))};
+                static_cast<uint32_t>(mux_config->get_buffer_index_address(channel_type, channel_id)),
+                static_cast<uint32_t>(mux_config->get_status_address())};
             rt_args.insert(rt_args.end(), mux_rt_args.begin(), mux_rt_args.end());
         } else {
             // Generate fabric connection args directly using passed parameters
@@ -493,10 +500,9 @@ void TestReceiver::add_config(TestTrafficReceiverConfig config) {
         auto outgoing_direction = this->test_device_ptr_->get_forwarding_direction(src_node_id, dst_node_id);
 
         // Use common helper to register fabric connection for credit return
-        // NOTE: Use TestWorkerType::SENDER because receiver SENDS credit packets back to sender
         credit_connection_key = this->test_device_ptr_->register_fabric_connection(
             this->logical_core_,
-            TestWorkerType::SENDER,
+            TestWorkerType::RECEIVER,
             this->test_device_ptr_->connection_manager_,
             outgoing_direction,
             config.link_id);
@@ -572,7 +578,7 @@ TestMux::TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optio
 }
 
 void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key) {
-    TT_FATAL(config_ != nullptr, "Mux config already set for core {}", logical_core_);
+    TT_FATAL(config_ == nullptr, "Mux config already set for core {}", logical_core_);
     config_ = mux_config;
     connection_key_ = std::move(connection_key);
 }
@@ -614,7 +620,7 @@ void TestDevice::add_worker(TestWorkerType worker_type, CoreCoord logical_core) 
     };
 
     TT_FATAL(
-        core_already_occupied(worker_type, logical_core),
+        !core_already_occupied(worker_type, logical_core),
         "On node: {}, trying to add a worker type {} to an already occupied core: {}",
         this->fabric_node_id_,
         static_cast<int>(worker_type),
@@ -757,6 +763,15 @@ void TestDevice::create_mux_kernels() {
 
         const auto dst_node_id = route_manager_->get_neighbor_node_id(fabric_node_id_, connection_key.direction);
 
+        log_info(
+            tt::LogTest,
+            "num full size channels: {}",
+            mux_config->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL));
+        log_info(
+            tt::LogTest,
+            "num header only channels: {}",
+            mux_config->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL));
+
         auto mux_ct_args = mux_config->get_fabric_mux_compile_time_args();
         auto mux_rt_args = mux_config->get_fabric_mux_run_time_args(
             fabric_node_id_, dst_node_id, connection_key.link_idx, program_handle_, mux_core);
@@ -795,13 +810,19 @@ void TestDevice::create_sync_kernel() {
         sync_connection_manager.get_connection_count_for_core(sync_core, TestWorkerType::SYNC);
     log_info(tt::LogTest, "sync core: {}, num sync connections: {}", sync_core, num_sync_connections);
 
+    // Check if sync core has mux connections
+    bool has_mux_connections = sync_connection_manager.is_mux_client(sync_core);
+    uint32_t num_muxes_to_terminate = sync_connection_manager.get_num_muxes_to_terminate();
+
     // Compile-time args
     std::vector<uint32_t> ct_args = {
         is_2D_routing_enabled,
         is_dynamic_routing_enabled,
-        (uint32_t)num_sync_connections,                     /* num sync fabric connections */
-        static_cast<uint32_t>(senders_.size() + 1),         /* num local sync cores (all senders + sync core) */
-        sender_memory_map_->common.get_kernel_config_size() /* kernel config buffer size */
+        (uint32_t)num_sync_connections,                      /* num sync fabric connections */
+        static_cast<uint32_t>(senders_.size() + 1),          /* num local sync cores (all senders + sync core) */
+        sender_memory_map_->common.get_kernel_config_size(), /* kernel config buffer size */
+        has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
+        num_muxes_to_terminate                               /* NUM_MUXES_TO_TERMINATE */
     };
 
     // Runtime args: memory map args, then sync fabric connection args
@@ -847,6 +868,11 @@ void TestDevice::create_sync_kernel() {
         uint32_t sender_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sender_core);
         local_args.push_back(sender_noc_encoding);
     }
+
+    // Add mux termination local args (empty vector if not a mux client)
+    auto mux_termination_local_args =
+        sync_connection_manager.generate_mux_termination_local_args_for_core(sync_core, device_info_provider_);
+    local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
 
     // create sync kernel with local args
     sync_worker.create_kernel(coord_, ct_args, rt_args, local_args, sender_memory_map_->get_local_args_address(), {});
@@ -986,8 +1012,8 @@ void TestDevice::create_receiver_kernels() {
         }
 
         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
-        // NOTE: Use SENDER because receiver acts as sender when sending credit packets
-        size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::SENDER);
+        // NOTE: Use RECEIVER to match how the receiver registers its credit return connections
+        size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
 
         // Check if this core has mux connections
         bool has_mux_connections = connection_manager_.is_mux_client(core);

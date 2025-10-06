@@ -30,3 +30,19 @@ Tests:
             num_packets: 10
             destination:
               device: [0, 1]
+
+  - name: "mux_simple_comparison2"
+    sync: false
+    enable_flow_control: false  # Disable flow control for comparison (defaults to false)
+    fabric_setup:
+      topology: Linear
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            size: 512
+            num_packets: 10
+            destination:
+              device: [0, 1]

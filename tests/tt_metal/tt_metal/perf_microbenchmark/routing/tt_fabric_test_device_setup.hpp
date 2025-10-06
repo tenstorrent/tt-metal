@@ -30,8 +30,7 @@ const std::string default_receiver_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_receiver.cpp";
 const std::string default_sync_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_sync.cpp";
-const std::string default_mux_kernel_src =
-    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_test_mux.cpp";
+const std::string default_mux_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using FabricMuxConfig = tt::tt_fabric::FabricMuxConfig;

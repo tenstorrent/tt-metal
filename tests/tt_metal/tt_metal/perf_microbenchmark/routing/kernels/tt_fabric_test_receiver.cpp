@@ -38,6 +38,7 @@ void kernel_main() {
     size_t rt_args_idx = 0;
     size_t local_args_idx = 0;
 
+    DPRINT << "receiver NUM_CREDIT_CONNECTIONS: " << (uint32_t)NUM_CREDIT_CONNECTIONS << ENDL();
     DPRINT << "receiver HAS_MUX_CONNECTIONS: " << (uint32_t)HAS_MUX_CONNECTIONS << ENDL();
     DPRINT << "receiver NUM_MUXES_TO_TERMINATE: " << (uint32_t)NUM_MUXES_TO_TERMINATE << ENDL();
 
