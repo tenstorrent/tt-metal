@@ -16,10 +16,11 @@ jobs:
       build-wheel: true
   galaxy-nightly-tests:
     needs: build-artifact
-    uses: ./.github/workflows/galaxy-nightly-tests-impl.yaml
+    uses: ./.github/workflows/profiler-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: topology-6u
+      test-script: ./tests/scripts/run_profiler_regressions.sh
