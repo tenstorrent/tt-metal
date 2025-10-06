@@ -1260,7 +1260,7 @@ async function run() {
           owners = Array.from(ownerSet.values());
           // Build optional note for original owners (names only)
           const origNames = Array.from(genericExitOrigOwners.keys());
-          var originalOwnersNote = origNames.length ? ` (pipeline owner: ${origNames.join(', ')})` : '';
+          var originalOwnersNote = origNames.length ? ` (error owner unclear. pipeline owners: ${origNames.join(', ')})` : '';
         } catch (_) { /* ignore */ }
         // Fallback: try to resolve owners from the workflow name
         if (!owners || owners.length === 0) {
