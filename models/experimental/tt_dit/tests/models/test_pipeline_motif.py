@@ -9,9 +9,10 @@ import pytest
 import ttnn
 from loguru import logger
 
-from ...pipelines.motif.pipeline_motif import (
+from ...parallel.config import DiTParallelConfig, ParallelFactor
+from ...pipelines.motif.pipeline_motif import MotifPipeline
+from ...pipelines.stable_diffusion_35_large.pipeline_stable_diffusion_35_large import (
     TimingCollector,
-    create_pipeline,
 )
 
 
@@ -20,117 +21,122 @@ from ...pipelines.motif.pipeline_motif import (
     [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
 )
 @pytest.mark.parametrize(
-    ("image_w", "image_h", "guidance_scale", "num_inference_steps"),
-    [
-        (1024, 1024, 5.0, 50),
-    ],
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    indirect=True,
 )
+@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
-    ("mesh_device", "cfg", "sp", "tp", "topology", "num_links", "mesh_test_id"),
+    ("mesh_device", "sp", "tp", "topology", "num_links", "mesh_test_id"),
     [
-        pytest.param((2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1, "2x4cfg1sp0tp1", id="2x4cfg1sp0tp1"),
-        pytest.param((2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4cfg0sp0tp1", id="2x4cfg0sp0tp1"),
-        pytest.param((4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4, "4x8cfg1sp0tp1", id="4x8cfg1sp0tp1"),
+        pytest.param((1, 4), (1, 0), (4, 1), ttnn.Topology.Linear, 1, "1x4sp0tp1", id="1x4sp0tp1"),
+        pytest.param((2, 2), (2, 0), (2, 1), ttnn.Topology.Linear, 1, "2x2sp0tp1", id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 0), (4, 1), ttnn.Topology.Linear, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        pytest.param((2, 4), (4, 1), (2, 0), ttnn.Topology.Linear, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+        pytest.param((4, 8), (8, 1), (4, 0), ttnn.Topology.Linear, 4, "4x8sp1tp0", id="4x8sp1tp0"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "use_cache",
+    ("enable_t5_text_encoder", "use_torch_t5_text_encoder", "use_torch_clip_text_encoder"),
     [
-        pytest.param(True, id="cache_on"),
-        # pytest.param(False, id="cache_off"),
+        pytest.param(True, True, True, id="encoder_cpu"),
+        # pytest.param(True, False, False, id="encoder_device"),
     ],
 )
 @pytest.mark.parametrize(
     "traced",
     [
-        pytest.param(True, id="tracing_on"),
-        # pytest.param(False, id="tracing_off"),
+        pytest.param(True, id="traced"),
+        pytest.param(False, id="not_traced"),
     ],
 )
 def test_motif_pipeline(
     *,
     mesh_device: ttnn.MeshDevice,
-    image_w: int,
-    image_h: int,
-    guidance_scale: float,
+    width: int,
+    height: int,
     num_inference_steps: int,
-    cfg: tuple[int, int],
     sp: tuple[int, int],
     tp: tuple[int, int],
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
+    enable_t5_text_encoder: bool,
+    use_torch_t5_text_encoder: bool,
+    use_torch_clip_text_encoder: bool,
     traced: bool,
-    use_cache: bool,
-    is_ci_env: bool,
     mesh_test_id: str,
-    monkeypatch,
 ) -> None:
-    # Setup CI environment
-    if is_ci_env:
-        if use_cache:
-            monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")  # noqa: S108
-        else:
-            pytest.skip("Skipping. No use cache is implicitly tested with the configured non persistent cache path.")
-        if traced:
-            pytest.skip("Skipping traced test in CI environment. Use Performance test for detailed timing analysis.")
+    sp_factor, sp_axis = sp
+    tp_factor, tp_axis = tp
 
-    # Create timing collector
-    timing_collector = TimingCollector()
+    if tp_factor < 4:
+        pytest.skip("triggers OOM during VAE pass")
 
-    # Create pipeline
-    pipeline = create_pipeline(
-        mesh_device=mesh_device,
-        batch_size=1,
-        image_w=image_w,
-        image_h=image_h,
-        guidance_scale=guidance_scale,
-        cfg_config=cfg,
-        sp_config=sp,
-        tp_config=tp,
-        num_links=num_links,
-        use_cache=use_cache,
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
 
-    # Set timing collector
+    logger.info(f"Mesh device shape: {mesh_device.shape}")
+    logger.info(f"Parallel config: {parallel_config}")
+    logger.info(f"T5 enabled: {enable_t5_text_encoder}")
+
+    timing_collector = TimingCollector()
+
+    pipeline = MotifPipeline(
+        mesh_device=mesh_device,
+        enable_t5_text_encoder=enable_t5_text_encoder,
+        use_torch_t5_text_encoder=use_torch_t5_text_encoder,
+        use_torch_clip_text_encoder=use_torch_clip_text_encoder,
+        parallel_config=parallel_config,
+        topology=topology,
+        num_links=num_links,
+        width=width,
+        height=height,
+        use_cache=True,
+    )
+
     pipeline.timing_collector = timing_collector
 
-    # Define test prompt
-    prompt = (
+    prompts = [
         "cinematic film still of Kodak Motion Picture Film (Sharp Detailed Image) An Oscar winning movie for Best "
         "Cinematography a woman in a kimono standing on a subway train in Japan Kodak Motion Picture Film Style, "
         "shallow depth of field, vignette, highly detailed, high budget, bokeh, cinemascope, moody, epic, gorgeous, "
         "film grain, grainy"
-    )
+    ]
 
-    if no_prompt:
-        # Run single generation
-        negative_prompt = None
+    filename_prefix = f"motif_{width}_{height}_{mesh_test_id}"
+    if enable_t5_text_encoder:
+        if use_torch_t5_text_encoder:
+            filename_prefix += "_t5cpu"
+    else:
+        filename_prefix += "_t5off"
+    if use_torch_clip_text_encoder:
+        filename_prefix += "_clipcpu"
+    if not traced:
+        filename_prefix += "_untraced"
 
+    def run(*, prompt: str, number: int, seed: int) -> None:
         images = pipeline(
             prompt_1=[prompt],
             prompt_2=[prompt],
             prompt_3=[prompt],
-            negative_prompt_1=[negative_prompt],
-            negative_prompt_2=[negative_prompt],
-            negative_prompt_3=[negative_prompt],
+            negative_prompt_1=[None],
+            negative_prompt_2=[None],
+            negative_prompt_3=[None],
             num_inference_steps=num_inference_steps,
-            seed=0,
+            cfg_scale=5.0,
+            seed=seed,
             traced=traced,
         )
 
-        # Save image
-        output_filename = f"motif_{image_w}_{image_h}_{mesh_test_id}.png"
+        output_filename = f"{filename_prefix}_{number}.png"
         images[0].save(output_filename)
         logger.info(f"Image saved as {output_filename}")
 
-        # Print timing information
         timing_data = timing_collector.get_timing_data()
         logger.info(f"CLIP encoding time: {timing_data.clip_encoding_time:.2f}s")
         logger.info(f"T5 encoding time: {timing_data.t5_encoding_time:.2f}s")
@@ -141,35 +147,15 @@ def test_motif_pipeline(
             avg_step_time = sum(timing_data.denoising_step_times) / len(timing_data.denoising_step_times)
             logger.info(f"Average denoising step time: {avg_step_time:.2f}s")
 
+    if no_prompt:
+        for i, prompt in enumerate(prompts):
+            run(prompt=prompt, number=i, seed=0)
     else:
-        # Interactive demo
+        prompt = prompts[0]
         for i in itertools.count():
             new_prompt = input("Enter the input prompt, or q to exit: ")
             if new_prompt:
                 prompt = new_prompt
             if prompt[0] == "q":
                 break
-
-            negative_prompt = None
-
-            images = pipeline(
-                prompt_1=[prompt],
-                prompt_2=[prompt],
-                prompt_3=[prompt],
-                negative_prompt_1=[negative_prompt],
-                negative_prompt_2=[negative_prompt],
-                negative_prompt_3=[negative_prompt],
-                num_inference_steps=num_inference_steps,
-                seed=0,
-                traced=traced,
-            )
-
-            output_filename = f"motif_{image_w}_{image_h}_{mesh_test_id}_{i}.png"
-            images[0].save(output_filename)
-            logger.info(f"Image saved as {output_filename}")
-
-    # Synchronize all devices
-    for submesh_device in pipeline.submesh_devices:
-        ttnn.synchronize_device(submesh_device)
-
-    logger.info("SD3.5 pipeline test completed successfully!")
+            run(prompt=prompt, number=i, seed=i)
