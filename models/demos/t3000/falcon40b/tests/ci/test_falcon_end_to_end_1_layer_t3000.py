@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 import pytest
 
 import ttnn
@@ -89,7 +91,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
 
-    tt_cache_path = get_hf_tt_cache_path(model_version)
+    tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
     disable_persistent_kernel_cache()
 

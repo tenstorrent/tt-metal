@@ -4,6 +4,7 @@
 
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -154,7 +155,7 @@ def run_test_perplexity(
         model_config = get_model_config(
             model_config_str, llm_mode, input_shape, num_devices=mesh_device.get_num_devices()
         )
-        tt_cache_path = get_hf_tt_cache_path(model_version)
+        tt_cache_path = Path(get_hf_tt_cache_path(model_version))
 
         # Load tt-metal model
         logger.info("Moving weights (all layers) to device; might take some time...")
@@ -242,7 +243,6 @@ def test_perplexity_huggingface(
         max_seq_len,
         None,
         None,
-        None,
         num_samples,
         {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
         use_hf_model=True,
@@ -278,8 +278,6 @@ def test_perplexity(
     expected_ppl,
     expected_top1,
     expected_top5,
-    model_location_generator,
-    get_tt_cache_path,
     t3k_mesh_device,
 ):
     assert is_wormhole_b0(), "This test is only for Wormhole B0"
@@ -292,8 +290,6 @@ def test_perplexity(
         batch_size,
         max_seq_len,
         model_config_str,
-        model_location_generator,
-        get_tt_cache_path,
         t3k_mesh_device,
         num_samples,
         {"ppl": expected_ppl, "top1_acc": expected_top1, "top5_acc": expected_top5},
