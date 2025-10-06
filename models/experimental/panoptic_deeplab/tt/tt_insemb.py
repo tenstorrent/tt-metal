@@ -30,6 +30,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
         common_stride: int,
         norm: str,
         train_size: Optional[Tuple],
+        model_configs=None,
     ):
         # Handle both dict and object parameter formats
         decoder_params = parameters["decoder"] if isinstance(parameters, dict) else parameters.decoder
@@ -45,6 +46,7 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             decoder_channels=decoder_channels,
             common_stride=common_stride,
             train_size=train_size,
+            model_configs=model_configs,
         )
         assert self.decoder_only
         use_bias = norm == ""
@@ -68,7 +70,12 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             device=self.device,
         )
         self.center_head_0 = TtConv2d.create_with_height_slicing(
-            ch0_params, num_slices=2, stride=(1, 1), padding=(1, 1)
+            ch0_params,
+            num_slices=2,
+            stride=(1, 1),
+            padding=(1, 1),
+            conv_path="instance_head.center_head.0",
+            model_configs=self.model_configs,
         )
 
         # center_head_1
@@ -85,7 +92,12 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             device=self.device,
         )
         self.center_head_1 = TtConv2d.create_with_height_slicing(
-            ch1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
+            ch1_params,
+            num_slices=2,
+            stride=(1, 1),
+            padding=(1, 1),
+            conv_path="instance_head.center_head.1",
+            model_configs=self.model_configs,
         )
 
         # center_predictor
@@ -106,7 +118,13 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             bias=cp_bias,
             device=self.device,
         )
-        self.center_predictor = TtConv2d.create(cp_params, stride=(1, 1), padding=(0, 0))
+        self.center_predictor = TtConv2d.create(
+            cp_params,
+            stride=(1, 1),
+            padding=(0, 0),
+            conv_path="instance_head.center_predictor",
+            model_configs=self.model_configs,
+        )
 
         # --- Offset Prediction Branch ---
         # offset_head_0
@@ -124,7 +142,12 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             device=self.device,
         )
         self.offset_head_0 = TtConv2d.create_with_height_slicing(
-            oh0_params, num_slices=2, stride=(1, 1), padding=(1, 1)
+            oh0_params,
+            num_slices=2,
+            stride=(1, 1),
+            padding=(1, 1),
+            conv_path="instance_head.offset_head.0",
+            model_configs=self.model_configs,
         )
 
         # offset_head_1
@@ -141,7 +164,12 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             device=self.device,
         )
         self.offset_head_1 = TtConv2d.create_with_height_slicing(
-            oh1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
+            oh1_params,
+            num_slices=2,
+            stride=(1, 1),
+            padding=(1, 1),
+            conv_path="instance_head.offset_head.1",
+            model_configs=self.model_configs,
         )
 
         # offset_predictor
@@ -162,7 +190,13 @@ class TtPanopticDeepLabInsEmbedHead(TtDeepLabV3PlusHead):
             bias=op_bias,
             device=self.device,
         )
-        self.offset_predictor = TtConv2d.create(op_params, stride=(1, 1), padding=(0, 0))
+        self.offset_predictor = TtConv2d.create(
+            op_params,
+            stride=(1, 1),
+            padding=(0, 0),
+            conv_path="instance_head.offset_predictor",
+            model_configs=self.model_configs,
+        )
 
         self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
         logger.debug("TtPanopticDeepLabInsEmbedHead initialization complete")

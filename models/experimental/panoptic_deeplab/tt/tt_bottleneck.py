@@ -36,11 +36,13 @@ class TtBottleneck(LightweightModule):
         dilation: int = 1,
         shortcut_stride: int = 1,
         block_id: str = "unknown",
+        model_configs=None,
     ):
         super().__init__()
         self.device = device
         self.has_shortcut = has_shortcut
         self.block_id = block_id
+        self.model_configs = model_configs
 
         # Extract parameters for conv1, conv2, conv3 from preprocessed structure
         conv1_params = parameters["conv1"]
@@ -57,17 +59,27 @@ class TtBottleneck(LightweightModule):
             TtConv2dParameters.from_preprocessed_parameters(conv1_params, device=device, dtype=dtype),
             stride=(1, 1),
             padding=(0, 0),
+            conv_path=f"{block_id}.conv1",
+            model_configs=model_configs,
         )
 
         # For conv2, use architecture parameters and update dilation
         conv2_tt_params = TtConv2dParameters.from_preprocessed_parameters(conv2_params, device=device, dtype=dtype)
         conv2_tt_params.dilation = conv2_dilation
-        self.conv2 = TtConv2d(conv2_tt_params, stride=conv2_stride, padding=conv2_padding)
+        self.conv2 = TtConv2d(
+            conv2_tt_params,
+            stride=conv2_stride,
+            padding=conv2_padding,
+            conv_path=f"{block_id}.conv2",
+            model_configs=model_configs,
+        )
 
         self.conv3 = TtConv2d(
             TtConv2dParameters.from_preprocessed_parameters(conv3_params, device=device, dtype=dtype),
             stride=(1, 1),
             padding=(0, 0),
+            conv_path=f"{block_id}.conv3",
+            model_configs=model_configs,
         )
 
         # Initialize shortcut if needed
@@ -86,6 +98,8 @@ class TtBottleneck(LightweightModule):
                 ),
                 stride=shortcut_stride_tuple,
                 padding=(0, 0),
+                conv_path=f"{block_id}.shortcut",
+                model_configs=model_configs,
             )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -101,7 +115,6 @@ class TtBottleneck(LightweightModule):
         if self.has_shortcut:
             logger.debug(f"TtBottleneck {self.block_id} processing shortcut convolution")
             identity = self.shortcut(identity)
-            identity = ttnn.to_memory_config(identity, ttnn.DRAM_MEMORY_CONFIG)
             logger.debug(f"TtBottleneck {self.block_id} shortcut processing complete, shape: {identity.shape}")
 
         # Main path: Conv1 + ReLU (BatchNorm fused into Conv1)

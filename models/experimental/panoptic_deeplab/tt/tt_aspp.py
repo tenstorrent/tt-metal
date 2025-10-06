@@ -102,6 +102,7 @@ class TtASPP(LightweightModule):
         activation: str,
         dropout: float = 0.0,
         pool_kernel_size,
+        model_configs=None,
     ):
         super(TtASPP, self).__init__()
         logger.debug(
@@ -109,6 +110,7 @@ class TtASPP(LightweightModule):
         )
         assert len(dilations) == 3, "ASPP expects 3 dilations, got {}".format(len(dilations))
         self.dropout = dropout
+        self.model_configs = model_configs
         use_bias = False
 
         self.activation = get_ttnn_activation(activation)
@@ -126,7 +128,9 @@ class TtASPP(LightweightModule):
             bias=conv0_bias,
             device=self.device,
         )
-        conv0 = TtConv2d.create(conv0_params, stride=(1, 1), padding=(0, 0))
+        conv0 = TtConv2d.create(
+            conv0_params, stride=(1, 1), padding=(0, 0), conv_path="aspp.convs.0", model_configs=self.model_configs
+        )
         self.conv_branches.append(conv0)
 
         # Branches 2, 3, 4: 3x3 convolutions with dilations (BatchNorm fused)
@@ -141,7 +145,12 @@ class TtASPP(LightweightModule):
                 weight=conv_params_path["weight"], bias=conv_bias, device=self.device, dilation=(dilation, dilation)
             )
             conv = TtConv2d.create_with_channel_slicing(
-                conv_params, stride=(1, 1), padding=(dilation, dilation), num_slices=channel_slices[i]
+                conv_params,
+                stride=(1, 1),
+                padding=(dilation, dilation),
+                num_slices=channel_slices[i],
+                conv_path=f"aspp.convs.{i+1}",
+                model_configs=self.model_configs,
             )
             self.conv_branches.append(conv)
 
@@ -153,7 +162,9 @@ class TtASPP(LightweightModule):
             bias=pool_conv_bias,
             device=self.device,
         )
-        self.pool_conv = TtConv2d.create(pool_conv_params, stride=(1, 1), padding=(0, 0))
+        self.pool_conv = TtConv2d.create(
+            pool_conv_params, stride=(1, 1), padding=(0, 0), conv_path="aspp.convs.4", model_configs=self.model_configs
+        )
 
         # Final Project convolution (BatchNorm fused into Conv)
         project_conv_path = parameters["project"]
@@ -163,7 +174,13 @@ class TtASPP(LightweightModule):
             bias=project_conv_bias,
             device=self.device,
         )
-        self.project_conv = TtConv2d.create(project_conv_params, stride=(1, 1), padding=(0, 0))
+        self.project_conv = TtConv2d.create(
+            project_conv_params,
+            stride=(1, 1),
+            padding=(0, 0),
+            conv_path="aspp.project",
+            model_configs=self.model_configs,
+        )
 
         self.pool_upsample = TtUpsample.create(device=device, scale_factor=(1, 1), mode="bilinear")
 
