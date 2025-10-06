@@ -58,7 +58,7 @@ def test_max_pool2d_with_indices(device):
     #     for c in range(in_c):
     #         for h in range(in_h):
     #             for w in range(in_w):
-    #                 torch_input[n, c, h, w] = c
+    #                 torch_input[n, c, h, w] = h * in_w + w
 
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
