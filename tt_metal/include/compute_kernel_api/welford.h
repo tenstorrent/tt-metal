@@ -42,6 +42,8 @@ namespace ckernel {
  * @param num_skip_rows   Number of initial rows to skip in the update.
  *                        Setting this to a value greater than 0 skips the first num_skip_rows rows of the update.
  *                        Should follow 0 <= num_skip_rows <= TILE_HEIGHT (32).
+ * @param group_id        The group that the tile belongs to. The dst regs can hold welford values for a maximum of
+ *                        16 groups at a time.
  * @param reciprocal_lut  The reference to the reciprocal lookup table. If an empty array is passed (reciprocal_size is
  * 0), the reciprocal will be computed using float division.
  *
@@ -60,6 +62,7 @@ ALWI void welford_tile(
     uint32_t current_row,
     uint32_t final_row,
     uint32_t num_skip_rows,
+    uint32_t group_id,
     const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
     MATH((llk_math_welfords_sfpu<
           input_dst_index,
@@ -67,7 +70,7 @@ ALWI void welford_tile(
           m2_dst_index,
           reformat_dst_to_col_on_end,
           /*convert_M2_to_var_on_end=*/false,
-          reciprocal_size>(current_row, final_row, num_skip_rows, reciprocal_lut)));
+          reciprocal_size>(current_row, final_row, num_skip_rows, group_id, reciprocal_lut)));
 }
 
 /**
@@ -92,6 +95,8 @@ ALWI void welford_tile(
  *
  * @param scale_factor       The reciprocal of this value (1/scale_factor) is multiplied with the M2 value in the DST
  * register at tile offset 2 to compute the variance.
+ * @param group_id           The group that the tile belongs to. The dst regs can hold welford values for a maximum of
+ *                           16 groups at a time.
  * @param reciprocal_lut     The reference to the reciprocal lookup table. If an empty array is passed (reciprocal_size
  * is 0), the reciprocal will be computed using float division.
  *
@@ -101,14 +106,15 @@ ALWI void welford_tile(
  *                           Each valid value is followed by an invalid value.
  */
 template <uint32_t mean_dst_index, uint32_t m2_dst_index, uint32_t reciprocal_size>
-ALWI void welford_M2_to_var(uint32_t scale_factor, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
+ALWI void welford_M2_to_var(
+    uint32_t scale_factor, uint32_t group_id, const std::array<uint32_t, reciprocal_size>& reciprocal_lut) {
     MATH((llk_math_welfords_sfpu<
           /*input_dst_index=*/0,
           mean_dst_index,
           m2_dst_index,
           /*reformat_dst_to_col_on_end=*/false,
           /*convert_M2_to_var_on_end=*/true,
-          reciprocal_size>(scale_factor, /*final_row=*/0, /*num_skip_rows=*/0, reciprocal_lut)));
+          reciprocal_size>(scale_factor, /*final_row=*/0, /*num_skip_rows=*/0, group_id, reciprocal_lut)));
 }
 
 /**
