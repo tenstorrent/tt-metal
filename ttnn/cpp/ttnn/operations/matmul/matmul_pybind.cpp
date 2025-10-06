@@ -556,8 +556,8 @@ void py_module(py::module& module) {
                   - Input A
                   - Input B
                 * - MatmulMultiCoreReuseProgramConfig
-                  - Interleaved (L1/DRAM), Height/Block Sharded (L1)
-                  - Interleaved (L1/DRAM), Height/Block Sharded (L1)
+                  - Interleaved (L1/DRAM), Height or Block Sharded (L1)
+                  - Interleaved (L1/DRAM), Height or Block Sharded (L1)
                 * - MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig
                   - Width Sharded (L1)
                   - Width Sharded (DRAM)
@@ -569,7 +569,7 @@ void py_module(py::module& module) {
                   - Interleaved (L1/DRAM)
                 * - MatmulMultiCoreReuseMultiCast1DProgramConfig mcast_in0
                   - Interleaved (L1/DRAM), Width Sharded (L1)
-                  - Interleaved (L1/DRAM), Width Sharded (DRAM)
+                  - Interleaved (L1/DRAM), Width Sharded (L1)
 
 
             For :class:`MatmulMultiCoreReuseMultiCastProgramConfig`, a special case exists when :attr:`input_tensor_a` is single column (height sharded or interleaved) and :attr:`input_tensor_b` is a single row (width sharded or interleaved).
