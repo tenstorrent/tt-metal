@@ -245,13 +245,6 @@ class MotifTransformer(Module):
             pooled: Tensor with shape [batch_size, pooled_projection_dim].
             timestep: Tensor with shape [batch_size, 1].
         """
-        if len(prompt.shape) == 4:
-            prompt = ttnn.squeeze(prompt, 0)
-        if len(pooled.shape) == 4:
-            pooled = ttnn.squeeze(ttnn.squeeze(pooled, 0), 0)
-        if len(timestep.shape) == 4:
-            timestep = ttnn.squeeze(ttnn.squeeze(timestep, 0), 0)
-
         batch_size, _, _ = spatial.shape
         assert len(prompt.shape) == 3
         assert len(pooled.shape) == 2
