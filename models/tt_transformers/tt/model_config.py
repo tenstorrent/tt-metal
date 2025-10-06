@@ -457,6 +457,7 @@ class ModelArgs:
         max_seq_len=1024 * 128,
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
+        model_location_generator=None,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -508,6 +509,12 @@ class ModelArgs:
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
             self.TOKENIZER_PATH = HF_MODEL
+
+            is_CI_v2 = is_ci_v2_env()
+            if is_CI_v2:
+                self.CKPT_DIR = model_location_generator(HF_MODEL, download_if_ci_v2=True)
+                self.TOKENIZER_PATH = self.CKPT_DIR
+
             if not self.CACHE_PATH:
                 self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             else:  # For HF models, always append the device name (e.g. N150/N300/T3K/TG) to the cache path
