@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <umd/device/tt_core_coordinates.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -32,6 +33,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 
 namespace tt::tt_metal {
@@ -124,7 +126,7 @@ TEST_F(MeshDeviceFixture, PingAllLegalDramChannels) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->num_dram_channels()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->dram_size_per_channel() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->num_dram_channels()));
             ASSERT_TRUE(unit_tests::basic::device::dram_ping(
@@ -167,7 +169,7 @@ TEST_F(MeshDeviceFixture, TensixPingAllLegalL1Cores) {
                 devices_.at(id), 32 * 1024, start_byte_address, devices_.at(id)->logical_grid_size()));
         }
         {
-            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - 32 * 1024;
+            size_t start_byte_address = devices_.at(id)->l1_size_per_core() - (32 * 1024);
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
                 devices_.at(id), 4, start_byte_address, devices_.at(id)->logical_grid_size()));
             ASSERT_TRUE(unit_tests::basic::device::l1_ping(
