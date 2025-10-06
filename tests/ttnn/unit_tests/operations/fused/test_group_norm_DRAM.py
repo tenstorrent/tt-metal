@@ -293,15 +293,15 @@ def _nearest_32_per_core(x, core):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
-    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
+    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps",
     [
         ### oft
-        (1, 256, 159, 159, 16, 3, 4, 4),
-        (1, 64, 192, 640, 16, 10, 2, 4),
+        (1, 256, 159, 159, 16, 3, 4, 4, 1e-5),
+        (1, 64, 192, 640, 16, 10, 2, 4, 1e-5),
     ],
 )
 @run_for_blackhole("blackhole specific tests")
-def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x):
+def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps):
     skip_if_not_blackhole_20_cores(device)
     torch.manual_seed(0)
     grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
@@ -310,7 +310,7 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.group_norm(
-        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=eps
     )
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
@@ -323,9 +323,7 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    print(
-        f"input_tensor_row_major shape: {input_tensor_row_major.shape} padded shape: {input_tensor_row_major.padded_shape}"
-    )
+
     unpadded_shape = input_tensor_row_major.shape
     out_shape = [
         unpadded_shape[0],
@@ -333,11 +331,11 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         _nearest_32_per_core(unpadded_shape[2], cores_x),
         _nearest_32_per_core(unpadded_shape[3], cores_y),
     ]
-    print(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
+
     input_tensor_tilized = ttnn.tilize_with_val_padding(
         input_tensor_row_major, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
     )
-    print(f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}")
+
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
     input_mask_tensor = ttnn.from_torch(
         input_mask_tensor,
@@ -374,9 +372,8 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
         core_grid=grid_size,
         inplace=False,
         num_out_blocks=num_out_blocks,
-        epsilon=1e-5,
+        epsilon=eps,
     )
-    print(f"output_tensor shape: {output_tensor.shape} padded shape: {output_tensor.padded_shape}")
 
     ttnn.synchronize_device(device)
     output_tensor = ttnn.from_device(output_tensor)

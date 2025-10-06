@@ -733,18 +733,18 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
 
 
 @pytest.mark.parametrize(
-    "N, C, H, W, num_groups, shard",
+    "N, C, H, W, num_groups, shard, eps",
     [
-        (1, 256, 12, 40, 16, "BS"),
-        (1, 256, 24, 80, 16, "HS"),
-        (1, 256, 48, 160, 16, "HS"),
-        (1, 512, 12, 40, 16, "BS"),
-        (1, 64, 96, 320, 16, "HS"),
+        (1, 256, 12, 40, 16, "BS", 1e-5),
+        (1, 256, 24, 80, 16, "HS", 1e-5),
+        (1, 256, 48, 160, 16, "HS", 1e-5),
+        (1, 512, 12, 40, 16, "BS", 1e-5),
+        (1, 64, 96, 320, 16, "HS", 1e-5),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @run_for_blackhole("blackhole specific tests")
-def test_group_norm_oft(device, N, C, H, W, num_groups, shard):
+def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps):
     assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
 
     skip_if_not_blackhole_20_cores(device)
@@ -757,7 +757,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard):
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
     # Execute torch group_norm
     torch_output_tensor = torch.nn.functional.group_norm(
-        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=1e-5
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias, eps=eps
     )
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
@@ -827,7 +827,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard):
         bias=beta_t,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
-        epsilon=1e-5,
+        epsilon=eps,
     )
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
