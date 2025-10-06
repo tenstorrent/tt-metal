@@ -7,14 +7,13 @@ import torch
 import pytest
 from loguru import logger
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_unet import TtUNet2DConditionModel
+from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import (
     DiffusionPipeline,
     UNet2DConditionModel,
 )
 from PIL import Image
 import numpy as np
-
-SDXL_L1_SMALL_SIZE = 14272
 
 
 def setup_pipelines():
