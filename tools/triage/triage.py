@@ -32,11 +32,19 @@ import os
 import utils
 from collections.abc import Iterable
 
+
+def find_install_debugger_script() -> str:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    install_script = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "scripts", "install_debugger.sh")
+    )
+    return install_script
+
+
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
 except ImportError as e:
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    install_script = os.path.join(os.path.dirname(script_dir), "install_debugger.sh")
+    install_script = find_install_debugger_script()
     print(f"Module '{e}' not found. Please install tt-exalens by running:")
     print(f"  {utils.GREEN}{install_script}{utils.RST}")
     exit(1)
@@ -494,10 +502,8 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
     except Exception:
         skip_check = False
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    ref_path = os.path.abspath(
-        os.path.join(os.path.dirname(os.path.dirname(script_dir)), "scripts", "ttexalens_ref.txt")
-    )
+    scripts_dir = os.path.dirname(find_install_debugger_script())
+    ref_path = os.path.abspath(os.path.join(scripts_dir, "ttexalens_ref.txt"))
 
     try:
         with open(ref_path, "r", encoding="utf-8") as f:
