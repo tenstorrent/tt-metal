@@ -25,7 +25,16 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
             1,
             0.991,
         ),
-        ((1, 1536, 64, 64), (1, 1536), ((1, 384, 64, 64), (1, 768, 64, 64), (1, 768, 64, 64)), (1, 77, 1280), 2, 0.987),
+        # fmt: off
+        (
+            (1, 1536, 64, 64),
+            (1, 1536),
+            ((1, 384, 64, 64), (1, 768, 64, 64), (1, 768, 64, 64)),
+            (1, 77, 1280),
+            2,
+            0.987,
+        ),
+        # fmt: on
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
