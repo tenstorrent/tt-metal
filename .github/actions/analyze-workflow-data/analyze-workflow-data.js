@@ -1184,30 +1184,34 @@ async function run() {
             getAnnotationsDirForRunId(latestFail.id)
           ); // get the error snippets for the latest failing run using annotations if available
           errorSnippetsCache.set(latestFail.id, errs); // cache the error snippets for reuse
-          // Aggregate owners from snippets
-          const ownerSet = new Map(); // ownerSet will contain the mappings from an owner's id and name to the owner object
-          for (const e of (errs || [])) {
-            if (Array.isArray(e.owner)) {
-              for (const o of e.owner) {
+          // Infer job/test and resolve owners per snippet, then aggregate
+          const ownerSet = new Map();
+          for (const sn of (errs || [])) {
+            const inferred = inferJobAndTestFromSnippet(sn);
+            if (inferred) { sn.job = inferred.job; sn.test = inferred.test; }
+            resolveOwnersForSnippet(sn, name);
+            if (Array.isArray(sn.owner)) {
+              for (const o of sn.owner) {
                 if (!o) continue;
-                const key = `${o.id || ''}|${o.name || ''}`;
-                ownerSet.set(key, o);
+                const k = `${o.id || ''}|${o.name || ''}`;
+                ownerSet.set(k, o);
               }
             }
-          } // this deduplicates owner lists within snippets and make sures owners with the same name but different ids are seen differently
+          }
           owners = Array.from(ownerSet.values());
         } catch (_) { /* ignore */ }
         // Fallback: try to resolve owners from the workflow name
         if (!owners || owners.length === 0) {
-          owners = findOwnerForLabel(name);
+          owners = findOwnerForLabel(name) || [DEFAULT_INFRA_OWNER];
         }
         // When alertAll is false, avoid pinging by listing owner names instead of Slack mention IDs
         const ownerNamesText = (() => {
           const arr = Array.isArray(owners) ? owners : (owners ? [owners] : []);
           const names = arr.map(o => (o && (o.name || o.id)) ? (o.name || o.id) : '').filter(Boolean);
-          return names.length ? names.join(', ') : '(no owner found)';
+          return names.length ? names.join(', ') : (DEFAULT_INFRA_OWNER.name);
         })();
-        const ownerMentions = alertAll ? (mention(owners) || '(no owner found)') : ownerNamesText; // conditionally ping owners only if alertAll is true
+        const fallbackMention = `<@${DEFAULT_INFRA_OWNER.id}>`;
+        const ownerMentions = alertAll ? (mention(owners) || fallbackMention) : ownerNamesText; // conditionally ping owners only if alertAll is true
         const wfUrl = getWorkflowLink(github.context, runs[0]?.path); // get the workflow url link for the pipeline run (can use any run to get the workflow link)
         failingItems.push(`• ${name} ${wfUrl ? `<${wfUrl}|open>` : ''} ${ownerMentions}`.trim()); // the run is failing because if it wasn't the for loop would have continued earlier
       }
