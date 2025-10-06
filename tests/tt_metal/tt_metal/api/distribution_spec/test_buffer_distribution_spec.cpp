@@ -11,6 +11,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
+#include "impl/buffers/buffer_page_mapping.hpp"
 
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;

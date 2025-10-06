@@ -32,6 +32,8 @@
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/impl/dispatch/hardware_command_queue.hpp"
 
+#include "impl/buffers/buffer_page_mapping.hpp"
+
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using MeshShape = tt::tt_metal::distributed::MeshShape;

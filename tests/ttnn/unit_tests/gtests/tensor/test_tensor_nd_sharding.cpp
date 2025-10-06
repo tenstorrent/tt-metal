@@ -8,6 +8,8 @@
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/distributed.hpp>
 
+#include "impl/buffers/buffer_page_mapping.hpp"
+
 namespace {
 struct NDShardingParams {
     Shape shape;
@@ -357,8 +359,8 @@ TEST_P(NDShardingSqueezeRankTests, TestSqueezeRank) {
     EXPECT_EQ(dspec.shard_shape_in_pages(), params.expected_shard_shape_pages);
 
     if (params.tensor_shape_pages.rank() == params.shard_shape_pages.rank()) {
-        auto expected_page_mapping =
-            detail::compute_page_mapping(params.tensor_shape_pages, params.shard_shape_pages, dspec.cores());
+        BufferDistributionSpec expected_dspec(params.tensor_shape_pages, params.shard_shape_pages, dspec.cores());
+        auto expected_page_mapping = expected_dspec.compute_page_mapping();
         EXPECT_EQ(dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
     }
 }
@@ -413,8 +415,8 @@ TEST_F(NDShardingSqueezeRankStressTests, TestSqueezeRankStress) {
     iterate_shapes(Shape({4, 4, 4, 4}), [&](const Shape& tensor_shape) {
         iterate_shapes(tensor_shape, [&](const Shape& shard_shape) {
             BufferDistributionSpec dspec(tensor_shape, shard_shape, cores, ShardOrientation::ROW_MAJOR);
-            auto expected_page_mapping =
-                tt::tt_metal::detail::compute_page_mapping(tensor_shape, shard_shape, dspec.cores());
+            BufferDistributionSpec expected_dspec(tensor_shape, shard_shape, dspec.cores());
+            auto expected_page_mapping = expected_dspec.compute_page_mapping();
             EXPECT_EQ(
                 dspec.compute_page_mapping().core_host_page_indices, expected_page_mapping.core_host_page_indices);
         });
