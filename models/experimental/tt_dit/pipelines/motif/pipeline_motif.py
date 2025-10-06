@@ -372,9 +372,9 @@ class StableDiffusion3Pipeline:
         prompt_1: list[str],
         prompt_2: list[str],
         prompt_3: list[str],
-        negative_prompt_1: list[str],
-        negative_prompt_2: list[str],
-        negative_prompt_3: list[str],
+        negative_prompt_1: list[str | None],
+        negative_prompt_2: list[str | None],
+        negative_prompt_3: list[str | None],
         num_inference_steps: int = 40,
         linear_quadratic_emulating_steps: int = 100,
         seed: int | None = None,
@@ -406,7 +406,7 @@ class StableDiffusion3Pipeline:
                     # HACK: reshape submesh device 0 from 2D to 1D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
                 prompt_encoding_start_time = time.time()
-                prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
+                prompt_embeds, pooled_prompt_embeds, prompt_embeds_alt, pooled_prompt_embeds_alt = self._encode_prompts(
                     prompt_1=prompt_1,
                     prompt_2=prompt_2,
                     prompt_3=prompt_3,
@@ -709,15 +709,20 @@ class StableDiffusion3Pipeline:
         prompt_1: list[str],
         prompt_2: list[str],
         prompt_3: list[str],
-        negative_prompt_1: list[str],
-        negative_prompt_2: list[str],
-        negative_prompt_3: list[str],
+        negative_prompt_1: list[str | None],
+        negative_prompt_2: list[str | None],
+        negative_prompt_3: list[str | None],
         num_images_per_prompt: int,
         max_t5_sequence_length: int,
         do_classifier_free_guidance: bool,
         clip_skip: int | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         timer = self.timing_collector
+
+        no_negative_prompt = [x is None for x in negative_prompt_1]
+        negative_prompt_1 = [x if x is not None else "" for x in negative_prompt_1]
+        negative_prompt_2 = [x if x is not None else "" for x in negative_prompt_2]
+        negative_prompt_3 = [x if x is not None else "" for x in negative_prompt_3]
 
         with timer.time_section("text_encoding") if timer else nullcontext():
             prompt_embeds, pooled_prompt_embeds = self._text_encoder.encode(
@@ -728,10 +733,21 @@ class StableDiffusion3Pipeline:
                 negative_prompt_1, negative_prompt_2, negative_prompt_3, num_images_per_prompt=num_images_per_prompt
             )
 
-        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-        pooled_prompt_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
+        zeroed_prompt_embeds = negative_prompt_embeds.clone()
+        zeroed_pooled_prompt_embeds = negative_pooled_prompt_embeds.clone()
 
-        return prompt_embeds, pooled_prompt_embeds
+        for i, no_neg in enumerate(no_negative_prompt):
+            if no_neg:
+                zeroed_prompt_embeds[i] = 0
+                zeroed_pooled_prompt_embeds[i] = 0
+
+        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+        prompt_embeds_alt = torch.cat([zeroed_prompt_embeds, prompt_embeds], dim=0)
+
+        pooled_prompt_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
+        pooled_prompt_embeds_alt = torch.cat([zeroed_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
+
+        return prompt_embeds, pooled_prompt_embeds, prompt_embeds_alt, pooled_prompt_embeds_alt
 
 
 class TextEncoder:

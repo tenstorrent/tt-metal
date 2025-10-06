@@ -111,7 +111,8 @@ def test_motif_pipeline(
 
     if no_prompt:
         # Run single generation
-        negative_prompt = ""
+        negative_prompt = None
+
         images = pipeline(
             prompt_1=[prompt],
             prompt_2=[prompt],
@@ -149,7 +150,7 @@ def test_motif_pipeline(
             if prompt[0] == "q":
                 break
 
-            negative_prompt = ""
+            negative_prompt = None
 
             images = pipeline(
                 prompt_1=[prompt],
