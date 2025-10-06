@@ -46,6 +46,23 @@ void kernel_main() {
 
     DPRINT << "in0recv: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
+    /**
+     * Credit-based multicasting scheme. See sender for sender details.
+     * Receiver logic:
+     * - while true:
+     *   - cb_reserve_back
+     *   - if num_received >= buffer_factor: // This means that the buffer has filled at least once, so hitting
+     * reserve_back means that compute has completed on buf_idx, and the reciever can acknowledge that the buffer slot
+     * is free.
+     *     - increment ack_sem[buf_idx]
+     *   - wait valid_sem[buf_idx]
+     *   - reset valid_sem[buf_idx]
+     *   - num_received++
+     *   - buf_idx = (buf_idx + 1) % buffer_factor
+     *   - cb_push_back
+     */
+    uint32_t num_received = 0;
+    uint32_t buf_idx = 0;
 
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
@@ -56,11 +73,17 @@ void kernel_main() {
 
 #ifndef SKIP_IN0
                 volatile tt_l1_ptr uint32_t* in0_valid_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_sem_addrs[0]);
-                uint64_t in0_ack_sem_noc_addr = in0_sender_base_noc_addr | in0_ack_sem_addrs[0];
-                noc_semaphore_set(in0_valid_sem_ptr, INVALID);
-                noc_semaphore_inc(in0_ack_sem_noc_addr, 1);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_sem_addrs[buf_idx]);
+                uint64_t in0_ack_sem_noc_addr = in0_sender_base_noc_addr | in0_ack_sem_addrs[buf_idx];
+                if (num_received >= buffer_factor) {
+                    noc_semaphore_inc(in0_ack_sem_noc_addr, 1);
+                } else {
+                    // Only increment while the buffer has not filled at least once to avoid overflow
+                    num_received++;
+                }
                 noc_semaphore_wait(in0_valid_sem_ptr, VALID);
+                noc_semaphore_set(in0_valid_sem_ptr, INVALID);
+                buf_idx = (buf_idx + 1) % buffer_factor;
 #endif
 
                 cb_push_back(cb_id_in0, in0_block_num_tiles);

@@ -56,6 +56,24 @@ void kernel_main() {
     DPRINT << "in0send: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
 
+    /**
+     * Credit-based multicasting scheme. See receiver for reciever details.
+     * Sender logic:
+     * - start with buffer_factor number of credits
+     * - keep track of destination buffer slot (0..buffer_factor-1)
+     * - while true:
+     *   - if credits == 0:
+     *     - wait on ack_sem[buf_idx] to reach in0_mcast_num_dests
+     *     - reset ack_sem[buf_idx] to 0
+     *     - credits++
+     *   - mcast data into buf_idx
+     *   - set valid_sem[buf_idx]
+     *   - credits--
+     *   - buf_idx = (buf_idx + 1) % buffer_factor
+     */
+    uint32_t credits = buffer_factor;
+    uint32_t buf_idx = 0;
+
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         for (uint32_t n_block = N_start_block; n_block <= N_end_block; n_block++) {
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
@@ -81,9 +99,13 @@ void kernel_main() {
 
                 // DPRINT << "in0 sender wait for all clear" << ENDL();
                 volatile tt_l1_ptr uint32_t* in0_ack_sem_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_ack_sem_addrs[0]);
-                noc_semaphore_wait(in0_ack_sem_ptr, in0_mcast_num_dests);
-                noc_semaphore_set(in0_ack_sem_ptr, 0);
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_ack_sem_addrs[buf_idx]);
+
+                if (credits == 0) {
+                    noc_semaphore_wait(in0_ack_sem_ptr, in0_mcast_num_dests);
+                    noc_semaphore_set(in0_ack_sem_ptr, 0);
+                    credits++;
+                }
 
                 uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
 
@@ -96,9 +118,13 @@ void kernel_main() {
                     true);
                 // DPRINT << "in0 sender after send" << ENDL();
 
-                uint64_t in0_multicast_valid_sem_addr = in0_multicast_data_noc | in0_valid_sem_addrs[0];
-                noc_semaphore_set_multicast(in0_valid_sem_addrs[0], in0_multicast_valid_sem_addr, in0_mcast_num_dests);
+                uint64_t in0_multicast_valid_sem_addr = in0_multicast_data_noc | in0_valid_sem_addrs[buf_idx];
+                noc_semaphore_set_multicast(
+                    in0_valid_sem_addrs[buf_idx], in0_multicast_valid_sem_addr, in0_mcast_num_dests);
                 DPRINT << "in0 sender after send data arrived" << ENDL();
+
+                credits--;
+                buf_idx = (buf_idx + 1) % buffer_factor;
 #endif
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
             }
