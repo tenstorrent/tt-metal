@@ -76,6 +76,16 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Ensure cpupower (best-effort)
+        run: |
+          set -euxo pipefail
+          if ! command -v cpupower >/dev/null 2>&1; then
+            # Try kernel-matched tools first, fallback to generic
+            (apt-get update && apt-get install -y --no-install-recommends \
+              linux-tools-common "linux-tools-$(uname -r)") || \
+            (apt-get update && apt-get install -y --no-install-recommends linux-tools-generic) || true
+          fi
+          command -v cpupower || true
       - name: Enable Performance mode
         run: |
           sudo cpupower frequency-set -g performance
