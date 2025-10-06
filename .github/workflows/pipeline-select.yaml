@@ -122,6 +122,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   scaleout-tests:
+    if: ${{ inputs.scaleout-tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/scaleout-tests.yaml
