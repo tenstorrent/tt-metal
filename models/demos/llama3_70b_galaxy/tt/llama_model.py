@@ -432,7 +432,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.lm_head(x, None, mode="prefill")
 
             # Gather the output across all devices and untilize the tensor (for argmax)
-            tt_logits = self.tt_ccl.line_all_gather(
+            tt_logits_tilized = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
                 num_links=3,
@@ -441,7 +441,8 @@ class TtTransformer(LightweightModule):
                 buffer_key="SAMPLING",
             )
 
-            tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+            tt_logits = ttnn.untilize(tt_logits_tilized, use_multicore=True)
+            tt_logits_tilized.deallocate(True)
 
             tt_logits = ttnn.reshape(
                 tt_logits,
@@ -449,6 +450,7 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
             tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
+            tt_logits.deallocate(True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]
 

@@ -102,7 +102,7 @@ class TT_CCL:
             self.rs_create_heads_buffers = self.get_decode_rs_create_heads_buffers()
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
-            self.support_seqlens = [2048, 1024, 128]
+            self.support_seqlens = [4096, 2048, 1024, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -533,8 +533,6 @@ class TT_CCL:
                 "FF3": [(1, 1, seqlen, 3584)],
                 "FF2": [(1, 1, seqlen, 2048)],
                 "LAYERNORM": [(1, 1, seqlen, 128)],
-                "LM_HEAD": [(1, 1, 32, 16384)],
-                "SAMPLING": [(1, 1, 32, 128 * 1024)],
             }
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
@@ -548,6 +546,19 @@ class TT_CCL:
                 )
                 ag_persistent_buffers[key] = tt_buffer
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
+            buffers_dict_extra = {
+                "LM_HEAD": [(4, 1, 32, 16384)],
+                "SAMPLING": [(1, 1, 32, 128 * 1024)],
+            }
+            for key, shape in buffers_dict_extra.items():
+                tt_buffer = ttnn.as_tensor(
+                    torch.zeros(shape[0]),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                )
+                ag_persistent_buffers[key] = tt_buffer
+            ag_persistent_buffers_all[32] = ag_persistent_buffers
         return ag_persistent_buffers_all
 
     def line_all_reduce(
