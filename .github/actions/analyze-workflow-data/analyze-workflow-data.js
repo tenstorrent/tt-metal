@@ -431,7 +431,6 @@ function renderCommitsTable(commits) {
 /**
  * Fetches PR information associated with a commit.
  *
- * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
  * @param {string} commitSha - Full SHA of the commit to look up
  * @returns {Promise<object>} Object containing:
@@ -449,7 +448,7 @@ async function fetchPRInfo(_github, _context, _commitSha) {
  * Returns GitHub login (if associated), author display name, and profile URL (if available).
  */
 // Disabled: commit author fetch via GitHub API; will be inferred from commits index if present
-async function fetchCommitAuthor(_octokit, _context, _commitSha) {
+async function fetchCommitAuthor(_commitSha) {
   return { login: undefined, name: undefined, htmlUrl: undefined };
 }
 
@@ -815,7 +814,6 @@ function findFirstFailInWindow(mainBranchRunsWindow) {
  * Scans runs in reverse chronological order and returns the oldest failure before the first encountered success.
  * Falls back to the oldest failure in history if no success is found.
  *
- * @param {object} octokit - Authenticated Octokit client
  * @param {object} context - GitHub Actions context
  * @param {string} workflowPath - Path to the workflow file (e.g., .github/workflows/ci.yaml)
  * @returns {Promise<object|null>} The workflow run object or null if none found
@@ -857,7 +855,6 @@ function findGoodBadCommits(scheduledMainRuns, context) {
  * Gets information about the last run on main branch.
  *
  * @param {Array<object>} mainBranchRuns - Array of runs on main branch, sorted by date (newest first)
- * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
  * @returns {Promise<object>} Object containing run information
  */
@@ -897,7 +894,6 @@ async function getLastRunInfo(mainBranchRuns, context) {
  * Generates summary tables for push and scheduled workflows.
  *
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
- * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
  * @returns {Promise<string>} Markdown table for all workflows
  */
@@ -966,7 +962,6 @@ async function generateSummaryBox(grouped, context) {
  * Builds the complete markdown report.
  *
  * @param {Map<string, Array<object>>} grouped - Map of workflow names to their runs
- * @param {object} github - Octokit client instance
  * @param {object} context - GitHub Actions context
  * @returns {Promise<string>} Complete markdown report
  */
@@ -1350,7 +1345,7 @@ async function run() {
           }
           // Commit author enrichment is now superseded by commits_between list; keep top-level for convenience if present
           if (item.first_failed_head_sha) {
-            const author = await fetchCommitAuthor(null, null, item.first_failed_head_sha);
+            const author = await fetchCommitAuthor(item.first_failed_head_sha);
             item.first_failed_author_login = author.login;
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
@@ -1447,7 +1442,7 @@ async function run() {
           }
           // Commit author of the first failed in-window (optional)
           if (item.first_failed_head_sha) {
-            const author = await fetchCommitAuthor(null, null, item.first_failed_head_sha);
+            const author = await fetchCommitAuthor(item.first_failed_head_sha);
             item.first_failed_author_login = author.login;
             item.first_failed_author_name = author.name;
             item.first_failed_author_url = author.htmlUrl;
