@@ -477,6 +477,41 @@ process_mcast_in0_program_and_create_override_variables(
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
+    // Intermediate CB read
+    /*
+    Blackhole architecture alignment issue workaround for tiny tiles:
+
+    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
+    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
+    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
+
+    Example scenario:
+    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
+    - CB configured with size=2 to hold both tiles
+
+    Result:
+    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
+    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
+
+    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
+    the intermediate CB first, then copy to the destination CB. This ensures proper
+    alignment at the cost of additional memory bandwidth overhead.
+
+    Note: This workaround should only be used for this specific alignment issue case.
+    */
+    bool in0_needs_intermediate_cb_read = false;
+    bool in1_needs_intermediate_cb_read = false;
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
+        if (in0_needs_intermediate_cb_read) {
+            mm_kernel_in0_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
+        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
+        if (in1_needs_intermediate_cb_read) {
+            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
+    }
+
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -742,6 +777,24 @@ process_mcast_in0_program_and_create_override_variables(
             bias_single_tile_size,
             in3_CB_size / bias_single_tile_size,
             in3_CB_size);
+    }
+
+    // Intermediate CB read
+    if (in1_needs_intermediate_cb_read) {
+        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
+            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
+                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
+                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
+    }
+    if (in0_needs_intermediate_cb_read) {
+        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
+            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
+                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
     }
 
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
@@ -1261,6 +1314,41 @@ process_mcast_in1_program_and_create_override_variables(
         mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
     }
 
+    // Intermediate CB read
+    /*
+    Blackhole architecture alignment issue workaround for tiny tiles:
+
+    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
+    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
+    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
+
+    Example scenario:
+    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
+    - CB configured with size=2 to hold both tiles
+
+    Result:
+    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
+    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
+
+    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
+    the intermediate CB first, then copy to the destination CB. This ensures proper
+    alignment at the cost of additional memory bandwidth overhead.
+
+    Note: This workaround should only be used for this specific alignment issue case.
+    */
+    bool in0_needs_intermediate_cb_read = false;
+    bool in1_needs_intermediate_cb_read = false;
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
+        if (in0_needs_intermediate_cb_read) {
+            mm_kernel_in0_sender_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
+        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
+        if (in1_needs_intermediate_cb_read) {
+            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
+    }
+
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -1469,6 +1557,24 @@ process_mcast_in1_program_and_create_override_variables(
             bias_single_tile_size,
             in3_CB_size / bias_single_tile_size,
             in3_CB_size);
+    }
+
+    // Intermediate CB read
+    if (in1_needs_intermediate_cb_read) {
+        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
+            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
+                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
+                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
+    }
+    if (in0_needs_intermediate_cb_read) {
+        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
+            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
+                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
     }
 
     // Parameters for last row, col, or block
@@ -3241,6 +3347,41 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
+    // Intermediate CB read
+    /*
+    Blackhole architecture alignment issue workaround for tiny tiles:
+
+    Problem: When reading tiny tiles from DRAM to circular buffers (CB), address alignment
+    issues occur. DRAM tile addresses are 64-byte aligned within each block, but L1 CB
+    addresses are not necessarily aligned due to non-64-byte-aligned page sizes.
+
+    Example scenario:
+    - Two consecutive 544-byte tiles (16x32 tile of dtype bfloat8_b) stored on different DRAM banks
+    - CB configured with size=2 to hold both tiles
+
+    Result:
+    - Tile 0: DRAM Bank 0, Address 64    → CB L1 Address 0   (64-byte aligned ✓)
+    - Tile 1: DRAM Bank 1, Address 64    → CB L1 Address 544 (not 64-byte aligned ✗)
+
+    Solution: Use an intermediate single-tile CB as a staging area. Read each tile into
+    the intermediate CB first, then copy to the destination CB. This ensures proper
+    alignment at the cost of additional memory bandwidth overhead.
+
+    Note: This workaround should only be used for this specific alignment issue case.
+    */
+    bool in0_needs_intermediate_cb_read = false;
+    bool in1_needs_intermediate_cb_read = false;
+    if (device->arch() == tt::ARCH::BLACKHOLE) {
+        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
+        if (in0_needs_intermediate_cb_read) {
+            mm_kernel_in0_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
+        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
+        if (in1_needs_intermediate_cb_read) {
+            mm_kernel_in1_sender_writer_defines["INTERMEDIATE_CB_READ"] = "1";
+        }
+    }
+
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
@@ -3433,6 +3574,24 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         output_single_tile_size,
         out_CB_size / output_single_tile_size,
         out_CB_size);
+
+    // Intermediate CB read
+    if (in1_needs_intermediate_cb_read) {
+        uint32_t in1_intermediate_cb_index = tt::CBIndex::c_9;
+        tt_metal::CircularBufferConfig cb_in1_intermediate_config =
+            tt_metal::CircularBufferConfig(in1_single_tile_size, {{in1_intermediate_cb_index, in1_data_format}})
+                .set_page_size(in1_intermediate_cb_index, in1_single_tile_size)
+                .set_tile_dims(in1_intermediate_cb_index, in1_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in1_intermediate_config);
+    }
+    if (in0_needs_intermediate_cb_read) {
+        uint32_t in0_intermediate_cb_index = tt::CBIndex::c_8;
+        tt_metal::CircularBufferConfig cb_in0_intermediate_config =
+            tt_metal::CircularBufferConfig(in0_single_tile_size, {{in0_intermediate_cb_index, in0_data_format}})
+                .set_page_size(in0_intermediate_cb_index, in0_single_tile_size)
+                .set_tile_dims(in0_intermediate_cb_index, in0_tile);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_in0_intermediate_config);
+    }
 
     // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = Nt % per_core_N == 0 ? per_core_N : Nt % per_core_N;
