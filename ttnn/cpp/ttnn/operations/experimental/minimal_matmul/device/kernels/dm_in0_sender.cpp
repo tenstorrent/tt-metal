@@ -17,9 +17,8 @@ void kernel_main() {
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(6);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t input_tile_size = get_compile_time_arg_val(8);
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
-    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(11);
+    constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(9);
+    constexpr uint32_t buffer_factor = get_compile_time_arg_val(10);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -28,9 +27,19 @@ void kernel_main() {
     const uint32_t in0_mcast_dest_noc_start_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_mcast_dest_noc_end_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_mcast_dest_noc_end_y = get_arg_val<uint32_t>(argidx++);
+    uint32_t* in0_valid_sem_ids = reinterpret_cast<uint32_t*>(get_arg_addr(argidx));
+    argidx += buffer_factor;
+    uint32_t* in0_ack_sem_ids = reinterpret_cast<uint32_t*>(get_arg_addr(argidx));
+
+    uint32_t in0_valid_sem_addrs[buffer_factor];
+    uint32_t in0_ack_sem_addrs[buffer_factor];
+    for (uint32_t i = 0; i < buffer_factor; i++) {
+        in0_valid_sem_addrs[i] = get_semaphore(in0_valid_sem_ids[i]);
+        in0_ack_sem_addrs[i] = get_semaphore(in0_ack_sem_ids[i]);
+    }
 
     // Tensor accessor for input tensor
-    constexpr auto in0_args = TensorAccessorArgs<12>();
+    constexpr auto in0_args = TensorAccessorArgs<11>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, input_tile_size);
 
     constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
@@ -39,17 +48,17 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_sem_addrs[0]);
     *(in0_mcast_receiver_semaphore_addr_ptr) = VALID;
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_ack_sem_addrs[0]);
 
     const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x,
         in0_mcast_dest_noc_start_y,
         in0_mcast_dest_noc_end_x,
         in0_mcast_dest_noc_end_y,
-        in0_mcast_receiver_semaphore_addr);
+        in0_valid_sem_addrs[0]);
 
     const uint64_t in0_multicast_data_noc = get_noc_multicast_addr(
         in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y, 0);
@@ -96,7 +105,7 @@ void kernel_main() {
                 // DPRINT << "in0 sender after send" << ENDL();
 
                 noc_semaphore_set_multicast(
-                    in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_dests);
+                    in0_valid_sem_addrs[0], in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_dests);
                 DPRINT << "in0 sender after send data arrived" << ENDL();
 #endif
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
