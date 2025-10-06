@@ -339,9 +339,7 @@ struct FabricEriscDatamoverConfig {
     static_assert(sizeof(tt::tt_fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Receiver Channels
-    std::array<std::size_t, max_downstream_edms> receiver_channels_local_buffer_index_address = {};
     // persistent mode field
-    std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_flow_control_semaphore_address = {};
     std::array<std::size_t, max_downstream_edms> receiver_channels_downstream_teardown_semaphore_address = {};
 
     // Conditionally used fields. BlackHole with 2-erisc uses these fields for sending credits back to sender.
@@ -512,8 +510,6 @@ public:
         const FabricNodeId& peer_fabric_node_id,
 
         const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
-            receiver_channels_downstream_flow_control_semaphore_id,
-        const std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>&
             receiver_channels_downstream_teardown_semaphore_id,
         const std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels>&
             sender_channels_flow_control_semaphore_id,
@@ -620,22 +616,18 @@ public:
     // Semaphore IDs
     // this is the receiver channel's local sem for flow controlling with downstream fabric sender
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-        receiver_channels_downstream_flow_control_semaphore_id = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id = {};
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id = {};
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_connection_semaphore_id = {};
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id = {};
-    std::array<size_t, FabricEriscDatamoverConfig::max_downstream_edms> receiver_channels_local_buffer_index_address =
-        {};
 
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_x = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms> downstream_edm_vcs_noc_y = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels> downstream_edm_vcs_noc_x = {};
+    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels> downstream_edm_vcs_noc_y = {};
+    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels>
         downstream_edm_vcs_buffer_base_address = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels>
         downstream_edm_vcs_worker_registration_address = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
+    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::num_receiver_channels>
         downstream_edm_vcs_worker_location_info_address = {};
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels>
         downstream_vcs_sender_channel_buffer_index_semaphore_id = {};
