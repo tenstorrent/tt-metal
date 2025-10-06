@@ -7,7 +7,7 @@ import torch
 import pytest
 from loguru import logger
 from models.experimental.stable_diffusion_xl_refiner.tt.tt_unet import TtUNet2DConditionModel
-from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_REFINER_L1_SMALL_SIZE
 from diffusers import (
     DiffusionPipeline,
     UNet2DConditionModel,
@@ -314,7 +314,7 @@ def run_demo_inference(
     logger.info("Demo complete!")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),

@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_refiner.tt.tt_unet import TtUNet2DC
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
-from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_REFINER_L1_SMALL_SIZE
 
 
 def prepare_ttnn_tensors(
@@ -155,7 +155,7 @@ def run_unet_model(
         ((1, 4, 128, 128), (), (1, 77, 1280), (1, 1280), (1, 5)),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
     input_shape,

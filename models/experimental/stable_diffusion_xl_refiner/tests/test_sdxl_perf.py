@@ -6,7 +6,7 @@ import pytest
 
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
-from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_REFINER_L1_SMALL_SIZE
 from models.experimental.stable_diffusion_xl_refiner.tests.pcc.test_module_tt_unet import run_unet_model
 
 UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
@@ -18,7 +18,7 @@ UNET_DEVICE_TEST_TOTAL_ITERATIONS = 1
         ((1, 4, 128, 128), (), (1, 77, 1280), (1, 1280), (1, 5)),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 def test_unet(
     device,

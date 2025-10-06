@@ -11,7 +11,7 @@ from models.experimental.stable_diffusion_xl_refiner.tt.tt_crossattnupblock2d im
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
-from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SDXL_REFINER_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -37,7 +37,7 @@ from models.experimental.stable_diffusion_xl_refiner.tests.test_common import SD
         # fmt: on
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_REFINER_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnup(
     device,
     input_shape,
