@@ -13,7 +13,7 @@
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
-#include "ttnn/operations/normalization/kernel_util/compute/combine_welford.hpp"
+#include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 
 /**
  * @brief This kernel computes layernorm for sharded tensors using
@@ -60,9 +60,10 @@
  * calculation is done using the global mean and 1/sqrt(var + eps) results.
  *
  * @note Depending on the tensor and core grid shape, some cores may
- *       not participate in the reduction. These cores just receive the
- *       multicasted global results and perform the rest of layernorm
- *       for their row(s).
+ *       not participate in the reduction (i.e., `is_allgather_worker`
+ *       will be false). These cores just receive the multicasted
+ *       global results and perform the rest of layernorm for their
+ *       row(s) width slices.
  */
 namespace NAMESPACE {
 namespace {
