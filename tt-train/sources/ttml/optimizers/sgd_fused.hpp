@@ -35,7 +35,21 @@ public:
 
     void set_lr(float lr) override;
 
+    [[nodiscard]] float get_momentum() const;
+    void set_momentum(float momentum);
+
+    [[nodiscard]] float get_dampening() const;
+    void set_dampening(float dampening);
+
+    [[nodiscard]] float get_weight_decay() const;
+    void set_weight_decay(float weight_decay);
+
+    [[nodiscard]] bool get_nesterov() const;
+    void set_nesterov(bool nesterov);
+
 private:
+    void validate_config() const;
+    bool m_config_dirty{false};
     size_t m_steps{0};
     SGDFusedConfig m_config;
     ttml::serialization::NamedParameters m_momentum;
