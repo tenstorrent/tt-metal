@@ -259,6 +259,14 @@ void device_module(py::module& m_device) {
         Returns associated mmio device of give device id.
     )doc");
 
+    m_device.def("SetRootDir", &tt::tt_metal::SetRootDir, py::arg("root_dir"), R"doc(
+        Sets the root directory for TT Metal operations.
+        Args:
+            root_dir (str): Path to the root directory to set.
+        Example:
+            >>> ttnn.device.SetRootDir("/path/to/tt_metal_home")
+    )doc");
+
     m_device.def(
         "SetDefaultDevice",
         [](MeshDevice* device) { ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device); },
