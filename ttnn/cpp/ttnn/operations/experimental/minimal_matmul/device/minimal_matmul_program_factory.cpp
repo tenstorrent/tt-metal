@@ -212,9 +212,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
         for (uint32_t in1_worker_idx = 1; in1_worker_idx < grid_size.y; in1_worker_idx++) {
             CoreCoord in1_worker_core = {(std::size_t)core.x, (std::size_t)0};
             if (in1_noc == tt::tt_metal::NOC::NOC_0) {
-                in1_worker_core.y = grid_size.y - in1_worker_idx;
-            } else {
                 in1_worker_core.y = in1_worker_idx;
+            } else {
+                in1_worker_core.y = grid_size.y - in1_worker_idx;
             }
             if (in1_worker_core.y == core.y) {
                 in1_core_order_index = in1_worker_idx;
