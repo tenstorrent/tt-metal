@@ -10,6 +10,8 @@
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
+#include "debug/waypoint.h"
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
@@ -170,10 +172,13 @@ void kernel_main() {
     }
 
     // Generate sliding window mask if sliding window is enabled and window_start > 0
+    WAYPOINT("GSWS");
     if (sliding_window > 0 && window_start_unaligned > 0) {
         generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(
             k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
+        // generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
+    WAYPOINT("GSWE");
 
     noc_async_write_barrier();  // #19201 BH hang workaround
 
