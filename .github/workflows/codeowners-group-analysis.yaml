@@ -1182,9 +1182,21 @@ jobs:
               fi
             done
 
+            # Also find Slack user ID for the PR author
+            echo "Looking up PR author in Slack: $PR_AUTHOR_FULL_NAME"
+            PR_AUTHOR_SLACK_ID=$(find_slack_user_id "$PR_AUTHOR_FULL_NAME" "$PR_AUTHOR_LOGIN")
+
+            if [ -n "$PR_AUTHOR_SLACK_ID" ]; then
+              PR_AUTHOR_MENTION="<@$PR_AUTHOR_SLACK_ID>"
+              echo "✅ Found PR author in Slack: $PR_AUTHOR_FULL_NAME -> $PR_AUTHOR_SLACK_ID"
+            else
+              PR_AUTHOR_MENTION="$PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)"
+              echo "⚠️  PR author not found in Slack: $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN), using fallback"
+            fi
+
             SLACK_MESSAGE="$SLACK_MESSAGE$SLACK_USER_MENTIONS!"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>"
-            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)"
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Please review when you have a moment. Thank you! 🚀"
 
