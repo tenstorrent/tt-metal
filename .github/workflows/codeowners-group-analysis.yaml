@@ -1124,8 +1124,8 @@ jobs:
                     break
                   fi
                 else
-                  echo "Error: Failed to search Slack users: $(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')"
-                  echo ""
+                  echo "Error: Failed to search Slack users: $(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')" >&2
+                  echo "" >&2
                   return
                 fi
               done
@@ -1145,7 +1145,7 @@ jobs:
 
               # If still not found, try partial name matching (fuzzy search)
               if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-                echo "Trying partial name matching for: $full_name"
+                echo "Trying partial name matching for: $full_name" >&2
 
                 # Split the full name into words and try to find users containing those words
                 IFS=' ' read -ra NAME_WORDS <<< "$full_name"
@@ -1175,15 +1175,15 @@ jobs:
                     # Exactly one match found - use it
                     USER_ID=$(echo "$POTENTIAL_MATCHES" | cut -d'|' -f1)
                     MATCHED_NAME=$(echo "$POTENTIAL_MATCHES" | cut -d'|' -f2)
-                    echo "✅ Found partial match: $full_name -> $MATCHED_NAME ($USER_ID)"
+                    echo "✅ Found partial match: $full_name -> $MATCHED_NAME ($USER_ID)" >&2
                   elif [ "$MATCH_COUNT" -gt 1 ]; then
-                    echo "⚠️  Multiple partial matches found for $full_name, skipping to avoid confusion:"
-                    echo "$POTENTIAL_MATCHES" | cut -d'|' -f2 | sed 's/^/    - /'
+                    echo "⚠️  Multiple partial matches found for $full_name, skipping to avoid confusion:" >&2
+                    echo "$POTENTIAL_MATCHES" | cut -d'|' -f2 | sed 's/^/    - /' >&2
                   else
-                    echo "⚠️  No partial matches found for $full_name"
+                    echo "⚠️  No partial matches found for $full_name" >&2
                   fi
                 else
-                  echo "⚠️  No partial matches found for $full_name"
+                  echo "⚠️  No partial matches found for $full_name" >&2
                 fi
               fi
 
