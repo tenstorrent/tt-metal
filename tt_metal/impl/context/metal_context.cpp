@@ -13,6 +13,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
+#include "impl/debug/inspector/rpc_server_generated.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
 #include "tt_metal/impl/debug/dprint_server.hpp"
@@ -110,6 +111,23 @@ void MetalContext::initialize(
     // Initialize inspector
     inspector_data_ = Inspector::initialize();
 
+    // Inspector RPC callback registration for getting build environment info
+    // This allows Inspector clients (e.g. tt-triage) to get the correct firmware path
+    // for each device and build config, enabling correct firmware path resolution
+    // without relying on relative paths
+    Inspector::get_rpc_server().setGetBuildEnvCallback([fw_compile_hash](auto params, auto results) {
+        const auto device_id = params.getDeviceId();
+        // Get device-specific firmware path from BuildEnvManager
+        const auto& firmware_path = BuildEnvManager::get_instance().get_out_firmware_root_path(device_id);
+        const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device_id);
+
+        // Populate RPC response with build environment info
+        auto build_info = results.initBuildInfo();
+        build_info.setBuildKey(build_env.build_key);
+        build_info.setFirmwarePath(firmware_path);
+        build_info.setFwCompileHash(fw_compile_hash);
+    });
+
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(dispatch_core_config, num_hw_cqs);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(num_hw_cqs);
@@ -155,6 +173,7 @@ void MetalContext::initialize(
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
         // fw_build_key is a combination of build_key and fw_compile_hash
         // If fw_compile_hash changes, the fw_build_key will change and FW will be rebuilt
+        // if it's not already in firmware_built_keys_
         uint64_t fw_build_key =
             (static_cast<uint64_t>(BuildEnvManager::get_instance().get_device_build_env(device_id).build_key) << 32) |
             static_cast<uint64_t>(fw_compile_hash);

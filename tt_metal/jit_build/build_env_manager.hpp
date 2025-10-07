@@ -51,6 +51,7 @@ public:
         chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class);
 
     void build_firmware(chip_id_t device_id);
+    const std::string& get_out_firmware_root_path(chip_id_t device_id);
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.

@@ -65,6 +65,16 @@ struct MeshWorkloadData {
     binaryStatusPerMeshDevice @2 :List(MeshDeviceBinaryStatus);
 }
 
+# Build environment info for a specific device
+# Used to get correct firmware path for each device and build config,
+# enabling correct firmware path resolution without relying on relative
+# paths
+struct BuildEnvData {
+    buildKey @0 :UInt32; # Unique identifier for the build configuration
+    firmwarePath @1 :Text; # Absolute path to the firmware directory for this device
+    fwCompileHash @2 :UInt64; # Hash of the firmware compilation settings
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -80,4 +90,10 @@ interface Inspector {
 
     # Search for a kernel
     getKernel @4 (watcherKernelId :Int32) -> (kernel :KernelData);
+
+    # Get build environment information for a specific device
+    # Returns device-specific firmware paths and build configuration.
+    # This replaces the old approach of constructing relative paths,
+    # providing correct firmware locations for each device
+    getBuildEnv @5 (deviceId :UInt64) -> (buildInfo :BuildEnvData);
 }
