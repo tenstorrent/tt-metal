@@ -26,7 +26,6 @@
 #include "dev_msgs.h"
 #include "accessor/tensor_accessor.h"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "noc_nonblocking_api.h"
 
 // clang-format off
 /**
