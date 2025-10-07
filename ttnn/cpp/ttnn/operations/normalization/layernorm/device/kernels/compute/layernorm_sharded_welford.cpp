@@ -8,42 +8,16 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "compute_kernel_api.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/copy_dest_values.h"
-#include "compute_kernel_api/eltwise_unary/fill.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/eltwise_binary_sfpu.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "dprint_pages.h"
-#include "dprint_tensix.h"
+#include "ttnn/operations/normalization/kernel_util/compute/combine_welford.hpp"
 
 // SPLIT REDUCE across Cores
 namespace NAMESPACE {
 namespace {
-// C++17 compatible bit_cast replacement using union
-template <typename To, typename From>
-inline To bit_cast(const From& from) noexcept {
-    static_assert(sizeof(To) == sizeof(From), "Types must have same size");
-    static_assert(std::is_trivially_copyable_v<From>, "From must be trivially copyable");
-    static_assert(std::is_trivially_copyable_v<To>, "To must be trivially copyable");
-
-    union {
-        From f;
-        To t;
-    } u;
-
-    u.f = from;
-    return u.t;
-}
-
 // Get the set size of the next block in the Welford combine.
 inline auto get_next_set_size(
     const uint32_t block,
@@ -193,9 +167,6 @@ void MAIN {
 
     // Compute E[x] and Var[x] using Welford's algorithm
     const uint32_t num_partial_tiles = num_block_ht_result_tiles;
-    // DPRINT << "block_w: " << block_w << ENDL();
-    // DPRINT << "num_partial_tiles: " << num_partial_tiles << ENDL();
-    // DPRINT << "partial_reduce_W: " << partial_reduce_W << ENDL();
 
     reconfig_data_format_srca(cb_in);
 
@@ -227,169 +198,27 @@ void MAIN {
 
     reconfig_data_format_srca(cb_ex_partial);
 
-    // Welford combine local partials with external partials
+    // Combine Welford local partials with external partials
     // cb_ex <-- cb_ex_external, cb_ex_partial
     // where "ex" is mean and var interleaved.
     if constexpr (is_allgather_worker) {
-        // Accumulate mean and M2 in dst regs.
-        // Use 2 extra dst regs to help with the math
-        constexpr uint32_t tmp_dst0 = 0;
-        constexpr uint32_t tmp_dst1 = 1;
-        constexpr uint32_t mean_acc_dst = 2;
-        constexpr uint32_t m2_acc_dst = 3;
-
-        // Work with two tiles (1 mean and 1 var) at a time
-        constexpr uint32_t mean_cb_idx = 0;
-        constexpr uint32_t var_cb_idx = 1;
-
         cb_reserve_back(cb_ex, 2 * num_tiles_per_allgather_worker);
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            tile_regs_acquire();
-
-            // Make sure that the registers are zeroed out
-            fill_tile_init();
-            fill_tile(tmp_dst0, 0.f);
-            fill_tile(tmp_dst1, 0.f);
-            fill_tile(mean_acc_dst, 0.f);
-            fill_tile(m2_acc_dst, 0.f);
-
-            uint32_t acc_n = 0;
-            for (uint32_t b = 0; b < num_blocks_combine; b++) {
-                // Wait for 1 mean tile and 1 var tile
-                cb_wait_front(cb_ex_external, 2);
-
-                // DPRINT << "external tiles:" << ENDL();
-                // tt::compute::common::print_full_tile(cb_ex_external, 0, true);
-                // tt::compute::common::print_full_tile(cb_ex_external, 1, true);
-                // TODO RM: The last block may have a smaller num_reduce_tiles_per_block_h,
-                // pass in the last value as a CTA. Don't have this depend on block_w.
-                // Further, if we are a second-stage reader, the final num_second_stage_blocks - 1 tiles
-                // will be the result of reducing a set that is num_blocks_first_stage wide * tile_width
-                // (adjusted for potential padding at the end of the first stage blocks)
-                // Make all these CTAs to avoid computing it here
-                const float n_a = acc_n;
-                // TODO RM: This should use a runtime arg where
-                // only the last core in each row has a reduced width
-                // const float n_b = b == num_blocks_combine - 1 ? num_reduce_tiles_per_block_h * tile_width : block_w;
-                const float n_b = get_next_set_size(
-                    b,
-                    num_blocks_combine,
-                    is_second_stage_reader,
-                    num_blocks_first_stage,
-                    second_stage_w,
-                    block_w,
-                    last_block_w);
-
-                DPRINT << "n_a: " << n_a << ENDL();
-                DPRINT << "n_b: " << n_b << ENDL();
-                // tt::compute::common::print_full_tile(cb_ex_external, 0, true);
-
-                const float na2 = static_cast<float>(n_a) / (n_a + n_b);
-                const float nb2 = static_cast<float>(n_b) / (n_a + n_b);
-
-                // Copy x_b to dst1
-                copy_tile_to_dst_init_short(cb_ex_external);
-                copy_tile(cb_ex_external, mean_cb_idx, tmp_dst1);
-
-                // DPRINT << "x_b: " << ENDL();
-                // dprint_tensix_dest_reg<true>(tmp_dst1);
-
-                // DPRINT << "x_a: " << ENDL();
-                // dprint_tensix_dest_reg<true>(mean_acc_dst);
-
-                // Compute delta = x_b - x_a, store in dst0
-                sub_binary_tile_init();
-                sub_binary_tile(tmp_dst1, mean_acc_dst, tmp_dst0);
-
-                // Multiply accumulated mean by n_a
-                binop_with_scalar_tile_init();
-                mul_unary_tile(mean_acc_dst, bit_cast<uint32_t>(na2));
-
-                // Multiply x_b by n_b
-                binop_with_scalar_tile_init();
-                mul_unary_tile(tmp_dst1, bit_cast<uint32_t>(nb2));
-
-                // Accumulate n_b * x_b into mean
-                add_binary_tile_init();
-                add_binary_tile(mean_acc_dst, tmp_dst1, mean_acc_dst);
-
-                // Square delta
-                square_tile_init();
-                square_tile(tmp_dst0);
-
-                // Multiply delta^2 by n_a * nb2
-                binop_with_scalar_tile_init();
-                mul_unary_tile(tmp_dst0, bit_cast<uint32_t>(n_a * nb2));
-
-                // Accumulate into M2
-                add_binary_tile_init();
-                add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
-
-                // Copy var_b into dst0
-                copy_tile_to_dst_init_short(cb_ex_external);
-                copy_tile(cb_ex_external, var_cb_idx, tmp_dst0);
-
-                // Multiply var_b by n_b to get M2_b, store in dst0
-                binop_with_scalar_tile_init();
-                mul_unary_tile(tmp_dst0, bit_cast<uint32_t>(n_b));
-
-                // Accumulate into M2
-                add_binary_tile_init();
-                add_binary_tile(m2_acc_dst, tmp_dst0, m2_acc_dst);
-
-                acc_n += n_b;
-                cb_pop_front(cb_ex_external, 2);
-            }
-
-            // Convert final M2 to var
-            // DPRINT << "acc_n: " << acc_n << ENDL();
-            // DPRINT << "1.f / acc_n: " << 1.f / acc_n << ENDL();
-            binop_with_scalar_tile_init();
-            mul_unary_tile(m2_acc_dst, bit_cast<uint32_t>(1.f / acc_n));
-
-            // Compute 1/sqrt(Var[x] + eps).
-            // This is what gets written and mcasted as var
-            // since this is the eventual quantity
-            // that's used in the normalization.
-            // Only do 1/sqrt(Var[x] + eps) if we are
-            // not doing two-stage reduce or if we are
-            // the second stage reader in a two-stage reduce.
-            if (!(use_two_stage_reduce && !is_second_stage_reader)) {
-                // DPRINT << "CB eps: " << ENDL();
-                //  tt::compute::common::print_full_tile(cb_eps, 0, false);
-
-                binop_with_scalar_tile_init();
-                add_unary_tile(m2_acc_dst, eps);
-
-                // // add eps to var
-                // TODO RM: Re-enable this
-                // binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_eps);
-                // binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_eps, 0, m2_acc_dst);
-
-                // DPRINT << "M2 : " << ENDL();
-                // dprint_tensix_dest_reg<true>(m2_acc_dst);
-
-                // 1/sqrt(var + eps)
-                rsqrt_tile_init();
-                rsqrt_tile(m2_acc_dst);
-            }
-
-            // Just needed to stay in sync with the readers
-            if (use_two_stage_reduce && !is_second_stage_reader) {
-                // Number of second-stage tiles = 2 * (num_blocks_second_stage - 1)
-                // The -1 is the account for the row-column overlap core
-                // between first stage (row) and second stage (column) (if row major).
-                // The factor of 2 is because each block has 2 tiles (mean, var).
-                constexpr uint32_t num_second_stage_tiles = 2 * (num_blocks_second_stage - 1);
-                cb_wait_front(cb_ex_external, num_second_stage_tiles);
-                cb_pop_front(cb_ex_external, num_second_stage_tiles);
-            }
-
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(mean_acc_dst, cb_ex);
-            pack_tile(m2_acc_dst, cb_ex);
-            tile_regs_release();
+            norm::kernel_util::compute::combine_welford_partials(
+                cb_ex_external,
+                cb_ex,
+                num_blocks_combine,
+                [&](uint32_t b) {
+                    return get_next_set_size(
+                        b,
+                        num_blocks_combine,
+                        is_second_stage_reader,
+                        num_blocks_first_stage,
+                        second_stage_w,
+                        block_w,
+                        last_block_w);
+                },
+                norm::kernel_util::compute::RSqrtPolicy{!(use_two_stage_reduce && !is_second_stage_reader), eps});
         }
         cb_push_back(cb_ex, 2 * num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, 2 * num_tiles_per_allgather_worker);
