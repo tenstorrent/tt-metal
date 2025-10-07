@@ -5,6 +5,7 @@
 #include "convert_to_hwc_program_factory.hpp"
 
 #include "tt-metalium/tt_backend_api_types.hpp"
+#include <tt-metalium/hal.hpp>
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
@@ -12,6 +13,14 @@
 namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
+
+// Helper function to compute alignment requirement based on L1 alignment and element size
+uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
+    const uint32_t element_size_bytes = input_tensor.element_size();
+    const uint32_t l1_alignment_bytes = tt::tt_metal::hal::get_l1_alignment();
+    // Calculate alignment requirement in number of elements
+    return l1_alignment_bytes / element_size_bytes;
+}
 
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Tensor& a, Tensor& output) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -34,9 +43,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         l1_input_shard_width % TILE_WIDTH == 0,
         "Shard width must be multiple of tile width (was {})",
         l1_input_shard_width);
+    const auto alignment_elements = compute_alignment_requirement_in_elements(output);
     TT_FATAL(
-        output_shard_width % 8 == 0,
-        "Output shard width must be multiple of 8 to satisfy alignment constraints (was {})",
+        output_shard_width % alignment_elements == 0,
+        "Output shard width must be multiple of {} to satisfy alignment constraints (was {})",
+        alignment_elements,
         output_shard_width);
 
     const auto create_circular_buffer = [&program, &l1_input_core_grid](
@@ -115,8 +126,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_id,
         cb_in_transpose_id0,
         cb_out_id,
-        output_shard_width,
-        output_shard_height,
+        output_shard_width,   // output channels
+        output_shard_height,  // output hw
         total_tiles_writer0,
         output_stride_sticks,
         0,
@@ -131,8 +142,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         cb_in_id,
         cb_in_transpose_id1,
         cb_out_id,
-        output_shard_width,
-        output_shard_height,
+        output_shard_width,   // output channels
+        output_shard_height,  // output hw
         total_tiles_writer1,
         output_stride_sticks,
         output_stride_sticks,

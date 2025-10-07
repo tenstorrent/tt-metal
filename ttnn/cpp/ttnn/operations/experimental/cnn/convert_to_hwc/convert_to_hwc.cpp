@@ -4,6 +4,7 @@
 
 #include "convert_to_hwc.hpp"
 #include "device/convert_to_hwc_op.hpp"
+#include "device/convert_to_hwc_program_factory.hpp"
 
 namespace ttnn::operations::experimental::cnn {
 
@@ -15,13 +16,13 @@ static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Ten
         input_memory_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED,
         "Input tensor must be width sharded");
 
-    // const auto& input_shape = input_tensor.logical_shape();
     const auto& input_shard_spec = input_memory_config.shard_spec().value();
     const auto input_shard_height = input_shard_spec.shape[0];
     const auto input_shard_width = input_shard_spec.shape[1];
 
-    const auto output_shard_height = input_shard_width;                   // HW dimension per core stays the same
-    const auto output_shard_width = tt::round_up(input_shard_height, 8);  // deduce rounding from element size
+    const auto output_shard_height = input_shard_width;  // HW dimension per core stays the same
+    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(input_tensor);
+    const auto output_shard_width = tt::round_up(input_shard_height, alignment_elements);
 
     const std::array<uint32_t, 2> output_shard_shape = {output_shard_height, output_shard_width};
 
@@ -52,9 +53,11 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
             output_memory_config = infer_hwc_output_memory_config(a);
         }
     }
+    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(a);
     TT_FATAL(
-        output_memory_config.shard_spec()->shape[1] % 8 == 0,
-        "Output shard width must be rounded up to next multiple of 8 to satisfy alignment constraints (width was {})",
+        output_memory_config.shard_spec()->shape[1] % alignment_elements == 0,
+        "Output shard width must be rounded up to next multiple of {} to satisfy alignment constraints (width was {})",
+        alignment_elements,
         output_memory_config.shard_spec()->shape[1]);
 
     auto program = ConvertToHWC{output_memory_config, dtype.value_or(a.dtype())};

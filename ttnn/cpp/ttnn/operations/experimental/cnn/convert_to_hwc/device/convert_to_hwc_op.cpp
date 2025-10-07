@@ -41,9 +41,9 @@ std::vector<ttnn::TensorSpec> ConvertToHWC::compute_output_specs(const std::vect
     const int C = shape[2];
     const int HW = shape[3];
 
-    // Output needs to be multiple of 8 since this is what conv expects (also to guarantee aligned copies)
-    // Alignment requirement is 16 bytes, which equals 8 elements for bfloat16 (2 bytes each)
-    const auto output_channels = tt::round_up(C, 8);
+    // Output needs to be multiple of alignment requirement to guarantee aligned copies
+    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(input_tensors.at(0));
+    const auto output_channels = tt::round_up(C, alignment_elements);
 
     return {TensorSpec(
         Shape({B, 1, HW, output_channels}),
