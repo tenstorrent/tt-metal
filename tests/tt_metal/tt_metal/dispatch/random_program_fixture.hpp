@@ -406,14 +406,14 @@ private:
         for (auto& workload : this->workloads) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }
-        distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
+        this->device_->end_mesh_trace(mesh_command_queue.id(), trace_id);
         return trace_id;
     }
 
     void run_trace(const distributed::MeshTraceId trace_id) {
         auto& mesh_command_queue = this->device_->mesh_command_queue();
         for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
-            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
+            this->device_->replay_mesh_trace(mesh_command_queue.id(), trace_id, false);
         }
     }
 };
