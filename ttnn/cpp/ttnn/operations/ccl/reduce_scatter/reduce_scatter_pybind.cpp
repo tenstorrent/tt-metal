@@ -28,7 +28,7 @@ void py_bind_reduce_scatter(py::module& module) {
 
             Keyword Args:
                 cluster_axis (int, optional): The cluster axis to reduce across. Defaults to `None`.
-                topology (ttnn.Topology, optional): Fabric topology. Defaults to current mesh topology.
+                topology (ttnn.Topology, optional): Fabric topology. Defaults to `ttnn.Topology.Linear`.
                 output_tensor (ttnn.Tensor, optional): Preallocated output tensor.
                 memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
