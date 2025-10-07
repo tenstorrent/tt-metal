@@ -47,7 +47,11 @@ void kernel_main() {
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
 
     constexpr uint32_t N_num_blocks = N_end_block - N_start_block + 1;
-    constexpr uint32_t defer_write_k_block = K_num_blocks > 2 ? 2 : 0;
+    constexpr uint32_t N_local_block_offset = N_start_block / N_num_blocks;
+    constexpr uint32_t num_cores_y = (N_tiles / N_block_tiles) / N_num_blocks;
+    constexpr uint32_t K_blocks_per_core_y = K_num_blocks / num_cores_y;
+    // constexpr uint32_t defer_write_k_block = N_local_block_offset % K_num_blocks;
+    constexpr uint32_t defer_write_k_block = N_local_block_offset * K_blocks_per_core_y;
 
     bool k_forward = true;
     bool n_forward = true;
