@@ -86,7 +86,22 @@ jobs:
           command -v cpufreq-set
       - name: Enable Performance mode
         run: |
-          sudo cpufreq-set -g performance
+          # Set performance governor for all CPU cores
+          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            if [ -f "$cpu" ]; then
+              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
+              echo "Setting performance governor for CPU $cpu_num"
+              sudo cpufreq-set -c "$cpu_num" -g performance
+            fi
+          done
+      - name: Verify Performance mode is enabled
+        run: |
+          echo "Current CPU governor settings:"
+          cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+          echo "CPU frequency info:"
+          cpufreq-info --governors
+          echo "Current frequencies:"
+          cat /proc/cpuinfo | grep "cpu MHz" | head -10
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
@@ -123,4 +138,11 @@ jobs:
       - name: Disable Performance mode
         if: always()
         run: |
-          sudo cpufreq-set -g ondemand
+          # Set ondemand governor for all CPU cores
+          for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+            if [ -f "$cpu" ]; then
+              cpu_num=$(echo "$cpu" | grep -o 'cpu[0-9]*' | grep -o '[0-9]*')
+              echo "Setting ondemand governor for CPU $cpu_num"
+              sudo cpufreq-set -c "$cpu_num" -g ondemand
+            fi
+          done
