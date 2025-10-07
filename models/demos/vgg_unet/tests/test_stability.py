@@ -23,7 +23,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize(
     "batch_size",
-    ((1),),
+    (1,),
 )
 @pytest.mark.parametrize(
     "resolution",
