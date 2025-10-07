@@ -1,5 +1,5 @@
 USER="ttuser"
-CONFIG_FILE="training_shakespeare_llama7b_pp_fabric.yaml"
+CONFIG_FILE="training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml"
 HOST_FILE=${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/configurations/5loudboxes/hosts.txt
 RANK_BINDINGS_FILE=${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/configurations/5loudboxes/rank_bindings.yaml
 

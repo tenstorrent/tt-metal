@@ -2,85 +2,122 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Main entry point for transformer training.
+"""Main entry point for 3-tier hierarchical parallel transformer training.
 
-This script orchestrates the training of transformer models (GPT-2, Llama)
-using configurations specified in YAML files.
+This script orchestrates the training of transformer models using a 3-tier architecture:
+- Workers: Compute forward/backward passes
+- Aggregator: Averages gradients from workers
+- Optimizer: Applies optimizer updates
 """
 import os
 import sys
 
 sys.path.append(f'{os.environ["TT_METAL_HOME"]}/tt-train/sources/ttml')
 
-import ttml
-from ttml.common.config import get_config, DeviceConfig, TrainingConfig, MultiHostConfig
-from ttml.common.utils import set_seed, initialize_device, create_optimizer
-from ttml.common.model_factory import TransformerModelFactory
 import click
+import ttml
+from ttml.common.config import DeviceConfig, MultiHostConfig, TrainingConfig, get_config
+from ttml.common.model_factory import TransformerModelFactory
+from ttml.common.utils import create_optimizer, initialize_device, set_seed
 
 from data import prepare_data
-from trainer import train
+from trainer import worker, aggregator, optimizer
 
 
 @click.command()
 @click.option("-c", "--config", type=str, default="training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml")
-def main(config: str):
-    """Main training function.
+@click.option(
+    "--worker-type",
+    type=click.Choice(["worker", "aggregator", "optimizer"], case_sensitive=False),
+    default=None,
+    help="Type of worker (auto-detected if not specified)",
+)
+def main(config: str, worker_type: str):
+    """Main training function for 3-tier hierarchical parallel training.
+
+    The system consists of three types of processes:
+    - Workers (ranks 0 to num_workers-1): Compute forward/backward passes
+    - Aggregator (rank num_workers): Aggregates gradients from workers
+    - Optimizer (rank num_workers+1): Applies optimizer updates
 
     Args:
         config: Path to YAML configuration file (relative to configs directory)
+        worker_type: Type of worker to run (auto-detected from rank if not specified)
     """
-    # Load configuration and set seed
+    # Load configuration
     yaml_config = get_config(config)
 
+    # Initialize distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
     distributed_ctx = autograd_ctx.get_distributed_context()
 
-    # Initialize socket manager based on multihost configuration
+    rank = distributed_ctx.rank()
+    world_size = distributed_ctx.size()
+
     multihost_config = MultiHostConfig(yaml_config)
+    num_workers = multihost_config.num_workers
+
+    # Auto-detect worker type based on rank if not specified
+    if worker_type is None:
+        if rank < num_workers:
+            worker_type = "worker"
+        elif rank == num_workers:
+            worker_type = "aggregator"
+        else:
+            worker_type = "optimizer"
+
+    print(f"Rank {rank}/{world_size}: Running as {worker_type}")
+
+    # Initialize socket manager
     socket_type = (
         ttml.core.distributed.SocketType.FABRIC
         if multihost_config.socket_type == "fabric"
         else ttml.core.distributed.SocketType.MPI
     )
     autograd_ctx.initialize_socket_manager(socket_type)
-    socket_manager = autograd_ctx.get_socket_manager()
 
-    rank = distributed_ctx.rank()
-    world_size = distributed_ctx.size()
-
-    assert multihost_config.enabled, "Multihost is not enabled"
-    assert world_size > 1, f"World size must be greater than 1, world size: {world_size}"
-
-    # adjust seed based on worker rank to make sure that each worker has a different seed
+    # Set seed based on rank
     set_seed(yaml_config["training_config"].get("seed", 42) + rank)
 
     # Prepare data
     train_ids, val_ids, vocab_size, decode = prepare_data(yaml_config)
 
-    # Use vocab_size from data instead of config
+    # Update config with vocab size
     training_config = yaml_config.setdefault("training_config", {})
     transformer_config = training_config.setdefault("transformer_config", {})
     transformer_config["vocab_size"] = int(vocab_size)
 
-    # Initialize device mesh
+    # Initialize device
     initialize_device(yaml_config)
 
-    # Create model, and training configuration
+    # Create model and config
     model_factory = TransformerModelFactory(yaml_config)
     model = model_factory.create_model()
+    print(f"Rank {rank}: Model created")
 
     training_cfg = TrainingConfig(yaml_config)
     device_config = DeviceConfig(yaml_config)
 
-    # Execute training
-    train_losses, val_losses = train(
-        training_cfg, model, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
-    )
+    # Execute appropriate worker function
+    if worker_type == "worker":
+        # Training worker - computes forward/backward and uses RemoteOptimizer
+        train_losses, val_losses = worker(
+            training_cfg, model, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
+        )
+        print(f"[Worker {rank}] Completed with {len(train_losses)} loss values")
+    elif worker_type == "aggregator":
+        # Aggregator - averages gradients from workers and broadcasts weights
+        aggregator(model, training_cfg, device_config.enable_ddp)
+    elif worker_type == "optimizer":
+        # Optimizer - applies optimizer updates
+        optimizer_instance = create_optimizer(model, yaml_config)
+        optimizer(model, training_cfg, optimizer_instance)
 
     # Cleanup
-    ttml.autograd.AutoContext.get_instance().close_device()
+    distributed_ctx.barrier()
+    autograd_ctx.close_device()
+    print(f"Rank {rank}: Finished")
 
 
 if __name__ == "__main__":
