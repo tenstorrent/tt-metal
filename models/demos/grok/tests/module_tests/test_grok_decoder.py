@@ -9,9 +9,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.grok.reference.llama_clone import GrokDecoder as ReferenceGrokDecoder
+from models.demos.grok.tt.ccl import CCL_Manager
 from models.demos.grok.tt.decoder import Decoder
 from models.demos.grok.tt.model_config import TtModelArgs
-from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.rope import RotarySetup
 
@@ -138,7 +138,7 @@ def test_grok_decoder_inference(
             ),
         )
 
-    tt_ccl = TT_CCL(mesh_device)
+    tt_ccl = CCL_Manager(mesh_device)
     tt_model = Decoder(
         mesh_device,
         tt_ccl,

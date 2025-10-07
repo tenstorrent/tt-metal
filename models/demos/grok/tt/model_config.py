@@ -590,6 +590,13 @@ class TtModelArgs:
             packer_l1_acc=True,
         )
 
+        model_config["NORM_COMPUTE_KERNEL_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
         return model_config
 
     def weight_cache_path(self, dtype):
