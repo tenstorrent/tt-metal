@@ -24,6 +24,7 @@ class MLP(LightweightModule):
         dtype,
         model_config,
         state_dict_prefix=None,
+        deallocate_torch=False,
     ):
         super().__init__()
 
@@ -79,6 +80,11 @@ class MLP(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # cache_file_name=cache_name("w3_interleaved"),
         )
+
+        if deallocate_torch:
+            del state_dict[f"{state_dict_prefix}.w1.weight"]
+            del state_dict[f"{state_dict_prefix}.w2.weight"]
+            del state_dict[f"{state_dict_prefix}.w3.weight"]
 
         self.activation_type = ttnn.UnaryOpType.GELU
 

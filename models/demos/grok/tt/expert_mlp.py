@@ -11,7 +11,7 @@ from models.tt_transformers.tt.model_config import TensorGroup
 
 
 class ExpertMLP(LightweightModule):
-    def __init__(self, mesh_device, tt_ccl, state_dict, args, layer_num, dtypes):
+    def __init__(self, mesh_device, tt_ccl, state_dict, args, layer_num, dtypes, deallocate_torch=False):
         super().__init__()
 
         self.mesh_device = mesh_device
@@ -66,6 +66,12 @@ class ExpertMLP(LightweightModule):
         self.w3 = as_tensor("w3")  # up_proj
 
         self.activation_type = ttnn.UnaryOpType.GELU
+
+        if deallocate_torch:
+            for expert_num in range(8):
+                del state_dict[f"model.layers.{layer_num}.block_sparse_moe.experts.{expert_num}.w1.weight"]
+                del state_dict[f"model.layers.{layer_num}.block_sparse_moe.experts.{expert_num}.w2.weight"]
+                del state_dict[f"model.layers.{layer_num}.block_sparse_moe.experts.{expert_num}.w3.weight"]
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Simplified for mode="decode", TG=True, dim=8192 only

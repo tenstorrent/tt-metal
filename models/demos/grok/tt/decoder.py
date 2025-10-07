@@ -22,6 +22,7 @@ class Decoder(LightweightModule):
         dtype,
         transformation_mats,
         paged_attention_config=None,
+        deallocate_torch=False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -30,6 +31,8 @@ class Decoder(LightweightModule):
         self.layer_num = layer_num
         self.dtype = dtype
         self.model_config = args.get_model_config()
+
+        print(f"Loading weights for layer {layer_num}")
 
         self.attention = Attention(
             mesh_device=mesh_device,
@@ -51,6 +54,7 @@ class Decoder(LightweightModule):
             layer_num=layer_num,
             dtype=dtype,
             model_config=self.model_config,
+            deallocate_torch=deallocate_torch,
         )
 
         self.experts = ExpertMLP(
@@ -64,6 +68,7 @@ class Decoder(LightweightModule):
                 "w2": ttnn.bfloat8_b,
                 "w3": ttnn.bfloat8_b,
             },
+            deallocate_torch=deallocate_torch,
         )
         self.moe = TtMoE(
             mesh_device=mesh_device,

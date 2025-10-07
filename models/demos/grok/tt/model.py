@@ -11,7 +11,6 @@ class Transformer(LightweightModule):
         state_dict,
         weight_cache_path,
         args,
-        layer_num,
         dtype,
         paged_attention_config=None,
     ):
@@ -20,12 +19,12 @@ class Transformer(LightweightModule):
         self.tt_ccl = tt_ccl
 
         self.rope_setup = RotarySetup(
-            mesh_device,
-            batch_size,
-            model_args.head_dim,
-            model_args.max_seq_len,
-            model_args.rope_theta,
-            None,  # No rope scaling for Grok
+            self.mesh_device,
+            self.args.max_batch_size,
+            self.args.head_dim,
+            self.args.max_seq_len,
+            self.args.rope_theta,
+            None,
         )
 
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
@@ -41,8 +40,9 @@ class Transformer(LightweightModule):
                 layer_num=layer_idx,
                 transformation_mats=self.transformation_mats,
                 paged_attention_config=paged_attention_config,
+                deallocate_torch=True,
             )
-            for layer_idx in self.args.num_hidden_layers
+            for layer_idx in range(self.args.num_hidden_layers)
         ]
         self.norm = DistributedNorm(
             RMSNorm(
