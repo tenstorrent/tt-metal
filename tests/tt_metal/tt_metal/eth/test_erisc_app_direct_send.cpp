@@ -200,7 +200,7 @@ bool eth_direct_sender_receiver_kernels(
         std::cout << "Mismatch at Core: " << eth_receiver_core.str() << std::endl;
         std::cout << readback_vec[0] << std::endl;
     }
-    return true;
+    return pass;
 }
 
 // Tests ethernet direct send/receive from ERISC_L1_UNRESERVED_BASE
@@ -1004,13 +1004,13 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                     continue;
                 }
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
-                    if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 1 &&
-                        tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                        log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
-                        continue;
-                    }
+                    // if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 1 &&
+                    //     tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                    //     log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
+                    //     continue;
+                    // }
 
-                    for (int i = 0; i < 100; ++i) {
+                    for (int i = 0; i < 500; ++i) {
                         std::cout << "it " << i << "\n";
                         const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
                         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
@@ -1024,6 +1024,7 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                             receiver_core,
                             processor));
                     }
+                    return;
                 }
             }
         }

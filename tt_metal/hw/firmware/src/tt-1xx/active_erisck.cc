@@ -29,6 +29,7 @@ void _start() {
     asm("0: .reloc 0b, R_RISCV_NONE, __global_pointer$");
 #endif
     extern uint32_t __kernel_data_lma[];
+    // asm("nop; nop; nop;");
     do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
     noc_local_state_init(NOC_INDEX);

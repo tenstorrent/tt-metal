@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
+#include "impl/context/metal_context.hpp"
 
 namespace tt {
 
@@ -19,6 +20,7 @@ namespace tt_metal {
 enum class HalProgrammableCoreType;
 
 constexpr uint32_t kernel_config_entry_count = 8;
+// constexpr uint32_t active_eth_kernel_padding = 256;  // 256 bytes padding between active ethernet kernels
 
 WorkerConfigBufferMgr::WorkerConfigBufferMgr() { entries_.resize(kernel_config_entry_count); }
 
@@ -85,7 +87,16 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
                 this->reservation_[idx].addr = this->base_addrs_[idx];
                 break;
             }
-            TT_ASSERT(size <= this->end_addrs_[idx] - this->base_addrs_[idx]);
+
+            // Account for padding when checking buffer capacity for active ethernet
+            uint32_t effective_size = size;
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            if (idx < hal.get_programmable_core_type_count() &&
+                hal.get_programmable_core_type(idx) == tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+                // effective_size += active_eth_kernel_padding;
+            }
+
+            TT_ASSERT(effective_size <= this->end_addrs_[idx] - this->base_addrs_[idx]);
 
             // alloc_index may be ahead or behind free_index
             // so compare to either end of buffer or next to be freed addr. if alloc_index is inside free_index, we
@@ -94,14 +105,14 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
                                ? this->end_addrs_[idx]
                                : this->entries_[free_index][idx].addr;
 
-            if (addr + size > end && end == this->end_addrs_[idx]) {
+            if (addr + effective_size > end && end == this->end_addrs_[idx]) {
                 // Wrap the ring buffer
                 addr = this->base_addrs_[idx];
                 end = this->entries_[free_index][idx].addr;
             }
             bool had_sync = sync_info.need_sync;
 
-            if (addr + size > end) {
+            if (addr + effective_size > end) {
                 // Need a sync...but will this entry free enough space?  Look at the next
                 uint32_t next_free_index = free_index + 1;
                 if (next_free_index == kernel_config_entry_count) {
@@ -115,7 +126,7 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
                     uint32_t next_end = (addr >= this->entries_[next_free_index][idx].addr)
                                             ? this->end_addrs_[idx]
                                             : this->entries_[next_free_index][idx].addr;
-                    if (addr + size > next_end) {
+                    if (addr + effective_size > next_end) {
                         // Need to free multiple entries
                         // Move the free index forward to the next entry and retry
                         free_index = next_free_index;
@@ -165,6 +176,8 @@ void WorkerConfigBufferMgr::free(uint32_t free_up_to_sync_count) {
 
 void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
     size_t num_buffer_types = this->reservation_.size();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+
     for (uint32_t idx = 0; idx < num_buffer_types; idx++) {
         if (this->reservation_[idx].size == 0) {
             continue;
@@ -181,8 +194,15 @@ void WorkerConfigBufferMgr::alloc(uint32_t when_freeable_sync_count) {
             alloc_index = 0;
         }
 
-        this->entries_[alloc_index][idx].addr =
-            this->entries_[old_alloc_index][idx].addr + this->entries_[old_alloc_index][idx].size;
+        uint32_t next_addr = this->entries_[old_alloc_index][idx].addr + this->entries_[old_alloc_index][idx].size;
+
+        // Add padding for active ethernet kernels
+        if (idx < hal.get_programmable_core_type_count() &&
+            hal.get_programmable_core_type(idx) == tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) {
+            // next_addr += active_eth_kernel_padding;
+        }
+
+        this->entries_[alloc_index][idx].addr = next_addr;
         this->entries_[alloc_index][idx].size = 0;
         this->entries_[alloc_index][idx].sync_count = 0xbabababa;  // debug
 

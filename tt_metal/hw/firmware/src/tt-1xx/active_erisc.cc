@@ -143,6 +143,8 @@ int __attribute__((noinline)) main(void) {
     // Add an invalidate before the first read of mailboxes->go_messages[0].signal
     invalidate_l1_cache();
 
+    // uint32_t exec_count = 0;
+
     while (1) {
         // Wait...
         WAYPOINT("GW");
@@ -198,6 +200,7 @@ int __attribute__((noinline)) main(void) {
                 uint32_t kernel_lma =
                     kernel_config_base +
                     mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+                // ((volatile uint32_t*)(0x10))[0] = kernel_lma;
                 reinterpret_cast<void (*)()>(kernel_lma)();
                 WAYPOINT("D");
             }

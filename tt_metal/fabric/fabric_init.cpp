@@ -4,6 +4,7 @@
 
 #include "fabric.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
 #include <variant>
 
@@ -496,7 +497,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
             auto proc = static_cast<tt::tt_metal::DataMovementProcessor>(risc_id);
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
                 // Force fabric to run on erisc1
-                proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
+                // proc = tt::tt_metal::DataMovementProcessor::RISCV_1;
             }
 
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
@@ -510,6 +511,7 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_tt_fabric_program(tt::
                     .compile_args = ct_args,
                     .defines = defines,
                     .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+            log_warning(tt::LogMetal, "Fabric on device {} using eth core {} {}", device->id(), eth_logical_core, proc);
 
             tt::tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, eth_logical_core, rt_args);
         }

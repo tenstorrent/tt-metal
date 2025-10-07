@@ -787,10 +787,10 @@ void ElfFile::Impl::XIPify() {
         }
     }
 
-    if (!num_reloc_sections) {
-        // Hm, that's suspicious
-        TT_THROW("{}: there are no relocation sections", path_);
-    }
+    // if (!num_reloc_sections) {
+    //     // Hm, that's suspicious
+    //     TT_THROW("{}: there are no relocation sections", path_);
+    // }
 
     // The text segment is now XIP
     GetSegments().front().address = 0;
