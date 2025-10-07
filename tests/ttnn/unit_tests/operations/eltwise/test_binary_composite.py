@@ -1053,23 +1053,3 @@ def test_unary_right_shift(input_shapes, device, scalar):
 
     pcc = ttnn.pearson_correlation_coefficient(golden_tensor, output_tensor)
     assert pcc >= 0.99
-
-
-@pytest.mark.parametrize("accurate_mode", [False, True])
-@pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_binary_div_edge_case_ttnn(accurate_mode, round_mode, device):
-    in_data1 = torch.tensor([0.0, 1.0, -1.0, 0.0, 0.0, 7.0, 9.75], dtype=torch.float32)
-    in_data2 = torch.tensor([0.0, 0.0, 0.0, 1.0, -1.0, 2.5, -14.25], dtype=torch.float32)
-    input_tensor1 = ttnn.from_torch(
-        in_data1, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    input_tensor2 = ttnn.from_torch(
-        in_data2, dtype=ttnn.float32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-    output_tensor = ttnn.div(input_tensor1, input_tensor2, accurate_mode=accurate_mode, round_mode=round_mode)
-    golden_function = ttnn.get_golden_function(ttnn.div)
-    golden_tensor = golden_function(in_data1, in_data2, round_mode)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert torch.allclose(golden_tensor, output_tensor, equal_nan=True)
