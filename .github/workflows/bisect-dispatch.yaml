@@ -40,6 +40,7 @@ on:
       retries:
         required: false
         type: string
+        default: "3"
         description: "Number of retries (default 3)"
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
@@ -109,4 +110,4 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p ${{ inputs.tracy }} -r ${{ inputs.retries }}
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} ${{ inputs.tracy && '-p' || '' }} -r ${{ inputs.retries }}

@@ -9,7 +9,7 @@ Usage:
   -g GOOD_SHA    : known good commit
   -b BAD_SHA     : known bad commit
   -t TIMEOUT     : per-iteration timeout (default 30m)
-  -p PROFILING   : enable Tracy profiling
+  -p             : enable Tracy profiling
   -r RETRIES     : number of retries (default 3)
 END
 
@@ -20,7 +20,7 @@ bad_commit=""
 tracy_enabled=0
 retries=3
 
-while getopts ":f:g:b:t:p:r:" opt; do
+while getopts ":f:g:b:t:pr:" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
