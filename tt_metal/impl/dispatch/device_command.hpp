@@ -14,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "command_queue_interface.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
