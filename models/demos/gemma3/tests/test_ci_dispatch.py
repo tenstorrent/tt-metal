@@ -23,9 +23,8 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
     else:
         is_ci_v2_env = True
 
-    os.environ["HF_MODEL"] = hf_model_name
-
     model_weights_path = str(model_location_generator(hf_model_name, download_if_ci_v2=True, ci_v2_timeout_in_s=1800))
+    os.environ["HF_MODEL"] = model_weights_path
     os.environ["TT_CACHE_PATH"] = model_weights_path
 
     logger.info(f"Running fast dispatch tests for {model_weights_path}")
