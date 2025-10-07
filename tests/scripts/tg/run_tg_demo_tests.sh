@@ -133,6 +133,22 @@ run_tg_sd35_demo_tests() {
   fi
 }
 
+run_tg_gpt_oss_tests() {
+  fail=0
+
+  echo "LOG_METAL: Running run_tg_gpt_oss_tests"
+
+  gpt_oss=("/mnt/MLPerf/tt_dnn-models/gpt-oss/GPT-OSS-20B/" "/mnt/MLPerf/tt_dnn-models/gpt-oss/GPT-OSS-120B/")
+  for gpt_oss_dir in $gpt_oss; do
+    GPT_OSS_DIR=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/demo/simple_text_demo.py --timeout 1000; fail+=$?
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    echo "LOG_METAL: run_tg_gpt_oss_tests failed"
+    exit 1
+  fi
+}
+
 run_tg_sentence_bert_tests() {
 
   pytest models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py --timeout=1500 ; fail+=$?
@@ -157,6 +173,8 @@ run_tg_demo_tests() {
     run_tg_sd35_demo_tests
   elif [[ "$1" == "sentence_bert" ]]; then
     run_tg_sentence_bert_tests
+  elif [[ "$1" == "gpt-oss" ]]; then
+    run_tg_gpt_oss_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
