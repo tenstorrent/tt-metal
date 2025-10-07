@@ -526,9 +526,9 @@ def clean_device():
 def cpp_binary():
     """Verify C++ operation chain binary exists (built by CMake)"""
     if not os.path.exists(CPP_OPERATION_CHAIN_BINARY):
-        pytest.fail(
+        pytest.skip(
             f"C++ operation chain binary not found: {CPP_OPERATION_CHAIN_BINARY}\n"
-            f"Make sure to build the project first (e.g., ./build_metal.sh)"
+            f"Build with './build_metal.sh --build-ttnn-tests' to run C++ tests"
         )
     yield CPP_OPERATION_CHAIN_BINARY
 
