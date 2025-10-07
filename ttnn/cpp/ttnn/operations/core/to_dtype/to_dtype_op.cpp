@@ -142,10 +142,12 @@ Tensor ToDtype::invoke(const ttnn::Tensor& input_tensor, const ttnn::DataType& d
 
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
+        tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype,
             tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile()),
-            input_tensor.tensor_spec().memory_config()));
+            input_tensor.tensor_spec().memory_config(),
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape()));
 
     return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
 };
