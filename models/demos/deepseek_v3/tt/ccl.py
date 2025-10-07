@@ -17,14 +17,10 @@ class CCL:
         self.core_range_set = ttnn.num_cores_to_corerangeset(self.num_cores, self.grid, row_wise=True)
 
         self.gather_sems = []
-        self.from_sems = []
-        self.to_sems = []
         self.reduce_scatter_sems = []
         self.barrier_sems = []
         for _ in range(len(list(mesh_device.shape))):
             self.gather_sems.append([])
-            self.from_sems.append([])
-            self.to_sems.append([])
             self.reduce_scatter_sems.append([])
             self.barrier_sems.append([])
             for _ in range(2):
@@ -34,8 +30,7 @@ class CCL:
                         ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
                     ]
                 )  # use two semaphores to use minimal version of all_gather_async
-                self.from_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
-                self.to_sems[-1].append(ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0))
+
                 self.reduce_scatter_sems[-1].append(
                     [
                         ttnn.create_global_semaphore(self.mesh_device, self.core_range_set, 0),
@@ -66,22 +61,6 @@ class CCL:
         Get a semaphore for the given axis.
         """
         sem = self.gather_sems[axis][self.sem_cnt[axis]]
-        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
-        return sem
-
-    def get_from_sem(self, axis):
-        """
-        Get a semaphore for the given axis.
-        """
-        sem = self.from_sems[axis][self.sem_cnt[axis]]
-        self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
-        return sem
-
-    def get_to_sem(self, axis):
-        """
-        Get a semaphore for the given axis.
-        """
-        sem = self.to_sems[axis][self.sem_cnt[axis]]
         self.sem_cnt[axis] = (self.sem_cnt[axis] + 1) % 2
         return sem
 
