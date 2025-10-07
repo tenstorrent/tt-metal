@@ -108,7 +108,7 @@ void py_module(nb::module_& m) {
         py_tensor.def(
             "to_string",
             [](const Tensor& tensor) { return tensor.get_value(PreferredPrecision::FULL).write_to_string(); },
-            "Print Tensor to string");
+            "Return string representation of the Tensor");
         py_tensor.def(
             "shape",
             [](const Tensor& tensor) {
