@@ -77,12 +77,12 @@ void SGDFusedDeviceOperation::validate_on_program_cache_miss(
             momentum_buffer.value(), "Momentum Buffer", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     }
 
-    const auto& momentum = args.momentum;
-    const auto& use_momentum = (momentum > 0.0F);
-    TT_FATAL(
-        use_momentum && momentum_buffer.has_value(),
-        "Momentum buffer must be provided when using momentum. Got: {}",
-        momentum);
+    const auto momentum = args.momentum;
+    const auto use_momentum = (momentum > 0.0F);
+    if (use_momentum) {
+        TT_FATAL(
+            momentum_buffer.has_value(), "Momentum buffer must be provided when using momentum. Got: {}", momentum);
+    }
 }
 
 SGDFusedDeviceOperation::spec_return_value_t SGDFusedDeviceOperation::compute_output_specs(
