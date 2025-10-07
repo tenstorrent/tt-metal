@@ -2,3 +2,4 @@ datasets
 transformers
 tqdm
 numpy
+loguru
