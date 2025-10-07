@@ -20,10 +20,6 @@ on:
         required: false
         type: boolean
         default: false
-      ref:
-        description: "The git ref (branch, tag, or commit SHA) to checkout"
-        required: false
-        type: string
 
 jobs:
   build-docs:
@@ -50,7 +46,6 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || 'main' }}
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
@@ -106,8 +101,6 @@ jobs:
         # This is needed by the pages-deploy action so
         # that the folder is initialized for .git
         uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.ref || 'main' }}
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         timeout-minutes: 10
         with:
