@@ -26,10 +26,19 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     std::uint16_t tiles_received;
 
     uint16_t num_tiles_recv;
+#ifdef USE_ZONE_COUNTER
+    std::uint32_t counter = zone.get_counter();
+#endif
     do {
+#ifdef USE_ZONE_COUNTER
+        counter++;
+#endif
         tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
+#ifdef USE_ZONE_COUNTER
+    zone.set_counter(--counter);
+#endif
 }
 
 // Pop N tiles from the incoming stream

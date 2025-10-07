@@ -103,8 +103,16 @@ __attribute__((noinline)) void init_profiler(
     wIndex = CUSTOM_MARKERS;
     stackSize = 0;
 
+    if (myRiscID < 2) {
+        sumIDs[0] = 25367;
+        sumIDs[1] = 27747;
+    } else {
+        sumIDs[0] = 12957;
+        sumIDs[1] = 40878;
+    }
+
     for (int i = 0; i < SUM_COUNT; i++) {
-        sumIDs[i] = 0;
+        // sumIDs[i] = 0;
         sums[i] = 0;
     }
 
@@ -494,6 +502,7 @@ struct profileScopeGuaranteed {
 
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeAccumulate {
+#ifndef USE_ZONE_COUNTER
     uint64_t start_time = 0;
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
 
@@ -504,6 +513,10 @@ struct profileScopeAccumulate {
         sumIDs[index] = timer_id;
         sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
     }
+#else
+    inline __attribute__((always_inline)) void set_counter(uint32_t value) { sums[index] = value; }
+    inline __attribute__((always_inline)) uint32_t get_counter() { return sums[index]; }
+#endif
 };
 
 // performs quick push to DRAM if buffers appear full

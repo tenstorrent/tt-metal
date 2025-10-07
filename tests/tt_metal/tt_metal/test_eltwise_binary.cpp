@@ -68,6 +68,9 @@ int main(int argc, char** argv) {
     bool measure_cb_timings = false;
     std::tie(measure_cb_timings, input_args) =
         test_args::has_command_option_and_remaining_args(input_args, "--measure-cb-timings");
+    bool use_zone_counter = false;
+    std::tie(use_zone_counter, input_args) =
+        test_args::has_command_option_and_remaining_args(input_args, "--use-zone-counter");
 
     bool pass = true;
     bool multibank = true;
@@ -160,6 +163,9 @@ int main(int argc, char** argv) {
             if (!measure_cb_timings) {
                 reader_defines["MEASURE_CB_TIMINGS_SKIP"] = "1";
             }
+            if (use_zone_counter) {
+                reader_defines["USE_ZONE_COUNTER"] = "1";
+            }
 
             std::map<std::string, std::string> writer_defines;
             uint32_t writer_wait_time = 0;
@@ -171,6 +177,9 @@ int main(int argc, char** argv) {
             }
             if (!measure_cb_timings) {
                 writer_defines["MEASURE_CB_TIMINGS_SKIP"] = "1";
+            }
+            if (use_zone_counter) {
+                writer_defines["USE_ZONE_COUNTER"] = "1";
             }
 
             auto binary_reader_kernel = tt_metal::CreateKernel(
@@ -208,6 +217,9 @@ int main(int argc, char** argv) {
             }
             if (!measure_cb_timings) {
                 compute_defines["MEASURE_CB_TIMINGS_SKIP"] = "1";
+            }
+            if (use_zone_counter) {
+                compute_defines["USE_ZONE_COUNTER"] = "1";
             }
 
             auto eltwise_binary_kernel = tt_metal::CreateKernel(
