@@ -8,7 +8,6 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
-// #include "debug/dprint.h"
 
 void kernel_main() {
     /*
@@ -114,7 +113,7 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned] = get_runtime_args(
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
         cur_pos,
         cur_batch,
         core_num_in_reduce,
