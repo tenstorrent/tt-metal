@@ -136,6 +136,7 @@ def extract_callstack_from_gdb_output(
     return cs
 
 
+# Class for storing callstack and message that should be displayed together
 @dataclass
 class KernelCallstackWithMessage:
     callstack: list[CallstackEntry]
@@ -170,17 +171,18 @@ def get_gdb_callstack(
 
     # Run gdb script
     if gdb_client.stdin is not None:
-        try:
-            gdb_client.stdin.write(gdb_script)
-            gdb_client.stdin.flush()
-        except Exception as e:
-            print("UGABUGA")
-            return KernelCallstackWithMessage(callstack=[], message=str(e))
+        gdb_client.stdin.write(gdb_script)
+        gdb_client.stdin.flush()
 
     callstack = extract_callstack_from_gdb_output(
         gdb_client.communicate()[0], start_callstack_label, end_callstack_label
     )
-    return KernelCallstackWithMessage(callstack=callstack, message=None)
+
+    # We handle errors in gdb_server by printing them therefore we do not have it here so we print generic message if we failed to get callstack
+    message = (
+        "Failed to get callstack from GDB. Look for error message above the table." if len(callstack) == 0 else None
+    )
+    return KernelCallstackWithMessage(callstack=callstack, message=message)
 
 
 def get_callstack(
@@ -205,6 +207,7 @@ def get_callstack(
                 return KernelCallstackWithMessage(callstack=callstack(location, elfs, offsets, risc_name), message=None)
             except Exception as e:
                 try:
+                    # If full callstack failed, we default to top callstack
                     pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
                     return KernelCallstackWithMessage(
                         callstack=top_callstack(pc, elfs, offsets, context),
@@ -285,11 +288,6 @@ def dump_callstacks(
                 callstack_with_message = get_gdb_callstack(
                     location, risc_name, dispatcher_core_data, gdb_server.server.port, process_ids
                 )
-                # We handle errors in gdb_server by printing them therefore we do not have it here
-                if len(callstack_with_message.callstack) == 0:
-                    callstack_with_message.message = (
-                        "Failed to get callstack from GDB. Look for error message above the table."
-                    )
             # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
             if len(callstack_with_message.callstack) > 0 and callstack_with_message.callstack[0].pc is None:
                 try:
