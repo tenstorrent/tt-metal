@@ -22,7 +22,6 @@ docker build --progress=plain \
 
 # Step 3: Run conan create in the container
 echo "Running conan create in container"
-docker run -it --rm -v "$(pwd):/workspace" "${METAL_IMAGE_NAME}" \
-    --device /dev/tenstorrent \
-    -v /dev/hugepages-1G:/dev/hugepages-1G \
-    run_metal_with_conan.sh "/tt-conan/default_cxx20.txt"
+docker run -it --rm -v "$(pwd):/workspace" \
+    --device /dev/tenstorrent -v /dev/hugepages-1G:/dev/hugepages-1G \
+    "${METAL_IMAGE_NAME}" ./run_metal_with_conan.sh "/tt-conan/default_cxx20.txt"
