@@ -72,6 +72,17 @@ int main(int argc, char** argv) {
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
 
+    // Configure progress monitoring from cmdline flags
+    if (cmdline_parser.show_progress() || cmdline_parser.verbose_progress()) {
+        ProgressMonitorConfig progress_config;
+        progress_config.enabled = true;
+        progress_config.poll_interval_seconds = cmdline_parser.get_progress_interval();
+        progress_config.hung_threshold_seconds = cmdline_parser.get_hung_threshold();
+        progress_config.verbose = cmdline_parser.verbose_progress();
+
+        test_context.enable_progress_monitoring(progress_config);
+    }
+
     // Initialize CSV file for bandwidth results if any of the configs have benchmark mode set
     for (const auto& config : raw_test_configs) {
         if (config.benchmark_mode) {
@@ -175,7 +186,7 @@ int main(int argc, char** argv) {
                 test_context.launch_programs();
 
                 log_info(tt::LogTest, "Waiting for programs");
-                test_context.wait_for_programs();
+                test_context.wait_for_programs_with_progress();
                 log_info(tt::LogTest, "Test {} Finished.", built_test.parametrized_name);
 
                 test_context.process_telemetry_data(built_test);

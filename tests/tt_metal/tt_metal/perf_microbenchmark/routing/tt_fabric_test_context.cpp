@@ -241,3 +241,27 @@ void TestContext::dump_raw_telemetry_csv(const TestConfig& config) {
     }
     log_info(tt::LogTest, "Dumped raw telemetry to: {}", raw_telemetry_path.string());
 }
+
+void TestContext::wait_for_programs_with_progress() {
+    if (!progress_config_.enabled) {
+        fixture_->wait_for_programs();
+        return;
+    }
+
+    // Create progress monitor (but don't start polling thread yet)
+    TestProgressMonitor monitor(this, progress_config_);
+
+    // Poll and check for completion in this thread
+    log_info(
+        tt::LogTest,
+        "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
+        progress_config_.poll_interval_seconds,
+        progress_config_.hung_threshold_seconds);
+
+    monitor.poll_until_complete();
+
+    // Now call wait_for_programs() to ensure proper cleanup
+    fixture_->wait_for_programs();
+
+    log_info(tt::LogTest, "Progress monitoring complete");
+}

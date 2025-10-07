@@ -24,6 +24,7 @@
 #include "tt_fabric_test_allocator.hpp"
 #include "tt_fabric_test_memory_map.hpp"
 #include "tt_fabric_telemetry.hpp"
+#include "tt_fabric_test_progress_monitor.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -44,6 +45,10 @@ using SenderCreditInfo = tt::tt_fabric::fabric_tests::SenderCreditInfo;
 using ReceiverCreditInfo = tt::tt_fabric::fabric_tests::ReceiverCreditInfo;
 using TestWorkerType = tt::tt_fabric::fabric_tests::TestWorkerType;
 using CommonMemoryMap = tt::tt_fabric::fabric_tests::CommonMemoryMap;
+using ProgressMonitorConfig = tt::tt_fabric::fabric_tests::ProgressMonitorConfig;
+using TestProgressMonitor = tt::tt_fabric::fabric_tests::TestProgressMonitor;
+using SenderMemoryMap = tt::tt_fabric::fabric_tests::SenderMemoryMap;
+using IDeviceInfoProvider = tt::tt_fabric::fabric_tests::IDeviceInfoProvider;
 
 using ChipSendType = tt::tt_fabric::ChipSendType;
 using NocSendType = tt::tt_fabric::NocSendType;
@@ -368,6 +373,20 @@ public:
     void launch_programs() { fixture_->run_programs(); }
 
     void wait_for_programs() { fixture_->wait_for_programs(); }
+
+    void enable_progress_monitoring(const ProgressMonitorConfig& config) {
+        progress_config_ = config;
+        progress_config_.enabled = true;
+    }
+
+    void wait_for_programs_with_progress();
+
+    // Accessors for progress monitor
+    const std::unordered_map<MeshCoordinate, TestDevice>& get_test_devices() const { return test_devices_; }
+
+    const SenderMemoryMap& get_sender_memory_map() const { return sender_memory_map_; }
+
+    IDeviceInfoProvider* get_device_info_provider() const { return fixture_.get(); }
 
     void process_telemetry_data(TestConfig& built_test_config) {
         if (this->get_telemetry_enabled()) {
@@ -1567,6 +1586,9 @@ private:
     double measured_bw_min_ = 0.0;
     double measured_bw_avg_ = 0.0;
     double measured_bw_max_ = 0.0;
+
+    // Progress monitoring
+    ProgressMonitorConfig progress_config_;
     std::filesystem::path raw_telemetry_csv_path_;
     std::filesystem::path csv_file_path_;
     std::filesystem::path csv_summary_file_path_;

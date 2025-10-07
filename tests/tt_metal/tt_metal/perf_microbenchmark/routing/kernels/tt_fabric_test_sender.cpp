@@ -72,6 +72,8 @@ void kernel_main() {
 
     // Round-robin packet sending: send one packet from each config per iteration
     uint64_t start_timestamp = get_timestamp();
+    constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
+
     while (packets_left_to_send) {
         packets_left_to_send = false;
 
@@ -95,6 +97,18 @@ void kernel_main() {
         }
 
         loop_count++;
+
+        // Periodically write progress updates (skip in BENCHMARK_MODE for performance)
+        if constexpr (!BENCHMARK_MODE) {
+            if (loop_count % PROGRESS_UPDATE_INTERVAL == 0) {
+                // Calculate total packets sent across all traffic configs
+                uint64_t progress_packets_sent = 0;
+                for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+                    progress_packets_sent += sender_config->traffic_config_ptrs[i]->num_packets_processed;
+                }
+                write_test_packets(sender_config->get_result_buffer_address(), progress_packets_sent);
+            }
+        }
     }
 
     DPRINT << "Packet sending loop complete, sent " << loop_count << " total iterations" << ENDL();

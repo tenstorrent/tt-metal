@@ -825,7 +825,26 @@ void CmdlineParser::print_help() {
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
     log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
+    log_info(LogTest, "");
+    log_info(LogTest, "Progress Monitoring Options:");
+    log_info(LogTest, "  --show-progress                              Enable real-time progress monitoring.");
+    log_info(LogTest, "  --progress-interval <seconds>                Poll interval (default: 2).");
+    log_info(LogTest, "  --hung-threshold <seconds>                   Hung detection threshold (default: 30).");
+    log_info(LogTest, "  --verbose                                    Show per-device progress bars.");
 }
+
+// Progress monitoring methods
+bool CmdlineParser::show_progress() { return test_args::has_command_option(input_args_, "--show-progress"); }
+
+uint32_t CmdlineParser::get_progress_interval() {
+    return test_args::get_command_option_uint32(input_args_, "--progress-interval", 2);
+}
+
+uint32_t CmdlineParser::get_hung_threshold() {
+    return test_args::get_command_option_uint32(input_args_, "--hung-threshold", 30);
+}
+
+bool CmdlineParser::verbose_progress() { return test_args::has_command_option(input_args_, "--verbose"); }
 
 // YamlConfigParser private helpers
 CoreCoord YamlConfigParser::parse_core_coord(const YAML::Node& node) {

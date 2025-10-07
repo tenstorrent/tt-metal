@@ -204,6 +204,10 @@ public:
 
     const std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>>& get_configs() const { return configs_; }
 
+    // Accessors for progress monitoring
+    CoreCoord get_core() const { return logical_core_; }
+    uint64_t get_total_packets() const;  // Defined out-of-line
+
     // global line sync configs - stores sync traffic configs with their fabric connection keys
     // Managed by TestDevice::sync_connection_manager_ (separate instance from regular connections)
     std::vector<std::pair<TestTrafficSenderConfig, ConnectionKey>> global_sync_configs_;

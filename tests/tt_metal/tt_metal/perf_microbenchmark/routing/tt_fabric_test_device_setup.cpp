@@ -1235,5 +1235,16 @@ void TestDevice::set_local_runtime_args_for_core(
     device_info_provider_->write_data_to_core(device_coord, logical_core, local_args_address, args);
 }
 
+// TestSender accessor implementations (need complete TestDevice)
+uint64_t TestSender::get_total_packets() const {
+    uint64_t total = 0;
+    for (const auto& [config, _] : configs_) {
+        total += config.parameters.num_packets;
+    }
+    // Note: We don't add global_sync_configs_ packets here
+    // because sync packets are not traffic packets
+    return total;
+}
+
 }  // namespace fabric_tests
 }  // namespace tt::tt_fabric

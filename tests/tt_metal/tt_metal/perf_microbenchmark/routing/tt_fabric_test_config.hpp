@@ -293,6 +293,12 @@ public:
     bool has_help_option();
     void print_help();
 
+    // Progress monitoring options
+    bool show_progress();
+    uint32_t get_progress_interval();
+    uint32_t get_hung_threshold();
+    bool verbose_progress();
+
 private:
     const std::vector<std::string>& input_args_;
     std::optional<std::string> filter_type;
