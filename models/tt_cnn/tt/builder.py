@@ -23,25 +23,22 @@ class SliceStrategyConfiguration:
 
 
 # Currently, channel slicing is not natively supported by the Conv2D operation and must be done manually
-# For now, we identify channel slicing by having a num_slices > 0 with a slice_type of None
-# Normally, num_slices of 0 for a not None slice_type means auto-slice, so we don't have that feature for channel slice
-# Once Conv2D supports channel slicing natively, we should be able to support it without API changes
 @dataclass
 class HeightSliceStrategyConfiguration(SliceStrategyConfiguration):
     def get_slice_type(self):
-        return ttnn.Conv2dSliceHeight
+        return ttnn.Conv2dDRAMSliceHeight
 
 
 @dataclass
 class WidthSliceStrategyConfiguration(SliceStrategyConfiguration):
     def get_slice_type(self):
-        return ttnn.Conv2dSliceWidth
+        return ttnn.Conv2dDRAMSliceWidth
 
 
 @dataclass
 class ChannelSliceStrategyConfiguration(SliceStrategyConfiguration):
     def get_slice_type(self):
-        return None
+        return ttnn.Conv2dL1Full
 
     def __post_init__(self):
         if self.num_slices <= 1:
@@ -480,9 +477,9 @@ def to_compute_config(configuration: Conv2dConfiguration, device: ttnn.Device):
 def to_slice_config(configuration: Conv2dConfiguration):
     if configuration.slice_strategy is None:
         return None
-    # Channel slicing returns None for slice_type and is handled manually
-    if configuration.slice_strategy.get_slice_type() is None:
-        return None
+    # Channel slicing uses the predefined Conv2dL1FullSliceConfig
+    if isinstance(configuration.slice_strategy, ChannelSliceStrategyConfiguration):
+        return ttnn.Conv2dL1FullSliceConfig
     return ttnn.Conv2dSliceConfig(
         slice_type=configuration.slice_strategy.get_slice_type(),
         num_slices=configuration.slice_strategy.get_num_slices(),
@@ -510,8 +507,8 @@ class TtConv2d:
 
         # Check for channel slicing
         if (
-            self.slice_config is None
-            and configuration.slice_strategy is not None
+            configuration.slice_strategy is not None
+            and isinstance(configuration.slice_strategy, ChannelSliceStrategyConfiguration)
             and configuration.slice_strategy.get_num_slices() > 0
         ):
             split_in_channels = configuration.in_channels // configuration.slice_strategy.get_num_slices()
