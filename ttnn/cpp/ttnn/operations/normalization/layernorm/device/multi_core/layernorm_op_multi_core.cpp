@@ -1099,9 +1099,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
             "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
     }
 
-    std::cout << "Reader sender kernel file: " << sender_reader_kernel_file << std::endl;
-    std::cout << "Reader receiver kernel file: " << receiver_reader_kernel_file << std::endl;
-
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
         sender_reader_kernel_file,
@@ -1305,8 +1302,6 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                   "layernorm_sharded_welford.cpp"
                 : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp";
     }
-
-    std::cout << "Compute kernel file: " << compute_kernel_file << std::endl;
 
     KernelHandle compute_kernels_id = -1;
     auto compute_kernels_id_all_to_all = CreateKernel(
