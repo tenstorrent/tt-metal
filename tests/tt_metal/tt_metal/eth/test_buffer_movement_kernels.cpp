@@ -759,40 +759,42 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                     //     log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
                     //     continue;
                     // }
-                    const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-                    log_info(
-                        tt::LogTest,
-                        "Sending interleaved buffer from device {} to device {}, using eth core {} DM{} and {}",
-                        sender_device->id(),
-                        receiver_device->id(),
-                        sender_eth_core.str(),
-                        erisc_idx,
-                        receiver_eth_core.str());
-                    BankedConfig test_config = BankedConfig{
-                        .num_pages = num_pages,
-                        .size_bytes = num_pages * page_size,
-                        .page_size_bytes = page_size,
-                        .input_buffer_type = BufferType::L1,
-                        .output_buffer_type = BufferType::DRAM};
+                    for (int i = 0; i < 100; ++i) {
+                        const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
+                        log_info(
+                            tt::LogTest,
+                            "Sending interleaved buffer from device {} to device {}, using eth core {} DM{} and {}",
+                            sender_device->id(),
+                            receiver_device->id(),
+                            sender_eth_core.str(),
+                            erisc_idx,
+                            receiver_eth_core.str());
+                        BankedConfig test_config = BankedConfig{
+                            .num_pages = num_pages,
+                            .size_bytes = num_pages * page_size,
+                            .page_size_bytes = page_size,
+                            .input_buffer_type = BufferType::L1,
+                            .output_buffer_type = BufferType::DRAM};
 
-                    ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_eth_core,
-                        receiver_eth_core,
-                        test_config,
-                        test_config.page_size_bytes,
-                        processor));
-                    ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_eth_core,
-                        receiver_eth_core,
-                        test_config,
-                        MAX_BUFFER_SIZE,
-                        processor));
+                        ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                            static_cast<MeshDispatchFixture*>(this),
+                            sender_mesh_device,
+                            receiver_mesh_device,
+                            sender_eth_core,
+                            receiver_eth_core,
+                            test_config,
+                            test_config.page_size_bytes,
+                            processor));
+                        ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                            static_cast<MeshDispatchFixture*>(this),
+                            sender_mesh_device,
+                            receiver_mesh_device,
+                            sender_eth_core,
+                            receiver_eth_core,
+                            test_config,
+                            MAX_BUFFER_SIZE,
+                            processor));
+                    }
                     // test_config = BankedConfig{
                     //     .num_pages = num_pages,
                     //     .size_bytes = num_pages * page_size,
