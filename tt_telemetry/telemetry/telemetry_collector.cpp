@@ -234,16 +234,17 @@ static void telemetry_thread(
     tt::scaleout_tools::fsd::proto::FactorySystemDescriptor fsd) {
     try {
         std::unique_ptr<tt::umd::Cluster> cluster;
+        std::unique_ptr<tt::tt_metal::Hal> hal;
         std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> psd;
         std::unique_ptr<TopologyHelper> topology_translation;
-        std::unique_ptr<tt::tt_metal::Hal> hal;
 
         if (telemetry_enabled) {
             cluster = std::make_unique<tt::umd::Cluster>();
             auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-            psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(cluster, distributed_context, rtoptions);
-            topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
             hal = create_hal(cluster);
+            psd = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(
+                cluster, distributed_context, hal.get(), rtoptions);
+            topology_translation = std::make_unique<TopologyHelper>(cluster, psd);
             log_info(tt::LogAlways, "Created cluster, physical system descriptor, and HAL");
 
             create_ethernet_metrics(
