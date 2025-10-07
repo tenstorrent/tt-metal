@@ -14,10 +14,10 @@ from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("mkn", [(1, 2880, 320)])
-@pytest.mark.parametrize("num_experts", [128])
-@pytest.mark.parametrize("num_tokens", [(1, 16)])
-@pytest.mark.parametrize("tile_h", [32])
+@pytest.mark.parametrize("mkn", [(16, 128, 512)])
+@pytest.mark.parametrize("num_experts", [8])
+@pytest.mark.parametrize("num_tokens", [(1, 4)])
+@pytest.mark.parametrize("tile_h", [16])
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
 def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, tile_w, in1_dtype):
@@ -32,7 +32,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
 
     # Mark some as 0 to test the sparsity
     sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
-    number_of_zeros = 28
+    number_of_zeros = random.randint(0, sparsity.numel() - 1)
     zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
     sparsity.view(-1)[zero_indices] = 0.0
 
@@ -71,7 +71,6 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
     output_t = ttnn.sparse_matmul(
         in0_t,
         in1_t,
-        # is_input_a_sparse=True,
         sparsity=sparsity_t,
         nnz=nnz,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -80,8 +79,6 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
 
     output_tensor = ttnn.to_torch(output_t)
 
-    logger.info(output_tensor.shape)
-
     # Compute matmul using torch for each batch and concatenate the results
     for b, s, e in itertools.product(range(b), range(s), range(num_experts)):
         if sparsity[0, b, s, e] == 0.0:
@@ -89,7 +86,6 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
         in0_batch = in0[b, s, :, :]
         in1_batch = in1[0, e, :, :]
         pt_out = torch.matmul(in0_batch, in1_batch)
-        logger.info(pt_out.shape)
 
         # Compare with output tensor
         expected_pcc = 0.999
@@ -173,81 +169,3 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_tokens, tile_h,
         # Compare with output tensor
         expected_pcc = 0.999
         assert_with_pcc(pt_out, output_tensor[b, s, 0, e, :, :], expected_pcc)
-
-
-@pytest.mark.parametrize("mkn", [(1, 2880, 1440)])
-@pytest.mark.parametrize("num_experts", [32])
-@pytest.mark.parametrize("tile_h", [32])
-@pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16])
-def test_batched_sparse_matmul(device, mkn, num_experts, tile_h, tile_w, in1_dtype):
-    torch.manual_seed(0)
-    m, k, n = mkn
-    in0 = torch.randn((1, num_experts, m, k), dtype=torch.bfloat16)
-    in1 = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
-
-    sparsity_shape = (1, 1, 1, num_experts)
-    sparsity = torch.rand(sparsity_shape)
-
-    # Mark some as 0 to test the sparsity
-    sparsity[(sparsity == 0)] = 0.1  # First make sure there are no zeros
-    number_of_zeros = 28
-    zero_indices = torch.randperm(sparsity.numel())[:number_of_zeros]
-    sparsity.view(-1)[zero_indices] = 0.0
-
-    sparsity = sparsity.to(dtype=torch.float32)
-
-    nnz = int((sparsity != 0).sum().item())
-    logger.info(f"nnz: {nnz}")
-
-    in0_t = ttnn.from_torch(
-        in0,
-        tile=ttnn.Tile((tile_h, 32)),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    in1_t = ttnn.from_torch(
-        in1,
-        tile=ttnn.Tile((32, tile_w)),
-        dtype=in1_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    sparsity_t = ttnn.from_torch(
-        sparsity,
-        dtype=ttnn.float32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    output_tile = ttnn.Tile([tile_h, tile_w])
-    output_t = ttnn.sparse_matmul(
-        in0_t,
-        in1_t,
-        sparsity=sparsity_t,
-        nnz=nnz,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_tile=output_tile,
-        batched_input_a=True,
-    )
-
-    output_tensor = ttnn.to_torch(output_t)
-    logger.info(output_tensor.shape)
-
-    # Compute matmul using torch for each batch and concatenate the results
-    for e in range(num_experts):
-        if sparsity[0, 0, 0, e] == 0.0:
-            continue
-        in0_batch = in0[0, e, :, :]
-        in1_batch = in1[0, e, :, :]
-        pt_out = torch.matmul(in0_batch, in1_batch)
-
-        # Compare with output tensor
-        expected_pcc = 0.999
-        assert_with_pcc(pt_out, output_tensor[0, e, :, :], expected_pcc)

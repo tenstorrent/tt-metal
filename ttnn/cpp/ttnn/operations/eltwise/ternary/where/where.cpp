@@ -105,7 +105,12 @@ Tensor WhereOperation::invoke(
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(t_true.dtype());
                 return ttnn::prim::where(
-                    condition, t_true, t_false, output_dtype, memory_config.value_or(t_true.memory_config()), output);
+                    condition,
+                    t_true,
+                    t_false,
+                    output_dtype,
+                    memory_config.value_or(t_true.memory_config()),
+                    output);
             }
         } else if (is_value_true_Tensor && !is_value_false_Tensor) {
             // TTS case: tensor-tensor-scalar
@@ -159,7 +164,7 @@ Tensor WhereOperation::invoke(
             // TSS case: tensor-scalar-scalar
             const auto& t_true = std::get<float>(value_true);
             const auto& t_false = std::get<float>(value_false);
-
+            log_debug(tt::LogOp, "Where LLK - TSS");
             unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
 
             return ttnn::operations::unary::Unary_chain::invoke(
@@ -170,6 +175,7 @@ Tensor WhereOperation::invoke(
         }
     }
 
+    log_debug(tt::LogOp, "Where - legacy");
     return std::visit(
         [&](const auto&... values) {
             return ternary_utils::where_impl(
