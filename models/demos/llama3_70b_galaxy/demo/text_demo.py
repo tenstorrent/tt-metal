@@ -5,6 +5,7 @@ from pathlib import Path
 from loguru import logger
 from datetime import datetime
 import hashlib
+import numpy as np
 import requests
 import json
 import torch
@@ -207,6 +208,29 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
+        ),
+        (  # Batch-32 with non-uniform sampling
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {
+                "temperature": list(np.linspace(0.1, 1.0, 32)),
+                "top_p": list(np.linspace(0.08, 1.0, 32)),
+                "top_k": list(np.linspace(1, 32, 32).astype(int)),
+            },  # sampling_params (non-uniform)
             False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -485,6 +509,7 @@ def create_tt_model(
     ],
     ids=[
         "batch-32",  # throughput
+        "batch-32-non-uniform-sampling",  # throughtput w/ non-uniform sampling
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
@@ -780,45 +805,10 @@ def test_demo_text(
                 v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
-        device_sampling_params = SamplingParams(
-            # temperature=[sampling_params["temperature"]]*batch_size, top_k=[32]*batch_size, top_p=[sampling_params["top_p"]]*batch_size
-            temperature=[
-                0.0,
-                0.03225806,
-                0.06451613,
-                0.09677419,
-                0.12903226,
-                0.16129032,
-                0.19354839,
-                0.22580645,
-                0.25806452,
-                0.29032258,
-                0.32258065,
-                0.35483871,
-                0.38709677,
-                0.41935484,
-                0.4516129,
-                0.48387097,
-                0.51612903,
-                0.5483871,
-                0.58064516,
-                0.61290323,
-                0.64516129,
-                0.67741935,
-                0.70967742,
-                0.74193548,
-                0.77419355,
-                0.80645161,
-                0.83870968,
-                0.87096774,
-                0.90322581,
-                0.93548387,
-                0.96774194,
-                1.0,
-            ],
-            top_k=[32] * batch_size,
-            top_p=[sampling_params["top_p"]] * batch_size,
-        )
+        temperature = sampling_params["temperature"]
+        top_k = sampling_params.get("top_k", 32)
+        top_p = sampling_params["top_p"]
+        device_sampling_params = SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p)
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
             profiler.start(f"compile_prefill", iteration=batch_idx)
