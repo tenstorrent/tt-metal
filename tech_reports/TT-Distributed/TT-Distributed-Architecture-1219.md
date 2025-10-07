@@ -658,7 +658,7 @@ As mentioned previously, Host APIs to configure individual program attributes in
 
 ```cpp
 // Creates an empty MeshWorkload object
-MeshWorkloadHandle CreateMeshWorkload();
+MeshWorkload MeshWorkload();
 
 // Wrapper around mesh_workload.add_program. By default, the added program runs on the
 // entire Virtual Mesh.
@@ -719,7 +719,7 @@ MeshWorkload Matmul::create_mesh_workload(
     auto mesh = input_tensors.at(0).mesh();
 
     // Create an empty MeshWorkload
-    MeshWorkloadHandle dp_matmul_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle dp_matmul_workload = distributed::MeshWorkload();
 
     // Create a matmul program configured for a single device
     auto program_with_callbacks = this->create_program(
@@ -771,7 +771,7 @@ distributed::MeshWorkload AllGather::create_mesh_workload(
     const std::vector<MeshTensor>& input_tensors,
     std::vector<MeshTensor>& output_tensors) const {
 
-    MeshWorkloadHandle all_gather_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle all_gather_workload = distributed::MeshWorkload();
 
     auto program_with_callbacks = this->create_program(input_tensors, output_tensors);
 
@@ -806,7 +806,7 @@ distributed::MeshWorkload CombinedWorkload::create_mesh_workload(
     std::vector<MeshTensor>& output_tensors) const {
 
     // Create an empty MeshWorkload
-    MeshWorkloadHandle combined_workload = distributed::CreateMeshWorkload();
+    MeshWorkloadHandle combined_workload = distributed::MeshWorkload();
 
     // Populate the MeshWorkload with a unary and binary operation, each runs on a
     // different grid
@@ -1174,13 +1174,13 @@ EnqueueWriteBuffer(device_0_cq_1_handle, mul_src_1, random_data_1);
 // Record that inputs were written
 EnqueueRecordEvent(device_0_cq_1_handle, device_0_write_event);
 // Wait until inputs were written
-EnqueueWaitForEvent(device_0_cq_0_handle, device_0_write_event);
+device_0_cq_0_handle.enqueue_wait_for_event(device_0_write_event);
 // Run compute
 EnqueueProgram(device_0_cq_0_handle, mul_program);
 // Record that compute was run and is completed
 EnqueueRecordEvent(device_0_cq_0_handle, device_0_compute_event);
 // Wait until compute has completed
-EnqueueWaitForEvent(device_0_cq_1_handle, device_0_compute_event);
+device_0_cq_1_handle.enqueue_wait_for_event(device_0_compute_event);
 // Read outputs
 EnqueueReadBuffer(device_0_cq_1_handle, mul_dst, mul_readback_data);
 
@@ -1630,13 +1630,13 @@ The functions listed below allow a MeshTrace to be captured, binarized and run/r
 // Maps to BeginTraceCapture
 void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EndTraceCapture
+
 void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to ReplayTrace
+
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
 
-// Maps to ReleaseTrace
+
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id);
 
 // Get the underlying MeshTrace metadata corresponding to an ID.

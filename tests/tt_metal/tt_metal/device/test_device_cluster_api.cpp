@@ -166,9 +166,10 @@ TEST_F(N300MeshDeviceFixture, ActiveEthValidateEthernetSockets) {
     std::vector<CoreCoord> device_0_sockets = device_0->get_ethernet_sockets(1);
     std::vector<CoreCoord> device_1_sockets = device_1->get_ethernet_sockets(0);
 
-    // There are 2 in total. But expecting 1 because 1 is used for dispatching to remote device.
-    ASSERT_EQ(device_0_sockets.size(), 1);
-    ASSERT_EQ(device_1_sockets.size(), 1);
+    // There are 2 in total. But expecting 1 because 1 is used for dispatching to remote device for fast dispatch
+    int expected_n300_count = this->IsSlowDispatch() ? 2 : 1;
+    ASSERT_EQ(device_0_sockets.size(), expected_n300_count);
+    ASSERT_EQ(device_1_sockets.size(), expected_n300_count);
     ASSERT_EQ(
         device_0->get_connected_ethernet_core(device_0_sockets.at(0)),
         std::make_tuple(device_1->id(), device_1_sockets.at(0)));

@@ -4,9 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -39,8 +37,8 @@ int main() {
     std::vector<uint32_t> src_vec(src_num_values_packed, 0);
     // source vector = {1, 2, 3, ... , 30, 31, 32,   2048}
     for (uint32_t i = 0; i < src_vec.size(); i++) {
-        bfloat16 bfloat_val1 = bfloat16(2 * i + 1);
-        bfloat16 bfloat_val2 = bfloat16(2 * i + 2);
+        bfloat16 bfloat_val1 = bfloat16((2 * i) + 1);
+        bfloat16 bfloat_val2 = bfloat16((2 * i) + 2);
         src_vec[i] = pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(bfloat_val1, bfloat_val2));
     }
 
@@ -187,8 +185,8 @@ int main() {
     printf("Original tensor with shape (%d, %d):\n", src_M, src_N);
     for (uint32_t m = 0; m < src_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_src; n++) {
-            printf("%d ", (uint16_t)src_vec[m * num_packed_row_src + n]);
-            printf("%d ", (uint16_t)(src_vec[m * num_packed_row_src + n] >> 16));
+            printf("%d ", (uint16_t)src_vec[(m * num_packed_row_src) + n]);
+            printf("%d ", (uint16_t)(src_vec[(m * num_packed_row_src) + n] >> 16));
         }
         printf("\n");
     }
@@ -197,7 +195,7 @@ int main() {
     // Upload inputs (non-blocking), enqueue mesh workload (non-blocking), read back result, then wait for completion
     distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
     distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::EnqueueReadMeshBuffer(cq, dst_vec, dst_buffer, true);
     distributed::Finish(cq);
@@ -205,8 +203,8 @@ int main() {
     printf("Padded tensor with shape (%d, %d):\n", dst_M, dst_N);
     for (uint32_t m = 0; m < dst_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_dst; n++) {
-            printf("%d ", (uint16_t)dst_vec[m * num_packed_row_dst + n]);
-            printf("%d ", (uint16_t)(dst_vec[m * num_packed_row_dst + n] >> 16));
+            printf("%d ", (uint16_t)dst_vec[(m * num_packed_row_dst) + n]);
+            printf("%d ", (uint16_t)(dst_vec[(m * num_packed_row_dst) + n] >> 16));
         }
         printf("\n");
     }

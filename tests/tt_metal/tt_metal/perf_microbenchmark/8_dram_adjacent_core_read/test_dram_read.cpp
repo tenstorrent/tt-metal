@@ -12,7 +12,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/util.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
@@ -29,7 +28,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -206,7 +205,7 @@ bool validation(
             auto input_bfp8 = unpack_bfp8_tiles_into_float_vec(input_vec, true, true);
 
             for (uint32_t i = 0; i < num_slices; ++i) {
-                uint32_t input_step = start_index + i * num_datum_per_slice * num_banks;
+                uint32_t input_step = start_index + (i * num_datum_per_slice * num_banks);
                 std::vector<float> input_slice(
                     input_bfp8.begin() + input_step, input_bfp8.begin() + input_step + num_datum_per_slice);
                 uint32_t result_step = i * num_datum_per_slice;
@@ -223,7 +222,7 @@ bool validation(
             auto input_bf16 = unpack_uint32_vec_into_bfloat16_vec(input_vec);
 
             for (uint32_t i = 0; i < num_slices; ++i) {
-                uint32_t input_step = start_index + i * num_datum_per_slice * num_banks;
+                uint32_t input_step = start_index + (i * num_datum_per_slice * num_banks);
                 std::vector<bfloat16> input_slice(
                     input_bf16.begin() + input_step, input_bf16.begin() + input_step + num_datum_per_slice);
                 uint32_t result_step = i * num_datum_per_slice;
@@ -361,7 +360,7 @@ int main(int argc, char** argv) {
         uint32_t block_w = nt / num_banks;
         uint32_t num_datum_per_slice = 32 * 32;
 
-        uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
+        uint32_t single_tile_size = tt::tile_size(tile_format);
         if (input_size % single_tile_size != 0) {
             auto align_to_single_tile = [=](uint64_t value) -> uint64_t {
                 return ((value + (single_tile_size - 1)) / single_tile_size) * single_tile_size;
@@ -455,16 +454,15 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        auto mesh_workload = tt_metal::distributed::MeshWorkload();
+        mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}}, std::move(program));
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
             tt_metal::distributed::Finish(device->mesh_command_queue());
-            tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
+            tt_metal::ReadMeshDeviceProfilerResults(*device);
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,7 @@
 #include <vector>
 
 #include <tt_stl/span.hpp>
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -35,10 +35,6 @@ namespace tt::tt_metal {
 class IDevice;
 
 namespace distributed {
-
-MeshWorkload CreateMeshWorkload();
-
-void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range);
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
@@ -106,26 +102,6 @@ void EnqueueReadMeshBuffer(
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 
-// Make the specified MeshCommandQueue record an event.
-// Host is not notified when this event completes.
-// Can be used for CQ to CQ synchronization.
-MeshEvent EnqueueRecordEvent(
-    MeshCommandQueue& mesh_cq,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-
-// Make the specified MeshCommandQueue record an event and notify the host when it completes.
-// Can be used for CQ to CQ and host to CQ synchronization.
-MeshEvent EnqueueRecordEventToHost(
-    MeshCommandQueue& mesh_cq,
-    tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
-
-// Make the specified MeshCommandQueue wait for the completion of an event.
-// This operation is non-blocking on host, however the specified command queue
-// will stall until the event is recorded.
-void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const MeshEvent& event);
-
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);
 
@@ -134,12 +110,6 @@ void EventSynchronize(const MeshEvent& event);
 bool EventQuery(const MeshEvent& event);
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
-
-void EndTraceCapture(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id);
-
-void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
-
-void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id);
 
 void Synchronize(
     MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});

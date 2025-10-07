@@ -4,7 +4,7 @@
 
 #include "tt_elffile.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <elf.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -589,6 +589,7 @@ void ElfFile::Impl::XIPify() {
             }
 
             unsigned kind = PCREL;
+            // NOLINTBEGIN(bugprone-switch-missing-default-case)
             switch (type) {
                 case R_RISCV_LO12_I:
                 case R_RISCV_LO12_S: kind = ABS; [[fallthrough]];
@@ -651,6 +652,7 @@ void ElfFile::Impl::XIPify() {
                     TT_THROW("{}: R_RISCV_32_PCREL relocation found at {}", path_, reloc.r_offset);
                     break;
             }
+            // NOLINTEND(bugprone-switch-missing-default-case)
         }
 
         // Combine hi/lo relocs

@@ -4,7 +4,7 @@
 
 #include "tlb_config.hpp"
 
-#include <assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <string>
@@ -41,7 +41,7 @@ int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
         (target.y >= tt::umd::wormhole::T6_Y_LOCATIONS.size())) {
         TT_THROW("Invalid TENSIX core coordinate for generating static TLB index");
     }
-    return TENSIX_STATIC_TLB_START + target.y * 8 + target.x;
+    return TENSIX_STATIC_TLB_START + (target.y * 8) + target.x;
 }
 
 int32_t get_static_tlb_index(tt::umd::CoreCoord target) {
@@ -78,7 +78,7 @@ int32_t get_static_tlb_index_logical_tensix(CoreCoord target) {
         (target.y >= tt::umd::blackhole::T6_Y_LOCATIONS.size())) {
         TT_THROW("Invalid TENSIX core coordinate for generating static TLB index");
     }
-    return TENSIX_STATIC_TLB_START + target.y * 14 + target.x;
+    return TENSIX_STATIC_TLB_START + (target.y * 14) + target.x;
 }
 
 int32_t get_static_tlb_index_logical_dram(CoreCoord target) {
