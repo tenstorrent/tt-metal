@@ -61,8 +61,8 @@ class Conv:
 
         # check input is in interleaved format
         if hasattr(input_tensor, "memory_config") and input_tensor.memory_config().is_sharded():
-            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-            # input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
+            # input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
         # check weights are also properly formatted
         if hasattr(self.weights, "memory_config") and self.weights.memory_config().is_sharded():
@@ -73,7 +73,7 @@ class Conv:
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
-            math_approx_mode=True,
+            math_approx_mode=False,
         )
 
         output_tensor = None
@@ -90,9 +90,9 @@ class Conv:
                 conv_config = ttnn.Conv2dConfig(
                     weights_dtype=ttnn.bfloat16,
                     output_layout=ttnn.TILE_LAYOUT,
-                    deallocate_activation=True,  # Disable for stability
-                    reallocate_halo_output=True,  # Disable for stability
-                    enable_act_double_buffer=True,  # Disable for stability
+                    deallocate_activation=True,
+                    reallocate_halo_output=True,
+                    enable_act_double_buffer=True,
                     activation=None,  # Handle activation separately if needed
                 )
 
@@ -170,7 +170,9 @@ class Conv:
 
                 temp_weights = ttnn.from_device(self.weights) if hasattr(self.weights, "device") else self.weights
                 temp_weights = ttnn.to_device(temp_weights, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
+                if not hasattr(self.weights, "device") or self.weights.device != device:
+                    self.weights = ttnn.to_device(self.weights, device)
+                    self.bias = ttnn.to_device(self.bias, device)
                 [output_tensor, [_out_height, _out_width]] = ttnn.conv2d(
                     input_tensor=temp_input,
                     weight_tensor=temp_weights,
@@ -261,13 +263,14 @@ class Conv_with_split:
         split_input_tensors = torch.split(input_tensor, self.split_input_channels, 3)
         split_weight_tensors = torch.split(self.weights, self.split_input_channels, 1)
 
-        weights_dtype = ttnn.bfloat16
+        weights_dtype = ttnn.float32
 
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
+            math_approx_mode=False,
         )
 
         for i in range(self.split_factor):

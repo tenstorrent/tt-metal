@@ -112,27 +112,27 @@ def create_custom_preprocessor(device):
                 prefix = first_layer_name.split("/")[0]
                 parameters[prefix] = {}
                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(layers[0], layers[1])
-                if "OSA2_1" in prefix:
-                    parameters[prefix]["weight"] = conv_weight
-                    parameters[prefix]["bias"] = conv_bias
-                else:
-                    parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
-                    parameters[prefix]["bias"] = ttnn.from_torch(
-                        torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-                    )
+                # if "OSA2_1" in prefix:
+                #     parameters[prefix]["weight"] = conv_weight
+                #     parameters[prefix]["bias"] = conv_bias
+                # else:
+                parameters[prefix]["weight"] = ttnn.from_torch(conv_weight, dtype=ttnn.bfloat16)
+                parameters[prefix]["bias"] = ttnn.from_torch(
+                    torch.reshape(conv_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
+                )
 
             first_layer_name, _ = list(model.concat.named_children())[0]
             base_name = first_layer_name.split("/")[0]
             parameters[base_name] = {}
-            if "OSA2_1" in base_name:
-                parameters[base_name]["weight"] = model.concat[0].weight
-                parameters[base_name]["bias"] = model.concat[0].bias
-            else:
-                concat_weight, concat_bias = fold_batch_norm2d_into_conv2d(model.concat[0], model.concat[1])
-                parameters[base_name]["weight"] = ttnn.from_torch(concat_weight, dtype=ttnn.bfloat16)
-                parameters[base_name]["bias"] = ttnn.from_torch(
-                    torch.reshape(concat_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
-                )
+            # if "OSA2_1" in base_name:
+            #     parameters[base_name]["weight"] = model.concat[0].weight
+            #     parameters[base_name]["bias"] = model.concat[0].bias
+            # else:
+            concat_weight, concat_bias = fold_batch_norm2d_into_conv2d(model.concat[0], model.concat[1])
+            parameters[base_name]["weight"] = ttnn.from_torch(concat_weight, dtype=ttnn.bfloat16)
+            parameters[base_name]["bias"] = ttnn.from_torch(
+                torch.reshape(concat_bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
+            )
 
             parameters["fc"] = {}
             parameters["fc"]["weight"] = ttnn.from_torch(model.ese.fc.weight, dtype=ttnn.bfloat16)
@@ -284,7 +284,7 @@ def test_vovnetcp_esemodule(device, n, c, h, w):
         (768, 224, 1024, 3, 5, 5, [1, 768, 20, 50]),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 # @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_vovnetcp_osa_stage(
     device, reset_seeds, in_ch, stage_ch, concat_ch, block_per_stage, layer_per_block, stage_num, input_shape
@@ -317,7 +317,7 @@ def test_vovnetcp_osa_stage(
     passed, msg = check_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
     logger.info(
-        f"vovnetcp_osa_stage test passed: "
+        f"vovnetcp_osa_stage_{stage_num} test passed: "
         # f"batch_size={batch_size}, "
         # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
         # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
