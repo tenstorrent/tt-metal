@@ -45,6 +45,7 @@ class ChannelSliceStrategyConfiguration(SliceStrategyConfiguration):
 
     def __post_init__(self):
         if self.num_slices <= 1:
+            # for height and width slicing passing 0 will result in auto-slice, but for channel slice it's not implemented
             raise ValueError(f"Channel slicing requires num_slices > 1")
 
 
