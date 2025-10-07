@@ -2,17 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
 import ttnn
 
-from ...utils.tensor import bf16_tensor
-from ...utils.substate import substate, indexed_substates
-from ...parallel.manager import CCLManager
-from ...parallel.config import EncoderParallelConfig
 from ...layers.linear import ColParallelLinear, RowParallelLinear
-import math
-from ...layers.normalization import RMSNorm
 from ...layers.module import Module, ModuleList
+from ...layers.normalization import RMSNorm
+from ...parallel.config import EncoderParallelConfig
+from ...parallel.manager import CCLManager
+from ...utils.substate import indexed_substates, substate
+from ...utils.tensor import bf16_tensor
 
 
 class T5Config:
@@ -97,8 +98,15 @@ class T5Encoder(Module):
         self.encoder.load_state_dict(substate(state_dict, "encoder"))
         self.final_layer_norm.load_state_dict(substate(state_dict, "encoder.final_layer_norm"))
 
-    def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+    def __call__(
+        self, prompt: ttnn.Tensor, device: ttnn.Device, *, attention_mask: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         embeddings, position_bias = self.token_embeddings(prompt, device)
+
+        if attention_mask is not None:
+            attention_mask = (attention_mask - 1.0) * float("inf")
+            position_bias += attention_mask
+
         hidden_states = self.encoder(embeddings, position_bias)
 
         output = self.final_layer_norm(hidden_states[-1])
