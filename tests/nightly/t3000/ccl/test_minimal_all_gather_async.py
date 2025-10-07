@@ -831,18 +831,20 @@ def test_all_gather_async_2x4(
 
 
 def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, memory_config, layout, device):
-    torch_input = torch.rand(input_shape).bfloat16()
+    num_devices = math.prod(mesh_shape)
+    replicate = mesh_shape[cluster_axis] if cluster_axis is not None else num_devices
+    torch_input = torch.cat([torch.rand(input_shape).bfloat16() for _ in range(replicate)], dim=dim)
 
-    replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
-    torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
-
+    shard_dims = (None, dim) if cluster_axis == 1 else (dim, None)
     tt_input = ttnn.from_torch(
         torch_input,
         layout=layout,
         memory_config=memory_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
         device=device,
     )
+
+    torch_reference = torch_input.repeat([num_devices] + [1] * (len(input_shape) - 1))
 
     return tt_input, torch_reference
 
@@ -852,12 +854,13 @@ LAYOUT = ttnn.TILE_LAYOUT
 
 NUM_ITERS = 2
 
+
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
-@pytest.mark.parametrize("input_shape", [[2, 2, 32, 32], [5, 32, 32], [2, 2, 2, 32, 32], [2, 2, 2,2, 32, 32]])
+@pytest.mark.parametrize("input_shape", [[2, 2, 32, 32], [5, 32, 32], [2, 2, 2, 32, 32], [2, 2, 2, 2, 32, 32]])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-@pytest.mark.parametrize("dim", [0, 1, 2, 3, 4,5])
+@pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
 @pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
@@ -871,7 +874,7 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
         cluster_axis,
         dtype,
         memory_config,
-        layout,
+        ttnn.TILE_LAYOUT,
         mesh_device,
     )
 
@@ -890,14 +893,8 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
             topology=topology,
             multi_device_global_semaphore=semaphores,
         )
-    logger.info(f"Done iteration {i}")
 
-    for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
-        logger.info("Bringing tensor back to host")
-        tt_output_tensor = ttnn.to_torch(t)
-        logger.info("Brought tensor back from host")
+        tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])
 
-        if dtype == ttnn.bfloat16:
-            assert_equal(tt_output_tensor, torch_reference)
-        else:
-            assert_with_pcc(tt_output_tensor, torch_reference)
+        eq, mess = comp_pcc(torch_reference, tt_output_tensor)
+        assert eq, mess
