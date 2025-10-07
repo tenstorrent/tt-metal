@@ -47,10 +47,16 @@ void kernel_main() {
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
 
     constexpr uint32_t N_num_blocks = N_end_block - N_start_block + 1;
+    constexpr uint32_t defer_write_k_block = K_num_blocks > 1 ? 1 : 0;
 
     bool k_forward = true;
     bool n_forward = true;
     bool reuse_block = false;
+
+    uint32_t defer_write_m_block = 0;
+    uint32_t defer_write_n_block = 0;
+    bool defer_write = false;
+
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         reuse_block = false;
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
@@ -77,11 +83,12 @@ void kernel_main() {
             k_forward = !k_forward;
             // We get reuse on in0 when striding N block
             reuse_block = true;
+
             cb_wait_front(cb_id_in0_dm_out, out_block_num_tiles);
 
-            if (n_block_iter < N_num_blocks - 1) {
-                // This is not the last iteration of the N block loop, so we will get reuse on next block, so we should
-                // write output
+            // if (n_block_iter < N_num_blocks - 1) {
+            // This is not the last iteration of the N block loop, so we will get reuse on next block, so we should
+            // write output
 #ifndef SKIP_OUT
                 uint32_t out_read_ptr = get_read_ptr(cb_id_in0_dm_out);
                 // safe_print_bf16_tile(out_read_ptr);
@@ -98,9 +105,9 @@ void kernel_main() {
                 }
                 noc_async_writes_flushed();
 #endif
-            }
+                // }
 
-            cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
+                cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
         }
         n_forward = !n_forward;
     }
