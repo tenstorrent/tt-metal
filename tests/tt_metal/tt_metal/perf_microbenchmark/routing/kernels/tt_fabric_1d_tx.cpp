@@ -74,16 +74,7 @@ inline void setup_header_routing_2d(
               use_dynamic_routing));  // dynamic routing not supported for 2D multicast in this test
         set_mcast_header(packet_header, direction, range);
     } else {
-        if constexpr (use_dynamic_routing) {
-            fabric_set_unicast_route(
-                (MeshPacketHeader*)packet_header,
-                my_dev_id,  // Ignored: Dynamic Routing does not need src chip ID
-                dst_dev_id,
-                dst_mesh_id,
-                ew_dim);  // Ignored: Dynamic Routing does not need mesh dimensions
-        } else {
-            fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id);
-        }
+        fabric_set_unicast_route((HybridMeshPacketHeader*)packet_header, dst_dev_id, dst_mesh_id);
     }
 }
 

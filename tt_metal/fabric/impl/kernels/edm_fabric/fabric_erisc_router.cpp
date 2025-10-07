@@ -525,7 +525,7 @@ FORCE_INLINE bool check_downstream_interface_has_space_runtime(
 
 template <uint8_t rx_channel_id, typename DownstreamSenderVC0T, typename DownstreamSenderVC1T>
 FORCE_INLINE bool can_forward_packet_completely(
-    tt_l1_ptr MeshPacketHeader* packet_header,
+    tt_l1_ptr HybridMeshPacketHeader* packet_header,
     std::array<DownstreamSenderVC0T, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
     DownstreamSenderVC1T& downstream_edm_interface_vc1,

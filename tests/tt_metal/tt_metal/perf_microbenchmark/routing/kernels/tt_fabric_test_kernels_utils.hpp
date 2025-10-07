@@ -427,14 +427,8 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true, USE_DYNAMIC_ROUTING
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
-        if constexpr (USE_DYNAMIC_ROUTING) {
-            setup_2d_unicast_route<MeshPacketHeader>(packet_header_address, unicast_fields);
-        } else {
-            fabric_set_unicast_route(
-                (HybridMeshPacketHeader*)packet_header_address,
-                unicast_fields.dst_device_id,
-                unicast_fields.dst_mesh_id);
-        }
+        fabric_set_unicast_route(
+            (HybridMeshPacketHeader*)packet_header_address, unicast_fields.dst_device_id, unicast_fields.dst_mesh_id);
     }
 };
 
@@ -455,11 +449,7 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true, USE_DYNAMIC_ROUTI
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto mcast_fields = ChipMulticastFields2D::build_from_args(arg_idx);
-        if constexpr (USE_DYNAMIC_ROUTING) {
-            setup_2d_mcast_route<MeshPacketHeader>(packet_header_address, mcast_fields);
-        } else {
-            setup_2d_mcast_route<HybridMeshPacketHeader>(packet_header_address, mcast_fields);
-        }
+        setup_2d_mcast_route<HybridMeshPacketHeader>(packet_header_address, mcast_fields);
     }
 };
 
