@@ -202,6 +202,7 @@ public:
                     case 1:
                         return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_aerisc.ld"
                                             : "runtime/hw/toolchain/blackhole/kernel_subordinate_aerisc.ld";
+                    default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
             case HalProgrammableCoreType::IDLE_ETH:
                 switch (params.processor_id) {
@@ -211,6 +212,7 @@ public:
                     case 1:
                         return params.is_fw ? "runtime/hw/toolchain/blackhole/firmware_subordinate_ierisc.ld"
                                             : "runtime/hw/toolchain/blackhole/kernel_subordinate_ierisc.ld";
+                    default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
             default:
                 TT_THROW(

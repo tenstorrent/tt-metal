@@ -170,6 +170,7 @@ public:
                     case 1:
                         return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_subordinate_ierisc.ld"
                                             : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
+                    default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
             default:
                 TT_THROW(
