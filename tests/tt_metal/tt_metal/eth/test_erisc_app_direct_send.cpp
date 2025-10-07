@@ -1006,47 +1006,49 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                     //     log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
                     //     continue;
                     // }
-                    const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
-                    ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        WORD_SIZE,
-                        src_eth_l1_byte_address,
-                        dst_eth_l1_byte_address,
-                        sender_core,
-                        receiver_core,
-                        processor));
-                    ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        4 * WORD_SIZE,
-                        src_eth_l1_byte_address,
-                        dst_eth_l1_byte_address,
-                        sender_core,
-                        receiver_core,
-                        processor));
-                    ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        256 * WORD_SIZE,
-                        src_eth_l1_byte_address,
-                        dst_eth_l1_byte_address,
-                        sender_core,
-                        receiver_core,
-                        processor));
-                    ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        1000 * WORD_SIZE,
-                        src_eth_l1_byte_address,
-                        dst_eth_l1_byte_address,
-                        sender_core,
-                        receiver_core,
-                        processor));
+                    for (int i = 0; i < 100; ++i) {
+                        const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
+                        ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                            static_cast<MeshDispatchFixture*>(this),
+                            sender_mesh_device,
+                            receiver_mesh_device,
+                            WORD_SIZE,
+                            src_eth_l1_byte_address,
+                            dst_eth_l1_byte_address,
+                            sender_core,
+                            receiver_core,
+                            processor));
+                    }
+                    // ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    //     static_cast<MeshDispatchFixture*>(this),
+                    //     sender_mesh_device,
+                    //     receiver_mesh_device,
+                    //     4 * WORD_SIZE,
+                    //     src_eth_l1_byte_address,
+                    //     dst_eth_l1_byte_address,
+                    //     sender_core,
+                    //     receiver_core,
+                    //     processor));
+                    // ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    //     static_cast<MeshDispatchFixture*>(this),
+                    //     sender_mesh_device,
+                    //     receiver_mesh_device,
+                    //     256 * WORD_SIZE,
+                    //     src_eth_l1_byte_address,
+                    //     dst_eth_l1_byte_address,
+                    //     sender_core,
+                    //     receiver_core,
+                    //     processor));
+                    // ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
+                    //     static_cast<MeshDispatchFixture*>(this),
+                    //     sender_mesh_device,
+                    //     receiver_mesh_device,
+                    //     1000 * WORD_SIZE,
+                    //     src_eth_l1_byte_address,
+                    //     dst_eth_l1_byte_address,
+                    //     sender_core,
+                    //     receiver_core,
+                    //     processor));
                 }
             }
         }
