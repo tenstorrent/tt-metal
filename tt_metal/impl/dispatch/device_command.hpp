@@ -56,7 +56,9 @@ public:
 
     void add_dispatch_wait_with_prefetch_stall(uint32_t flags, uint32_t address, uint32_t stream, uint32_t count);
 
-    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint32_t addr);
+    void add_prefetch_relay_linear(uint32_t noc_xy_addr, DeviceAddr lengthB, uint64_t addr);
+
+    void add_prefetch_relay_linear_h(uint32_t noc_xy_addr, DeviceAddr lengthB, uint64_t addr);
 
     void add_prefetch_relay_paged(
         uint8_t is_dram,
