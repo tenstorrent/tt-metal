@@ -1083,30 +1083,6 @@ jobs:
           if [ "$SEND_SLACK" = "true" ] && [ -n "$SELECTED_OWNERS" ]; then
             echo "Sending Slack notification to channel: $SLACK_CHANNEL"
 
-            # First, verify the bot can access the channel
-            CHANNEL_INFO_RESPONSE=$(curl -s -X GET \
-              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
-              -H "Content-Type: application/json" \
-              "https://slack.com/api/conversations.info?channel=$SLACK_CHANNEL")
-
-            if [ "$(echo "$CHANNEL_INFO_RESPONSE" | jq -r '.ok')" != "true" ]; then
-              CHANNEL_ERROR=$(echo "$CHANNEL_INFO_RESPONSE" | jq -r '.error // "Unknown error"')
-              if [ "$CHANNEL_ERROR" = "channel_not_found" ]; then
-                echo "❌ Channel not found. Possible solutions:"
-                echo "   1. Make sure the bot is added to the channel"
-                echo "   2. Use /invite @your-bot-name in the channel"
-                echo "   3. Verify the channel ID is correct: $SLACK_CHANNEL"
-                echo "   4. Check if the channel is private and bot needs explicit invitation"
-              else
-                echo "❌ Cannot access channel: $CHANNEL_ERROR"
-              fi
-              echo "Channel info response: $CHANNEL_INFO_RESPONSE"
-              exit 0  # Don't fail the entire workflow, just skip Slack notification
-            fi
-
-            CHANNEL_NAME=$(echo "$CHANNEL_INFO_RESPONSE" | jq -r '.channel.name // "unknown"')
-            echo "✅ Channel verified: #$CHANNEL_NAME ($SLACK_CHANNEL)"
-
             # Function to find Slack user ID by full name
             find_slack_user_id() {
               local full_name="$1"
@@ -1197,6 +1173,7 @@ jobs:
               }')
 
             # Send message to Slack
+            echo "Attempting to send message to Slack..."
             SLACK_RESPONSE=$(curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
               -H "Content-Type: application/json" \
@@ -1206,7 +1183,7 @@ jobs:
             # Check if message was sent successfully
             if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
               SLACK_TS=$(echo "$SLACK_RESPONSE" | jq -r '.ts')
-              echo "✅ Successfully sent Slack notification to #$CHANNEL_NAME (message ts: $SLACK_TS)"
+              echo "✅ Successfully sent Slack notification to channel $SLACK_CHANNEL (message ts: $SLACK_TS)"
             else
               SLACK_ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "Unknown error"')
               echo "❌ Failed to send Slack notification: $SLACK_ERROR"
@@ -1215,16 +1192,26 @@ jobs:
               # Provide specific error guidance
               case "$SLACK_ERROR" in
                 "not_in_channel")
-                  echo "💡 Solution: Invite the bot to the channel with: /invite @your-bot-name"
+                  echo "💡 Solution: The bot needs to be added to the channel"
+                  echo "   1. Go to Slack channel with ID: $SLACK_CHANNEL"
+                  echo "   2. Type: /invite @your-bot-name"
+                  echo "   3. Or add via channel settings → Members → Add apps"
                   ;;
                 "channel_not_found")
-                  echo "💡 Solution: Verify channel ID and ensure bot has access"
+                  echo "💡 Solutions:"
+                  echo "   1. Verify the channel ID is correct: $SLACK_CHANNEL"
+                  echo "   2. Make sure the bot is added to the channel"
+                  echo "   3. For private channels, the bot needs explicit invitation"
                   ;;
                 "missing_scope")
                   echo "💡 Solution: Bot needs 'chat:write' permission"
+                  echo "   Current scopes: chat:write,users:read (should be sufficient)"
                   ;;
                 "invalid_auth")
                   echo "💡 Solution: Check if CODEOWNERS_PING_BOT token is valid"
+                  ;;
+                "invalid_channel")
+                  echo "💡 Solution: Channel ID format should be like C09HT5VSXRB"
                   ;;
               esac
             fi
