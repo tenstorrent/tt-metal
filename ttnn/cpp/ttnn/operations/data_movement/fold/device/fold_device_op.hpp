@@ -23,7 +23,7 @@ struct Fold {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor;
+        const Tensor input_tensor;
     };
 
     using spec_return_value_t = TensorSpec;

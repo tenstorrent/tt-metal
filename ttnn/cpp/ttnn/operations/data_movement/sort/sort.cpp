@@ -164,8 +164,8 @@ std::vector<Tensor> ExecuteSort::invoke(
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
         if (CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
-            std::get<0>(*optional_output_tensors).tensor_attributes->get_storage() =
-                input_tensor.tensor_attributes->get_storage();
+            std::get<0>(*optional_output_tensors).tensor_attributes()->get_storage() =
+                input_tensor.tensor_attributes()->get_storage();
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
         } else {
             return {input_tensor, ttnn::zeros_like(input_tensor)};

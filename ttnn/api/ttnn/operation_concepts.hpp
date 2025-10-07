@@ -16,6 +16,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::device_operation {
 
@@ -104,3 +105,20 @@ concept HasSkipLaunch = requires(
 };
 
 }  // namespace ttnn::device_operation
+
+namespace ttnn::composite_operation {
+
+template <typename operation_t, typename... args_t>
+concept LazifyableCompositeOperationConcept = requires {
+    typename operation_t::tensor_return_value_t;
+    typename operation_t::spec_return_value_t;
+} && requires(const std::vector<Tensor>& input_tensors, args_t&&... args) {
+    { operation_t(std::forward<args_t>(args)...) } -> std::same_as<operation_t>;
+    { operation_t::get_tensor_inputs(std::forward<args_t>(args)...) } -> std::same_as<std::vector<Tensor>>;
+    { std::declval<operation_t>().validate(input_tensors) };
+    {
+        std::declval<operation_t>().compute_output_specs(input_tensors)
+    } -> std::same_as<typename operation_t::spec_return_value_t>;
+    { std::declval<operation_t>().invoke(input_tensors) } -> std::same_as<typename operation_t::tensor_return_value_t>;
+};
+}  // namespace ttnn::composite_operation

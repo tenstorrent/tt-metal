@@ -16,11 +16,13 @@ target_sources(
             to_layout/to_layout_op.hpp
             compute_kernel/compute_kernel_config.hpp
             to_memory_config/to_memory_config_op.hpp
+            set_tensor_spec/set_tensor_spec.hpp
     PRIVATE
         compute_kernel/compute_kernel_config.cpp
         core.cpp
         to_layout/to_layout_op.cpp
         to_dtype/to_dtype_op.cpp
+        set_tensor_spec/set_tensor_spec.cpp
 )
 
 target_include_directories(ttnn_op_core PRIVATE ${FixmeOpIncDirs})

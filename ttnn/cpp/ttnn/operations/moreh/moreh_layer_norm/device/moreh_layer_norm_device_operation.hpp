@@ -20,13 +20,13 @@ struct MorehLayerNormOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input;
+        const Tensor input;
 
-        const std::optional<const Tensor>& gamma;
-        const std::optional<const Tensor>& beta;
-        const std::optional<const Tensor>& output;
-        const std::optional<const Tensor>& mean;
-        const std::optional<const Tensor>& rstd;
+        const std::optional<const Tensor> gamma;
+        const std::optional<const Tensor> beta;
+        const std::optional<const Tensor> output;
+        const std::optional<const Tensor> mean;
+        const std::optional<const Tensor> rstd;
     };
 
     using spec_return_value_t = std::vector<std::optional<TensorSpec>>;

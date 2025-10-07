@@ -23,11 +23,11 @@ struct MorehMatmulOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input;
-        const Tensor& other;
+        const Tensor input;
+        const Tensor other;
 
-        const std::optional<Tensor>& output;
-        const std::optional<const Tensor>& bias;
+        const std::optional<Tensor> output;
+        const std::optional<const Tensor> bias;
     };
 
     using spec_return_value_t = TensorSpec;

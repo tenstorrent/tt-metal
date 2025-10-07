@@ -28,10 +28,10 @@ struct MorehAdamOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& param_in;
-        const Tensor& grad;
-        const Tensor& exp_avg_in;
-        const Tensor& exp_avg_sq_in;
+        const Tensor param_in;
+        const Tensor grad;
+        const Tensor exp_avg_in;
+        const Tensor exp_avg_sq_in;
 
         const std::optional<const Tensor> max_exp_avg_sq_in;
         const std::vector<std::optional<Tensor>> output_tensors;

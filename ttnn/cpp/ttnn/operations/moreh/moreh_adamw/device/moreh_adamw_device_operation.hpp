@@ -29,16 +29,16 @@ struct MorehAdamWDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& param_in;
-        const Tensor& grad;
-        const Tensor& exp_avg_in;
-        const Tensor& exp_avg_sq_in;
-        const std::optional<Tensor>& max_exp_avg_sq_in;
+        const Tensor param_in;
+        const Tensor grad;
+        const Tensor exp_avg_in;
+        const Tensor exp_avg_sq_in;
+        const std::optional<Tensor> max_exp_avg_sq_in;
 
-        const std::optional<Tensor>& param_out;
-        const std::optional<Tensor>& exp_avg_out;
-        const std::optional<Tensor>& exp_avg_sq_out;
-        const std::optional<Tensor>& max_exp_avg_sq_out;
+        const std::optional<Tensor> param_out;
+        const std::optional<Tensor> exp_avg_out;
+        const std::optional<Tensor> exp_avg_sq_out;
+        const std::optional<Tensor> max_exp_avg_sq_out;
     };
 
     using spec_return_value_t = std::vector<std::optional<ttnn::TensorSpec>>;

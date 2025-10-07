@@ -37,9 +37,9 @@ struct MorehSoftmaxBackwardOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& output_tensor;
-        const Tensor& output_grad_tensor;
-        const std::optional<Tensor>& input_grad_tensor;
+        const Tensor output_tensor;
+        const Tensor output_grad_tensor;
+        const std::optional<Tensor> input_grad_tensor;
     };
 
     using spec_return_value_t = TensorSpec;

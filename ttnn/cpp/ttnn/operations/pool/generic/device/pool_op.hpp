@@ -36,7 +36,7 @@ struct Pool2D {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor_;
+        const Tensor input_tensor_;
     };
 
     using spec_return_value_t = TensorSpec;

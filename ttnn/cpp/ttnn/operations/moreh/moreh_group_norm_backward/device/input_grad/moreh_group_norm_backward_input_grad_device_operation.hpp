@@ -15,10 +15,10 @@ struct MorehGroupNormBackwardInputGradOperation {
         const DeviceComputeKernelConfig compute_kernel_config;
     };
     struct tensor_args_t {
-        const Tensor& output_grad;
-        const Tensor& input;
-        const Tensor& mean;
-        const Tensor& rstd;
+        const Tensor output_grad;
+        const Tensor input;
+        const Tensor mean;
+        const Tensor rstd;
         const std::optional<const Tensor> gamma;
         const std::optional<const Tensor> input_grad;
     };

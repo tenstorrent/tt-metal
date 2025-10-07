@@ -7,7 +7,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
-
 #include "generic_op_device_operation.hpp"
 
 namespace ttnn::operations::generic {
@@ -96,7 +95,7 @@ void GenericOpDeviceOperation::GenericProgram::override_runtime_arguments(
             UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.buffer);
         }
         if (cb_desc.global_circular_buffer != nullptr) {
-            experimental::UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.global_circular_buffer);
+            tt::tt_metal::experimental::UpdateDynamicCircularBufferAddress(program, cb_handle, *cb_desc.global_circular_buffer);
         }
     }
 }

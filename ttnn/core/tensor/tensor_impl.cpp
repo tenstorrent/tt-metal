@@ -571,7 +571,8 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     HostStorage host_storage(std::move(distributed_host_buffer));
-    return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
+    auto output = Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
+    return output;
 }
 
 // ======================================================================================
@@ -672,8 +673,9 @@ Tensor to_device(
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
 
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
-    if (memory_config) {
-        tensor_spec_overriden_memory_config = tensor.tensor_spec().with_memory_config(*memory_config);
+    if (memory_config.has_value()) {
+        auto memory_config_value = memory_config.value();
+        tensor_spec_overriden_memory_config = tensor.tensor_spec().with_memory_config(memory_config_value);
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -681,7 +683,7 @@ Tensor to_device(
                                   : &tensor.tensor_spec();
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
     auto [mesh_storage, topology] = to_device_mesh_buffer(
-        tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, tensor.tensor_topology(), cq_id);
+        tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes(), tensor.tensor_topology(), cq_id);
     return Tensor(std::move(mesh_storage), *tensor_spec, topology);
 }
 
@@ -758,7 +760,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         host_tensor.storage(),
         mesh_buffer,
         device_tensor.tensor_spec(),
-        *host_tensor.tensor_attributes,
+        *host_tensor.tensor_attributes(),
         host_tensor.tensor_topology(),
         cq_id);
     device_tensor = Tensor(

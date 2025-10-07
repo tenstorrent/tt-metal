@@ -49,7 +49,7 @@ struct operation_attributes_t {
 };
 
 struct tensor_args_t {
-    const Tensor& input_tensor;
+    const Tensor input_tensor;
     const std::optional<const Tensor> mask;
 };
 

@@ -24,8 +24,8 @@ struct MorehMeanBackwardOperation {
         const DeviceComputeKernelConfig compute_kernel_config;
     };
     struct tensor_args_t {
-        const Tensor& output_grad;
-        const std::optional<Tensor>& input_grad;
+        const Tensor output_grad;
+        const std::optional<Tensor> input_grad;
     };
 
     using spec_return_value_t = TensorSpec;

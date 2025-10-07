@@ -21,7 +21,7 @@ struct MorehGroupNormOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input;
+        const Tensor input;
         const std::optional<const Tensor> gamma;
         const std::optional<const Tensor> beta;
         const std::optional<const Tensor> output;

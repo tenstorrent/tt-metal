@@ -22,8 +22,8 @@ struct MorehClipGradNormStep1Operation {
     };
 
     struct tensor_args_t {
-        const std::vector<Tensor>& inputs;
-        const Tensor& tmp_pow_sum;
+        const std::vector<Tensor> inputs;
+        const Tensor tmp_pow_sum;
     };
 
     using spec_return_value_t = TensorSpec;
