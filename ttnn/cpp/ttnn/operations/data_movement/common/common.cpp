@@ -525,6 +525,40 @@ ttnn::Tensor pad_to_tile_vol(
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
 
+// not unit tested, use with caution
+uint16_t float_to_uint16(float f) {
+    // For positive infinity, return the maximum uint16_t value
+    // For negative infinity, return the minimum uint16_t value
+    if (std::isinf(f)) {
+        return (f > 0) ? std::numeric_limits<uint16_t>::max() : std::numeric_limits<uint16_t>::min();
+    }
+
+    // For Not-a-Number (NaN), return 0
+    if (std::isnan(f)) {
+        return 0;
+    }
+
+    // Handle overflow and underflow
+    const float max_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::max());
+    const float min_uint16 = static_cast<float>(std::numeric_limits<uint16_t>::min());
+    if (f >= max_uint16) {
+        return std::numeric_limits<uint16_t>::max();
+    }
+    if (f <= min_uint16) {
+        return std::numeric_limits<uint16_t>::min();
+    }
+
+    // For all other finite values, safely cast after rounding
+    return static_cast<uint16_t>(std::round(f));
+}
+
+// based off pack_two_bfloat16_into_uint32
+uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s) {
+    // first -> lower 16
+    // second -> upper 16
+    return (uint32_t)two_uint16s.first | ((uint32_t)two_uint16s.second << 16);
+}
+
 ttnn::Shape compute_padded_shape(
     const ttnn::Shape& logical_shape, const uint32_t tile_height, const uint32_t tile_width) {
     if (logical_shape.rank() == 1) {
