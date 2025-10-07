@@ -1564,7 +1564,7 @@ bool auto_enable_kernel_folding(
     if (!enable_folding_.has_value()) {
         if (stride[0] == kernel_size[0] && stride[1] == kernel_size[1] &&
             (padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0) && is_dram) {
-            log_info(tt::LogOp, "Auto enabling kernel folding");
+            log_debug(tt::LogOp, "Auto enabling kernel folding");
             return true;
         } else {
             return false;
