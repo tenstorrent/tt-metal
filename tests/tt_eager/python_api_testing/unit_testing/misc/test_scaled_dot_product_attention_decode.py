@@ -1568,7 +1568,7 @@ def test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype):
     "b, nh, nkv, s, d, grid_size, sliding_window",
     [
         # Test different sliding window sizes
-        [1, 1, 1, 128, 128, (8, 1), 32],  # Micro test
+        [1, 1, 1, 1024, 128, (8, 1), 128],  # Micro test
         # [4, 8, 1, 1024, 128, (8, 4), 64],    # Small window
         # [4, 8, 1, 1024, 128, (8, 4), 128],   # Medium window
         # [4, 8, 1, 1024, 128, (8, 4), 256],   # Large window
@@ -1594,11 +1594,11 @@ def test_sdpa_decode_sliding_window(
 
     # Test different positions to ensure sliding window works correctly
     test_positions = [
-        sliding_window + 10,  # Window fully slides
+        sliding_window * 2,  # Window fully slides
         sliding_window // 2,  # Window partially filled
-        # sliding_window - 1,   # Window almost full
-        # s // 2,               # Middle of sequence
-        # s - 10,               # Near end of sequence
+        sliding_window - 1,  # Window almost full
+        s // 2,  # Middle of sequence
+        s - 10,  # Near end of sequence
     ]
 
     for cur_pos in test_positions:

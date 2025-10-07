@@ -22,9 +22,6 @@
 #include "compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
-#include "debug/waypoint.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
 namespace NAMESPACE {
@@ -111,13 +108,6 @@ void MAIN {
     const uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
-
-    // For sliding window, we need to determine if this core processes the first chunk
-    // The first chunk is processed by the core with the highest core_num_in_reduce
-    // (due to reverse chunk distribution)
-    const bool apply_sliding_window_mask = (sliding_window > 0) && (core_num_in_reduce == num_cores_per_head - 1);
-    // ASSERT(core_num_in_reduce != (num_cores_per_head - 1));
-    // ASSERT(!do_reduce);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
 
     // Idle core
@@ -131,7 +121,6 @@ void MAIN {
     constexpr uint32_t cur_pos_base = St * 32 - 1;
     uint32_t cur_pos = cur_pos_base;  // default to non-causal, which we do attention on the entire kv cache. In this
                                       // case we set cur_pos to the last position
-    WAYPOINT("SPD1");
     if constexpr (is_causal) {
         // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
         if (cur_pos_arg != UINT32_MAX) {
@@ -156,8 +145,13 @@ void MAIN {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Get the sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned] =
-        get_runtime_args(cur_pos, cur_batch, core_num_in_reduce, num_cores_per_head, k_chunk_size_dynamic);
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
+        cur_pos,
+        cur_batch,
+        core_num_in_reduce,
+        num_cores_per_head,
+        k_chunk_size_dynamic,
+        sliding_window > 0 ? std::optional<uint32_t>(sliding_window) : std::nullopt);
     if (k_chunk_start == k_chunk_end) {
         return;  // early exit because no computes needs to be done
     }
@@ -169,7 +163,6 @@ void MAIN {
     }
 
     // We tilize input Q if it is in ROW MAJOR layout
-    WAYPOINT("SPD2");
     if constexpr (tilize_q) {
         compute_kernel_hw_startup(cb_q_rm, cb_q_in);
         tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
@@ -219,7 +212,6 @@ void MAIN {
     uint32_t cb_prev_sum = cb_sum_2;
 
     // Loop through all heads assigned to core
-    WAYPOINT("SPD3");
     for (uint32_t cur_head_work = 0; cur_head_work < num_heads_per_core; ++cur_head_work) {
 
         /******************************************************************************
@@ -273,7 +265,6 @@ void MAIN {
          * @param out_chunk_tiles - Number of output chunk tiles
          */
         /* START OF FLASH ATTENTION LOOP */
-        WAYPOINT("SPD4");
         {
             uint32_t cb_out_mm = cb_out_accumulate_im;
 
@@ -286,16 +277,14 @@ void MAIN {
                 // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
                 bool add_causal_mask_fusion = is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk;
-                bool add_sliding_window_mask_fusion = k_chunk == k_chunk_start && apply_sliding_window_mask;
+                bool add_sliding_window_mask_fusion =
+                    k_chunk == window_start_chunk && (window_start_unaligned % 32) > 0;
                 bool add_mask_fusion = add_causal_mask_fusion || use_attention_mask || add_sliding_window_mask_fusion;
 #else
                 bool add_mask_fusion = false;
                 bool add_causal_mask_fusion = false;
                 bool add_sliding_window_mask_fusion = false;
 #endif
-                add_mask_fusion = false;
-                add_causal_mask_fusion = false;
-                add_sliding_window_mask_fusion = false;
 
                 /* QK = Q_CHUNK @ K_CHUNK */
                 // Determine which mask buffer to use for fusion
@@ -321,7 +310,6 @@ void MAIN {
                     add_mask_fusion,
                     mask_cb_to_use,
                     cb_zero_in);
-                WAYPOINT("SPD5");
 
                 /* QK += MASK */
                 if (!add_mask_fusion) {
@@ -339,12 +327,11 @@ void MAIN {
                     }
 
                     // Apply sliding window mask to the first chunk (only on the core that processes it)
-                    if (k_chunk == k_chunk_start && apply_sliding_window_mask) {
+                    if (k_chunk == window_start_chunk && (window_start_unaligned % 32) > 0) {
                         reconfig_data_format(cb_qk_im, cb_sliding_window_mask_in);
                         add_block_inplace<false>(cb_qk_im, cb_sliding_window_mask_in, qk_chunk_tiles_dynamic);
                     }
                 }
-                WAYPOINT("SPD6");
 
                 /**
                  * OPTIMIZATION
@@ -355,7 +342,6 @@ void MAIN {
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_max);
-                WAYPOINT("SPD7");
 
                 /**
                  * OPTIMIZATION
@@ -365,17 +351,13 @@ void MAIN {
                  * else:
                  *  cur_max = max(qk, dim=-1)
                  */
-                WAYPOINT("SP7a");
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
-                WAYPOINT("SP7b");
 
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
-                WAYPOINT("SP7c");
                 pack_reconfig_data_format(cb_qk_im);
-                WAYPOINT("SPD8");
 
                 /**
                  * sub_exp performs `QK = exp((QK - cur_max) * scale)`
@@ -387,12 +369,10 @@ void MAIN {
                     vector_mode,
                     cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
-                WAYPOINT("SPD9");
 
                 // Reconfig register DF
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
-                WAYPOINT("SP10");
 
                 /* reduce_c performs CUR_SUM = sum(QK, dim = -1) */
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
@@ -418,11 +398,9 @@ void MAIN {
                     false,
                     cb_mask_in,
                     cb_zero_in);
-                WAYPOINT("SP11");
                 // Reconfig register DF
                 reconfig_data_format_srca(cb_out_im);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
-                WAYPOINT("SP12");
                 /* OUT_ACC += OUT_IM */
                 if (k_chunk == k_chunk_start) {
                     cb_out_mm = cb_out_im;
@@ -474,8 +452,6 @@ void MAIN {
                     move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
                 }
             }
-
-            WAYPOINT("SP13");
         }
         /* END OF FLASH ATTENTION LOOP */
         // Perform reduction across intermediates from other cores if this is the reduction core
