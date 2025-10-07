@@ -123,6 +123,7 @@ class RunTimeOptions {
     bool profiler_sync_enabled = false;
     bool profiler_mid_run_dump = false;
     bool profiler_trace_profiler = false;
+    bool profiler_trace_tracking = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -393,6 +394,7 @@ public:
     bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
     bool get_profiler_trace_only() const { return profiler_trace_profiler; }
+    bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }

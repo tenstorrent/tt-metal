@@ -185,6 +185,7 @@ def main():
                 sys.exit(1)
             logger.info(f"Using port {port}")
             os.environ["TTNN_OP_PROFILER"] = "1"
+            os.environ["TT_METAL_PROFILER_TRACE_TRACKING"] = "1"
             doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
 
         if not doReport:

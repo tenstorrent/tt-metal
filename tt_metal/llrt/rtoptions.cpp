@@ -85,6 +85,7 @@ RunTimeOptions::RunTimeOptions() {
     profiler_mid_run_dump = false;
     profiler_buffer_usage_enabled = false;
     profiler_trace_profiler = false;
+    profiler_trace_tracking = false;
 #if defined(TRACY_ENABLE)
     const char* profiler_enabled_str = std::getenv("TT_METAL_DEVICE_PROFILER");
     if (profiler_enabled_str != nullptr && profiler_enabled_str[0] == '1') {
@@ -100,6 +101,10 @@ RunTimeOptions::RunTimeOptions() {
         const char* profiler_trace_profiler_str = std::getenv("TT_METAL_TRACE_PROFILER");
         if (profiler_trace_profiler_str != nullptr && profiler_trace_profiler_str[0] == '1') {
             profiler_trace_profiler = true;
+        }
+        const char* profiler_trace_tracking_str = std::getenv("TT_METAL_PROFILER_TRACE_TRACKING");
+        if (profiler_trace_tracking_str != nullptr && profiler_trace_tracking_str[0] == '1') {
+            profiler_trace_tracking = true;
         }
         const char* profiler_mid_run_dump_str = std::getenv("TT_METAL_PROFILER_MID_RUN_DUMP");
         if (profiler_mid_run_dump_str != nullptr && profiler_mid_run_dump_str[0] == '1') {
