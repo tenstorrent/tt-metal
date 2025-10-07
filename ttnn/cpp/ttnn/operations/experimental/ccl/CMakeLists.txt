@@ -19,6 +19,7 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
             all_broadcast_async/device/all_broadcast_async_op.hpp
+            all_reduce_async/all_reduce_async.hpp
             all_gather_async/all_gather_async.hpp
             all_gather_async/device/all_gather_async_op.hpp
             composite_common.hpp
