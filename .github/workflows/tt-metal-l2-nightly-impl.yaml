@@ -411,12 +411,11 @@ jobs:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
         TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4, 3"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
         shell: bash
@@ -435,7 +434,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly group_norm tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.timeout || 10 }}
         run: pytest -n auto tests/ttnn/unit_tests/operations/fused -v -m "not disable_fast_runtime_mode" -k _oft --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
