@@ -2,7 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+from collections import defaultdict
+
+import pandas as pd
 import torch
+from loguru import logger
 
 from models.tt_transformers.tt.model_config import HfAttentionWrapper, HfDecoderWrapper, HfModelWrapper
 
@@ -58,3 +63,157 @@ def get_ref_model_dype(ref_model, model_name):
             return torch.bfloat16
 
     return default_dype
+
+
+###### UTIL FUNCTIONS FOR DEVICE PERF
+
+
+def build_duration_dict(raw_dict, column_name):
+    op_code_dict = {}
+    for entry in raw_dict:
+        if column_name not in entry:
+            logger.warning(f"Warning: {entry} does not have column {column_name}")
+        op_code = entry["OP CODE"]
+        duration = entry[column_name]
+        if op_code not in op_code_dict:
+            op_code_dict[op_code] = []
+        op_code_dict[op_code].append(duration)
+    return op_code_dict
+
+
+def build_duration_per_instance_dict(input_dict, num_layers):
+    per_instance_dict = {}
+    for op_code in input_dict:
+        num_ops_with_op_code = len(input_dict[op_code])
+        num_instances = num_ops_with_op_code // num_layers
+        if num_ops_with_op_code % num_layers != 0:
+            logger.warning(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
+            print_dict(input_dict, "input_dict")
+            assert num_ops_with_op_code % num_layers == 0
+        for iteration_id in range(num_layers):
+            for instance_id in range(num_instances):
+                op_code_with_id = f"{op_code}_{instance_id}"
+                if op_code_with_id not in per_instance_dict:
+                    per_instance_dict[op_code_with_id] = []
+                per_instance_dict[op_code_with_id].append(
+                    input_dict[op_code][iteration_id * num_instances + instance_id]
+                )
+    return per_instance_dict
+
+
+def merge_device_rows(df):
+    block_by_device = defaultdict(list)
+
+    for _, row in df.iterrows():
+        op_name = row["OP CODE"]
+        op_type = row["OP TYPE"]
+
+        if op_type == "tt_dnn_device":
+            device_id = int(row["DEVICE ID"])
+            block_by_device[device_id].append((op_name, row.to_dict()))
+
+    device_ids = sorted(block_by_device.keys())
+    merged_blocks = []
+
+    global_index = 0
+    while max(len(block_by_device[device_id]) for device_id in device_ids) > 0:
+        blocks = []
+        op_name = None
+        missing_devices = []
+        for device_id in device_ids:
+            if not len(block_by_device[device_id]):
+                logger.warning(f"Warning: Device {device_id} is missing operation {op_name} at index {global_index}")
+                continue
+            if op_name is None:
+                op_name = block_by_device[device_id][0][0]
+            elif op_name != block_by_device[device_id][0][0]:
+                missing_devices.append(device_id)
+                continue
+
+            blocks.append(block_by_device[device_id].pop(0))
+
+        if missing_devices:
+            logger.warning(
+                f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices {missing_devices} - do not trust data for this op or directly subsequent ops with the same name"
+            )
+
+        if not blocks:
+            break
+
+        if "AllGather" in op_name or "ReduceScatter" in op_name or "AllReduce" or "Matmul_RS" in op_name:
+            # For collective ops, take the average duration over all rows within a block
+            device_kernel_durations = [
+                d["DEVICE KERNEL DURATION [ns]"]
+                for _, d in blocks
+                if "DEVICE KERNEL DURATION [ns]" in d and not math.isnan(d["DEVICE KERNEL DURATION [ns]"])
+            ]
+
+            average_duration = (
+                sum(device_kernel_durations) / len(device_kernel_durations) if device_kernel_durations else float("nan")
+            )
+            # Use the first block's data but update its duration with the average
+            base_block = blocks[0][1].copy()
+            base_block["DEVICE KERNEL DURATION [ns]"] = average_duration
+            merged_blocks.append(base_block)
+        else:
+            # For non-collective ops, take the row with maximum duration
+            max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
+            merged_blocks.append(max_duration_block[1])
+
+        global_index += 1
+
+    return pd.DataFrame(merged_blocks)
+
+
+def process_measurements(df, num_layers):
+    raw_dict = df[
+        ["OP CODE", "DEVICE KERNEL DURATION [ns]", "OP TO OP LATENCY [ns]", "DEVICE KERNEL FIRST TO LAST START [ns]"]
+    ].to_dict(orient="records")
+
+    # Kernel duration
+    kernel_duration_dict = build_duration_dict(raw_dict, "DEVICE KERNEL DURATION [ns]")
+    kernel_duration_per_instance_dict = build_duration_per_instance_dict(kernel_duration_dict, num_layers)
+    kernel_duration_per_instance_aggregate_dict = {
+        "avg": aggregate_per_instance_dict(kernel_duration_per_instance_dict, lambda v: sum(v) / len(v)),
+        "min": aggregate_per_instance_dict(kernel_duration_per_instance_dict, min),
+        "max": aggregate_per_instance_dict(kernel_duration_per_instance_dict, max),
+    }
+
+    # Dispatch duration
+    dispatch_duration_dict = build_duration_dict(raw_dict, "OP TO OP LATENCY [ns]")
+    dispatch_duration_per_instance_dict = build_duration_per_instance_dict(dispatch_duration_dict, num_layers)
+    dispatch_duration_per_instance_aggregate_dict = {
+        "avg": aggregate_per_instance_dict(dispatch_duration_per_instance_dict, lambda v: sum(v) / len(v)),
+        "min": aggregate_per_instance_dict(dispatch_duration_per_instance_dict, min),
+        "max": aggregate_per_instance_dict(dispatch_duration_per_instance_dict, max),
+    }
+    # First to last start
+    first_to_last_start_dict = build_duration_dict(raw_dict, "DEVICE KERNEL FIRST TO LAST START [ns]")
+    first_to_last_start_per_instance_dict = build_duration_per_instance_dict(first_to_last_start_dict, num_layers)
+    first_to_last_start_per_instance_aggregate_dict = {
+        "avg": aggregate_per_instance_dict(first_to_last_start_per_instance_dict, lambda v: sum(v) / len(v)),
+        "min": aggregate_per_instance_dict(first_to_last_start_per_instance_dict, min),
+        "max": aggregate_per_instance_dict(first_to_last_start_per_instance_dict, max),
+    }
+
+    return (
+        kernel_duration_per_instance_aggregate_dict,
+        dispatch_duration_per_instance_aggregate_dict,
+        first_to_last_start_per_instance_aggregate_dict,
+    )
+
+
+def print_dict(input_dict, dict_name):
+    # print dict as a readable python dict
+    logger.info(f"\n{dict_name} = {{")
+    for op_code_with_id in input_dict:
+        logger.info(f'"{op_code_with_id}": {input_dict[op_code_with_id]},')
+    logger.info("}")
+
+
+def aggregate_per_instance_dict(input_dict, agg_fn, default=0):
+    result = {}
+    for key, values in input_dict.items():
+        clean_values = [v if v is not None else 0 for v in values]
+        result[key] = agg_fn(clean_values) if clean_values else default
+    return result

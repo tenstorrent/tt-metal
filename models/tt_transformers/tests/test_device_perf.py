@@ -12,6 +12,11 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
 from tools.tracy.process_model_log import get_latest_ops_log_filename
 
+PREFILL_OP_START_INDEX = 0
+PREFILL_OP_END_INDEX = 35
+DECODER_OP_START_INDEX = 4
+DECODER_OP_END_INDEX = -22
+
 
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(
@@ -23,16 +28,21 @@ from tools.tracy.process_model_log import get_latest_ops_log_filename
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-@pytest.mark.parametrize("batch_size", (1,))
-@pytest.mark.parametrize("subdir", ("decoder-device-perf",))
 @pytest.mark.parametrize(
-    "device_analysis_types",
-    (["device_kernel_duration", "device_kernel_first_to_last_start"],),
+    "max_seq_len",
+    (1024,),
+)
+@pytest.mark.parametrize(
+    "run_prefill",
+    (True,),
+)
+@pytest.mark.parametrize(
+    "run_decode",
+    (True,),
 )
 def test_decoder_device_perf_one_iter(mesh_device, device_params, batch_size, subdir, device_analysis_types, is_ci_env):
     # Run the existing unit test under the device profiler for a single iteration
-    command = "models/tt_transformers/tests/test_decoder.py::test_decoder_inference[blackhole-device_params0-1-256-1-page_params0-paged_attention-8]"
+    command = "models/tt_transformers/tests/simple_text_demo.py -k device-perf"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     profiler = BenchmarkProfiler()
@@ -54,7 +64,7 @@ def test_decoder_device_perf_one_iter(mesh_device, device_params, batch_size, su
     filename = get_latest_ops_log_filename(subdir)
     df = pd.read_csv(filename)
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
-
+    df = merge_device_rows(df)
     # Compute per-op averages for kernel duration and op-to-op latency when available
     metrics = []
     if "DEVICE KERNEL DURATION [ns]" in df.columns:
