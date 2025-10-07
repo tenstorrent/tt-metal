@@ -163,14 +163,6 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
             const auto& intermediate_tensor = output_tensors[0].value();
 
             TT_FATAL(
-                intermediate_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
-                    intermediate_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-                    intermediate_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-                    intermediate_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                "Unsupported intermediate tensor memory layout {}.",
-                intermediate_tensor.memory_config().memory_layout());
-
-            TT_FATAL(
                 intermediate_tensor.storage_type() == StorageType::DEVICE,
                 "Operands to reduce_scatter_minimal_async need to be on device!");
             TT_FATAL(
@@ -186,7 +178,8 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
                 "Error, intermediate tensor page config should be same as input tensor page config but has {}",
                 intermediate_tensor.tensor_spec().page_config());
             TT_FATAL(
-                intermediate_tensor.memory_config() == this->intermediate_mem_config,
+                this->optional_intermediate_mem_config.has_value() &&
+                    intermediate_tensor.memory_config() == this->optional_intermediate_mem_config.value(),
                 "Error, intermediate tensor memory config should be same as intermediate_mem_config but has {}",
                 intermediate_tensor.memory_config());
 
@@ -213,11 +206,13 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     const auto& input_tensor = input_tensors[0];
     auto inter_shape = input_tensor.logical_shape();
 
-    MemoryConfig adjusted_intermediate_mem_config;
+    MemoryConfig adjusted_intermediate_mem_config,
+        intermediate_mem_config = optional_intermediate_mem_config.value_or(input_tensor.memory_config());
     if (this->topology == ccl::Topology::Linear) {
         inter_shape[0] *= 2;
 
-        if (intermediate_mem_config.is_sharded()) {
+        // need to adjust memory config taken from input tensor
+        if (intermediate_mem_config.is_sharded() && !optional_intermediate_mem_config.has_value()) {
             auto intermediate_shard_spec = intermediate_mem_config.shard_spec().value();
             intermediate_shard_spec.shape[0] *= 2;
             adjusted_intermediate_mem_config = intermediate_mem_config.with_shard_spec(intermediate_shard_spec);
@@ -310,7 +305,7 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->num_links,
         this->ring_size,
         this->output_mem_config,
-        this->intermediate_mem_config,
+        this->optional_intermediate_mem_config,
         this->topology,
         this->barrier_semaphore.has_value(),
         this->using_persistent_buffers,
@@ -339,7 +334,7 @@ Tensor reduce_scatter_minimal_async_impl(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<MemoryConfig>& intermeidate_memory_config,
+    const std::optional<MemoryConfig>& optional_intermediate_memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<uint32_t>& cluster_axis,
@@ -383,7 +378,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    num_links,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
-                   intermeidate_memory_config.value_or(input_tensor.memory_config()),
+                   optional_intermediate_memory_config,
                    ccl_topology,
                    multi_device_global_semaphore,
                    barrier_semaphore,
@@ -408,7 +403,7 @@ Tensor reduce_scatter_minimal_async(
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<MemoryConfig>& intermeidate_memory_config,
+    const std::optional<MemoryConfig>& intermediate_memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis,
@@ -423,7 +418,7 @@ Tensor reduce_scatter_minimal_async(
         barrier_semaphore,
         num_links,
         memory_config,
-        intermeidate_memory_config,
+        intermediate_memory_config,
         topology,
         sub_device_id,
         cluster_axis,
