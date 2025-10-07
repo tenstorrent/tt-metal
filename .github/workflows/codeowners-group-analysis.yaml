@@ -1168,9 +1168,12 @@ jobs:
 
             # Send message to Slack
             echo "Attempting to send message to Slack..."
+            echo "Channel: $SLACK_CHANNEL"
+            echo "Payload preview: $(echo "$SLACK_PAYLOAD" | head -c 200)..."
+
             SLACK_RESPONSE=$(curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
-              -H "Content-Type: application/json" \
+              -H "Content-type: application/json" \
               -d "$SLACK_PAYLOAD" \
               "https://slack.com/api/chat.postMessage")
 
