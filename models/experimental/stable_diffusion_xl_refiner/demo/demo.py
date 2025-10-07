@@ -52,18 +52,22 @@ def get_refiner_conditioning(refiner_pipe, prompt: str, negative_prompt: str = "
         do_classifier_free_guidance=True,
     )
 
-    encoder_hidden_states = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-    text_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
+    encoder_hidden_states_uncond = negative_prompt_embeds
+    encoder_hidden_states_cond = prompt_embeds
+    text_embeds_uncond = negative_pooled_prompt_embeds
+    text_embeds_cond = pooled_prompt_embeds
 
-    time_ids = torch.tensor(
-        [
-            [1024.0, 1024.0, 0.0, 0.0, 2.5],
-            [1024.0, 1024.0, 0.0, 0.0, 6.0],
-        ],
-        dtype=torch.float32,
+    time_ids_uncond = torch.tensor([1024.0, 1024.0, 0.0, 0.0, 2.5], dtype=torch.float32)
+    time_ids_cond = torch.tensor([1024.0, 1024.0, 0.0, 0.0, 6.0], dtype=torch.float32)
+
+    return (
+        encoder_hidden_states_uncond,
+        encoder_hidden_states_cond,
+        text_embeds_uncond,
+        text_embeds_cond,
+        time_ids_uncond,
+        time_ids_cond,
     )
-
-    return encoder_hidden_states, text_embeds, time_ids
 
 
 def generate_with_refiner_compare(
@@ -113,8 +117,14 @@ def generate_with_refiner_compare(
     base_latents = out.images
     logger.info("Base model complete - generated base latents")
 
-    # Get refiner conditioning
-    encoder_hidden_states, text_embeds, time_ids = get_refiner_conditioning(refiner_pipe, prompt, negative_prompt)
+    (
+        encoder_hidden_states_uncond,
+        encoder_hidden_states_cond,
+        text_embeds_uncond,
+        text_embeds_cond,
+        time_ids_uncond,
+        time_ids_cond,
+    ) = get_refiner_conditioning(refiner_pipe, prompt, negative_prompt)
 
     # Hugging Face refiner output - baseline for comparison
     logger.info("Running refiner for baseline comparison (Torch)...")
@@ -157,21 +167,21 @@ def generate_with_refiner_compare(
 
     # Prepare TT tensors
     ttnn_encoder_hidden_states_uncond = ttnn.from_torch(
-        encoder_hidden_states[0:1],
+        encoder_hidden_states_uncond,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_text_embeds_uncond = ttnn.from_torch(
-        text_embeds[0:1],
+        text_embeds_uncond,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_time_ids_uncond = ttnn.from_torch(
-        time_ids[0],
+        time_ids_uncond,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
@@ -179,21 +189,21 @@ def generate_with_refiner_compare(
     )
 
     ttnn_encoder_hidden_states_cond = ttnn.from_torch(
-        encoder_hidden_states[1:2],
+        encoder_hidden_states_cond,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_text_embeds_cond = ttnn.from_torch(
-        text_embeds[1:2],
+        text_embeds_cond,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn_time_ids_cond = ttnn.from_torch(
-        time_ids[1],
+        time_ids_cond,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
