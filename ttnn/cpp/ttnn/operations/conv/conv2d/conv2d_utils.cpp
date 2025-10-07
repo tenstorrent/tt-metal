@@ -1558,11 +1558,14 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
 bool auto_enable_kernel_folding(
     std::optional<bool> enable_folding_,
     bool is_dram,
+    uint32_t input_height,
+    uint32_t input_width,
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
     std::array<uint32_t, 4>& padding_n4) {
     if (!enable_folding_.has_value()) {
-        if (stride[0] == kernel_size[0] && stride[1] == kernel_size[1] &&
+        if (stride[0] == kernel_size[0] && stride[1] == kernel_size[1] && (input_height % stride[0] == 0) &&
+            (input_width % stride[1] == 0) &&
             (padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0) && is_dram) {
             log_debug(tt::LogOp, "Auto enabling kernel folding");
             return true;
@@ -1589,6 +1592,8 @@ Tensor fold_input_tensor_if_required(
     conv_config.enable_kernel_stride_folding = auto_enable_kernel_folding(
         conv_config.enable_kernel_stride_folding,
         input_tensor.memory_config().is_dram(),
+        input_height,
+        input_width,
         kernel_size,
         stride,
         padding_n4);
