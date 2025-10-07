@@ -169,6 +169,7 @@ def get_gdb_callstack(
 
     return extract_callstack_from_gdb_output(gdb_client.communicate()[0], start_callstack_label, end_callstack_label)
 
+
 # We return callstack and error message if error occurs
 def get_callstack(
     location: OnChipCoordinate,
@@ -267,7 +268,9 @@ def dump_callstacks(
                 except:
                     pass
         else:
-            callstack, error_message = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
+            callstack, error_message = get_callstack(
+                location, risc_name, dispatcher_core_data, elfs_cache, full_callstack
+            )
 
         result = DumpCallstacksData(
             dispatcher_core_data=dispatcher_core_data,
