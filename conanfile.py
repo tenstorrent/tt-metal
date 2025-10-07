@@ -125,7 +125,13 @@ class TTNNConan(ConanFile):
 
     def build(self):
         cmake = CMake(self)
-        cmake.configure(variables={"VERSION_NUMERIC": self.version})
+        cmake.configure(
+            variables={
+                "VERSION_NUMERIC": self.version,
+                "CPM_USE_LOCAL_PACKAGES": True,
+                "VERSION_HASH": "mockvalue",
+            }
+        )
         cmake.build()
 
     def configure(self):
@@ -141,6 +147,8 @@ class TTNNConan(ConanFile):
         self.requires("libnuma/2.0.19")
         self.requires("hwloc/2.10.0")
         self.requires("zlib/1.3.1")
+        self.requires("libevent/2.1.12")
+        self.requires("boost/1.86.0")
         self.requires("cpython/3.10.14")
 
     def package(self):
