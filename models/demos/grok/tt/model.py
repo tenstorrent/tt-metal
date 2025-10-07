@@ -17,6 +17,7 @@ class Transformer(LightweightModule):
         self.mesh_device = mesh_device
         self.args = args
         self.tt_ccl = tt_ccl
+        self.model_config = self.args.get_model_config()
 
         self.rope_setup = RotarySetup(
             self.mesh_device,
@@ -59,3 +60,15 @@ class Transformer(LightweightModule):
             self.args,
             tt_ccl=tt_ccl,
         )
+
+    def forward_decode(self, x, current_pos, rot_mats, page_table=None):
+        for layer_idx, layer in enuermate(self.layers):
+            x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            x = layer(
+                hidden_states=x,
+                current_pos=current_pos,
+                rot_mats=rot_mats,
+                page_table=page_table,
+            )
+
+        x = self.norm(x, mode="decode")
