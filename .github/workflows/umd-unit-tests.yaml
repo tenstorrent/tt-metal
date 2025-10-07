@@ -25,7 +25,7 @@ jobs:
     name: UMD tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'P100') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
+        (inputs.runner-label == 'P100' || inputs.runner-label == 'P300-viommu') && fromJSON(format('["in-service", "cloud-virtual-machine", "{0}"]', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
@@ -37,7 +37,7 @@ jobs:
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ (!contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
