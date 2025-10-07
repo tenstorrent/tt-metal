@@ -247,7 +247,7 @@ def tt_sharded_distributed_rmsnorm(
 ):
     inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
     # Run distributed rmsnorm part 1
-    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg, use_2d_core_grid=True)
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
 
     # All gather stats
     cluster_axis = 1

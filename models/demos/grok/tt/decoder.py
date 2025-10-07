@@ -89,8 +89,6 @@ class Decoder(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.layers.{layer_num}.pre_attn_norm",
                 is_distributed=True,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=ttnn.Topology.Ring,
                 tt_ccl=tt_ccl,
             ),
@@ -110,8 +108,6 @@ class Decoder(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.layers.{layer_num}.post_attn_norm",
                 is_distributed=True,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=ttnn.Topology.Ring,
                 tt_ccl=tt_ccl,
             ),
@@ -131,8 +127,6 @@ class Decoder(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.layers.{layer_num}.pre_moe_norm",
                 is_distributed=True,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=ttnn.Topology.Ring,
                 tt_ccl=tt_ccl,
             ),
@@ -152,8 +146,6 @@ class Decoder(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key=f"model.layers.{layer_num}.post_moe_norm",
                 is_distributed=True,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=ttnn.Topology.Ring,
                 tt_ccl=tt_ccl,
             ),
@@ -166,14 +158,13 @@ class Decoder(LightweightModule):
         residual = hidden_states
         input_memory_config = hidden_states.memory_config()
 
-        hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
-        # hidden_states = self.pre_attn_norm(hidden_states, mode="decode")
+        hidden_states = self.pre_attn_norm(hidden_states, mode="decode")
 
         # Attention
         attn_out = self.attention.forward(hidden_states, current_pos, rot_mats, page_table=page_table)
 
         # Post-attn norm
-        # attn_out = self.post_attn_norm(attn_out, mode="decode")
+        attn_out = self.post_attn_norm(attn_out, mode="decode")
 
         # Residual connection
         hidden_states = ttnn.add(residual, attn_out)
@@ -182,7 +173,7 @@ class Decoder(LightweightModule):
         # Pre-MoE norm
         residual = hidden_states
         # hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
-        # hidden_states = self.pre_moe_norm(hidden_states, mode="decode")
+        hidden_states = self.pre_moe_norm(hidden_states, mode="decode")
 
         # MLP
         mlp_in = ttnn.to_memory_config(hidden_states, self.model_config["MLP_ACT_MEMCFG"])
@@ -198,9 +189,9 @@ class Decoder(LightweightModule):
 
         # Post-MoE norm
         # moe_out = ttnn.typecast(moe_out, ttnn.bfloat16)
-        # moe_out = self.post_moe_norm(moe_out, mode="decode")
+        moe_out = self.post_moe_norm(moe_out, mode="decode")
 
         hidden_states = ttnn.add(residual, moe_out)
-        hidden_states = ttnn.to_memory_config(hidden_states, input_memory_config)
+        # hidden_states = ttnn.to_memory_config(hidden_states, input_memory_config)
 
         return hidden_states

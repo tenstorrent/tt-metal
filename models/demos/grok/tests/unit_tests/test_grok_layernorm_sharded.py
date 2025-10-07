@@ -3,6 +3,7 @@ import torch
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.demos.grok.reference.llama_clone import RMSNorm as RefRMSNorm
 from models.demos.grok.tt.ccl import CCL_Manager
 from models.demos.grok.tt.distributed_norm import DistributedNorm
 from models.demos.grok.tt.model_config import TtModelArgs
@@ -21,11 +22,11 @@ def test_grok_layernorm(mesh_device):
     tt_ccl = CCL_Manager(mesh_device)
     model_args = TtModelArgs(mesh_device)
 
-    torch_gamma = torch.randn(8192)
+    torch_gamma = torch.randn(8192) - 1
 
-    torch_input = torch.randn(1, 1, 32, 8192)
+    torch_input = torch.randn(1, 1, 32, 8192) + 10
 
-    torch_layernorm = torch.nn.LayerNorm(torch_input.shape[-1], eps=1e-5)
+    torch_layernorm = RefRMSNorm(8192, 1e-5)
     torch_layernorm.weight = torch.nn.Parameter(torch_gamma)
     torch_layernorm_output = torch_layernorm(torch_input)
 
@@ -43,8 +44,6 @@ def test_grok_layernorm(mesh_device):
             weight_dtype=ttnn.bfloat16,
             weight_key="norm",
             is_distributed=True,
-            sharded_program_config=model_args.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-            sharded_output_config=model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
             ccl_topology=ttnn.Topology.Ring,
             tt_ccl=tt_ccl,
         ),
@@ -57,4 +56,5 @@ def test_grok_layernorm(mesh_device):
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 3), mesh_shape=(8, 4))
     )[:1, :, :, :]
+    # comp_pcc(tt_output_torch, torch_layernorm_output)
     breakpoint()

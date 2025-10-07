@@ -95,6 +95,19 @@ def test_grok_decoder_inference(
         }
         reference_model.moe.experts[expert_idx].load_state_dict(expert_state_dict)
 
+    reference_model.pre_attn_norm.weight = torch.nn.Parameter(
+        state_dict[f"model.layers.{layer_num}.pre_attn_norm.weight"]
+    )
+    reference_model.post_attn_norm.weight = torch.nn.Parameter(
+        state_dict[f"model.layers.{layer_num}.post_attn_norm.weight"]
+    )
+    reference_model.pre_moe_norm.weight = torch.nn.Parameter(
+        state_dict[f"model.layers.{layer_num}.pre_moe_norm.weight"]
+    )
+    reference_model.post_moe_norm.weight = torch.nn.Parameter(
+        state_dict[f"model.layers.{layer_num}.post_moe_norm.weight"]
+    )
+
     seq_len = 1
     generation_start_pos = 0
     generation_length = 10
