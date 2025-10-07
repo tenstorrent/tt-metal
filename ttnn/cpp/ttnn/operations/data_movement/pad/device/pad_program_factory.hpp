@@ -53,5 +53,5 @@ tt::tt_metal::operation::ProgramWithCallbacks pad_tile_multicore(
     Tensor& output,
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
-    const float pad_value);
+    float pad_value);
 }  // namespace ttnn::operations::data_movement::detail
