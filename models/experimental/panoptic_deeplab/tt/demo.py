@@ -18,6 +18,7 @@ from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
 from models.experimental.panoptic_deeplab.tt.tt_model import TtPanopticDeepLab
 from models.experimental.panoptic_deeplab.reference.pytorch_model import PytorchPanopticDeepLab
 from models.experimental.panoptic_deeplab.tt.common import get_panoptic_deeplab_config, PDL_L1_SMALL_SIZE
+from models.experimental.panoptic_deeplab.tt.model_configs import ModelOptimisations
 from models.experimental.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.common.utility_functions import disable_persistent_kernel_cache
 
@@ -506,6 +507,10 @@ def run_panoptic_deeplab_demo(
         logger.info("Applying Conv+BatchNorm fusion...")
         fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
 
+        # Create model configurations
+        logger.info("Creating model configurations...")
+        model_configs = ModelOptimisations()
+
         # Create TTNN model
         logger.info("Creating TTNN model...")
         ttnn_model = TtPanopticDeepLab(
@@ -519,6 +524,7 @@ def run_panoptic_deeplab_demo(
             ins_embed_head_channels=ins_embed_head_channels,
             norm="",
             train_size=target_size,
+            model_configs=model_configs,
         )
 
     except FileNotFoundError:
