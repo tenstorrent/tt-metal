@@ -17,9 +17,11 @@ target_link_libraries(
     fabric_unit_tests
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
+
+target_link_options(fabric_unit_tests PRIVATE -Wl,-Bsymbolic)
+target_compile_options(fabric_unit_tests PRIVATE -fno-semantic-interposition)
 
 target_include_directories(
     fabric_unit_tests
@@ -47,9 +49,11 @@ target_link_libraries(
     test_physical_discovery
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
+
+target_link_options(test_physical_discovery PRIVATE -Wl,-Bsymbolic)
+target_compile_options(test_physical_discovery PRIVATE -fno-semantic-interposition)
 
 target_include_directories(
     test_physical_discovery
@@ -80,9 +84,11 @@ target_link_libraries(
     fabric_elastic_channels_host_test
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
+
+target_link_options(fabric_elastic_channels_host_test PRIVATE -Wl,-Bsymbolic)
+target_compile_options(fabric_elastic_channels_host_test PRIVATE -fno-semantic-interposition)
 
 target_include_directories(
     fabric_elastic_channels_host_test
@@ -130,6 +136,9 @@ set_target_properties(
 )
 target_link_libraries(test_system_health PRIVATE TT::SystemHealth::Smoke)
 
+target_link_options(test_system_health PRIVATE -Wl,-Bsymbolic)
+target_compile_options(test_system_health PRIVATE -fno-semantic-interposition)
+
 add_library(test_fabric_smoke OBJECT)
 add_library(TT::Metalium::Test::Fabric::Smoke ALIAS test_fabric_smoke)
 
@@ -154,6 +163,9 @@ target_link_libraries(
 
 add_executable(fabric_smoke_tests)
 target_link_libraries(fabric_smoke_tests PRIVATE TT::Metalium::Test::Fabric::Smoke)
+target_link_options(fabric_smoke_tests PRIVATE -Wl,-Bsymbolic)
+target_compile_options(fabric_smoke_tests PRIVATE -fno-semantic-interposition)
+
 set_target_properties(
     fabric_smoke_tests
     PROPERTIES
@@ -182,7 +194,6 @@ target_link_libraries(
     unit_tests_1d_fabric_latency
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 target_sources(
@@ -190,6 +201,10 @@ target_sources(
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_1d_fabric_loopback_latency.cpp
 )
+
+# NEW: Apply link and compile flags to unit_tests_1d_fabric_latency
+target_link_options(unit_tests_1d_fabric_latency PRIVATE -Wl,-Bsymbolic)
+target_compile_options(unit_tests_1d_fabric_latency PRIVATE -fno-semantic-interposition)
 
 # ---- Bench: unicast ----
 add_executable(
@@ -203,10 +218,13 @@ target_link_libraries(
     bench_unicast
     PRIVATE
         tt_metal
-        fabric
         gtest
         test_common_libs
 )
+
+# NEW: Apply link and compile flags to bench_unicast
+target_link_options(bench_unicast PRIVATE -Wl,-Bsymbolic)
+target_compile_options(bench_unicast PRIVATE -fno-semantic-interposition)
 
 add_dependencies(bench_unicast tt_metal)
 

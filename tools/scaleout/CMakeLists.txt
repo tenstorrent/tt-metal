@@ -60,6 +60,10 @@ target_link_libraries(
         $<BUILD_INTERFACE:protobuf::libprotobuf>
 )
 
+# NEW: Apply link and compile flags to scaleout_tools
+target_link_options(scaleout_tools PRIVATE -Wl,-Bsymbolic)
+target_compile_options(scaleout_tools PRIVATE -fno-semantic-interposition)
+
 target_link_libraries(
     run_cluster_validation
     PRIVATE
@@ -68,6 +72,11 @@ target_link_libraries(
         protobuf::libprotobuf
         tt_metal
 )
+
+# NEW: Apply link and compile flags to run_cluster_validation
+target_link_options(run_cluster_validation PRIVATE -Wl,-Bsymbolic)
+target_compile_options(run_cluster_validation PRIVATE -fno-semantic-interposition)
+
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
 target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
 

@@ -1,4 +1,4 @@
-add_library(fabric STATIC)
+add_library(fabric OBJECT)
 add_library(TT::Metalium::Fabric ALIAS fabric)
 
 # These headers are for the device, not host; will require cross compiling to lint them (future work).
@@ -8,14 +8,6 @@ set_target_properties(
         VERIFY_INTERFACE_HEADER_SETS
             FALSE
 )
-target_link_options(fabric PRIVATE "LINKER:-Bsymbolic")
-target_compile_options(
-    fabric
-    PUBLIC
-        -Wno-int-to-pointer-cast
-        -fno-semantic-interposition
-)
-
 target_sources(
     fabric
     PUBLIC
@@ -100,9 +92,12 @@ target_link_libraries(
         protobuf::libprotobuf
 )
 
+# NEW: Apply link flag to fabric (affects symbol binding when linking fabric)
+target_link_options(fabric PRIVATE -Wl,-Bsymbolic)
+
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
 
-target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
+target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast -fno-semantic-interposition)
 
 install(
     TARGETS
