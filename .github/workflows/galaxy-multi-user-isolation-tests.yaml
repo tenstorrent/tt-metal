@@ -10,6 +10,7 @@ on:
       extra-tag:
         required: false
         type: string
+        default: "in-service"
   schedule:
     - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
 
@@ -25,10 +26,9 @@ jobs:
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
     runs-on:
-      - in-service
       - topology-6u
       - arch-wormhole_b0
-      - ${{ inputs.extra-tag }}
+      - ${{ inputs.extra-tag || 'in-service' }}
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
