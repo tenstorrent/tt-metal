@@ -56,6 +56,8 @@ struct RSqrtPolicy {
  *                    all sets to be combined. This CB will be consumed
  * @param cb_combined CB to store the combined mean and variance results(size 2)
  * @param num_sets Number of sets to combine
+ * @param rsqrt_policy Policy to specify if 1/sqrt(Var[x] + eps) should be computed
+ *                     and pushed to the combined CB instead of variance
  * @tparam NextSetSizeFn Functor that takes the set index and returns the
  *                       size of the next set
  */
