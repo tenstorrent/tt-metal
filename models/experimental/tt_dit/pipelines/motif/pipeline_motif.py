@@ -424,7 +424,7 @@ class MotifPipeline:
         timestep: ttnn.Tensor,
         submesh_index: int,
     ) -> ttnn.Tensor:
-        if cfg_enabled and not self._parallel_config.cfg_parallel.factor > 1:
+        if cfg_enabled and self._parallel_config.cfg_parallel.factor == 1:
             latent = ttnn.concat([latent, latent])
 
         return self.transformers[submesh_index].forward(
@@ -499,11 +499,14 @@ class MotifPipeline:
                 ttnn.copy_host_to_device_tensor(
                     sigma_difference[submesh_id], self._traces[submesh_id].sigma_difference_input
                 )
-                sigma_difference_device = self._traces[submesh_id].sigma_difference_input
                 ttnn.execute_trace(submesh_device, self._traces[submesh_id].tid, cq_id=0, blocking=False)
                 noise_pred_list.append(self._traces[submesh_id].latents_output)
+
+            # TODO: If we don't do this, we get noise when tracing is enabled. But why, since sigma
+            # difference is only used outside of tracing region?
+            sigma_difference_device = [trace.sigma_difference_input for trace in self._traces]
         else:
-            for submesh_id, submesh_device in enumerate(self._submesh_devices):
+            for submesh_id in range(len(self._submesh_devices)):
                 noise_pred = self._step_inner(
                     cfg_enabled=cfg_enabled,
                     latent=latents[submesh_id],
@@ -513,10 +516,11 @@ class MotifPipeline:
                     submesh_index=submesh_id,
                 )
                 noise_pred_list.append(noise_pred)
-                sigma_difference_device = sigma_difference[submesh_id]
+
+            sigma_difference_device = sigma_difference
 
         if cfg_enabled:
-            if not self._parallel_config.cfg_parallel.factor > 1:
+            if self._parallel_config.cfg_parallel.factor == 1:
                 split_pos = noise_pred_list[0].shape[0] // 2
                 uncond = noise_pred_list[0][0:split_pos]
                 cond = noise_pred_list[0][split_pos:]
@@ -542,7 +546,7 @@ class MotifPipeline:
 
         for submesh_id, submesh_device in enumerate(self._submesh_devices):
             ttnn.synchronize_device(submesh_device)  # Helps with accurate time profiling.
-            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference_device)
+            ttnn.multiply_(noise_pred_list[submesh_id], sigma_difference_device[submesh_id])
             ttnn.add_(latents[submesh_id], noise_pred_list[submesh_id])
 
         return latents
