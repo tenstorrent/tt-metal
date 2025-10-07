@@ -50,8 +50,6 @@ public:
 
     bool is_grad_initialized() const;
 
-    void assign(const TensorPtr &other);
-
 private:
     void try_init_grad(bool init_ones = false);
 };

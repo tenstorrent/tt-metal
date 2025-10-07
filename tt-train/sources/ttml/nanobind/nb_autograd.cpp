@@ -74,7 +74,10 @@ void py_module(nb::module_& m) {
         py_tensor.def("get_rank", &Tensor::get_rank);
         py_tensor.def("backward", &Tensor::backward, nb::arg("retain_graph"));
         py_tensor.def("is_grad_initialized", &Tensor::is_grad_initialized);
-        py_tensor.def("assign", &Tensor::assign, nb::arg("other"));
+        py_tensor.def(
+            "assign",
+            [](const TensorPtr& self, const TensorPtr& other) { self->set_value(other->get_value()); },
+            nb::arg("other"));
         py_tensor.def_static(
             "from_numpy",
             [](nb::ndarray<> numpy_tensor,
