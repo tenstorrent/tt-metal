@@ -346,7 +346,7 @@ Tensor ExecutePrelu::invoke(
 }
 
 Tensor run_remainder(
-    const Tensor& input_a, const Tensor& input_b, float t_nan, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
     // explicitly using binary_ng to avoid fallback to legacy because of row boradcast
     Tensor result = ttnn::subtract(
@@ -397,9 +397,6 @@ Tensor run_remainder(
             false),
         result);
 
-    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result), output_mem_config);
-    result = ttnn::where(ttnn::logical_and(ttnn::eqz(input_a), ttnn::eqz(input_b)), t_nan, result, output_mem_config);
     return result;
 }
 // Binary remainder will be overloaded by unary remainder in another PR
@@ -407,15 +404,13 @@ Tensor ExecuteBinaryRemainder::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     DataType input_dtype = input_a.dtype();
 
-    float t_nan = tt::tt_metal::hal::get_nan();
-
     // No typecast for FP32 input
     const auto do_typecast = input_dtype != DataType::FLOAT32 or input_b.dtype() != DataType::FLOAT32;
     const auto& a = do_typecast ? typecast(input_a, DataType::FLOAT32) : input_a;
     const auto& b = do_typecast ? typecast(input_b, DataType::FLOAT32) : input_b;
 
     // Perform the remainder operation
-    Tensor result = run_remainder(a, b, t_nan, output_mem_config);
+    Tensor result = run_remainder(a, b, output_mem_config);
 
     // Return the result, typecasted if necessary
     return do_typecast ? typecast(result, input_dtype) : result;
@@ -436,8 +431,7 @@ Tensor run_fmod(
         ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
-    return ttnn::where(ttnn::eqz(input_b, output_mem_config), std::nanf(""), result);
+    return result;
 }
 
 // FMOD result = input − (other * trunc(input/other))
@@ -445,8 +439,7 @@ Tensor run_fmod(
 Tensor ExecuteBinaryFmod::invoke(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     DataType input_dtype = input_a.dtype();
-    Tensor div_res = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config);
-    div_res = ttnn::trunc(div_res, output_mem_config);
+    Tensor div_res = ttnn::div(input_a, input_b, true, "trunc", std::nullopt, output_mem_config);
     // No typecast for FP32 input
     if (input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32) {
         return run_fmod(input_a, input_b, div_res, output_mem_config);
