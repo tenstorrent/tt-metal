@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_downblock2d import TtDow
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -64,5 +64,5 @@ def test_downblock2d(device, temb_shape, input_shape, is_ci_env, reset_seeds):
     del unet, tt_downblock
     gc.collect()
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.998)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     logger.info(f"PCC is {pcc_message}")

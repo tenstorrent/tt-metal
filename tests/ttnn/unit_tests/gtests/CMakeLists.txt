@@ -80,9 +80,10 @@ target_link_libraries(
 
 # unit_tests_ttnn_ccl
 
-add_executable(unit_tests_ttnn_ccl)
+add_library(unit_tests_ttnn_ccl_lib OBJECT)
+add_library(TTNN::Test::CCL ALIAS unit_tests_ttnn_ccl_lib)
 target_sources(
-    unit_tests_ttnn_ccl
+    unit_tests_ttnn_ccl_lib
     PRIVATE
         ccl/test_ccl_commands.cpp
         ccl/test_ccl_helpers.cpp
@@ -93,24 +94,42 @@ target_sources(
         ccl/test_sharded_address_generators.cpp
         ccl/test_sharded_address_generators_new.cpp
 )
-target_include_directories(unit_tests_ttnn_ccl PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_include_directories(unit_tests_ttnn_ccl_lib PUBLIC ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
-    unit_tests_ttnn_ccl
-    PRIVATE
+    unit_tests_ttnn_ccl_lib
+    PUBLIC
         test_common_libs
         TTNN::CPP
 )
 
+add_executable(unit_tests_ttnn_ccl)
+target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
+
 # unit_tests_ttnn_ccl_ops
 
-add_executable(unit_tests_ttnn_ccl_ops)
+add_library(unit_tests_ttnn_ccl_ops_lib OBJECT)
+add_library(TTNN::Test::CCL::Ops ALIAS unit_tests_ttnn_ccl_ops_lib)
 target_sources(
-    unit_tests_ttnn_ccl_ops
+    unit_tests_ttnn_ccl_ops_lib
     PRIVATE
         ccl/test_persistent_fabric_ccl_ops.cpp
         ccl/test_send_recv_ops.cpp
 )
-setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
+target_include_directories(
+    unit_tests_ttnn_ccl_ops_lib
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+    unit_tests_ttnn_ccl_ops_lib
+    PUBLIC
+        test_common_libs
+        TTNN::CPP
+)
+
+add_executable(unit_tests_ttnn_ccl_ops)
+target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)
 
 # unit_tests_ttnn_ccl_multi_tensor
 
@@ -163,12 +182,7 @@ target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
 # test_ccl_multi_cq_multi_device
 
 add_executable(test_ccl_multi_cq_multi_device)
-target_sources(
-    test_ccl_multi_cq_multi_device
-    PRIVATE
-        multi_thread/test_ccl_multi_cq_multi_device.cpp
-        multi_thread/test_utils.cpp
-)
+target_sources(test_ccl_multi_cq_multi_device PRIVATE multi_thread/test_ccl_multi_cq_multi_device.cpp)
 setup_ttnn_test_target(test_ccl_multi_cq_multi_device)
 target_link_libraries(
     test_ccl_multi_cq_multi_device

@@ -115,7 +115,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-2F, 1e-2F));
 }
 
-TEST_F(SoftmaxTest, SoftmaxTest_Huge_Batch) {
+TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;

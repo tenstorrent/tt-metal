@@ -147,20 +147,25 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     const auto total_num_output_tiles = get_total_num_tiles_per_shard(num_tiles_for_output_shard);
     const CBHandle cb_output = create_cb_from_tensor(cb_output_id, output, total_num_output_tiles);
 
-    const auto bf16_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
-    const auto bf16_tile_size = tt::tt_metal::detail::TileSize(bf16_data_format);
+    auto cb_data_format = data_format;
+    auto cb_tile_size = tile_size;
+    bool bf8 = input_tensors[0].dtype() == DataType::BFLOAT8_B;
+    if (bf8) {
+        cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
+        cb_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
+    }
 
     const auto in0_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[0]);
     const uint32_t cb_input0_transpose_id = cb_inputs.size() + 1;
-    create_circular_buffer(cb_input0_transpose_id, in0_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_input0_transpose_id, in0_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const auto in1_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[1]);
     const uint32_t cb_input1_transpose_id = cb_inputs.size() + 2;
-    create_circular_buffer(cb_input1_transpose_id, in1_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_input1_transpose_id, in1_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const auto out_total_tiles_width = in0_total_tiles_width + in1_total_tiles_width;
     const uint32_t cb_concat_id = cb_inputs.size() + 3;
-    create_circular_buffer(cb_concat_id, out_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_concat_id, out_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
 
     const uint32_t cb_output_transpose_id = cb_inputs.size() + 4;
     create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
@@ -180,12 +185,16 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         tile_size,
         groups,
     };
+    std::map<std::string, std::string> reader_defines;
+    if (bf8) {
+        reader_defines["BF8"] = "1";
+    }
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
         "reader_height_sharded_width_concat_two_tensors_tiled.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(compile_time_args_0));
+        tt_metal::ReaderDataMovementConfig(compile_time_args_0, std::move(reader_defines)));
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
@@ -196,6 +205,9 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     // TODO: Skip the tile transpose in compute kernel if the following condition is true:
     // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
     // >> && input_tensors[1].padded_shape()[-1] / groups % TILE_WIDTH == 0)
+    constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
+    uint32_t BatchSize = MAX_1_BYTE_TILES_PER_BATCH / input_tensors[0].element_size();
+    compile_time_args_0.push_back(BatchSize);
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/compute/"

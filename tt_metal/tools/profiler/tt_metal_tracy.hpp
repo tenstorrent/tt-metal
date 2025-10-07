@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <tt_metal_profiler.hpp>
+
 #if defined(TRACY_ENABLE)
 
 #define TracyTTMetalBeginTrace(device_id, trace_id)                                                 \

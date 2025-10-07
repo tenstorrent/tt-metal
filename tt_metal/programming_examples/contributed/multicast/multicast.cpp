@@ -95,7 +95,7 @@ void verify_tiles(
             for (int i = 0; i < TILE_HEIGHT; i++) {
                 for (int j = 0; j < TILE_WIDTH; j++) {
                     int idx = tile_num.has_value() ? tile_elem_idx(tile_num.value(), i, j) : i * TILE_WIDTH + j;
-                    fmt::print("{} ", data[idx].to_float());
+                    fmt::print("{} ", static_cast<float>(data[idx]));
                 }
                 fmt::print("\n");
             }
@@ -118,8 +118,8 @@ void verify_tiles(
         for (int i = 0; i < TILE_HEIGHT && tile_match; i++) {
             for (int j = 0; j < TILE_WIDTH; j++) {
                 int idx = tile_elem_idx(tile, i, j);
-                float received = received_tiles[idx].to_float();
-                float golden = golden_tile[i * TILE_WIDTH + j].to_float();
+                float received = static_cast<float>(received_tiles[idx]);
+                float golden = static_cast<float>(golden_tile[i * TILE_WIDTH + j]);
                 if (received != golden) {
                     tile_match = false;
                     break;
@@ -181,8 +181,8 @@ int main(int argc, char **argv) {
         uint32_t dram_bank_id = 0;
         auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
         auto output_dram_buffer = MakeBufferBFP16(device, num_dests * num_tiles, false);
-        auto cb_src0 = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
-        auto cb_output = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
+        MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
 
         ////////// DATA MOVEMENT CONFIG SETUP //////////
         DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};

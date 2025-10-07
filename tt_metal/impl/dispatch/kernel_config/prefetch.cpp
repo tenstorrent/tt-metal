@@ -25,8 +25,8 @@
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 
@@ -208,12 +208,10 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
     if (!is_hd()) {
         create_edm_connection_sems(edm_connection_attributes_);
-        static_config_.is_2d_fabric =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology() ==
-            tt_fabric::Topology::Mesh;
+        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        static_config_.is_2d_fabric = fabric_context.is_2D_routing_enabled();
         static_config_.is_2d_fabric_dynamic =
-            tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_config() ==
-            tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+            static_config_.is_2d_fabric && fabric_context.is_dynamic_routing_enabled();
     } else {
         static_config_.is_2d_fabric = false;
         static_config_.is_2d_fabric_dynamic = false;

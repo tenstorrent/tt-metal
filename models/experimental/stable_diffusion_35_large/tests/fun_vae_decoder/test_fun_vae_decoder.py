@@ -10,7 +10,7 @@ import time
 from ...reference.vae_decoder import VaeDecoder
 from ...tt.fun_vae_decoder.fun_vae_decoder import sd_vae_decode, TtVaeDecoderParameters
 from ...tt.utils import assert_quality, to_torch
-from models.utility_functions import comp_allclose, comp_pcc
+from models.common.utility_functions import comp_allclose, comp_pcc
 from ...tt.parallel_config import StableDiffusionParallelManager, create_vae_parallel_config
 import tracy
 

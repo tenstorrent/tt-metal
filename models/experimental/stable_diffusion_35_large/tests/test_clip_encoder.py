@@ -29,8 +29,8 @@ from ..tt.parallel_config import EncoderParallelManager
     ],
     ids=["encoder_1", "encoder_2"],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["t3k", "tg"], indirect=True)
-@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2), (4, 4)], ids=["1x4", "2x2", "4x4"])
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4), (1, 1)], ids=["t3k", "tg", "n150"], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2), (4, 4), (1, 1)], ids=["1x4", "2x2", "4x4", "1x1"])
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
@@ -47,11 +47,18 @@ def test_clip_encoder(
     topology: ttnn.Topology,
 ) -> None:
     parent_mesh_shape = tuple(mesh_device.shape)
+    if submesh_shape == (1, 1):
+        if parent_mesh_shape != (1, 1):
+            pytest.skip("n150 mesh does not support submesh shapes other than 1x1, skipping")
     if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
         pytest.skip("submesh shape is larger than parent mesh shape, skipping")
     encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
-    parallel_manager = EncoderParallelManager(encoder_submesh, topology, mesh_axis=1, num_links=1)
+    if parent_mesh_shape == (1, 1):
+        print(f"Not running parallel manager for n150 mesh")
+        parallel_manager = None
+    else:
+        parallel_manager = EncoderParallelManager(encoder_submesh, topology, mesh_axis=1, num_links=1)
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     hf_model = CLIPTextModelWithProjection.from_pretrained(

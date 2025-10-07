@@ -8,6 +8,7 @@ import math
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
 def rms_norm(x, dim, gamma, beta, eps):
@@ -125,16 +126,18 @@ def test_layernorm_perf(mesh_device, num_devices_fractured, input_dim, input_cor
     # Run distributed rmsnorm part 1
     tt_stats = ttnn.rms_norm_pre_all_gather(input_tensor, program_config=ln_prg_cfg)
 
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    pytest.skip(LEGACY_CCL_SKIP)
     # All gather stats
-    tt_stats = ttnn.all_gather(
-        tt_stats,
-        3,
-        num_links=1,
-        cluster_axis=1,
-        mesh_device=mesh_device,
-        memory_config=ln_sharded_stats_memcfg,
-        topology=ttnn.Topology.Linear,
-    )
+    # tt_stats = ttnn.all_gather(
+    #     tt_stats,
+    #     3,
+    #     num_links=1,
+    #     cluster_axis=1,
+    #     mesh_device=mesh_device,
+    #     memory_config=ln_sharded_stats_memcfg,
+    #     topology=ttnn.Topology.Linear,
+    # )
 
     # Output memory config
     if output_core_grid is None:

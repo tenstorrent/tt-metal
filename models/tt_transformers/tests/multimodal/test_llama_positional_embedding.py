@@ -11,9 +11,9 @@ import torch.nn as nn
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_positional_embedding import TtLlamaPositionalEmbedding
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 

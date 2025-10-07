@@ -66,7 +66,7 @@ jobs:
     name: 🤖 Clang Tidy
     needs: [ build-docker-image, determine-scan-type ]
     if: ${{ needs.determine-scan-type.outputs.do-scan == 'true' }}
-    runs-on: tt-beta-ubuntu-2204-xlarge
+    runs-on: tt-ubuntu-2204-xlarge-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
       image: ${{ needs.build-docker-image.outputs.dev-tag || 'docker-image-unresolved!'}}

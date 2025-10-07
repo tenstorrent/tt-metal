@@ -10,11 +10,11 @@
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
-    constexpr bool intermediate_is_dram = get_compile_time_arg_val(0);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t receiver_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t alignment = get_compile_time_arg_val(4);
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t receiver_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t alignment = get_compile_time_arg_val(3);
+    constexpr auto packet_buffer_args = TensorAccessorArgs<4>();
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -55,8 +55,7 @@ void kernel_main() {
 
     fabric_connection.close();
 
-    InterleavedAddrGen<intermediate_is_dram> packet_buffer_addrgen{
-        .bank_base_address = intermediate_base_addr, .page_size = packet_size_bytes};
+    const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
 
     cb_reserve_back(packet_cb_id, 1);
     const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
@@ -74,7 +73,7 @@ void kernel_main() {
 
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
             if (page_idx == page_idx_start || packet_page_idx == curr_pages_per_packet) {
-                const uint64_t packet_noc_addr = packet_buffer_addrgen.get_noc_addr(packet_idx);
+                const uint64_t packet_noc_addr = get_noc_addr(packet_idx, packet_buffer, 0, 0);
                 noc_async_read(packet_noc_addr, packet_l1_addr, packet_size_bytes);
                 noc_async_read_barrier();
 

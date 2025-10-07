@@ -12,6 +12,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      enable-watcher:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   t3000-unit-tests:
@@ -23,14 +27,16 @@ jobs:
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
-      - tt-beta-ubuntu-2204-N300-llmbox-large-stable
+      - tt-ubuntu-2204-N300-llmbox-stable
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-group.arch }}
+        HF_HUB_OFFLINE: 1
+        HF_HOME: /mnt/MLPerf/huggingface
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
@@ -48,6 +54,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          enable-watcher: ${{ inputs.enable-watcher || false }}
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

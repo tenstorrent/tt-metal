@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
+#include <random>
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -30,6 +31,15 @@ std::string get_system_config_name(SystemConfig system_config);
 
 std::string get_test_variant_name(TestVariant variant);
 
+// Core socket send/recv test function
+bool test_socket_send_recv(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device_,
+    tt::tt_metal::distributed::MeshSocket& socket,
+    uint32_t data_size,
+    uint32_t page_size,
+    uint32_t num_txns = 20,
+    std::optional<std::mt19937> gen = std::nullopt);
+
 // Configuration for Multi-Host Socket Tests
 struct SocketTestConfig {
     uint32_t socket_fifo_size;
@@ -40,28 +50,28 @@ struct SocketTestConfig {
 };
 
 void test_multi_mesh_single_conn_bwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_single_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_multi_conn_fwd(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,
     SystemConfig system_config);
 
 void test_multi_mesh_multi_conn_bidirectional(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t socket_fifo_size,
     uint32_t socket_page_size,
     uint32_t data_size,

@@ -8,6 +8,7 @@ target_link_libraries(
     tt-metalium-validation-smoke
     PRIVATE
         TT::SystemHealth::Smoke
+        TT::Metalium::Test::Fabric::Smoke
         TT::Metalium::Test::API
         TT::Metalium::Test::Device::Smoke
         TT::Metalium::Test::Dispatch::Smoke

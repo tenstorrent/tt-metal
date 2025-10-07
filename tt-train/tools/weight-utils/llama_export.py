@@ -267,7 +267,7 @@ def dump_model(args):
                 emb_dim = hf_model_config.hidden_size
                 if not all(p.shape == (hf_model_config.num_key_value_heads * head_dim, emb_dim) for p in hf_values):
                     raise ValueError(f"Mismatch in shape for {key}: {hf_values[0].shape} vs. {init_shapes[key]}(tt)")
-                # M -> N linear repesented by n x m matrix, hence concate on dim -2 == 0.
+                # M -> N linear represented by n x m matrix, hence concate on dim -2 == 0.
                 hf_value = np.concatenate(hf_values, axis=-2)
             else:
                 hf_value = hf_state_dict[hf_key]

@@ -55,16 +55,13 @@ class MLP1D(AbstractModule):
     WEIGHT_DTYPE = ttnn.bfloat4_b
 
     @dataclass
-    class MLPProgramConfigData(OpConfigBase):
+    class ProgramConfigData(OpConfigBase):
         """Data class for the data for generating the PC for ttnn.linear."""
 
         dim: int
         hidden_dim: int
         num_devices: int
         core_grid_size: ttnn.CoreCoord
-
-    DRAM_SHARD_GRID_WIDTH = 8
-    PREFILL_ROWS = 8
 
     @classmethod
     def convert_weights(
@@ -196,7 +193,7 @@ class MLP1D(AbstractModule):
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
-            "linear_pc_gen": MLP1D.MLPProgramConfigData(
+            "linear_pc_gen": MLP1D.ProgramConfigData(
                 dim=dim, hidden_dim=hidden_dim, num_devices=mesh_width, core_grid_size=matmul_core_grid_size
             ),
             "w1": linear_op_config,
@@ -204,7 +201,7 @@ class MLP1D(AbstractModule):
             "w3": linear_op_config,
             "mul": MulConfig(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                input_tensor_a_activations=[],  # [ttnn.UnaryOpType.SILU], # TODO: uncomment once ttnn.silu PCC is fixed
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
             "reduce_scatter_async": ReduceScatterAsyncConfig(
                 dim=-1,  # We are scattering across the feature dimension (last one)
@@ -311,7 +308,7 @@ class MLP1D(AbstractModule):
             ),
             "mul": MulConfig(
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                input_tensor_a_activations=[],  # [ttnn.UnaryOpType.SILU], # TODO: uncomment once ttnn.silu PCC is fixed
+                input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
             "reduce_scatter_async": ReduceScatterAsyncConfig(
                 mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -375,12 +372,12 @@ class MLP1D(AbstractModule):
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
-                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
             "reduce_scatter_async": {
-                "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
+                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
         }
@@ -464,12 +461,12 @@ class MLP1D(AbstractModule):
         ttnn.deallocate(x)
 
         # Apply silu
-        w1_out_activated = cls._silu_workaround(w1_out)
-        ttnn.deallocate(w1_out)
+        # w1_out_activated = cls._silu_workaround(w1_out)
+        # ttnn.deallocate(w1_out)
 
         # Apply activation and multiply
-        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
-        ttnn.deallocate(w1_out_activated)
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
         # Down projection with dynamic program configs, no need to reshard as we are using dram activations
@@ -496,7 +493,7 @@ class MLP1D(AbstractModule):
         # All gather
         x = ttnn.experimental.all_gather_async(x, **cfg["all_gather"])
 
-        # TODO: File issue on AG not being able to do this internally
+        # TODO: File issue on AG not being able to do this internally (Issue #26672)
         x = ttnn.to_memory_config(x, **cfg["all_gather_reshard"])
 
         # Gate and up projections

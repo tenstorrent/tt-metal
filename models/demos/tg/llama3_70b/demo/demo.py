@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 
+from models.common.utility_functions import skip_for_grayskull
 from models.common.utils import top_k_top_p_filtering
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
@@ -22,7 +23,6 @@ from models.demos.t3000.llama2_70b.tt.llama_common import (
 )
 from models.demos.tg.llama3_70b.tt.llama_common import setup_llama_env
 from models.demos.tg.llama3_70b.tt.llama_generation_galaxy import TtLlamaModelForGeneration
-from models.utility_functions import skip_for_grayskull
 
 
 @dataclass
@@ -86,9 +86,9 @@ def get_prompts_for_compilation(tokenized, prompts):
     tokenized_len = [len(t) for t in tokenized]
     # pad tokenized_len to be power of 2 and 32 at least
     padded_tokenized_len = [max(32, nearest_power_of_2(l)) for l in tokenized_len]
-    # Get indexes of first occurences of each unique length
+    # Get indexes of first occurrences of each unique length
     unique_lengths = list(set(padded_tokenized_len))
-    # Get indexes of unique_lenghts in tokenized_len
+    # Get indexes of unique_lengths in tokenized_len
     indexes = [padded_tokenized_len.index(l) for l in unique_lengths]
     # Get tokenized and prompts for compilation
     return [tokenized[i] for i in indexes], [prompts[i] for i in indexes]

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <reflect>
-
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
 #include "ttnn/common/queue_id.hpp"

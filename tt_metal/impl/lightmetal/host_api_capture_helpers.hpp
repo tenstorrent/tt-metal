@@ -21,7 +21,7 @@ struct EthernetConfig;
 
 class IDevice;
 struct BufferConfig;
-struct CircularBufferConfig;
+class CircularBufferConfig;
 using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 
 //////////////////////////////////////////////////////////////
@@ -125,12 +125,6 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
     KernelHandle kernel_id,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args);
-
-void CaptureSetRuntimeArgs(
-    IDevice* device,
-    const std::shared_ptr<Kernel>& kernel,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const std::shared_ptr<RuntimeArgs>& runtime_args);
 
 void CaptureCreateCircularBuffer(
     CBHandle& cb_handle,

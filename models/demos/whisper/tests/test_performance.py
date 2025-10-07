@@ -12,10 +12,10 @@ from transformers import AutoFeatureExtractor, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import skip_for_grayskull
 
 
 def get_expected_times(model_name):

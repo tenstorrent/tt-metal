@@ -1,0 +1,36 @@
+inputs:
+  device_perf_model_name:
+    required: true
+    default: ''
+    description: "Used to specify the model for a device perf test. E2E perf tests do not set this"
+  commands:
+    required: true
+    description: "Shell commands to run the test"
+runs:
+  using: "composite"
+  steps:
+    - run: |
+        cd docker-job
+        set -x
+
+        ${{ inputs.commands }}
+
+        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv
+        python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME REPORT
+        cat Models_Device_Perf_${{ inputs.device_perf_model_name }}_$(date +%Y_%m_%d).csv > Models_Device_Perf_$(date +%Y_%m_%d).csv
+        cat Models_Device_Perf_$(date +%Y_%m_%d).csv
+        echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      if: ${{ inputs.device_perf_model_name != '' }}
+      shell: bash
+      env:
+        TRACY_NO_INVARIANT_CHECK: 1
+    - uses: ./.github/actions/docker-run
+      if: ${{ env.PIPELINE == 'model-perf' }}
+      with:
+        docker_image: ${{ env.DOCKER_IMAGE }}
+        docker_password: ${{ env.DOCKER_PASSWORD }}
+        docker_opts: ${{ env.DOCKER_OPTS }}
+        install_wheel: true
+        run_args: |
+          ${{ inputs.commands }}
+          env python3 models/perf/merge_perf_results.py REPORT

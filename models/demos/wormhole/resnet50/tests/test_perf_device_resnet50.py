@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.ttnn_resnet.tests.perf_device_resnet50 import run_perf_device
-from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()
@@ -13,7 +13,7 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",
     [
-        [16, "16-act_dtype0-weight_dtype0-math_fidelity0-device_params0", 5713.0],
+        [16, "16-act_dtype0-weight_dtype0-math_fidelity0-device_params0", 5780.0],
     ],
 )
 def test_perf_device(batch_size, test, expected_perf):

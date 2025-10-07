@@ -26,7 +26,6 @@ class MLP(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.args = args
@@ -34,7 +33,7 @@ class MLP(LightweightModule):
         self.model_config = model_config
         self.layer_num = layer_num
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+        torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
@@ -82,7 +81,9 @@ class MLP(LightweightModule):
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
-        self.activation_type = self.args.mlp_activation_type
+        self.activation_type = (
+            args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
+        )
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """

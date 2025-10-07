@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include <cstddef>
@@ -55,7 +54,7 @@ MeshDeviceView::MeshDeviceView(
             fabric_node_ids.end(),
             [this](const auto& fabric_node_id) { return fabric_node_id.mesh_id == mesh_id_; }),
         "All fabric node ids in MeshDeviceView must have the same mesh id: {}",
-        mesh_id_);
+        *mesh_id_);
 
     // Build coordinate map.
     for (const auto& [coord, maybe_device] : devices_) {

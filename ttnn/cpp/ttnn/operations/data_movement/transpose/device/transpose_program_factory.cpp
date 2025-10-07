@@ -539,7 +539,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
 
     // create reader kernel with compile time and runtime args
     tt::tt_metal::Buffer* src_buffer = a.buffer();
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t element_size = a.element_size();
     uint32_t padding_val_packed = 0;
@@ -559,8 +558,18 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
             }
         }
     }
-    std::vector<uint32_t> reader_compile_time_args = {
-        num_writes, padding_val_packed, (uint32_t)needs_padding, (uint32_t)0, 1, 1, 1, 1, 1};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    std::unordered_map<std::string, uint32_t> reader_named_compile_time_args = {
+        {"num_writes", num_writes},
+        {"padding_val_packed", padding_val_packed},
+        {"needs_padding", needs_padding},
+        {"swap_hw", (uint32_t)0},
+        {"H", 1},
+        {"W", 1},
+        {"accumulated_outer_dims", 1},
+        {"tile_height", 1},
+        {"tile_width", 1},
+    };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -568,7 +577,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
         "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/dataflow/"
         "reader_unary_transpose_hc_interleaved_tiled_padding_aware.cpp",
         total_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt::tt_metal::ReaderDataMovementConfig(
+            reader_compile_time_args, {}, tt::tt_metal::KernelBuildOptLevel::O2, reader_named_compile_time_args));
 
     // create writer kernel with compile time and runtime args
 
@@ -1932,7 +1942,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
 
     auto& all_cores = shard_spec.grid;
-    uint32_t num_cores = shard_spec.num_cores();
+    [[maybe_unused]] uint32_t num_cores = shard_spec.num_cores();
     auto bbox = shard_spec.grid.bounding_box();
     CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
     uint32_t num_cores_x = grid_size.x;

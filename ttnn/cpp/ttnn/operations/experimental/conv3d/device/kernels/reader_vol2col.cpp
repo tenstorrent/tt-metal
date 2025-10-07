@@ -75,9 +75,9 @@ void kernel_main() {
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
-    // Interleaved address generators
-    constexpr bool is_dram = true;
-    const InterleavedAddrGen<is_dram> in_reader = {.bank_base_address = in_addr, .page_size = in_row_size_bytes};
+    // Tensor accessor for input tensor
+    constexpr auto in_args = TensorAccessorArgs<28>();
+    const auto in_reader = TensorAccessor(in_args, in_addr, in_row_size_bytes);
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     constexpr uint32_t H_in_W_in = H_in * W_in;

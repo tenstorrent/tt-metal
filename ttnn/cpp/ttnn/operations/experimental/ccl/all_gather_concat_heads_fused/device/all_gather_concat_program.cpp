@@ -73,13 +73,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const uint32_t num_heads,
     bool use_noc1_only) {
     tt::tt_metal::Program program{};
-    ttnn::MeshDevice* mesh_device = input_tensor.mesh_device();
+    ttnn::MeshDevice* mesh_device = input_tensor.device();
     const bool enable_async_output_tensor = false;
 
     auto ring_core_ranges = output_tensor.shard_spec().value().grid.ranges();
 
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -439,7 +439,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         reader_rt_args.insert(reader_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
         log_trace(tt::LogOp, "Reader Runtime Args:");
-        for (const auto& arg : reader_rt_args) {
+        for ([[maybe_unused]] const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
 
@@ -489,7 +489,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         writer_rt_args.insert(writer_rt_args.end(), mcast_end_y.begin(), mcast_end_y.end());
 
         log_trace(tt::LogOp, "Writer Runtime Args:");
-        for (const auto& arg : writer_rt_args) {
+        for ([[maybe_unused]] const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
 

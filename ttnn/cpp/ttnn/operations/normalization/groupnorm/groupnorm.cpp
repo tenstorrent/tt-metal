@@ -74,8 +74,6 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
     }
 
-    const auto output_dtype = dtype.value_or(input_tensor.dtype());
-
     const std::optional<ttnn::Tensor>& gamma =
         weight.has_value() ? std::optional<ttnn::Tensor>(ttnn::unsqueeze_to_4D(weight.value())) : std::nullopt;
     const std::optional<ttnn::Tensor>& beta =

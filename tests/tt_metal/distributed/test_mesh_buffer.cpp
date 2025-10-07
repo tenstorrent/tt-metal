@@ -330,7 +330,7 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
     uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
-    for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
+    for ([[maybe_unused]] auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
         DeviceLocalBufferConfig per_device_buffer_config{
             .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
 
@@ -355,6 +355,9 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
 
             for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
                 for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+                    if (!mesh_device_->is_local(MeshCoordinate(logical_y, logical_x))) {
+                        continue;
+                    }
                     std::vector<uint32_t> dst_vec = {};
                     ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, MeshCoordinate(logical_y, logical_x));
                     EXPECT_EQ(dst_vec, src_vec);

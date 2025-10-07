@@ -9,7 +9,7 @@ import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("input_shape, module_path", [((1, 320), "time_embedding"), ((1, 2816), "add_embedding")])

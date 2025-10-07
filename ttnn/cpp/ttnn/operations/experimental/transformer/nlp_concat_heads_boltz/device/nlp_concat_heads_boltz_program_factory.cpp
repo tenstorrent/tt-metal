@@ -75,9 +75,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
     tt_metal::Program program = tt_metal::CreateProgram();
     uint32_t src0_cb_index = 0, out_cb_index = 16;
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
     tt::tt_metal::KernelHandle reader_kernel_id = 0, writer_kernel_id = 0;
     if (in_sharded) {
         std::vector<uint32_t> compile_time_args = {
@@ -102,13 +99,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
             tt_metal::WriterDataMovementConfig(compile_time_args));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {
-            // interleaved accessor args
-            (std::uint32_t)in0_is_dram,
             (std::uint32_t)in0_h_tiles,
             (std::uint32_t)in0_w_tiles,
             (std::uint32_t)in0_c,
             (std::uint32_t)in0_HtWt,
         };
+        tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
         tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(

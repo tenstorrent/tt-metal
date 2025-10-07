@@ -17,8 +17,8 @@ using namespace tt::tt_metal;
 // Single row - single core
 struct GatherProgramFactorySingleRowSingleCore {
     struct shared_variables_t {
-        KernelHandle gather_reader_kernel_id;
-        KernelHandle gather_writer_kernel_id;
+        KernelHandle gather_reader_kernel_id{};
+        KernelHandle gather_writer_kernel_id{};
         CoreCoord storage_grid_size;
     };
 
@@ -32,8 +32,8 @@ struct GatherProgramFactorySingleRowSingleCore {
 // Single row - multi core
 struct GatherProgramFactorySingleRowMultiCore {
     struct shared_variables_t {
-        KernelHandle gather_reader_kernel_id;
-        KernelHandle gather_writer_kernel_id;
+        KernelHandle gather_reader_kernel_id{};
+        KernelHandle gather_writer_kernel_id{};
         CoreCoord storage_grid_size;
     };
 

@@ -22,7 +22,7 @@ from models.tt_transformers.tt.common import (
     nearest_multiple,
 )
 from typing import Tuple
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass

@@ -10,7 +10,6 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         enchantum::enchantum
         fmt::fmt-header-only
-        small_vector
         Boost::algorithm
         Taskflow::Taskflow
         TT::Metalium

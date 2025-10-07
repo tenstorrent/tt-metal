@@ -13,6 +13,16 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 def run_reshard_test(
     device,
     input_shape,
@@ -57,7 +67,8 @@ def run_reshard_test(
         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
         buffer_type=ttnn.BufferType.DRAM,
     )
-    torch_tensor = torch.randn(input_shape).bfloat16()
+    # torch_tensor = torch.randn(input_shape).bfloat16()
+    torch_tensor = random_torch_tensor(tt_dtype, input_shape)
     tt_tensor_sharded = ttnn.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
     tt_tensor_sharded = ttnn.interleaved_to_sharded(
@@ -307,7 +318,7 @@ def test_reshard_rn50(
         ),
     ],
 )
-@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32])
 def test_reshard_with_program_cache(
     device,
     input_shape,
@@ -663,3 +674,264 @@ def test_dram_reshard_with_program_cache(
         )
 
     assert device.num_program_cache_entries() == 1
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
+    [
+        # block sharded with different page sizes
+        (
+            [1, 1, 64, 320],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 1)]],
+            (32, 40),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 1)]],
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        (
+            [1, 1, 192, 160],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (4, 2)]],
+            (64, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (2, 2)]],
+            (64, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # width sharded with different page sizes
+        (
+            [1, 1, 32, 160],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (4, 0)]],
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            [[(0, 0), (2, 0)]],
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            [1, 1, 5, 192],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (2, 0)]],
+            (5, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            [[(0, 0), (5, 0)]],
+            (5, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+def test_reshard_diff_width(
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_shape,
+    input_shard_orientation,
+    input_sharding_scheme,
+    output_shard_grid,
+    output_shard_shape,
+    output_shard_orientation,
+    output_sharding_scheme,
+    tt_dtype,
+):
+    torch_tensor, torch_tensor_after_round_trip = run_reshard_test(
+        device,
+        input_shape,
+        input_layout,
+        input_shard_grid,
+        input_shard_shape,
+        input_shard_orientation,
+        input_sharding_scheme,
+        output_shard_grid,
+        output_shard_shape,
+        output_shard_orientation,
+        output_sharding_scheme,
+        tt_dtype,
+    )
+
+    assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+    if tt_dtype != ttnn.bfloat8_b:
+        passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    else:
+        passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
+    [
+        (
+            [1, 1, 16384, 320],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (2048, 40),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 7)]],
+            (2048, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 320] sharded (512, 40) on 8x8 grid, reshard to (512, 64) on 5x8 grid
+        (
+            [1, 1, 4096, 320],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 40),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 7)]],
+            (512, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 640] sharded (512, 80) on 8x8 grid, reshard to (512, 96) on 7x8 grid
+        (
+            [1, 1, 4096, 640],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 80),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 96),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 1024, 640] sharded (128, 80) on 8x8 grid, reshard to (128, 96) on 7x8 grid
+        (
+            [1, 1, 1024, 640],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (128, 80),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (128, 96),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 1920] sharded (512, 240) on 8x8 grid, reshard to (512, 288) on 7x8 grid
+        (
+            [1, 1, 4096, 1920],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 240),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 288),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 1280] sharded (512, 160) on 8x8 grid, reshard to (512, 192) on 7x8 grid
+        (
+            [1, 1, 4096, 1280],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 960] sharded (512, 120) on 8x8 grid, reshard to (512, 192) on 5x8 grid
+        (
+            [1, 1, 4096, 960],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 120),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # input and output with different page size and have padding
+        (
+            [1, 1, 4096, 1248],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # width sharded with different page sizes
+        (
+            [1, 1, 1024, 1248],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 0)]],
+            (1024, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            [[(0, 0), (6, 0)]],
+            (1024, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            [1, 1, 32, 160],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (2, 0)]],
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            [[(0, 0), (4, 0)]],
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+def test_sd_reshard(
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_shape,
+    input_shard_orientation,
+    input_sharding_scheme,
+    output_shard_grid,
+    output_shard_shape,
+    output_shard_orientation,
+    output_sharding_scheme,
+    tt_dtype,
+):
+    torch_tensor, torch_tensor_after_round_trip = run_reshard_test(
+        device,
+        input_shape,
+        input_layout,
+        input_shard_grid,
+        input_shard_shape,
+        input_shard_orientation,
+        input_sharding_scheme,
+        output_shard_grid,
+        output_shard_shape,
+        output_shard_orientation,
+        output_sharding_scheme,
+        tt_dtype,
+    )
+
+    assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+    passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output

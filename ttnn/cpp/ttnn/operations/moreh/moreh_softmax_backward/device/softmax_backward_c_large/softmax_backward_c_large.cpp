@@ -74,8 +74,8 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardCLargeFactory::create(
     }
 
     if (op == MorehSoftmaxBackwardOp::LOGSOFTMAX) {
-        compute_defines["LOG"] = 1;
-        reader_defines["LOG"] = 1;
+        compute_defines["LOG"] = "1";
+        reader_defines["LOG"] = "1";
     }
 
     if (fp32_dest_acc_en) {

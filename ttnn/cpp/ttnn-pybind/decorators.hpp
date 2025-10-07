@@ -21,6 +21,8 @@
 namespace ttnn {
 namespace decorators {
 
+// NOLINTBEGIN(performance-unnecessary-value-param)
+
 namespace py = pybind11;
 
 template <typename T, typename return_t, typename... args_t>
@@ -158,6 +160,8 @@ auto bind_registered_operation(
 
     return py_operation;
 }
+
+// NOLINTEND(performance-unnecessary-value-param)
 
 }  // namespace decorators
 

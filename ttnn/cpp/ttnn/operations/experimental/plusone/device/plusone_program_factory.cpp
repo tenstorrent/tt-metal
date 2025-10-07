@@ -9,6 +9,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::detail {
 
@@ -32,7 +33,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     const auto& input_shape = input.padded_shape();
     uint32_t W = input_shape[-1];
     uint32_t H = 1;
-    if (input_shape.size() > 1) {
+    if (!input.is_sharded() && input_shape.size() > 1) {
         for (uint32_t i = 0; i < input_shape.size() - 1; ++i) {
             H *= input_shape[i];
         }
@@ -40,22 +41,26 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_units = W;
-    uint32_t aligned_input_unit_size = round_up_to_mul32(num_input_units * input_unit_size);
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, aligned_input_unit_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
-
+    uint32_t aligned_input_page_size = round_up_to_mul32(num_input_units * input_unit_size);
     auto src_buffer = input.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(aligned_input_page_size, {{src0_cb_index, input_cb_data_format}})
+            .set_page_size(src0_cb_index, aligned_input_page_size);
+    if (input.is_sharded()) {
+        cb_src0_config.set_globally_allocated_address(*src_buffer);
+    }
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
         src_is_dram,
-        aligned_input_unit_size,
+        aligned_input_page_size,
         W,
         H,
     };
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
 
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(

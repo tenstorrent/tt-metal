@@ -267,6 +267,7 @@ def test_decode_perf(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=True,
     )
 
 
@@ -346,4 +347,5 @@ def test_prefill_perf(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=True,
     )

@@ -11,7 +11,7 @@ from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 UFLD_V2_L1_SMALL_SIZE = 24576
 
 
-def load_torch_model(model_location_generator=None, use_pretrained_weight=False):
+def load_torch_model(model_location_generator=None, use_pretrained_weight=True):
     torch_model = TuSimple34(input_height=320, input_width=800)
     torch_model.eval()
     if not use_pretrained_weight:

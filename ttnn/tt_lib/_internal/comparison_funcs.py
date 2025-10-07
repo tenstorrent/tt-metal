@@ -71,7 +71,7 @@ def get_atol_rtol_pcc(golden, calculated):
             if golden.numel() == 1:
                 return float(torch.equal(golden, calculated))
 
-            # If both tensors are contant
+            # If both tensors are constant
             if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
                 return torch.isclose(torch.max(golden), torch.max(calculated)).item()
 
@@ -231,7 +231,7 @@ def comp_using_plot(tname, input, golden, calculated):
     plt.close()
 
 
-def comp_topk_simmilarity(golden, calculated):
+def comp_topk_similarity(golden, calculated):
     golden_values, golden_indices = golden[0], golden[1]
     calculated_values, calculated_gather_values = calculated[0], calculated[1]
 
@@ -242,9 +242,9 @@ def comp_topk_simmilarity(golden, calculated):
 
     indices_passing = ttnn_torch_cosine > 0.99
 
-    output_str += f", Cosine simmilarity: {ttnn_torch_cosine.item()}"
+    output_str += f", Cosine similarity: {ttnn_torch_cosine.item()}"
 
     if not indices_passing:
-        output_str += ", Cosine simmilarity check failed"
+        output_str += ", Cosine similarity check failed"
 
     return values_passing and indices_passing, output_str

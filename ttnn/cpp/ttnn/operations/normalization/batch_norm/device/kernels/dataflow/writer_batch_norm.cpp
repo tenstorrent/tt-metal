@@ -24,52 +24,37 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // batch_mean
-    constexpr auto cb_id_src = get_compile_time_arg_val(7);
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
+    constexpr bool weight_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr bool bias_has_value = get_compile_time_arg_val(1) == 1;
+    constexpr auto cb_id_src = get_compile_time_arg_val(2);
+    constexpr auto cb_id_dst = get_compile_time_arg_val(3);
+    constexpr auto cb_id_batch_var = get_compile_time_arg_val(4);
+    constexpr auto cb_id_weight = get_compile_time_arg_val(5);
+    constexpr auto cb_id_bias = get_compile_time_arg_val(6);
+    constexpr auto src_args = TensorAccessorArgs<7>();
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto batch_var_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
+    constexpr auto weight_args = TensorAccessorArgs<batch_var_args.next_compile_time_args_offset()>();
+    constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
     // output
-    constexpr auto cb_id_dst = get_compile_time_arg_val(8);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const DataFormat dst_data_format = get_dataformat(cb_id_dst);
-
-    const InterleavedAddrGenFast<dst_is_dram> dst = {
-        .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
+    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 
     // batch_var
-    constexpr auto cb_id_batch_var = get_compile_time_arg_val(9);
-    constexpr bool batch_var_is_dram = get_compile_time_arg_val(2) == 1;
     const uint32_t batch_var_tile_bytes = get_tile_size(cb_id_batch_var);
-    const DataFormat batch_var_data_format = get_dataformat(cb_id_batch_var);
-
-    const InterleavedAddrGenFast<batch_var_is_dram> batch_var = {
-        .bank_base_address = batch_var_addr, .page_size = batch_var_tile_bytes, .data_format = batch_var_data_format};
+    const auto batch_var = TensorAccessor(batch_var_args, batch_var_addr, batch_var_tile_bytes);
 
     // weight
-    constexpr auto cb_id_weight = get_compile_time_arg_val(10);
-    constexpr bool weight_is_dram = get_compile_time_arg_val(3) == 1;
     const uint32_t weight_tile_bytes = get_tile_size(cb_id_weight);
-    const DataFormat weight_data_format = get_dataformat(cb_id_weight);
-
-    const InterleavedAddrGenFast<weight_is_dram> weight = {
-        .bank_base_address = weight_addr, .page_size = weight_tile_bytes, .data_format = weight_data_format};
+    const auto weight = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
     // bias
-    constexpr auto cb_id_bias = get_compile_time_arg_val(11);
-    constexpr bool bias_is_dram = get_compile_time_arg_val(4) == 1;
     const uint32_t bias_tile_bytes = get_tile_size(cb_id_bias);
-    const DataFormat bias_data_format = get_dataformat(cb_id_bias);
-
-    const InterleavedAddrGenFast<bias_is_dram> bias = {
-        .bank_base_address = bias_addr, .page_size = bias_tile_bytes, .data_format = bias_data_format};
-
-    constexpr bool weight_has_value = get_compile_time_arg_val(5) == 1;
-    constexpr bool bias_has_value = get_compile_time_arg_val(6) == 1;
+    const auto bias = TensorAccessor(bias_args, bias_addr, bias_tile_bytes);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;

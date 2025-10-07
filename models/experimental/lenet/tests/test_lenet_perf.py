@@ -7,7 +7,7 @@ from loguru import logger
 import pytest
 import ttnn
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     profiler,
     enable_persistent_kernel_cache,
     disable_persistent_kernel_cache,

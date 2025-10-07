@@ -430,7 +430,7 @@ MeshContainer<T>::MeshContainer(const MeshShape& shape, std::vector<T> values) :
         shape.mesh_size() == values_.size(),
         "Shape and values size mismatch; shape: {}, values: {}",
         shape,
-        values.size());
+        values_.size());
 }
 
 template <typename T>

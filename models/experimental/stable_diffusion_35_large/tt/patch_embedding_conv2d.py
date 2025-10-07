@@ -40,7 +40,7 @@ class TtPatchEmbeddingConv2dParameters:
         else:
             bias = None
 
-        if os.environ["MESH_DEVICE"] == "T3K":
+        if os.environ.get("MESH_DEVICE", "") == "T3K":
             weight = torch.nn.functional.pad(weight, pad=(0, hidden_dim_padding), mode="constant", value=0)
             if not bias == None:
                 bias = torch.nn.functional.pad(bias, pad=(0, hidden_dim_padding), mode="constant", value=0)

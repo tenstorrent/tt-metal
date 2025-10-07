@@ -185,11 +185,13 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
     ssize_t target_block_index = -1;
     DeviceAddr start_address = absolute_start_address - offset_bytes_;
     for (size_t i = 0; i < block_address_.size(); i++) {
-        size_t block_start = block_address_[i];
-        size_t block_end = block_start + block_size_[i];
-        if (start_address >= block_start && start_address + alloc_size <= block_end) {
-            target_block_index = i;
-            break;
+        if (meta_block_is_allocated_[i]) {
+            size_t block_start = block_address_[i];
+            size_t block_end = block_start + block_size_[i];
+            if (start_address >= block_start && start_address + alloc_size <= block_end) {
+                target_block_index = i;
+                break;
+            }
         }
     }
 
@@ -205,7 +207,8 @@ std::optional<DeviceAddr> FreeListOpt::allocate_at_address(DeviceAddr absolute_s
     segregated_list.erase(it);
 
     size_t offset = start_address - block_address_[target_block_index];
-    size_t alloc_block_index = allocate_in_block(target_block_index, alloc_size, offset);
+    // Allocated addresses cache is invalidated by allocate_in_block
+    allocate_in_block(target_block_index, alloc_size, offset);
     update_lowest_occupied_address(start_address);
     return absolute_start_address;
 }
@@ -225,7 +228,6 @@ size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size,
         size_t free_block_size = offset;
         DeviceAddr free_block_address = block_address_[block_index];
         ssize_t prev_block = block_prev_block_[block_index];
-        ssize_t next_block = block_next_block_[block_index];
         block_size_[block_index] -= offset;
         block_address_[block_index] += offset;
         size_t new_block_index = alloc_meta_block(free_block_address, free_block_size, prev_block, block_index, false);
@@ -345,6 +347,19 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::available_addresses(
         }
     }
     return addresses;
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> FreeListOpt::allocated_addresses() const {
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> allocated_addresses;
+    allocated_addresses.reserve(block_address_.size());
+
+    for (size_t i = 0; i < block_address_.size(); i++) {
+        if (meta_block_is_allocated_[i] && block_is_allocated_[i]) {
+            allocated_addresses.emplace_back(block_address_[i], block_address_[i] + block_size_[i]);
+        }
+    }
+
+    return allocated_addresses;
 }
 
 size_t FreeListOpt::alloc_meta_block(

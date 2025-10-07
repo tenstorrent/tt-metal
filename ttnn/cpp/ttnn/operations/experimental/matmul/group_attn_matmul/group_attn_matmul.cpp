@@ -74,23 +74,4 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
         .at(0);
 }
 
-ttnn::Tensor GroupAttnMatmulOperation::invoke(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const CoreCoord& compute_with_storage_grid_size,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<const DataType> output_dtype,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor_a,
-        input_tensor_b,
-        compute_with_storage_grid_size,
-        memory_config,
-        output_dtype,
-        compute_kernel_config,
-        std::move(optional_output_tensor));
-}
-
-};  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::operations::experimental::matmul

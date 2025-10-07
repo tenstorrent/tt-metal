@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::matmul {
@@ -180,7 +181,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         tt::tt_metal::CircularBufferConfig(
             interm_cb_num_tiles * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
             .set_page_size(cb_intermed0_index, interm_single_tile_size);
-    auto cb_interm0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
 
     uint32_t cb_intermed1_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_interm1_config =
@@ -210,24 +211,20 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
     }
 
-    const uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const uint32_t src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src0_is_dram,
-        (uint32_t)src1_is_dram,
         (uint32_t)transpose_hw_bool,
         (uint32_t)row_major,
         out_subblock_w,
     };
+    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    const uint32_t dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)src0_is_dram,
-        (uint32_t)dst_is_dram,
         (uint32_t)output_cb_index,
         out_subblock_w,
         intermediate_num_tiles,
     };
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_kernel_defines;
     std::map<std::string, std::string> writer_kernel_defines;
@@ -515,7 +512,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
             device_compute_with_storage_grid.y,
             row_major);
         uint32_t g1_numcores = core_group_1.num_cores();
-        uint32_t g2_numcores = core_group_2.num_cores();
 
         std::vector<std::vector<uint32_t>> all_reader_runtime_args = {cores.size(), reader_runtime_args};
         std::vector<std::vector<uint32_t>> all_writer_runtime_args = {cores.size(), writer_runtime_args};
@@ -524,8 +520,6 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         // Set runtime args
         uint32_t num_output_blocks_per_core;
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-            const CoreCoord& core = cores.at(i);
-
             if (i < g1_numcores) {
                 num_output_blocks_per_core = num_output_blocks_per_core_group_1;
             } else {

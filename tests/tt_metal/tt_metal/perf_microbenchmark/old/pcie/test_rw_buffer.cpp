@@ -9,6 +9,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -23,12 +25,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
-
-namespace tt {
-namespace tt_metal {
-class IDevice;
-}  // namespace tt_metal
-}  // namespace tt
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -74,15 +70,16 @@ int main(int argc, char** argv) {
 
         // Device Setup
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Application Setup
         uint32_t single_tile_size = 2 * 1024;
         auto page_size = single_tile_size;
         BufferType buff_type = buffer_type == 0 ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1;
-        tt_metal::InterleavedBufferConfig buff_config{
-            .device = device, .size = buffer_size, .page_size = page_size, .buffer_type = buff_type};
-        auto buffer = CreateBuffer(buff_config);
+        tt::tt_metal::distributed::ReplicatedBufferConfig replicated_config{.size = buffer_size};
+        tt::tt_metal::distributed::DeviceLocalBufferConfig local_config{
+            .page_size = page_size, .buffer_type = buff_type};
+        auto buffer = tt::tt_metal::distributed::MeshBuffer::create(replicated_config, local_config, device.get());
 
         // Execute Application
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
@@ -94,7 +91,12 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                tt_metal::detail::WriteToBuffer(buffer, src_vec);
+                tt_metal::distributed::WriteShard(
+                    device->mesh_command_queue(0),
+                    buffer,
+                    src_vec,
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0),
+                    true);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }
@@ -117,7 +119,12 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                tt_metal::detail::ReadFromBuffer(buffer, result_vec);
+                tt_metal::distributed::ReadShard(
+                    device->mesh_command_queue(0),
+                    result_vec,
+                    buffer,
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0),
+                    true);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }
@@ -133,7 +140,7 @@ int main(int argc, char** argv) {
 
         // Validation & Teardown
         pass &= (src_vec == result_vec);
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());

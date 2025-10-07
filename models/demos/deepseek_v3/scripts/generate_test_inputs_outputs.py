@@ -62,8 +62,8 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         help="List of layer groups to log IO for. Can either be a torch module name or a state-dict-style layer path. The path can contain a range of indices, out of which only one will be logged. Only one layer for each torch module name will be logged. Defaults to a hardcoded layers.",
         default=[
-            # "model",  # TODO: uncomment this once memory issues are resolved
-            # "model.norm", # TODO: uncomment this once memory issues are resolved
+            "model",
+            "model.norm",
             "model.embed_tokens",
             "model.layers.0",
             "model.layers.0.input_layernorm",
@@ -77,6 +77,7 @@ def create_parser() -> argparse.ArgumentParser:
             "model.layers.3.mlp.gate",
             "model.layers.3.mlp.experts.0-255",
             "model.layers.3.mlp.shared_experts",
+            "lm_head",
         ],
     )
     parser.add_argument(
@@ -252,8 +253,8 @@ def main():
     for tok_idx in range(args.num_decode_tokens):
         print(f"Running the decode phase {tok_idx + 1}/{args.num_decode_tokens}")
         input_ids = model_inputs.input_ids[:, -args.num_decode_tokens + tok_idx - 1 : -args.num_decode_tokens + tok_idx]
-        attention_mask = torch.ones(
-            input_ids.shape[0], model_inputs.input_ids.shape[1] - args.num_decode_tokens + tok_idx + 1
+        attention_mask = torch.full(
+            (input_ids.shape[0], model_inputs.input_ids.shape[1] - args.num_decode_tokens + tok_idx + 1), float("-inf")
         )
         log_dict.update({layer_group: [] for layer_group in log_dict})
         with torch.no_grad():

@@ -58,8 +58,8 @@ void bind_primitive_binary_operation(
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<unary::FusedActivations>& activations,
-               const std::optional<unary::UnaryWithParam>& input_tensor_a_activation) -> ttnn::Tensor {
+               const std::optional<unary::EltwiseFusedActivations>& activations,
+               const std::optional<unary::EltwiseUnaryWithParam>& input_tensor_a_activation) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -153,9 +153,9 @@ void bind_binary_operation(
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -176,9 +176,9 @@ void bind_binary_operation(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
@@ -190,9 +190,9 @@ void bind_binary_operation(
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -213,9 +213,9 @@ void bind_binary_operation(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -296,9 +296,9 @@ void bind_binary_gcd_lcm_operation(
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -319,9 +319,9 @@ void bind_binary_gcd_lcm_operation(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -390,9 +390,9 @@ void bind_binary_unary_max_operation(
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -413,9 +413,9 @@ void bind_binary_unary_max_operation(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
@@ -427,9 +427,9 @@ void bind_binary_unary_max_operation(
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -450,9 +450,9 @@ void bind_binary_unary_max_operation(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -528,9 +528,9 @@ void bind_binary_unary_operation(
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -551,9 +551,9 @@ void bind_binary_unary_operation(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
@@ -565,9 +565,9 @@ void bind_binary_unary_operation(
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -588,9 +588,9 @@ void bind_binary_unary_operation(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -744,9 +744,9 @@ void bind_bitwise_binary_ops_operation(
                const int32_t scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -765,9 +765,9 @@ void bind_bitwise_binary_ops_operation(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
@@ -778,9 +778,9 @@ void bind_bitwise_binary_ops_operation(
                const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -799,9 +799,9 @@ void bind_bitwise_binary_ops_operation(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -883,9 +883,9 @@ void bind_logical_binary_ops_operation(
                     dtype,
                     memory_config,
                     output_tensor,
-                    ttnn::SmallVector<unary::UnaryWithParam>(),
-                    ttnn::SmallVector<unary::UnaryWithParam>(),
-                    ttnn::SmallVector<unary::UnaryWithParam>(),
+                    ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+                    ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+                    ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
                     use_legacy);
             },
             py::arg("input_tensor_a"),
@@ -1292,13 +1292,13 @@ void bind_div(
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
                bool accurate_mode,
-               const std::optional<std::string> round_mode,
+               const std::optional<std::string>& round_mode,
                const std::optional<const DataType>& dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -1323,9 +1323,9 @@ void bind_div(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = ttnn::DefaultQueueId},
 
@@ -1334,13 +1334,13 @@ void bind_div(
                const Tensor& input_tensor_a,
                float value,
                bool accurate_mode,
-               const std::optional<std::string> round_mode,
+               const std::optional<std::string>& round_mode,
                const std::optional<const DataType>& dtype,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -1365,9 +1365,9 @@ void bind_div(
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = ttnn::DefaultQueueId});
 }
@@ -1584,9 +1584,9 @@ void bind_inplace_operation(
             [](const binary_operation_t& self,
                const Tensor& input_tensor,
                const float scalar,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                const QueueId queue_id) {
                 return self(
@@ -1600,9 +1600,9 @@ void bind_inplace_operation(
             },
             py::arg("input_a"),
             py::arg("input_b"),
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
@@ -1611,9 +1611,9 @@ void bind_inplace_operation(
             [](const binary_operation_t& self,
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                const QueueId queue_id) {
                 return self(
@@ -1628,9 +1628,9 @@ void bind_inplace_operation(
             py::arg("input_a"),
             py::arg("input_b"),
             py::kw_only(),
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -1693,9 +1693,9 @@ void bind_logical_inplace_operation(
             [](const binary_operation_t& self,
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                const QueueId queue_id) {
                 return self(
@@ -1709,9 +1709,9 @@ void bind_logical_inplace_operation(
             },
             py::arg("input_a"),
             py::arg("input_b"),
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -1746,9 +1746,9 @@ void bind_binary_inplace_operation(
             [](const binary_operation_t& self,
                const Tensor& input_tensor,
                const float scalar,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                const QueueId queue_id) {
                 return self(
@@ -1763,9 +1763,9 @@ void bind_binary_inplace_operation(
             py::arg("input_a"),
             py::arg("input_b"),
             py::kw_only(),
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId},
 
@@ -1774,9 +1774,9 @@ void bind_binary_inplace_operation(
             [](const binary_operation_t& self,
                const Tensor& input_tensor_a,
                const Tensor& input_tensor_b,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                const QueueId queue_id) {
                 return self(
@@ -1791,9 +1791,9 @@ void bind_binary_inplace_operation(
             py::arg("input_a"),
             py::arg("input_b"),
             py::kw_only(),
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
@@ -1889,9 +1889,9 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -1912,9 +1912,9 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = ttnn::DefaultQueueId},
 
@@ -1926,9 +1926,9 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
@@ -1949,9 +1949,9 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
             py::arg("dtype") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
+            py::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
+            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
             py::arg("use_legacy") = std::nullopt,
             py::arg("queue_id") = ttnn::DefaultQueueId});
 }
@@ -1980,7 +1980,7 @@ void py_module(py::module& module) {
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535))doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
     detail::bind_binary_inplace_operation(
         module,
@@ -2008,7 +2008,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_binary_operation(
         module,
@@ -2016,7 +2016,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is not equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_binary_operation(
         module,
@@ -2024,7 +2024,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is less than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation(
@@ -2033,7 +2033,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation(
@@ -2042,7 +2042,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is greater than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation(
@@ -2051,7 +2051,7 @@ void py_module(py::module& module) {
         R"doc(Compares if :attr:`input_tensor_a` is greater than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation(
@@ -2060,7 +2060,7 @@ void py_module(py::module& module) {
         R"doc(Computes logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, \& \, \mathrm{{input\_tensor\_b}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc",
         "INT32 for tensor-scalar is supported only when use_legacy= False.");
 
     detail::bind_binary_operation(
@@ -2069,7 +2069,7 @@ void py_module(py::module& module) {
         R"doc(Computes logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, | \, \mathrm{{input\_tensor\_b}}_i)doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_binary_operation(
         module,
@@ -2101,7 +2101,7 @@ void py_module(py::module& module) {
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
         ". ",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_binary_operation(
         module,
@@ -2138,7 +2138,7 @@ void py_module(py::module& module) {
         R"doc(Perform bitwise_and operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32, UINT16 (range: 0 - 65535))doc");
+        R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
     detail::bind_bitwise_binary_ops_operation(
         module,
@@ -2146,7 +2146,7 @@ void py_module(py::module& module) {
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32, UINT16 (range: 0 - 65535))doc");
+        R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
     detail::bind_bitwise_binary_ops_operation(
         module,
@@ -2154,7 +2154,7 @@ void py_module(py::module& module) {
         R"doc(Perform bitwise_xor operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_xor|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32, UINT16 (range: 0 - 65535))doc");
+        R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
     detail::bind_bitwise_binary_ops_operation(
         module,
@@ -2235,28 +2235,28 @@ void py_module(py::module& module) {
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = (\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc",
         ".",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_or_,
         R"doc(Computes inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_xor_,
         R"doc(Computes inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_logical_inplace_operation(
         module,
         ttnn::logical_and_,
         R"doc(Computes inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i)doc",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16)doc");
 
     detail::bind_binary_gcd_lcm_operation(
         module,

@@ -26,7 +26,7 @@ void GroupNorm::validate(
     const auto& beta = optional_input_tensors.at(1);
     const auto& input_mask = optional_input_tensors.at(2);
     const auto& negative_mask = optional_input_tensors.at(3);
-    TT_FATAL(a.dtype() == DataType::BFLOAT16, "Error");
+    TT_FATAL(a.dtype() == DataType::BFLOAT16, "Input tensor must be BFLOAT16, got: {}", a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to groupnorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
     TT_FATAL(a.padded_shape()[3] % this->num_groups == 0, "channel must be divisible by num_groups!");
@@ -39,45 +39,90 @@ void GroupNorm::validate(
                 "{} != {}",
                 a.padded_shape()[3],
                 gamma.value().padded_shape()[3]);
-            TT_FATAL(a.device() == gamma.value().device(), "Error");
+            TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().padded_shape()[2] == TILE_HEIGHT, "Error");
+            TT_FATAL(
+                gamma.value().padded_shape()[2] == TILE_HEIGHT,
+                "Gamma tensor height must be TILE_HEIGHT (32), got: {}",
+                gamma.value().padded_shape()[2]);
         } else {
-            TT_FATAL(gamma.value().layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL((gamma.value().padded_shape()[3] == TILE_WIDTH), "Error");
-            TT_FATAL(a.device() == gamma.value().device(), "Error");
+            TT_FATAL(
+                gamma.value().layout() == Layout::ROW_MAJOR,
+                "Gamma tensor must have ROW_MAJOR layout, got: {}",
+                gamma.value().layout());
+            TT_FATAL(
+                (gamma.value().padded_shape()[3] == TILE_WIDTH),
+                "Gamma tensor inner dimension must be TILE_WIDTH (32), got: {}",
+                gamma.value().padded_shape()[3]);
+            TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().dtype() == DataType::BFLOAT16, "Error");
+            TT_FATAL(
+                gamma.value().dtype() == DataType::BFLOAT16,
+                "Gamma tensor must be BFLOAT16, got: {}",
+                gamma.value().dtype());
         }
         if (beta.has_value()) {
-            TT_FATAL(gamma.value().layout() == beta.value().layout(), "Error");
+            TT_FATAL(
+                gamma.value().layout() == beta.value().layout(),
+                "Gamma and beta must have the same layout, got gamma: {} vs beta: {}",
+                gamma.value().layout(),
+                beta.value().layout());
         }
     }
 
     if (beta.has_value()) {
         if (beta.value().layout() == Layout::TILE) {
-            TT_FATAL(a.padded_shape()[3] == beta.value().padded_shape()[3], "Error");
-            TT_FATAL(a.device() == beta.value().device(), "Error");
+            TT_FATAL(
+                a.padded_shape()[3] == beta.value().padded_shape()[3],
+                "Input and beta inner dimensions must match, got input: {} vs beta: {}",
+                a.padded_shape()[3],
+                beta.value().padded_shape()[3]);
+            TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().padded_shape()[2] == TILE_HEIGHT, "Error");
+            TT_FATAL(
+                beta.value().padded_shape()[2] == TILE_HEIGHT,
+                "Beta tensor height must be TILE_HEIGHT (32), got: {}",
+                beta.value().padded_shape()[2]);
         } else {
-            TT_FATAL(beta.value().layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL(beta.value().padded_shape()[3] == TILE_WIDTH, "Error");
-            TT_FATAL(a.device() == beta.value().device(), "Error");
+            TT_FATAL(
+                beta.value().layout() == Layout::ROW_MAJOR,
+                "Beta tensor must have ROW_MAJOR layout, got: {}",
+                beta.value().layout());
+            TT_FATAL(
+                beta.value().padded_shape()[3] == TILE_WIDTH,
+                "Beta tensor inner dimension must be TILE_WIDTH (32), got: {}",
+                beta.value().padded_shape()[3]);
+            TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to groupnorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().dtype() == DataType::BFLOAT16, "Error");
+            TT_FATAL(
+                beta.value().dtype() == DataType::BFLOAT16,
+                "Beta tensor must be BFLOAT16, got: {}",
+                beta.value().dtype());
         }
     }
 
     if (input_mask.has_value()) {
-        TT_FATAL(input_mask.value().layout() == Layout::TILE, "Error");
-        TT_FATAL(input_mask.value().padded_shape()[1] == this->num_groups, "Error");
-        TT_FATAL(input_mask.value().padded_shape()[2] == TILE_HEIGHT, "Error");
-        TT_FATAL(input_mask.value().padded_shape()[3] % TILE_WIDTH == 0, "Error");
+        TT_FATAL(
+            input_mask.value().layout() == Layout::TILE,
+            "Input mask must have TILE layout, got: {}",
+            input_mask.value().layout());
+        TT_FATAL(
+            input_mask.value().padded_shape()[1] == this->num_groups,
+            "Input mask dim1 must match number of groups, got: {} vs {}",
+            input_mask.value().padded_shape()[1],
+            this->num_groups);
+        TT_FATAL(
+            input_mask.value().padded_shape()[2] == TILE_HEIGHT,
+            "Input mask height must be TILE_HEIGHT (32), got: {}",
+            input_mask.value().padded_shape()[2]);
+        TT_FATAL(
+            input_mask.value().padded_shape()[3] % TILE_WIDTH == 0,
+            "Input mask inner dimension must be divisible by TILE_WIDTH (32), got: {}",
+            input_mask.value().padded_shape()[3]);
     }
 
     // Negative mask tensor is used to reduce the number of CB's used in the sharded version of the kernel by

@@ -58,24 +58,24 @@ struct NlpCreateHeadsBoltzDeviceOperation {
 
     struct Sharded {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
-            bool read_from_input_tensor_kv;
-            tt::tt_metal::CBHandle cb_q_output;
-            tt::tt_metal::CBHandle cb_k_output;
-            tt::tt_metal::CBHandle cb_v_output;
+            tt::tt_metal::KernelHandle reader_kernel_id{};
+            tt::tt_metal::KernelHandle writer_kernel_id{};
+            std::size_t num_cores{};
+            std::size_t num_cores_y{};
+            bool read_from_input_tensor_kv{};
+            tt::tt_metal::CBHandle cb_q_output{};
+            tt::tt_metal::CBHandle cb_k_output{};
+            tt::tt_metal::CBHandle cb_v_output{};
             std::vector<CoreCoord> cores;
-            uint32_t head_size;
-            uint32_t per_risc0_out_q_heads;
-            uint32_t per_risc1_out_q_heads;
-            uint32_t per_core_in_q_heads;
-            uint32_t per_core_out_kv_heads;
-            uint32_t per_core_in_kv_heads;
-            uint32_t head_tiles;
-            uint32_t num_kv_cores;
-            uint32_t single_tile_size;
+            uint32_t head_size{};
+            uint32_t per_risc0_out_q_heads{};
+            uint32_t per_risc1_out_q_heads{};
+            uint32_t per_core_in_q_heads{};
+            uint32_t per_core_out_kv_heads{};
+            uint32_t per_core_in_kv_heads{};
+            uint32_t head_tiles{};
+            uint32_t num_kv_cores{};
+            uint32_t single_tile_size{};
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

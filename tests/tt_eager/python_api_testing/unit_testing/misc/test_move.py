@@ -79,8 +79,10 @@ if is_wormhole_b0():
         (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
         (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
         (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.int32, ttnn.TILE_LAYOUT),
     ),
-    ids=["BFLOAT8_B-TILE", "BFLOAT16-RM", "BFLOAT16-TILE"],
+    ids=["BFLOAT8_B-TILE", "BFLOAT16-RM", "BFLOAT16-TILE", "INT32-RM", "INT32-TILE"],
 )
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("test_id", (0, 1), ids=["overlap", "non_overlap"])
@@ -90,9 +92,9 @@ def test_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_confi
     run_move_op(test_id, shape, layout, dtype, in0_mem_config, output_mem_config, device)
 
 
-def test_move_op_with_program_cache(device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_move_op_with_program_cache(dtype, device):
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
-    dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
     shape = [1, 3, 320, 384]
 

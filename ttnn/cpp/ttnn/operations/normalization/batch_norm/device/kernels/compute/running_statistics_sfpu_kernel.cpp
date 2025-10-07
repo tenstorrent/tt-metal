@@ -51,7 +51,7 @@ void MAIN {
             copy_tile_to_dst_init_short_with_dt(cb_one, cb_momentum);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_momentum, i, i * 2 + 1);
-                sub_binary_tile(i * 2, i * 2 + 1);
+                sub_binary_tile(i * 2, i * 2 + 1, i * 2);
                 tile_regs_commit();
                 pack_tile(i * 2, cb_tmp1);
             }
@@ -71,7 +71,7 @@ void MAIN {
             copy_tile_to_dst_init_short_with_dt(cb_batch_mean, cb_momentum);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_momentum, i, i * 2 + 1);
-                mul_binary_tile(i * 2, i * 2 + 1);
+                mul_binary_tile(i * 2, i * 2 + 1, i * 2);
                 tile_regs_commit();
                 pack_tile(i * 2, cb_tmp2);
             }
@@ -92,7 +92,7 @@ void MAIN {
             copy_tile_to_dst_init_short_with_dt(cb_old_running_mean, cb_tmp1);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_tmp1, i, i * 2 + 1);
-                mul_binary_tile(i * 2, i * 2 + 1);
+                mul_binary_tile(i * 2, i * 2 + 1, i * 2);
                 tile_regs_commit();
                 pack_tile(i * 2, cb_tmp3);
             }
@@ -117,7 +117,7 @@ void MAIN {
             copy_tile_to_dst_init_short_with_dt(cb_tmp3, cb_tmp2);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_tmp2, i, i * 2 + 1);
-                add_binary_tile(i * 2, i * 2 + 1);
+                add_binary_tile(i * 2, i * 2 + 1, i * 2);
                 tile_regs_commit();
                 pack_tile(i * 2, cb_updated_running_mean);
             }
@@ -139,7 +139,7 @@ void MAIN {
             copy_tile_to_dst_init_short_with_dt(cb_one, cb_momentum);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_momentum, i, i * 2 + 1);
-                sub_binary_tile(i * 2, i * 2 + 1);
+                sub_binary_tile(i * 2, i * 2 + 1, i * 2);
                 tile_regs_commit();
                 pack_tile(i * 2, cb_tmp1);
             }
@@ -159,7 +159,7 @@ void MAIN {
             copy_tile_to_dst_init_short_with_dt(cb_batch_var, cb_momentum);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_momentum, i, i * 2 + 1);
-                mul_binary_tile(i * 2, i * 2 + 1);
+                mul_binary_tile(i * 2, i * 2 + 1, i * 2);
                 tile_regs_commit();
                 pack_tile(i * 2, cb_tmp2);
             }
@@ -180,7 +180,7 @@ void MAIN {
             copy_tile_to_dst_init_short_with_dt(cb_old_running_var, cb_tmp1);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_tmp1, i, i * 2 + 1);
-                mul_binary_tile(i * 2, i * 2 + 1);
+                mul_binary_tile(i * 2, i * 2 + 1, i * 2);
                 tile_regs_commit();
                 pack_tile(i * 2, cb_tmp3);
             }
@@ -205,7 +205,7 @@ void MAIN {
             copy_tile_to_dst_init_short_with_dt(cb_tmp3, cb_tmp2);
             for (uint32_t i = 0; i < onetile; ++i) {
                 copy_tile(cb_tmp2, i, i * 2 + 1);
-                add_binary_tile(i * 2, i * 2 + 1);
+                add_binary_tile(i * 2, i * 2 + 1, i * 2);
                 tile_regs_commit();
                 pack_tile(i * 2, cb_updated_running_var);
             }

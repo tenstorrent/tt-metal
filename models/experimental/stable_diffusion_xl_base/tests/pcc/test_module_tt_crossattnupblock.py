@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_crossattnupblock2d impor
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from diffusers import UNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 
 
@@ -26,7 +26,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             20,
             1280,
             0,
-            0.982,
+            0.985,
         ),
         (
             (1, 1280, 64, 64),
@@ -37,7 +37,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
             10,
             640,
             1,
-            0.989,
+            0.993,
         ),
     ],
 )

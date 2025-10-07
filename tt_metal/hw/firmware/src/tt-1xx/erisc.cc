@@ -106,6 +106,7 @@ void __attribute__((noinline)) Application(void) {
     WAYPOINT("RED");
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
+    DeviceProfilerInit();
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         uint8_t go_message_signal = mailboxes->go_messages[0].signal;
@@ -119,13 +120,12 @@ void __attribute__((noinline)) Application(void) {
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
             // Note that a core may get "GO" w/ enable false to keep its launch_msg's in sync
-            enum dispatch_core_processor_masks enables =
-                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            uint32_t enables = launch_msg_address->kernel_config.enables;
             my_relative_x_ = my_logical_x_ - launch_msg_address->kernel_config.sub_device_origin_x;
             my_relative_y_ = my_logical_y_ - launch_msg_address->kernel_config.sub_device_origin_y;
-            if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+            if (enables & (1u << static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0))) {
                 WAYPOINT("R");
-                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+                firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, PROCESSOR_INDEX);
 #if defined(ARCH_WORMHOLE) && defined(ENABLE_IRAM)
                 iram_setup();
 #endif

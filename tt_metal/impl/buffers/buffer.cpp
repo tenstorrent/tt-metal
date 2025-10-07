@@ -197,7 +197,7 @@ UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer)
         return buffer_page_mapping;
     }
 
-    if (!buffer.has_shard_spec()) {
+    if (buffer.buffer_distribution_spec().has_value()) {
         return buffer.buffer_distribution_spec()->compute_page_mapping();
     }
 
@@ -548,10 +548,10 @@ std::optional<uint32_t> Buffer::num_cores() const {
     if (!is_sharded(this->buffer_layout_)) {
         return std::nullopt;
     }
-    if (shard_spec_.has_value()) {
-        return shard_spec_->tensor_shard_spec.grid.num_cores();
+    if (buffer_distribution_spec_.has_value()) {
+        return buffer_distribution_spec_.value().num_cores_with_data();
     }
-    return buffer_distribution_spec_.value().num_cores();
+    return shard_spec_->tensor_shard_spec.grid.num_cores();
 }
 
 DeviceAddr Buffer::translate_page_address(DeviceAddr offset, uint32_t bank_id) const {

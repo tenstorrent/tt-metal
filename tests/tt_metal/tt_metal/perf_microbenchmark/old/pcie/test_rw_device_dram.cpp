@@ -11,6 +11,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "impl/context/metal_context.hpp"
 #include <algorithm>
 #include <cstring>
@@ -59,10 +61,10 @@ int main(int argc, char** argv) {
 
         // Device Setup
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         // Application Setup
-        srand(time(0));
+        srand(time(nullptr));
         uint32_t dram_addr =
             tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalDramMemAddrType::UNRESERVED);
         uint32_t dram_channel = rand() % 8;
@@ -80,7 +82,8 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                pass &= tt_metal::detail::WriteToDeviceDRAMChannel(device, dram_channel, dram_addr, src_vec);
+                pass &= tt_metal::detail::WriteToDeviceDRAMChannel(
+                    device->get_devices()[0], dram_channel, dram_addr, src_vec);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }
@@ -98,7 +101,8 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                tt_metal::detail::ReadFromDeviceDRAMChannel(device, dram_channel, dram_addr, buffer_size, result_vec);
+                tt_metal::detail::ReadFromDeviceDRAMChannel(
+                    device->get_devices()[0], dram_channel, dram_addr, buffer_size, result_vec);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }
@@ -110,7 +114,7 @@ int main(int argc, char** argv) {
 
         // Validation & Teardown
         pass &= (src_vec == result_vec);
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());

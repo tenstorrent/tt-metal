@@ -18,7 +18,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs an elementwise maximum operation on inputs of int32 data type at idst0, idst1: y = max(x0, x1).
- * Output overwrites first operand in DST.
+ * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
@@ -31,16 +31,17 @@ namespace ckernel {
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX, InstrModLoadStore::INT32_2S_COMP>(idst0, idst1)));
+ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX, InstrModLoadStore::INT32_2S_COMP>(idst0, idst1, odst)));
 }
 
 // clang-format off
 /**
  * Performs an elementwise maximum operation on inputs at idst0, idst1: y = max(x0, x1).
- * Output overwrites first operand in DST.
+ * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
@@ -53,10 +54,11 @@ ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1) {
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1)));
+ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1, odst)));
 }
 
 /**
@@ -67,7 +69,7 @@ ALWI void binary_max_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max
 // clang-format off
 /**
  * Performs an elementwise maximum operation on inputs of int32 data type at idst0, idst1: y = min(x0, x1).
- * Output overwrites first operand in DST.
+ * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
@@ -80,16 +82,17 @@ ALWI void binary_max_tile_init() { MATH((llk_math_eltwise_binary_sfpu_binary_max
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX, InstrModLoadStore::INT32_2S_COMP>(idst0, idst1)));
+ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX, InstrModLoadStore::INT32_2S_COMP>(idst0, idst1, odst)));
 }
 
 // clang-format off
 /**
  * Performs an elementwise minimum operation on inputs at idst0, idst1: y = min(x0, x1).
- * Output overwrites first operand in DST.
+ * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
@@ -102,10 +105,11 @@ ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1) {
  * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1)));
+ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX, InstrModLoadStore::DEFAULT>(idst0, idst1, odst)));
 }
 
 /**

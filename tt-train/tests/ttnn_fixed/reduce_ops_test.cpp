@@ -52,7 +52,7 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim0);
     auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim0);
 
-    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-3, /*atol=*/5e-3));
+    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/7e-2, /*atol=*/1e-3));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
 }

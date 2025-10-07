@@ -9,7 +9,7 @@
 void kernel_main() {
     uint32_t output_base_addr = get_arg_val<uint32_t>(0);
 
-    constexpr bool output_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto output_addrg_args = TensorAccessorArgs<0>();
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
     const uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
@@ -23,13 +23,9 @@ void kernel_main() {
 
     const uint32_t ublock_size_bytes = get_tile_size(cb_out);
 
-    const auto& input_dataformat = get_dataformat(cb_out);
-    const auto& output_data_format = get_dataformat(cb_out);
-
     const uint32_t output_tile_bytes = ublock_size_bytes;
 
-    InterleavedAddrGenFast<output_dram> output_addrg = {
-        .bank_base_address = output_base_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
+    const auto output_addrg = TensorAccessor(output_addrg_args, output_base_addr, output_tile_bytes);
 
     for (uint32_t i = start_id; i < start_id + num_rows_per_core; ++i) {
         for (uint32_t j = 0; j < tiles_per_row; ++j) {

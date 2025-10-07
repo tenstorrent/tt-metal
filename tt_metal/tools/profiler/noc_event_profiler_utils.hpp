@@ -102,7 +102,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
     const Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     topology_json["mesh_shapes"] = nlohmann::ordered_json::array();
-    for (auto [mesh_id, mesh_shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
+    for (const auto& [mesh_id, mesh_shape] : tt::tt_fabric::get_physical_mesh_shapes()) {
         topology_json["mesh_shapes"].push_back({
             {"mesh_id", mesh_id.get()},
             {"shape", std::vector(mesh_shape.cbegin(), mesh_shape.cend())},

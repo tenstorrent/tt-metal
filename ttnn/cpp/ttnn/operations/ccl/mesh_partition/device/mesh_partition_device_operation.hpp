@@ -50,12 +50,6 @@ struct MeshPartitionDeviceOperation {
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& operation_attributes,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
         static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,

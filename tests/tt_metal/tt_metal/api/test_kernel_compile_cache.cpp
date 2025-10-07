@@ -28,13 +28,16 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/utils.hpp>
 #include "impl/kernels/kernel_impl.hpp"
+// Access to internal API: ProgramImpl::get_kernels
+#include "impl/program/program_impl.hpp"
 
 using namespace tt::tt_metal;
 
-TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
+TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
-    for (IDevice* device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
+        auto device = mesh_device->get_devices()[0];
         detail::ClearKernelCache();
         detail::EnablePersistentKernelCache();
 
@@ -53,7 +56,7 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
-        const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+        const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name = KernelImpl::from(*kernels.at(kernel_handle)).get_full_kernel_name();
 
         const std::string successful_marker_path =
@@ -79,10 +82,11 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
     }
 }
 
-TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProcessors) {
+TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProcessors) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
-    for (IDevice* device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
+        auto device = mesh_device->get_devices()[0];
         detail::ClearKernelCache();
 
         DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
@@ -103,7 +107,7 @@ TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProces
         const JitBuildState& build_state_riscv_1 = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
-        const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+        const auto& kernels = program.impl().get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name_riscv_0 =
             KernelImpl::from(*kernels.at(kernel_handle_riscv_0)).get_full_kernel_name();
         const std::string full_kernel_name_riscv_1 =

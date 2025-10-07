@@ -15,7 +15,7 @@ class Conv:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="relu",
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
         dtype=ttnn.bfloat16,
         auto_shard=False,
         enable_act_double_buffer=False,
@@ -192,7 +192,7 @@ class ConvSplit:
         reshard=False,
         deallocate=True,
         height_sharding=True,
-        activation="",
+        activation=None,
         dtype=ttnn.bfloat16,
         auto_shard=True,
         split_factor=2,
@@ -285,3 +285,15 @@ class ConvSplit:
             ttnn.deallocate(self.split_weight_tensors[i])
 
         return output_tensor
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = None
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer

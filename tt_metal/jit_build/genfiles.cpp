@@ -30,9 +30,6 @@
 #include "impl/context/metal_context.hpp"
 
 enum class UnpackToDestMode : uint8_t;
-namespace tt {
-enum class ARCH;
-}  // namespace tt
 
 namespace fs = std::filesystem;
 
@@ -167,12 +164,12 @@ static void emit_unpack_data_formats(
         "constexpr std::int32_t",
         "unpack_src_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(std::move(src_formats_all_cbs)));
+        data_format_vec_to_string(src_formats_all_cbs));
     file_stream << create_formats_array_string(
         "constexpr std::int32_t",
         "unpack_dst_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(std::move(dst_formats_all_cbs)));
+        data_format_vec_to_string(dst_formats_all_cbs));
     file_stream.close();
 }
 
@@ -206,12 +203,12 @@ static void emit_pack_data_formats(
         "constexpr unsigned char",
         "pack_src_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(std::move(src_formats_all_cbs)));
+        data_format_vec_to_string(src_formats_all_cbs));
     file_stream << create_formats_array_string(
         "constexpr unsigned char",
         "pack_dst_format",
         NUM_CIRCULAR_BUFFERS,
-        data_format_vec_to_string(std::move(dst_formats_all_cbs)));
+        data_format_vec_to_string(dst_formats_all_cbs));
 
     // budabackend-style format array
     // file_stream << create_formats_array_string("const std::int32_t", "pack_src_format", 16,

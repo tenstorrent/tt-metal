@@ -126,7 +126,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(single_tile_size * num_tiles, {{src0_cb_index, DataFormat::UInt32}})
             .set_page_size(src0_cb_index, single_tile_size);
-    CBHandle cb_src0 = CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
+    CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
 
     auto syncer_mesh_workload = CreateMeshWorkload();
     auto datacopy_mesh_workload = CreateMeshWorkload();
@@ -148,7 +148,8 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
-            llrt::write_hex_vec_to_core(device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+            MetalContext::instance().get_cluster().write_core(
+                device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
         for (std::size_t logical_x = 0; logical_x < output_buf->device()->num_cols(); logical_x++) {

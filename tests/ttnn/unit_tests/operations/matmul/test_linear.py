@@ -507,3 +507,117 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     assert torch.allclose(torch_result, ttnn_result_torch, atol=atol, rtol=rtol, equal_nan=True), (
         f"mismatch in allclose: torch: {torch_result}, ttnn: {ttnn_result_torch}",
     )
+
+
+@pytest.mark.parametrize("in0_block_w", [1, 2, 4, 8])
+@pytest.mark.parametrize("out_subblock", [[1, 4]])
+@pytest.mark.parametrize("out_block", [[1, 4]])
+@pytest.mark.parametrize("num_cores", [62, 64])
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("weights_bias_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("compute_config_params", [[ttnn.MathFidelity.LoFi, True, False, False, False]])
+def test_linear_yolov7(
+    device,
+    in0_block_w,
+    out_subblock,
+    out_block,
+    num_cores,
+    input_dtype,
+    weights_bias_dtype,
+    output_dtype,
+    compute_config_params,
+):
+    torch.manual_seed(0)
+    nhw = 6400
+    input_channels = 512
+    output_channels = 512
+
+    input_shape = [1, 1, nhw, input_channels]
+    torch_input_tensor = torch.randn([1, 1, nhw, input_channels], dtype=torch.bfloat16)  # Original size
+    torch_weight_tensor = torch.randn([1, 1, output_channels, input_channels], dtype=torch.bfloat16)
+    torch_bias_tensor = torch.randn([1, 1, 1, output_channels], dtype=torch.bfloat16)
+    torch_out_golden_tensor = torch.nn.functional.linear(
+        torch_input_tensor[0, 0, :, :], torch_weight_tensor[0, 0, :, :], bias=torch_bias_tensor[0, 0, :, :]
+    )
+    torch_out_golden_tensor = torch.nn.functional.silu(torch_out_golden_tensor)
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, input_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    tt_weight_tensor = ttnn.from_torch(
+        torch.permute(torch_weight_tensor, (0, 1, 3, 2)),
+        weights_bias_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_bias_tensor = ttnn.from_torch(
+        torch_bias_tensor,
+        weights_bias_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=compute_config_params[0],
+        math_approx_mode=compute_config_params[1],
+        fp32_dest_acc_en=compute_config_params[2],
+        packer_l1_acc=compute_config_params[3],
+        dst_full_sync_en=compute_config_params[4],
+    )
+    grid_size = (8, 8)
+    per_core_M = (nhw + 32 * num_cores - 1) // (32 * num_cores)
+    per_core_N = output_channels // 32
+
+    matmul_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock[0],
+        out_subblock_w=out_subblock[1],
+        out_block_h=out_block[0],
+        out_block_w=out_block[1],
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        mcast_in0=False,
+    )
+
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 7),
+            ),
+        }
+    )
+
+    shard_height = (nhw + num_cores * 32 - 1) // (num_cores * 32) * 32
+    x = tt_input_tensor
+    in0_shard_shape = [shard_height, input_channels]
+    in0_shard_spec = ttnn.ShardSpec(shard_grid, in0_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    height_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in0_shard_spec
+    )
+    x = ttnn.to_memory_config(x, height_sharded_mem_config)
+
+    out_shard_shape = [shard_height, output_channels]
+    out_shard_spec = ttnn.ShardSpec(shard_grid, out_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, out_shard_spec)
+
+    tt_output_tensor_on_device = ttnn.linear(
+        x,
+        tt_weight_tensor,
+        bias=tt_bias_tensor,
+        program_config=matmul_config,
+        memory_config=output_mem_config,
+        dtype=output_dtype,
+        compute_kernel_config=compute_config,
+    )
+    tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)

@@ -7,7 +7,6 @@
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/old_infra_device_operation.hpp"

@@ -7,7 +7,7 @@ import logging
 
 import ttnn
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import torch_to_tt_tensor_rm
+from models.common.utility_functions import torch_to_tt_tensor_rm
 from models.experimental.hrnet.hrnet_utils import create_batchnorm
 
 logger = logging.getLogger(__name__)

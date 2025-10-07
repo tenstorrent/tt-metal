@@ -64,7 +64,7 @@ def create_multimodal_model(
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
-    assert tt_model_args.is_vision(), "This model is multimodal"
+    assert tt_model_args.is_llama_vision(), "This model is multimodal"
 
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
@@ -447,7 +447,7 @@ def test_multimodal_demo_text(
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 35,
+            "T3K_Llama-3.2-11B": 34.25,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 

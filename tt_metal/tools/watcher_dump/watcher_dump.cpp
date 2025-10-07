@@ -45,7 +45,7 @@ void dump_data(
     std::filesystem::create_directories(cq_dir);
 
     // Only look at user-specified devices
-    vector<IDevice*> devices;
+    vector<std::unique_ptr<IDevice>> devices;
     for (chip_id_t id : device_ids) {
         string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
         std::ofstream cq_file = std::ofstream(cq_fname);
@@ -54,7 +54,7 @@ void dump_data(
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
         IDevice* device = tt::tt_metal::CreateDeviceMinimal(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
-        devices.push_back(device);
+        devices.push_back(std::unique_ptr<IDevice>(device));
         if (dump_cqs) {
             cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
             std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);

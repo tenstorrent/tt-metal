@@ -10,7 +10,7 @@ namespace tt::tt_metal {
 
 enum class ProfilerReadState { NORMAL, ONLY_DISPATCH_CORES, LAST_FD_READ };
 enum class ProfilerSyncState { INIT, CLOSE_DEVICE };
-enum class ProfilerDataBufferSource { L1, DRAM };
+enum class ProfilerDataBufferSource { L1, DRAM, DRAM_AND_L1 };
 
 struct DeviceProgramId {
     uint32_t base_program_id = 0;

@@ -8,8 +8,8 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
-from models.utility_functions import run_for_wormhole_b0
 
 
 def run_e2e_performant_sentencebert(

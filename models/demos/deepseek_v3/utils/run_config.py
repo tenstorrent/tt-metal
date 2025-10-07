@@ -6,25 +6,33 @@ from collections.abc import Callable
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from types import NoneType
-from typing import Any, Callable, overload
+from typing import Any, overload
+
+from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
 
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
-WeightConfig = dict[str, "WeightConfig | str | None"] | list["WeightConfig | str | None"]
+WeightConfig = (
+    dict[str, "WeightConfig | SavedWeight | None"]
+    | list["WeightConfig | SavedWeight | None"]
+    | tuple["WeightConfig | SavedWeight | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+)
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
 # In general, we require ModelConfig to be serializable (NOTE: mesh device and classes that hold references to the objects on it are NOT serializable).
 ModelPrefillConfig = (
     dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 ModelDecodeConfig = (
     dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 
@@ -33,11 +41,13 @@ ModelState = Any  # Type of the model state
 RunPrefillConfig = (
     dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 RunDecodeConfig = (
     dict[str, "RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 
@@ -86,7 +96,7 @@ def create_run_config(model_config, weight_config, *model_states):
         mb_mesh_device=None,
     )
 
-    print(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
+    logger.info(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
 
     return run_config
 
@@ -116,8 +126,10 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
-    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
-        return ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
+    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(
+        weight_config_item, SavedWeight
+    ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+        return load_weight(weight_config_item, model_state_config_item.mesh_device)
 
     if weight_config_item is None:
         assert not isinstance(
@@ -155,12 +167,21 @@ def _merge_config_containers(
 
     # If both configs are lists/tuples of the same length or one of them is None, merge them as a list/tuple.
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):
-        if cfg_a is None or cfg_b is None or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b)):
+        if (
+            cfg_a is None
+            or cfg_b is None
+            or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b))
+            or (len(cfg_a) == 1 or len(cfg_b) == 1 and type(cfg_a) == type(cfg_b))
+        ):
             container = type(cfg_a) if cfg_a is not None else type(cfg_b)
             if cfg_a is None:
                 cfg_a = container([None]) * len(cfg_b)
             if cfg_b is None:
                 cfg_b = container([None]) * len(cfg_a)
+            if len(cfg_a) == 1:
+                cfg_a *= len(cfg_b)
+            if len(cfg_b) == 1:
+                cfg_b *= len(cfg_a)
             return container(
                 _merge_config_containers(a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device)
                 for a, b in zip(cfg_a, cfg_b, strict=True)
@@ -320,3 +341,16 @@ def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -
 def is_op_config(obj: Any) -> bool:
     """Check if the object is an op config instance."""
     return issubclass(type(obj), OpConfigBase) and is_dataclass(obj)
+
+
+def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
+    """
+    Load a weight tensor from a SavedWeight object to a given mesh device.
+    """
+
+    return ttnn.load_tensor(
+        saved_weight.path,
+    ).to(
+        device=device,
+        mem_config=saved_weight.memory_config,
+    )

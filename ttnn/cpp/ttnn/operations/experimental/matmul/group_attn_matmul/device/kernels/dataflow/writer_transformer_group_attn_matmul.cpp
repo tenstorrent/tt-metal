@@ -33,11 +33,9 @@ void kernel_main() {
     uint32_t bfloat16_Nt_bytes = get_arg_val<uint32_t>(i++);
     uint32_t bfloat16_last_row_bytes_read = get_arg_val<uint32_t>(i++);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(2);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(3);
-    constexpr uint32_t intermediate_num_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(1);
+    constexpr uint32_t intermediate_num_tiles = get_compile_time_arg_val(2);
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 =
@@ -49,18 +47,17 @@ void kernel_main() {
     constexpr uint32_t num_rows_in_one_tile = 32;
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
-#ifndef IN0_SHARDED
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
+    constexpr auto in0_args = TensorAccessorArgs<3>();
+
+#ifndef IN0_SHARDED
+    const auto s0 = TensorAccessor(in0_args, src0_addr, in0_tile_bytes);
 #endif
 
-#ifndef OUT_SHARDED
     const uint32_t out_tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat out_data_format = get_dataformat(cb_id_out);
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = out_tile_bytes, .data_format = out_data_format};
+    constexpr auto out_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+#ifndef OUT_SHARDED
+    const auto s = TensorAccessor(out_args, dst_addr, out_tile_bytes);
 #endif
 
 #ifndef IN0_SHARDED

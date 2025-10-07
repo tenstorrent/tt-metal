@@ -19,7 +19,6 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.fixture
 def reference_model(hf_config, use_bitonic_sort):
     """Get the actual DeepSeek MLP model using local implementation."""
-    torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
     return ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
 
@@ -40,6 +39,7 @@ def reference_model(hf_config, use_bitonic_sort):
 def test_forward_pass(
     mode,
     seq_len,
+    set_deterministic_env,
     reference_model,
     hf_config,
     topk_fallback,

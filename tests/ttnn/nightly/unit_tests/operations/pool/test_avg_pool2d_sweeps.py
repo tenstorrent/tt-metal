@@ -35,14 +35,7 @@ parameters = {
         [1, 384, 35, 35, 3, 3, 1, 1, 1, 1, False, False],
         [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True],
         [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True],
-    ],
-    "failing_parameters": [
-        # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, ceil_mode, count_include_pad]
-        [1, 112, 14, 14, 2, 2, 2, 2, 0, 0, False, True],  # 11
-        [1, 24, 56, 56, 2, 2, 2, 2, 0, 0, False, True],  # 13
-        [1, 40, 28, 28, 2, 2, 2, 2, 0, 0, False, True],  # 15
-        [1, 80, 14, 14, 2, 2, 2, 2, 0, 0, False, True],  # 16
-    ],
+    ]
 }
 
 
@@ -64,10 +57,6 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         count_include_pad,
     ) = input_spec
 
-    # Check if input_spec is in failing_parameters
-    if input_spec in parameters["failing_parameters"]:
-        pytest.skip(f"Skipping test for failing input_spec: {input_spec}")
-
     run_avg_pool2d(
         device=device,
         tensor_map=tensor_map,
@@ -79,4 +68,5 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         divisor_override=None,
         count_include_pad=count_include_pad,
         shard_scheme=None,
+        skips_enabled=False,
     )

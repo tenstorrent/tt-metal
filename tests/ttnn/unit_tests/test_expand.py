@@ -7,6 +7,16 @@ import ttnn
 import pytest
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
@@ -24,9 +34,10 @@ import pytest
         ttnn.TILE_LAYOUT,
     ],
 )
-def test_expand(input_shape, output_shape, tensor_layout, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_expand(input_shape, output_shape, tensor_layout, dtype, device):
     torch.manual_seed(2024)
-    torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
+    torch_input_tensor = random_torch_tensor(dtype, input_shape)
     torch_output_tensor = torch_input_tensor.expand(output_shape)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=tensor_layout, device=device)
@@ -43,10 +54,11 @@ def test_expand(input_shape, output_shape, tensor_layout, device):
         ttnn.TILE_LAYOUT,
     ],
 )
-def test_expand_callback(tensor_layout, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_expand_callback(tensor_layout, dtype, device):
     num_program_cache_entries_list = []
     for i in range(2):
-        test_expand([32, 1], [32, 32], tensor_layout, device)
+        test_expand([32, 1], [32, 32], tensor_layout, dtype, device)
         num_program_cache_entries_list.append(device.num_program_cache_entries())
 
     assert num_program_cache_entries_list[0] > 0

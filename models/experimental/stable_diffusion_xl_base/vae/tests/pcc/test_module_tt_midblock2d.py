@@ -10,7 +10,7 @@ from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelO
 from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from diffusers import AutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random
+from models.common.utility_functions import torch_random
 
 
 @pytest.mark.parametrize(
@@ -19,8 +19,15 @@ from models.utility_functions import torch_random
         (1, 512, 128, 128),
     ],
 )
+@pytest.mark.parametrize(
+    "block_name",
+    [
+        "encoder",
+        "decoder",
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_midblock(device, input_shape, is_ci_env, reset_seeds):
+def test_vae_midblock(device, input_shape, block_name, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
@@ -31,10 +38,13 @@ def test_vae_midblock(device, input_shape, is_ci_env, reset_seeds):
     vae.eval()
     state_dict = vae.state_dict()
 
-    torch_midblock = vae.decoder.mid_block
+    if block_name == "encoder":
+        torch_midblock = vae.encoder.mid_block
+    else:
+        torch_midblock = vae.decoder.mid_block
 
     model_config = ModelOptimisations()
-    tt_midblock = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block", model_config=model_config)
+    tt_midblock = TtUNetMidBlock2D(device, state_dict, f"{block_name}.mid_block", model_config=model_config)
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
 
     torch_output_tensor = torch_midblock(torch_input_tensor, temb=None)

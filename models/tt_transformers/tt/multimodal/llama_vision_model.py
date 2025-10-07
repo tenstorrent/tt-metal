@@ -13,6 +13,7 @@ from PIL import Image as PIL_Image
 from torch import Tensor
 
 import ttnn
+from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
@@ -22,7 +23,6 @@ from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_visi
     TtLlamaCrossAttentionTransformerVision,
 )
 from models.tt_transformers.tt.rope import get_rot_mats
-from models.utility_functions import nearest_32
 
 logger = logging.getLogger(__name__)
 MP_SCALE = 8
@@ -123,7 +123,6 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         self.mesh_device = mesh_device
         self.tt_ccl = TT_CCL(self.mesh_device)
-        self.state_dict = state_dict
         self.weight_cache_path = weight_cache_path
         self.dtype = dtype
         self.configuration = configuration
@@ -690,7 +689,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_row_masked_out_mask_11SD=full_text_mask_expand_11SD,
             xattn_caches=xattn_caches,
             current_pos=None,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             user_id=user_id,
             mode="prefill",
             page_table=page_table,
@@ -733,7 +732,7 @@ class CrossAttentionTransformer(torch.nn.Module):
             full_text_row_masked_out_mask_11SD=full_text_mask_expand_11SD,
             xattn_caches=xattn_caches,
             current_pos=position_id,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,

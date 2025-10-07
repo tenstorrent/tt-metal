@@ -60,25 +60,20 @@ void kernel_main() {
     constexpr auto cb_in4 = tt::CBIndex::c_4;
     constexpr auto cb_in5 = tt::CBIndex::c_5;
 
-    constexpr bool in_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool index0_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool index1_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool index2_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr bool index3_is_dram = get_compile_time_arg_val(4) == 1;
-    constexpr bool index4_is_dram = get_compile_time_arg_val(5) == 1;
+    constexpr auto in_args = TensorAccessorArgs<0>();
+    constexpr auto index0_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    constexpr auto index1_args = TensorAccessorArgs<index0_args.next_compile_time_args_offset()>();
+    constexpr auto index2_args = TensorAccessorArgs<index1_args.next_compile_time_args_offset()>();
+    constexpr auto index3_args = TensorAccessorArgs<index2_args.next_compile_time_args_offset()>();
+    constexpr auto index4_args = TensorAccessorArgs<index3_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGen<in_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
+    const auto s0 = TensorAccessor(in_args, src_addr, stick_size);
 
-    const InterleavedAddrGen<index0_is_dram> index0 = {
-        .bank_base_address = index0_addr, .page_size = index0_stick_size};
-    const InterleavedAddrGen<index1_is_dram> index1 = {
-        .bank_base_address = index1_addr, .page_size = index1_stick_size};
-    const InterleavedAddrGen<index2_is_dram> index2 = {
-        .bank_base_address = index2_addr, .page_size = index2_stick_size};
-    const InterleavedAddrGen<index3_is_dram> index3 = {
-        .bank_base_address = index3_addr, .page_size = index3_stick_size};
-    const InterleavedAddrGen<index4_is_dram> index4 = {
-        .bank_base_address = index4_addr, .page_size = index4_stick_size};
+    const auto index0 = TensorAccessor(index0_args, index0_addr, index0_stick_size);
+    const auto index1 = TensorAccessor(index1_args, index1_addr, index1_stick_size);
+    const auto index2 = TensorAccessor(index2_args, index2_addr, index2_stick_size);
+    const auto index3 = TensorAccessor(index3_args, index3_addr, index3_stick_size);
+    const auto index4 = TensorAccessor(index4_args, index4_addr, index4_stick_size);
 
     uint32_t index_is_defined[5] = {
         index0_is_defined,

@@ -7,11 +7,12 @@ import torch
 from diffusers import AutoencoderKL
 
 import ttnn
+from models.demos.wormhole.stable_diffusion.common import SD_L1_SMALL_SIZE
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     """input_channels, input_height, input_width, out_channels, output_height, output_width""",
     [

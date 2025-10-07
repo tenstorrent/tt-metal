@@ -58,7 +58,7 @@ def test_run_average_pool(act_shape, dtype, device):
     act_channels_first = torch.permute(act, (0, 3, 1, 2))  # Torch operates on channels-first tensors
     golden_pytorch = torch.nn.AdaptiveAvgPool2d((1, 1))(act_channels_first)
 
-    ## test for equivalance
+    ## test for equivalence
     passing_pcc, output_pcc = comp_pcc(golden_pytorch, out_pytorch)
     print(f"Passing PCC = {passing_pcc}")
     print(f"Output PCC = {output_pcc}")

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <cstdint>
 #include "debug/dprint.h"
 
 // A helper function to exercise print features.
@@ -15,10 +16,14 @@ inline void print_test_data() {
     int32_t my_int32 = -44444;
     int64_t my_int64 = -5123456789;
     float my_float = 3.14159f;
+    int* my_int_ptr = reinterpret_cast<int*>(123);
+    float* my_float_ptr = reinterpret_cast<float*>(456);
+    uint16_t* my_uint16_ptr = reinterpret_cast<uint16_t*>(789);
     DPRINT << DEFAULTFLOAT() << DEC() << SETPRECISION(6);  // Restore defaults
     DPRINT << "Basic Types:\n" << 101 << -1.6180034f << '@' << BF16(0x3dfb) << ENDL();
     DPRINT << my_uint8 << my_uint16 << my_uint32 << my_uint64 << ENDL();
     DPRINT << my_int8 << my_int16 << my_int32 << my_int64 << ENDL();
+    DPRINT << "Pointer:\n" << my_int_ptr << "\n" << my_float_ptr << "\n" << my_uint16_ptr << ENDL();
     DPRINT << "SETPRECISION/FIXED/DEFAULTFLOAT:\n";
     DPRINT << SETPRECISION(5) << my_float << ENDL();
     DPRINT << SETPRECISION(9) << my_float << ENDL();

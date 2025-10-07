@@ -18,26 +18,22 @@ void kernel_main() {
     const uint32_t input_start_id = get_arg_val<uint32_t>(9);
     const uint32_t batch_start_id = get_arg_val<uint32_t>(10);
 
-    constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool input_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t granularity = get_compile_time_arg_val(4);
-    constexpr uint32_t u_count = get_compile_time_arg_val(5);
+    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t granularity = get_compile_time_arg_val(2);
+    constexpr uint32_t u_count = get_compile_time_arg_val(3);
+    constexpr auto cache_args = TensorAccessorArgs<4>();
+    constexpr auto input_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
-    const DataFormat cache_data_format = get_dataformat(cache_cb_id);
     const uint32_t input_tile_bytes = get_tile_size(input_cb_id);
-    const DataFormat input_data_format = get_dataformat(input_cb_id);
 
-    const InterleavedAddrGenFast<cache_is_dram> s0 = {
-        .bank_base_address = cache_addr, .page_size = cache_tile_bytes, .data_format = cache_data_format};
+    const auto s0 = TensorAccessor(cache_args, cache_addr, cache_tile_bytes);
 #ifdef INPUT_SHARDED
     cb_reserve_back(input_cb_id, Wt * num_batched_heads);
     cb_push_back(input_cb_id, Wt * num_batched_heads);
 #else
-    const InterleavedAddrGenFast<input_is_dram> s1 = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    const auto s1 = TensorAccessor(input_args, input_addr, input_tile_bytes);
     uint32_t input_id = input_start_id;
 #endif
 

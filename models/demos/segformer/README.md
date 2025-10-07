@@ -1,7 +1,7 @@
 # Segformer
 
 ## Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ## Introduction
 SegFormer's architecture is adept for both classification and segmentation tasks, utilizing a hierarchical design that extracts rich, multi-scale visual features. Its robust Transformer encoder generates powerful representations, suitable for discerning object categories, while a lightweight MLP decode head precisely maps these features for accurate pixel-level segmentation.
@@ -37,7 +37,7 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
 
 Use the following command to run Model performant running with Trace+2CQ
 ```
-pytest --disable-warnings models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_e2e
+pytest models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_e2e
 ```
 
 #### Multi Device (DP=2, n300):
@@ -45,7 +45,7 @@ pytest --disable-warnings models/demos/segformer/tests/perf/test_e2e_performant.
 
 Use the following command to run Model performant running with Trace+2CQ
 ```
-pytest --disable-warnings models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_e2e_dp
+pytest models/demos/segformer/tests/perf/test_e2e_performant.py::test_segformer_e2e_dp
 ```
 
 ### Segformer Semantic Segmentation Performant Demo
@@ -64,26 +64,26 @@ pytest --disable-warnings models/demos/segformer/tests/perf/test_e2e_performant.
 #### Single Device (BS=1):
 - Use the following command to run the demo script(Segmentation) which returns **mIoU** score for both reference, and ttnn models:
   ```
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation
+  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation
   ```
 
 #### Multi Device (DP=2, n300):
 - Use the following command to run the demo script(Segmentation) which returns **mIoU** score for both reference, and ttnn models:
   ```
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation_dp
+  pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation_dp
   ```
 
 ### Segformer Image Classification Demo
 #### Single Device (BS=1):
 - Use the following command to run the demo script(Classification) which returns **Accuracy** score for both reference, and ttnn models, validated with Imagenet Dataset samples:
   ```
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo
+  pytest models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo
   ```
 
 #### Multi Device (DP=2, n300):
 - Use the following command to run the demo script(Classification) which returns **Accuracy** score for both reference, and ttnn models, validated with Imagenet Dataset samples:
   ```
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo_dp
+  pytest models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo_dp
   ```
 
 ## Testing
@@ -91,15 +91,16 @@ pytest --disable-warnings models/demos/segformer/tests/perf/test_e2e_performant.
 #### Single Device (BS=1):
 - Use the following command to run the performant data evaluation with Trace+2CQs:
   ```
-  pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval
+  pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval
 
 #### Multi Device (DP=2, n300):
 - Use the following command to run the performant data evaluation with Trace+2CQs:
   ```
-  pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp
+  pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp
   ```
 
 ## Details
 - Entry point for the model is models/demos/segformer/tt/ttnn_segformer_model.py
 - Batch Size: 1
 - Support Input Resolution: 512x512 (Height, Width)
+- Dataset: [Semantic Segmentation](https://www.kaggle.com/datasets/awsaf49/ade20k-dataset), [Image classification](https://huggingface.co/datasets/ILSVRC/imagenet-1k)

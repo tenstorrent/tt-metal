@@ -7,14 +7,6 @@
 
 // #include "debug/dprint.h"
 
-constexpr bool get_read_from_dram() {
-    if constexpr (kernel_compile_time_args.size() > 0) {
-        return get_compile_time_arg_val(0);
-    } else {
-        return true;
-    }
-}
-
 void generate_bcast_scaler() {
     constexpr uint32_t cb_in_2 = 2;
     uint32_t scaler = get_arg_val<uint32_t>(8);
@@ -49,12 +41,9 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    constexpr uint32_t log_2_tile_bytes = tile_bytes == 2048 ? 11 : (tile_bytes == 1024 ? 10 : 0);
-    static_assert(log_2_tile_bytes);  // catch invalid tile size
 
-    constexpr bool read_from_dram = get_read_from_dram();
-
-    const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, log_2_tile_bytes};
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    const auto src_a = TensorAccessor(src_args, src_addr, tile_bytes);
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.

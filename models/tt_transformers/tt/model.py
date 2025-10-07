@@ -8,7 +8,7 @@ from tqdm import tqdm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.ccl import TT_CCL, ag_on_padded_dim_3
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -270,11 +270,11 @@ class Transformer(LightweightModule):
         )
         return tt_tokens
 
-    def concat_device_output(self, tt_out):
+    def concat_host_output(self, tt_out):
         """
-        Concatenate the output of the devices into a single tensor.
+        Concatenate the output of the devices into a single host tensor.
         """
-        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out.cpu())]
+        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
         if self.args.is_galaxy:
             row_dim, col_dim = (3, 1)
         else:
@@ -290,14 +290,14 @@ class Transformer(LightweightModule):
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        return self.concat_device_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
+        return self.concat_host_output(tt_out.cpu())[0, 0, last_token_idx, : self.vocab_size]
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
-        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
-            return self.concat_device_output(tt_out)[0, 0, :B, 0]
+            return self.concat_host_output(tt_out)[0, 0, :B, 0]
 
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
@@ -384,12 +384,21 @@ class Transformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            tt_logits = ag_on_padded_dim_3(
+            cluster_axis = 0 if self.args.is_galaxy else None
+            num_links = 2 if self.args.is_galaxy else 1
+            tt_logits = ttnn.experimental.all_gather_async(
                 tt_logits,
-                self.tt_ccl,
-                cluster_axis=0 if self.args.is_galaxy else None,
-                num_links=2 if self.args.is_galaxy else 1,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=tt_logits.memory_config(),
+                cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)

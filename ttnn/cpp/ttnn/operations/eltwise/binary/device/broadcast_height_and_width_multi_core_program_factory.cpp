@@ -141,8 +141,6 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         dst_cb_data_format,
         cb_output_buffer);
 
-    auto dst_is_dram = static_cast<uint32_t>(dst_buffer->buffer_type() == tt_metal::BufferType::DRAM);
-
     std::map<std::string, std::string> reader_defines;
     std::vector<uint32_t> reader_compile_time_args;
     std::map<std::string, std::string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);

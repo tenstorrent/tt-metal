@@ -83,7 +83,13 @@ def is_test_suite_type_that_uses_silicon(test_suite_type: TestSuiteType) -> bool
 
 def run_process_and_get_result(command, extra_env={}, capture_output=True):
     full_env = copy.deepcopy(os.environ)
-    full_env.update(extra_env)
+
+    # Handle None values in extra_env - remove keys with None values
+    for key, value in extra_env.items():
+        if value is None:
+            full_env.pop(key, None)  # Remove the key if it exists
+        else:
+            full_env[key] = value
 
     result = sp.run(command, shell=True, capture_output=capture_output, env=full_env)
 

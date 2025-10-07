@@ -112,7 +112,9 @@ void kernel_main() {
                             noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
                             noc_async_read_barrier();
 #endif
+#if !BCAST_LLK
                             FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
+#endif
 #if !SRC_SHARDED_B
                             cb_push_back(cb_id_src_b, onetile);
 #endif
@@ -124,7 +126,9 @@ void kernel_main() {
                             noc_async_read_tile(tile_offset + tw, src, l1_write_addr);
                             noc_async_read_barrier();
 #endif
+#if !BCAST_LLK
                             FILL_TILE_WITH_FIRST_ROW(cb_id_src);
+#endif
 #if !SRC_SHARDED_B
                             cb_push_back(cb_id_src, onetile);
 #endif

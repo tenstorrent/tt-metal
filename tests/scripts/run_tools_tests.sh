@@ -27,7 +27,7 @@ if [[ -z "$TT_METAL_SLOW_DISPATCH_MODE" ]] ; then
     echo "Watcher dump minimal test - Pass"
 
     # Now run with all watcher features, expect it to throw.
-    TT_METAL_WATCHER_KEEP_ERRORS=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=*WatcherAssertBrisc
+    TT_METAL_WATCHER_KEEP_ERRORS=1 ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTests/*Brisc
     ./build/tools/watcher_dump -d=0 -w &> tmp.log || { echo "Above failure is expected."; }
 
     # Verify the error we expect showed up in the program output.

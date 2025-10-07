@@ -919,7 +919,7 @@ void bind_binary_bw_div(
                const Tensor& grad_tensor,
                const Tensor& input_tensor_a,
                const float scalar,
-               const std::optional<std::string> round_mode,
+               const std::optional<std::string>& round_mode,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
                QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
@@ -940,7 +940,7 @@ void bind_binary_bw_div(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const ttnn::Tensor& other_tensor,
-               const std::optional<std::string> round_mode,
+               const std::optional<std::string>& round_mode,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,

@@ -8,8 +8,8 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import run_for_wormhole_b0
 from models.demos.wormhole.resnet50.demo.demo import test_demo_trace_with_imagenet
-from models.utility_functions import run_for_wormhole_b0
 
 test_demo_trace_with_imagenet.__test__ = False
 

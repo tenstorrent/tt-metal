@@ -66,7 +66,6 @@ class TtLlamaVisionEncoder(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
 

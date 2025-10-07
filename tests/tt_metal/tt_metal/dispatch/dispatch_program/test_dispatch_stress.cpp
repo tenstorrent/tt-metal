@@ -25,6 +25,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
+#include <tt-metalium/distributed.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -37,12 +38,12 @@ namespace tt::tt_metal {
 using std::vector;
 using namespace tt;
 
-void RunTest(IDevice* device) {
+void RunTest(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     Program program = Program();
     CoreRange core_range({0, 0}, {5, 5});
 
-    auto l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    auto l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // Kernels on brisc + ncrisc that just add two numbers
     KernelHandle brisc_kid = CreateKernel(
@@ -63,38 +64,37 @@ void RunTest(IDevice* device) {
             .compile_args = {l1_unreserved_base + 4}});
 
     // Write runtime args
-    auto get_first_arg = [](IDevice* device, CoreCoord& core, uint32_t multiplier) {
-        return (uint32_t)device->id() + (uint32_t)core.x * 10 * multiplier;
-    };
-    auto get_second_arg = [](IDevice* device, CoreCoord& core, uint32_t multiplier) {
-        return (uint32_t)core.y * 100 * multiplier;
-    };
+    auto get_first_arg =
+        [](const std::shared_ptr<distributed::MeshDevice>& mesh_device, CoreCoord& core, uint32_t multiplier) {
+            return (uint32_t)mesh_device->get_devices()[0]->id() + (uint32_t)core.x * 10 * multiplier;
+        };
+    auto get_second_arg = [](const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+                             CoreCoord& core,
+                             uint32_t multiplier) { return (uint32_t)core.y * 100 * multiplier; };
 
     for (CoreCoord core : core_range) {
-        std::vector<uint32_t> brisc_rt_args = {get_first_arg(device, core, 1), get_second_arg(device, core, 1)};
-        std::vector<uint32_t> ncrisc_rt_args = {get_first_arg(device, core, 2), get_second_arg(device, core, 2)};
+        std::vector<uint32_t> brisc_rt_args = {
+            get_first_arg(mesh_device, core, 1), get_second_arg(mesh_device, core, 1)};
+        std::vector<uint32_t> ncrisc_rt_args = {
+            get_first_arg(mesh_device, core, 2), get_second_arg(mesh_device, core, 2)};
         SetRuntimeArgs(program, brisc_kid, core, brisc_rt_args);
         SetRuntimeArgs(program, ncrisc_kid, core, ncrisc_rt_args);
     }
 
-    auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    if (slow_dispatch) {
-        // Slow dispatch uses LaunchProgram
-        tt::tt_metal::detail::LaunchProgram(device, program);
-    } else {
-        // Fast Dispatch uses the command queue
-        CommandQueue& cq = device->command_queue();
-        EnqueueProgram(cq, program, false);
-        Finish(cq);
-    }
+    distributed::MeshWorkload workload = distributed::CreateMeshWorkload();
+    distributed::AddProgramToMeshWorkload(
+        workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {0, 0}));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    distributed::Finish(mesh_device->mesh_command_queue());
 
     // Check results
     for (CoreCoord core : core_range) {
         std::vector<uint32_t> brisc_result;
+        auto device = mesh_device->get_devices()[0];
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, sizeof(uint32_t), brisc_result);
         std::vector<uint32_t> ncrisc_result;
         tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base + 4, sizeof(uint32_t), ncrisc_result);
-        uint32_t expected_result = get_first_arg(device, core, 1) + get_second_arg(device, core, 1);
+        uint32_t expected_result = get_first_arg(mesh_device, core, 1) + get_second_arg(mesh_device, core, 1);
         if (expected_result != brisc_result[0]) {
             log_warning(
                 LogTest,
@@ -105,7 +105,7 @@ void RunTest(IDevice* device) {
                 brisc_result[0]);
         }
         EXPECT_TRUE(expected_result == brisc_result[0]);
-        expected_result = get_first_arg(device, core, 2) + get_second_arg(device, core, 2);
+        expected_result = get_first_arg(mesh_device, core, 2) + get_second_arg(mesh_device, core, 2);
         if (expected_result != ncrisc_result[0]) {
             log_warning(
                 LogTest,
@@ -135,21 +135,23 @@ TEST(DispatchStress, TensixRunManyTimes) {
         for (unsigned int id = 0; id < num_devices; id++) {
             chip_ids.push_back(id);
         }
-        vector<IDevice*> devices_;
-        auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+        auto reserved_devices_ = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(chip_ids);
         devices_.reserve(reserved_devices_.size());
         for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }
 
         // Run the test on each device
-        for (IDevice* device : devices_) {
-            log_info(LogTest, "Running on device {}", device->id());
+        for (auto& device : devices_) {
+            log_info(LogTest, "Running on device {}", device->get_devices()[0]->id());
             RunTest(device);
         }
 
         // Close all devices
-        tt::tt_metal::detail::CloseDevices(reserved_devices_);
+        for (const auto& [id, device] : reserved_devices_) {
+            device->close();
+        }
     }
 }
 

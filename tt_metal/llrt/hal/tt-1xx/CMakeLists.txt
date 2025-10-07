@@ -10,6 +10,7 @@ set(HAL_INCLUDE_DIRS
 )
 
 add_library(wh_hal OBJECT)
+add_dependencies(wh_hal hal_generate_dev_msgs_header)
 target_sources(
     wh_hal
     PRIVATE
@@ -39,6 +40,7 @@ target_link_libraries(
 )
 
 add_library(bh_hal OBJECT ${BH_HAL_SRC})
+add_dependencies(bh_hal hal_generate_dev_msgs_header)
 target_sources(
     bh_hal
     PRIVATE

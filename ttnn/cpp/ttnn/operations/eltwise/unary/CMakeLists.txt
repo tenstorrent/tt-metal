@@ -17,7 +17,7 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES unary.hpp common/unary_op_types.hpp
+        FILES common/unary_op_types.hpp device/unary_composite_op.hpp unary.hpp unary_composite.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}

@@ -5,6 +5,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import profiler
 from models.demos.t3000.mixtral8x7b.reference.tokenizer import Tokenizer
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
     get_prefill_rot_mat,
@@ -16,7 +17,6 @@ from models.demos.t3000.mixtral8x7b.tt.mixtral_common import (
 from models.demos.t3000.mixtral8x7b.tt.mixtral_model import TtTransformer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import profiler
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
@@ -187,7 +187,7 @@ def test_mixtral_model_with_prefill_perf(
     state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
 
-    # Prompt with size with a bit more than 128 tokens. increase the prompt based on the prefill seqlen to accomodate every seqlen.
+    # Prompt with size with a bit more than 128 tokens. increase the prompt based on the prefill seqlen to accommodate every seqlen.
     prompts = [
         "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief, it was the epoch of incredulity, it was the season of Light, it was the season of Darkness, it was the spring of hope, it was the winter of despair, we had everything before us, we had nothing before us, we were all going direct to Heaven, we were all going direct the other way – in short, the period was so far like the present period, that some of its noisiest authorities insisted on its being received, for good or for evil, in the superlative degree of comparison only."
         * (prefill_seqlen // 128)

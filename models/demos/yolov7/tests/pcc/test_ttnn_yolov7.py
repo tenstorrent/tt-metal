@@ -37,4 +37,6 @@ def test_yolov7(device, reset_seeds, model_location_generator):
     output = ttnn_model(ttnn_input)[0]
 
     output = ttnn.to_torch(output)
-    assert_with_pcc(torch_output_tensor[0], output, pcc=0.999)
+
+    # TODO: PCC was lowered from 0.999 to 0.998 to enable math reconfig LLK fix (Issue #28221)
+    assert_with_pcc(torch_output_tensor[0], output, pcc=0.998)

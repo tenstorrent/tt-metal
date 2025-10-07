@@ -11,6 +11,7 @@ import torch
 import ttnn
 from models.tt_cnn.tt.executor import (
     ModelExecutor,
+    MultiCQModelOverlappedInputExecutor,
     MultiCQTracedModelOverlappedInputExecutor,
     MultiCQTracedModelPipelinedIOExecutor,
     TracedModelExecutor,
@@ -75,6 +76,29 @@ def create_test_model(input_shape, should_deallocate_input_tensor=True):
     return run, run_reference
 
 
+def create_multi_output_test_model(input_shape, should_deallocate_input_tensor=True):
+    def run(l1_input_tensor):
+        assert l1_input_tensor.storage_type() == ttnn.StorageType.DEVICE, "Model expects input tensor to be on device"
+        assert (
+            l1_input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
+        ), "Model expects input tensor to be in L1"
+        assert input_shape == l1_input_tensor.shape, "Unexpected input shape"
+
+        identity_output = ttnn.to(l1_input_tensor, memory_config=l1_input_tensor.memory_config())
+        relu_output = ttnn.relu(l1_input_tensor)
+
+        if should_deallocate_input_tensor:
+            ttnn.deallocate(l1_input_tensor)
+
+        return [identity_output, relu_output]
+
+    def run_reference(torch_input_tensor):
+        assert input_shape == torch_input_tensor.shape, "Unexpected input shape"
+        return [torch_input_tensor, torch.nn.functional.relu(torch_input_tensor)]
+
+    return run, run_reference
+
+
 @dataclass
 class ExecutorTestConfig:
     name: str
@@ -103,6 +127,14 @@ EXECUTOR_CONFIGS = [
         all_transfers_on_separate_command_queue=False,
         requires_minimum_inputs=1,
         expected_executor_type=TracedModelExecutor,
+    ),
+    ExecutorTestConfig(
+        name="MultiCQModelOverlappedInputExecutor",
+        use_trace=False,
+        num_command_queues=2,
+        all_transfers_on_separate_command_queue=False,
+        requires_minimum_inputs=1,
+        expected_executor_type=MultiCQModelOverlappedInputExecutor,
     ),
     ExecutorTestConfig(
         name="MultiCQTracedModelOverlappedInputExecutor",
@@ -309,9 +341,7 @@ def test_executor_with_preallocated_outputs(
     pipe.compile(sample_input)
 
     num_inputs = 32
-    pipe.preallocate_output_tensors_on_host(
-        num_inputs, output_shape=input_shape, output_dtype=ttnn.bfloat16, output_layout=ttnn.ROW_MAJOR_LAYOUT
-    )
+    pipe.preallocate_output_tensors_on_host(num_inputs)
 
     assert (
         pipe.preallocated_output_tensors == True

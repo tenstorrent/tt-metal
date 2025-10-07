@@ -27,7 +27,13 @@ FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {
 }
 namespace NAMESPACE {
 void MAIN {
+#ifdef ARCH_BLACKHOLE
+    // Until #28611 is closed - pack_untilize_dest on BH can't work with block_rt_dim > 1 (BATCH_SIZE = 1 ->
+    // block_rt_dim = 1)
+    constexpr int BATCH_SIZE = 1;
+#else
     constexpr int BATCH_SIZE = 8;
+#endif
     const uint32_t total_tiles = get_arg_val<uint32_t>(0);
     const uint32_t num_batches = total_tiles / BATCH_SIZE;
     const uint32_t leftover = total_tiles % BATCH_SIZE;

@@ -4,15 +4,13 @@
 
 import pytest
 from loguru import logger
-from models.utility_functions import run_for_wormhole_b0
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 123],
+        [1, 143.94],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -21,7 +19,7 @@ def test_perf_device_bare_metal_vovnet(batch_size, expected_perf):
     num_iterations = 1
     margin = 0.03
 
-    command = f"pytest models/experimental/vovnet/tests/pcc/test_tt_vovnet.py"
+    command = f"pytest models/experimental/vovnet/tests/pcc/test_tt_vovnet.py::test_vovnet_model_inference"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

@@ -33,8 +33,6 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     // one gain parameter per channel
     assert((gamma->get_value().logical_shape().to_array_4D() == std::array<uint32_t, 4>{1, 1, 1, C}));
 
-    auto device = &autograd::ctx().get_device();
-
     auto rmsnorm_fw_result = ttml::metal::rmsnorm_fw(tensor->get_value(), gamma->get_value(), true, epsilon);
     if (rmsnorm_fw_result.size() != 2U) {
         throw std::runtime_error(fmt::format(
@@ -86,7 +84,7 @@ autograd::TensorPtr rmsnorm_composite(
 
     ttnn::Tensor seq_means_of_squares = ttnn::mean(squares, /*dim_arg=*/-1, /*keep_dim=*/true);  // [B,1,S,1]
 
-    constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
 
     ttnn::Tensor seq_means_of_squares_plus_epsilon = ttnn::add(
         seq_means_of_squares,
@@ -136,7 +134,7 @@ autograd::TensorPtr rmsnorm_composite(
 
         auto dL_dout = out->get_grad();  // Grad w.r.t normalized arctivations, hence [B,1,S,C]
 
-        constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+        constexpr auto none = ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam>{};
 
         auto scaled_gain = ttnn::divide(
             g,

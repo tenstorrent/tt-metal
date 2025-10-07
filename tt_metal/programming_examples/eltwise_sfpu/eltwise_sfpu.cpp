@@ -140,8 +140,8 @@ int main() {
         // bit float.
         constexpr float eps = 5e-2f;
         for (uint32_t i = 0; i < result_vec.size(); ++i) {
-            float expected = bfloat16(std::exp(src0_vec[i].to_float())).to_float();
-            float result = result_vec[i].to_float();
+            float expected = static_cast<float>(bfloat16(std::exp(static_cast<float>(src0_vec[i]))));
+            float result = static_cast<float>(result_vec[i]);
             if (std::abs(expected - result) > eps) {
                 pass = false;
                 fmt::print(stderr, "Result mismatch at index {}: {} != {}\n", i, expected, result);

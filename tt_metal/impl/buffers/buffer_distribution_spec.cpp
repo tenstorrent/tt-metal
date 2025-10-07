@@ -8,6 +8,7 @@
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
+#include <utility>
 
 namespace tt::tt_metal {
 
@@ -140,19 +141,19 @@ BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
     tt::tt_metal::Shape tensor_shape,
     tt::tt_metal::Shape shard_shape,
     tt::tt_metal::Shape2D page_shape,
-    CoreRangeSet core_range_set,
+    const CoreRangeSet& core_range_set,
     ShardOrientation shard_orientation,
     ShardDistributionStrategy shard_distribution_strategy) {
-    auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(tensor_shape, page_shape);
-    auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(shard_shape, page_shape);
+    auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(std::move(tensor_shape), page_shape);
+    auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(std::move(shard_shape), page_shape);
     return BufferDistributionSpec(
         tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
 }
 
 BufferDistributionSpec::BufferDistributionSpec(
-    tt::tt_metal::Shape tensor_shape_in_pages,
-    tt::tt_metal::Shape shard_shape_in_pages,
-    CoreRangeSet core_range_set,
+    const tt::tt_metal::Shape& tensor_shape_in_pages,
+    const tt::tt_metal::Shape& shard_shape_in_pages,
+    const CoreRangeSet& core_range_set,
     ShardOrientation shard_orientation,
     ShardDistributionStrategy shard_distribution_strategy) {
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
@@ -171,7 +172,7 @@ BufferDistributionSpec::BufferDistributionSpec(
 }
 
 BufferDistributionSpec::BufferDistributionSpec(
-    Shape tensor_shape_in_pages, Shape shard_shape_in_pages, std::vector<CoreCoord> cores) :
+    const Shape& tensor_shape_in_pages, const Shape& shard_shape_in_pages, std::vector<CoreCoord> cores) :
     cores_(std::move(cores)) {
     TT_FATAL(tensor_shape_in_pages.rank() >= 1, "Tensor rank must be at least 1!");
     TT_FATAL(shard_shape_in_pages.rank() >= 1, "Shard rank must be at least 1!");
@@ -203,7 +204,9 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
     auto core_grid = core_range_set.ranges()[0];
 
     uint32_t num_shards_along_width = std::max(div_up(tensor_shape_in_pages[-1], shard_shape_in_pages[-1]), 1u);
-    uint32_t num_shards_along_height = std::max(div_up(tensor_shape_in_pages[-2], shard_shape_in_pages[-2]), 1u);
+    uint64_t tensor_volume = tensor_shape_in_pages.volume();
+    uint32_t tensor_height = tensor_volume == 0 ? 0 : tensor_volume / tensor_shape_in_pages[-1];
+    uint32_t num_shards_along_height = std::max(div_up(tensor_height, shard_shape_in_pages[-2]), 1u);
     if (shard_orientation != ShardOrientation::ROW_MAJOR) {
         std::swap(num_shards_along_width, num_shards_along_height);
     }

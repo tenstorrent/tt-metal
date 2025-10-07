@@ -33,15 +33,18 @@ void MAIN {
 
     // Loop over all the tiles and perform the computation
     for (uint32_t i = 0; i < n_tiles; i++) {
-        // Make sure there is registers we can use and hold it. The register can be being used by other
-        // components. So we need to be sure before we use it. Thus even though there is 16 registers, each
-        // time acquire a register, we get 8 of them that we can use until released.
-        acquire_dst();
         // Wait until there is a tile in both input circular buffers
         cb_wait_front(cb_in0, 1);
         cb_wait_front(cb_in1, 1);
+        // Make sure there is registers we can use and hold it. The register can be being used by other
+        // components. So we need to be sure before we use it. Thus even though there is 16 registers, each
+        // time acquire a register, we get 8 of them that we can use until released.
+        tile_regs_acquire();
         // Add the tiles from the input circular buffers and write the result to the destination register
         add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
+        // Release the held register
+        tile_regs_commit();
+        tile_regs_wait();
         // Make sure there is space in the output circular buffer
         cb_reserve_back(cb_out0, 1);
         // Copy the result from adding the tiles to the output circular buffer
@@ -51,7 +54,7 @@ void MAIN {
         cb_pop_front(cb_in0, 1);
         cb_pop_front(cb_in1, 1);
         // Release the held register
-        release_dst();
+        tile_regs_release();
     }
 }
 }  // namespace NAMESPACE

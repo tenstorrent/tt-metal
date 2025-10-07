@@ -84,12 +84,42 @@ void append_sharded_args(
 
 TensorAccessorArgs::TensorAccessorArgs(const Buffer& buffer, tensor_accessor::ArgsConfig args_config) :
     buffer_(&buffer), args_config_(args_config) {
-    if (is_sharded(buffer.buffer_layout())) {
+    update_args_config();
+}
+
+TensorAccessorArgs::TensorAccessorArgs(const Buffer* buffer, tensor_accessor::ArgsConfig args_config) :
+    buffer_(buffer), args_config_(args_config) {
+    update_args_config();
+}
+TensorAccessorArgs::TensorAccessorArgs(const std::shared_ptr<Buffer>& buffer, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(buffer.get(), args_config) {}
+
+TensorAccessorArgs::TensorAccessorArgs(const distributed::MeshBuffer& buffer, tensor_accessor::ArgsConfig args_config) :
+    buffer_(buffer.get_reference_buffer()), args_config_(args_config) {
+    update_args_config();
+}
+
+TensorAccessorArgs::TensorAccessorArgs(const distributed::MeshBuffer* buffer, tensor_accessor::ArgsConfig args_config) :
+    buffer_(buffer ? buffer->get_reference_buffer() : nullptr), args_config_(args_config) {
+    update_args_config();
+}
+
+TensorAccessorArgs::TensorAccessorArgs(
+    const std::shared_ptr<distributed::MeshBuffer>& buffer, tensor_accessor::ArgsConfig args_config) :
+    TensorAccessorArgs(buffer.get(), args_config) {}
+
+void TensorAccessorArgs::update_args_config() {
+    if (!buffer_) {
+        args_config_ = tensor_accessor::ArgConfig::None;
+        return;
+    }
+
+    if (buffer_->buffer_distribution_spec().has_value()) {
         args_config_.set(tensor_accessor::ArgConfig::Sharded);
     } else {
         args_config_ = tensor_accessor::ArgConfig::None;
     }
-    args_config_.set(tensor_accessor::ArgConfig::IsDram, buffer.is_dram());
+    args_config_.set(tensor_accessor::ArgConfig::IsDram, buffer_->is_dram());
 
     if (args_config_.test(tensor_accessor::ArgConfig::RuntimeRank)) {
         TT_FATAL(

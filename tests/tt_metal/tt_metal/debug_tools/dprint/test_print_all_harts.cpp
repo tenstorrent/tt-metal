@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <memory>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
@@ -10,14 +11,15 @@
 #include <string>
 #include <utility>
 #include <variant>
-#include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "gtest/gtest.h"
+#include "hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -36,14 +38,17 @@ class IDevice;
 using namespace tt;
 using namespace tt::tt_metal;
 
-namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-const std::string golden_output =
-R"(Test Debug Print: Data0
+const std::string golden_output_data0 =
+    R"(Test Debug Print: Data0
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -64,11 +69,17 @@ SLICE:
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
-Test Debug Print: Unpack
+)";
+const std::string golden_output_compute =
+    R"(Test Debug Print: Unpack
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -94,6 +105,10 @@ Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -112,6 +127,10 @@ Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -132,11 +151,17 @@ SLICE:
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
 Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
-Test Debug Print: Data1
+)";
+const std::string golden_output_data1 =
+    R"(Test Debug Print: Data1
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -156,12 +181,21 @@ SLICE:
 0.245117188 0.249023438 0.255859375 0.263671875 0.98046875 0.99609375 1.0234375 1.0546875
 0.365234375 0.373046875 0.380859375 0.388671875 1.4609375 1.4921875 1.5234375 1.5546875
 <TileSlice data truncated due to exceeding max count (32)>
-Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b))";
+Tried printing CBIndex::c_1: Unsupported data format (Bfp2_b)
+)";
 
-void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(
+    DPrintMeshFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::string& golden_output) {
     // Set up program and command queue
     constexpr CoreCoord core = {0, 0}; // Print on first core only
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     // Create a CB for testing TSLICE, dimensions are 32x32 bfloat16s
     constexpr uint32_t buffer_size = 32*32*sizeof(bfloat16);
@@ -169,52 +203,119 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
         buffer_size,
         {{CBIndex::c_0, tt::DataFormat::Float16_b}}
     ).set_page_size(CBIndex::c_0, buffer_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     // A CB with an unsupported data format
     CircularBufferConfig cb_src1_config = CircularBufferConfig(
         buffer_size,
         {{CBIndex::c_1, tt::DataFormat::Bfp2_b}}
     ).set_page_size(CBIndex::c_1, buffer_size);
-    CBHandle cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
 
     // Three different kernels to mirror typical usage and some previously
     // failing test cases, although all three kernels simply print.
-    KernelHandle brisc_print_kernel_id = CreateKernel(
-        program,
+    CreateKernel(
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/brisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    KernelHandle ncrisc_print_kernel_id = CreateKernel(
-        program,
+    CreateKernel(
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/ncrisc_print.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    KernelHandle trisc_print_kernel_id = CreateKernel(
-        program,
+    CreateKernel(
+        program_,
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() +
             "tests/tt_metal/tt_metal/test_kernels/misc/trisc_print.cpp",
         core,
         ComputeConfig{});
 
     // Run the program
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     // Check that the expected print messages are in the log file
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            golden_output
-        )
-    );
-}
-}
+    EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
 }
 
-TEST_F(DPrintFixture, TensixTestPrintFromAllHarts) {
-    for (IDevice* device : this->devices_) {
-        this->RunTestOnDevice(CMAKE_UNIQUE_NAMESPACE::RunTest, device);
+struct TestParams {
+    std::string test_name;
+    std::vector<HalProcessorIdentifier> enabled_processors;
+    std::string golden_output;
+};
+
+using enum HalProgrammableCoreType;
+using enum HalProcessorClassType;
+
+class PrintAllHartsFixture : public DPrintMeshFixture, public ::testing::WithParamInterface<TestParams> {
+private:
+    HalProcessorSet original_enabled_processors_;
+
+protected:
+    void ExtraSetUp() override {
+        original_enabled_processors_ = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
+            tt::llrt::RunTimeDebugFeatureDprint);
+        HalProcessorSet processor_set;
+        for (const auto& proc : GetParam().enabled_processors) {
+            processor_set.add(
+                proc.core_type,
+                tt::tt_metal::MetalContext::instance().hal().get_processor_index(
+                    proc.core_type, proc.processor_class, proc.processor_type));
+        }
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_processors(
+            tt::llrt::RunTimeDebugFeatureDprint, processor_set);
+    }
+    void ExtraTearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_processors(
+            tt::llrt::RunTimeDebugFeatureDprint, original_enabled_processors_);
+    }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    PrintAllHartsTests,
+    PrintAllHartsFixture,
+    ::testing::Values(
+        TestParams{
+            "All",
+            {
+                {TENSIX, DM, 0},
+                {TENSIX, DM, 1},
+                {TENSIX, COMPUTE, 0},
+                {TENSIX, COMPUTE, 1},
+                {TENSIX, COMPUTE, 2},
+            },
+            golden_output_data0 + golden_output_compute + golden_output_data1,
+        },
+        TestParams{
+            "Brisc",
+            {
+                {TENSIX, DM, 0},
+            },
+            golden_output_data0,
+        },
+        TestParams{
+            "BriscCompute",
+            {
+                // DPRINT server timeout if BRISC is disabled.
+                {TENSIX, DM, 0},
+                {TENSIX, COMPUTE, 0},
+                {TENSIX, COMPUTE, 1},
+                {TENSIX, COMPUTE, 2},
+            },
+            golden_output_data0 + golden_output_compute,
+        }),
+    [](const ::testing::TestParamInfo<TestParams>& info) { return info.param.test_name; });
+
+TEST_P(PrintAllHartsFixture, TensixTestPrint) {
+    for (auto& mesh_device : this->devices_) {
+        this->RunTestOnDevice(
+            [](DPrintMeshFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunTest(fixture, mesh_device, GetParam().golden_output);
+            },
+            mesh_device);
     }
 }
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
