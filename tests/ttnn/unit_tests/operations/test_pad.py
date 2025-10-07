@@ -20,7 +20,7 @@ torch.manual_seed(0)
 
 def random_torch_tensor(dtype, shape):
     if dtype == ttnn.uint16:
-        return torch.randint(0, 100, shape).to(torch.int16)
+        return torch.randint(0, 2**15, shape, dtype=torch.int16)
     if dtype == ttnn.int32:
         return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
     if dtype == ttnn.uint32:
@@ -41,7 +41,7 @@ def random_torch_tensor(dtype, shape):
     ],
 )
 @pytest.mark.parametrize("value", [0, 1])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     torch.manual_seed(0)
 
@@ -273,7 +273,7 @@ def test_pad_rm_sharded_stickwise(
 @pytest.mark.parametrize("padding,torch_padding", [(((1, 1), (2, 32), (0, 0)), (0, 0, 2, 32, 1, 1))])
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
-@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16, ttnn.uint16])
 def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
@@ -454,7 +454,7 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
     assert torch.equal(in_torch, out_torch)
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint16])
 @pytest.mark.parametrize("shape", [[1, 1, 18, 13]])
 @pytest.mark.parametrize("padshape", [[1, 1, TILE_HEIGHT, TILE_WIDTH]])
 @pytest.mark.parametrize("use_multicore", [False, True])
@@ -483,7 +483,7 @@ def _unsqueeze(smaller, larger, fill):
 @pytest.mark.parametrize(
     "padding", [[25, 1], [5, 4], [64], [32, 32], [1, 0, 0, 0], [1, 0, 0], [32, 32, 32, 64], [0, 64], [0, 0, 0, 64]]
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16])
 def test_pad_tile(shape, padding, dtype, device):
     if (shape, padding) in [([5, 4, 3, 2, 1], [1, 0, 0, 0]), ([5, 4, 3, 2, 1], [32, 32, 32, 64])]:
         pytest.xfail("Can't pad upper dims with rank>4")
