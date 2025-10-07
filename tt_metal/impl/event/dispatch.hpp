@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <command_queue_interface.hpp>
 #include <stdint.h>
 #include <sub_device_types.hpp>
 #include <tt-metalium/device.hpp>
