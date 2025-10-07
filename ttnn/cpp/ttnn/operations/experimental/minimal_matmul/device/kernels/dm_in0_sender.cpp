@@ -163,4 +163,6 @@ void kernel_main() {
         }
         n_forward = !n_forward;
     }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
