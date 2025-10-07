@@ -14,6 +14,7 @@
 #include <vector>
 #include <umd/device/types/core_coordinates.hpp>
 #include <optional>
+#include <hostdevcommon/fabric_common.h>
 
 namespace tt {
 namespace tt_metal {
