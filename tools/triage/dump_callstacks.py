@@ -169,7 +169,7 @@ def get_gdb_callstack(
 
     return extract_callstack_from_gdb_output(gdb_client.communicate()[0], start_callstack_label, end_callstack_label)
 
-
+# We return callstack and error message if error occurs
 def get_callstack(
     location: OnChipCoordinate,
     risc_name: str,
@@ -201,7 +201,7 @@ def get_callstack(
 
 
 def format_callstack(callstack: list[CallstackEntry | str]) -> str:
-    """Return string representation of the callstack with optional message prefix."""
+    """Return string representation of the callstack with optional error message."""
     frame_number_width = len(str(len(callstack) - 1))
     result = [""]
     for i, frame in enumerate(callstack):
@@ -267,12 +267,12 @@ def dump_callstacks(
                 except:
                     pass
         else:
-            callstack, message = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
+            callstack, error_message = get_callstack(location, risc_name, dispatcher_core_data, elfs_cache, full_callstack)
 
         result = DumpCallstacksData(
             dispatcher_core_data=dispatcher_core_data,
             pc=callstack[0].pc if len(callstack) > 0 else None,
-            kernel_callstack=[message] + callstack if message else callstack,
+            kernel_callstack=[error_message] + callstack if error_message else callstack,
         )
 
     except Exception as e:
