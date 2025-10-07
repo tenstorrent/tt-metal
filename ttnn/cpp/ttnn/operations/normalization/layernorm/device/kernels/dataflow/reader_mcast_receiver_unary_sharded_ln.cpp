@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-#include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
-#include "debug/dprint.h"
+#include "dataflow_api.h"
+#include "noc_addr_utils.h"
+
+namespace df = norm::layernorm::device::kernels::dataflow;
 
 // split REDUCE across cores
 void kernel_main() {
@@ -32,8 +34,8 @@ void kernel_main() {
     const bool is_second_stage_reader = get_arg_val<uint32_t>(2);
     const uint32_t start_x = get_arg_val<uint32_t>(3);
     const uint32_t start_y = get_arg_val<uint32_t>(4);
-    volatile tt_l1_ptr uint32_t* in0_remote_noc_x = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5));
-    volatile tt_l1_ptr uint32_t* in0_remote_noc_y = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_x));
+    df::L1Ptr in0_remote_noc_x = (df::L1Ptr)(get_arg_addr(5));
+    df::L1Ptr in0_remote_noc_y = (df::L1Ptr)(get_arg_addr(5 + num_x));
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 
@@ -48,40 +50,24 @@ void kernel_main() {
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);  // tile size
 
-    uint64_t remote_noc_addrs_first_stage[is_all_to_all_worker ? num_blocks_first_stage : 1];
-    uint64_t remote_noc_addrs_second_stage[is_all_to_all_worker ? num_blocks_second_stage : 1];
+    constexpr df::NumNocAddrs num_remote_noc_addrs_first_stage = is_all_to_all_worker ? num_blocks_first_stage : 1;
+    constexpr df::NumNocAddrs num_remote_noc_addrs_second_stage = is_all_to_all_worker ? num_blocks_second_stage : 1;
+    df::RemoteNocAddrs<num_remote_noc_addrs_first_stage> remote_noc_addrs_first_stage{};
+    df::RemoteNocAddrs<num_remote_noc_addrs_second_stage> remote_noc_addrs_second_stage{};
     if constexpr (is_all_to_all_worker) {
         if constexpr (use_two_stage_reduce) {
-            uint32_t x = start_x, y = start_y;
-            for (uint32_t i = 0; i < num_blocks_first_stage; ++i) {
-                remote_noc_addrs_first_stage[i] = get_noc_addr(in0_remote_noc_x[x], in0_remote_noc_y[y], 0);
-                if constexpr (row_major) {
-                    ++x;
-                    if (x == num_x) {
-                        x = 0;
-                    }
-                } else {
-                    ++y;
-                    if (y == num_y) {
-                        y = 0;
-                    }
-                }
-            }
-            if constexpr (row_major) {
-                x = start_x;
-                y = 0;
-            } else {
-                x = 0;
-                y = start_y;
-            }
-            for (uint32_t i = 0; i < num_blocks_second_stage; ++i) {
-                remote_noc_addrs_second_stage[i] = get_noc_addr(in0_remote_noc_x[x], in0_remote_noc_y[y], 0);
-                if constexpr (row_major) {
-                    ++y;
-                } else {
-                    ++x;
-                }
-            }
+            df::compute_two_stage_noc_addrs<
+                row_major,
+                num_remote_noc_addrs_first_stage,
+                num_remote_noc_addrs_second_stage>(
+                remote_noc_addrs_first_stage,
+                remote_noc_addrs_second_stage,
+                in0_remote_noc_x,
+                in0_remote_noc_y,
+                start_x,
+                start_y,
+                num_x,
+                num_y);
         } else {
             uint32_t x = start_x, y = start_y;
             for (uint32_t i = 0; i < num_blocks; ++i) {
@@ -111,6 +97,7 @@ void kernel_main() {
         remote_noc_addrs_first_stage[0] = get_noc_addr(in0_remote_noc_x[0], in0_remote_noc_y[0], 0);
     }
 
+    DPRINT << "rest of reader" << ENDL();
     volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
     volatile tt_l1_ptr uint32_t* reduce_sender_semaphore_addr_ptr =
