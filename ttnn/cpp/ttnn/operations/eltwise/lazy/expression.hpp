@@ -38,8 +38,9 @@ class BasicExpressionView {
     friend Function;
 
     std::span<const Node> nodes;
+    bool is_root;
 
-    BasicExpressionView(std::span<const Node> nodes) noexcept;
+    BasicExpressionView(std::span<const Node> nodes, bool is_root) noexcept;
 
     const Node& root() const noexcept;
 
@@ -82,6 +83,8 @@ public:
     DataType dtype() const noexcept;
     const Shape& logical_shape() const noexcept;
     tt::CBIndex index() const noexcept;
+    std::size_t inputs() const noexcept;
+    std::size_t circular_buffers() const noexcept;
 };
 
 // traverses in post-order
@@ -104,6 +107,7 @@ template <typename>
 class BasicExpression {
     friend ExpressionView;
     friend FunctionView;
+    friend Expression;
 
     std::vector<Node> nodes;
 
@@ -111,25 +115,40 @@ class BasicExpression {
     explicit BasicExpression(const Tensor& tensor)
         requires std::same_as<BasicExpression, Expression>;
 
-    explicit BasicExpression(Unary operation, ExpressionView first, Params&& params);
+    explicit BasicExpression(Unary operation, ExpressionView first, Params&& params)
+        requires std::same_as<BasicExpression, Function>;
 
-    explicit BasicExpression(Binary operation, ExpressionView first, ExpressionView second, Params&& params);
+    explicit BasicExpression(Binary operation, ExpressionView first, ExpressionView second, Params&& params)
+        requires std::same_as<BasicExpression, Function>;
 
     explicit BasicExpression(
-        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params&& params);
+        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params&& params)
+        requires std::same_as<BasicExpression, Function>;
 
 public:
     // Function must not be constructible from Tensor
     static std::optional<BasicExpression> from(const Tensor& tensor)
         requires std::same_as<BasicExpression, Expression>;
 
-    static std::optional<BasicExpression> from(Unary operation, ExpressionView first, Params params);
+    static std::optional<BasicExpression> from(Unary operation, ExpressionView first, Params params)
+        requires std::same_as<BasicExpression, Function>;
 
     static std::optional<BasicExpression> from(
-        Binary operation, ExpressionView first, ExpressionView second, Params params);
+        Binary operation, ExpressionView first, ExpressionView second, Params params)
+        requires std::same_as<BasicExpression, Function>;
 
     static std::optional<BasicExpression> from(
-        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params params);
+        Ternary operation, ExpressionView first, ExpressionView second, ExpressionView third, Params params)
+        requires std::same_as<BasicExpression, Function>;
+
+    BasicExpression(const BasicExpression&) = default;
+    BasicExpression(BasicExpression&&) noexcept = default;
+
+    // Function can implicitly widen to Expression
+    BasicExpression(const Function& function)
+        requires std::same_as<BasicExpression, Expression>;
+    BasicExpression(Function&& function) noexcept
+        requires std::same_as<BasicExpression, Expression>;
 
     // getters for Expression
 
@@ -154,8 +173,21 @@ public:
     DataType dtype() const noexcept;
     const Shape& logical_shape() const noexcept;
     tt::CBIndex index() const noexcept;
+    std::size_t inputs() const noexcept;
+    std::size_t circular_buffers() const noexcept;
 };
 
-std::string to_compute_kernel_string(ExpressionView expression);
+std::optional<Expression> defer(const Tensor& tensor);
+
+std::optional<Function> defer(Unary unary, ExpressionView first, Params params);
+
+std::optional<Function> defer(Binary binary, ExpressionView first, ExpressionView second, Params params);
+
+std::optional<Function> defer(
+    Ternary ternary, ExpressionView first, ExpressionView second, ExpressionView third, Params params);
+
+std::string to_compute_kernel_string(FunctionView expression);
+
+std::string to_debug_string(FunctionView expression);
 
 }  // namespace ttnn::operations::lazy
