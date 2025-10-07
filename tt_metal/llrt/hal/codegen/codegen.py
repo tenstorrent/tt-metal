@@ -323,7 +323,7 @@ class CodeGen:
             )
         print("}  // namespace offsets")
         print(
-            f"{self.interface_ns}::Factory create_factory() {{\n"
+            f"inline {self.interface_ns}::Factory create_factory() {{\n"
             f"static const {self.interface_ns}::Factory::Impl impl_ {{"
         )
         for struct in self.structs:
