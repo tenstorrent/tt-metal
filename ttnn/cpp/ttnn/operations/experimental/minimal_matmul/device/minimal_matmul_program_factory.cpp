@@ -83,11 +83,11 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     auto in1_sender_cores = CoreRange({0, 0}, {grid_size.x - 1, 0});
     auto in1_receiver_cores = CoreRange({0, 1}, {grid_size.x - 1, grid_size.y - 1});
 
-    auto in0_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in0_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
-    auto in1_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in1_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
+    auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
 
     // Create circular buffers for vol2col, weights, bias and matmul intermediates
@@ -250,10 +250,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             K_block_tiles,
             N_block_tiles,
             input_tile_size,
-            in0_mcast_sender_semaphore_id,
-            in0_mcast_receiver_semaphore_id,
-            in0_valid_semaphore_id,
-            1};
+            in0_sender_semaphore_id,
+            in0_receiver_semaphore_id,
+            in0_valid_semaphore_id};
         tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(in0_sender_compile_time_args);
         auto in0_sender_kernels_id = CreateKernel(
             program,
@@ -289,10 +288,9 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
             K_block_tiles,
             N_block_tiles,
             input_tile_size,
-            in1_mcast_sender_semaphore_id,
-            in1_mcast_receiver_semaphore_id,
-            in1_valid_semaphore_id,
-            1};
+            in1_sender_semaphore_id,
+            in1_receiver_semaphore_id,
+            in1_valid_semaphore_id};
         tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(in1_sender_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(in1_sender_compile_time_args);
         auto in1_sender_kernels_id = CreateKernel(
@@ -355,19 +353,12 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
                 CoreCoord core = cores.at(i);
                 auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[i]);
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[i]);
-                uint32_t in0_idx = core.y;
-                uint32_t in1_idx = core.x;
                 auto& reader_args = reader_runtime_args[core.x][core.y];
-                if (in1_idx == 0) {
-                    reader_args[0] = input_addr;
-                }
+                reader_args[0] = input_addr;
+
                 auto& writer_args = writer_runtime_args[core.x][core.y];
-                if (in0_idx == 0) {
-                    writer_args[0] = weight_addr;
-                    writer_args[1] = output_addr;
-                } else {
-                    writer_args[0] = output_addr;
-                }
+                writer_args[0] = weight_addr;
+                writer_args[1] = output_addr;
             }
         };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

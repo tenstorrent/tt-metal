@@ -21,10 +21,9 @@ void kernel_main() {
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(9);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(10);
     constexpr uint32_t input_tile_size = get_compile_time_arg_val(11);
-    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
-    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
+    uint32_t in1_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(12));
+    uint32_t in1_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
     uint32_t in1_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(15);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -36,7 +35,7 @@ void kernel_main() {
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<16>();
+    constexpr auto in1_args = TensorAccessorArgs<15>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, input_tile_size);
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
@@ -51,18 +50,15 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
     *(in1_valid_semaphore_addr_ptr) = VALID;
-    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
-    const uint64_t in1_mcast_sender_semaphore_noc_addr =
-        get_noc_addr(in1_sender_noc_x, in1_sender_noc_y, in1_mcast_sender_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in1_receiver_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_receiver_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in1_sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_sender_semaphore_addr);
+    const uint64_t in1_sender_semaphore_noc_addr =
+        get_noc_addr(in1_sender_noc_x, in1_sender_noc_y, in1_sender_semaphore_addr);
 
-    const uint64_t in1_mcast_receiver_semaphore_noc_addr =
-        get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_mcast_receiver_semaphore_addr);
-
-    DPRINT << "in1 is first chip " << (uint32_t)is_first_chip << ENDL();
-    DPRINT << "in1 is last chip " << (uint32_t)is_last_chip << ENDL();
+    const uint64_t in1_receiver_semaphore_noc_addr =
+        get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
 
     // DPRINT << "in1send: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
     //        << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
@@ -91,26 +87,20 @@ void kernel_main() {
                     }
                     noc_async_read_barrier();
                 } else {
-                    noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
-                    DPRINT << "in1 before wait for data" << ENDL();
-                    noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
-                    DPRINT << "in1 after wait for data" << ENDL();
+                    noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
+                    noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
                 }
 
                 if (!is_last_chip) {
-                    DPRINT << "in1 before wait for send sem" << ENDL();
-                    noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
-                    DPRINT << "in1 after wait for send sem" << ENDL();
-                    noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
+                    noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
+                    noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
 
                     uint64_t in1_unicast_data_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_start_address);
 
                     noc_async_write(in1_start_address, in1_unicast_data_addr, in1_block_num_tiles * input_tile_size);
 
-                    DPRINT << "in1 after send data" << ENDL();
-                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr);
-                    DPRINT << "in1 after send set receiver sem valid" << ENDL();
+                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
 #endif
 
