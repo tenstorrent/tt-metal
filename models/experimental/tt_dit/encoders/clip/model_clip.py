@@ -2,16 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import torch
 import ttnn
-
-from ...utils.tensor import bf16_tensor
-from ...utils.substate import substate, indexed_substates
-from ...parallel.manager import CCLManager
-from ...parallel.config import EncoderParallelConfig
-from ...layers.feedforward import ParallelFeedForward, FeedForward
-from ...layers.linear import ColParallelLinear, Linear
 from ttnn.distributed.distributed import ConcatMeshToTensor
+
+from ...layers.feedforward import FeedForward, ParallelFeedForward
+from ...layers.linear import ColParallelLinear, Linear
+from ...parallel.config import EncoderParallelConfig
+from ...parallel.manager import CCLManager
+from ...utils.substate import indexed_substates, substate
+from ...utils.tensor import bf16_tensor
 
 
 class CLIPConfig:
@@ -112,8 +114,13 @@ class CLIPEncoder:
             self.text_projection = None
 
     def __call__(
-        self, prompt_tokenized: ttnn.Tensor, mesh_device: ttnn.Device, with_projection: bool | None = None
-    ) -> ttnn.Tensor:
+        self,
+        prompt_tokenized: ttnn.Tensor,
+        mesh_device: ttnn.Device,
+        *,
+        with_projection: bool | None = None,
+        return_normalized_state: bool = False,
+    ) -> tuple[ttnn.Tensor, ...]:
         if with_projection is None:
             with_projection = self.text_projection is not None
 
@@ -155,14 +162,14 @@ class CLIPEncoder:
             if self.text_projection is None:
                 raise ValueError("projection weights are not loaded")
             text_projection_transposed = ttnn.transpose(self.text_projection, -2, -1)
-            projected_output = ttnn.matmul(
+            pooled_output = ttnn.matmul(
                 pooled_output, text_projection_transposed, compute_kernel_config=self.compute_kernel_config
             )
-            # sequence embedding, pooled embedding with projection
-            return encoder_output, projected_output
-        else:
-            # sequence embedding, pooled embedding without projection
-            return encoder_output, pooled_output
+
+        if return_normalized_state:
+            return encoder_output, pooled_output, normalized_final_state
+
+        return encoder_output, pooled_output
 
     def _pool_eos_from_torch_tensors(self, ids_t: torch.Tensor, seq_t: torch.Tensor, eos_token_id: int) -> torch.Tensor:
         """Helper function to pool EOS tokens from torch tensors.
