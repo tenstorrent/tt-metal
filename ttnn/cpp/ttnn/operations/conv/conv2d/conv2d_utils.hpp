@@ -195,6 +195,8 @@ shard_or_reshard_tensor_if_required(
 bool auto_enable_kernel_folding(
     std::optional<bool> enable_folding_,
     bool is_dram,
+    uint32_t input_height,
+    uint32_t input_width,
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
     std::array<uint32_t, 4>& padding_n4);
