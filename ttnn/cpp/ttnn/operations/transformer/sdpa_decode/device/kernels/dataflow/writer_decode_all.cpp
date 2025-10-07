@@ -5,7 +5,7 @@
 #include "dataflow_api.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "debug/assert.h"
+#include "debug/dprint.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
@@ -138,6 +138,12 @@ void kernel_main() {
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
+    DPRINT << "k_chunk_start: " << k_chunk_start << "k_chunk_end: " << k_chunk_end
+           << " window_start_chunk: " << window_start_chunk << " window_start_unaligned: " << window_start_unaligned
+           << ENDL();
+    DPRINT << "k_num_chunks: " << k_num_chunks << " Sk_chunk_t_dynamic: " << Sk_chunk_t_dynamic
+           << " cur_pos: " << cur_pos << ENDL();
 
     if (k_chunk_start == window_start_chunk && (window_start_unaligned % 32 > 0)) {
         // If this core processes the first chunk and we need to apply sliding window mask, generate it here
