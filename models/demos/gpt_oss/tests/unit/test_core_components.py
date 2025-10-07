@@ -199,7 +199,6 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
-    print("setup", setup["mesh_config"])
 
     # Create reference model
     from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssDecoderLayer

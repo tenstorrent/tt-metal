@@ -38,20 +38,18 @@ class Attention:
         self.ccl_manager = ccl_manager
         self.mesh_device = mesh_device
 
-        # (['sinks', 'q_proj.weight', 'q_proj.bias', 'k_proj.weight', 'k_proj.bias', 'v_proj.weight', 'v_proj.bias', 'o_proj.weight', 'o_proj.bias'])
-
-        # TODO: Add mesh mapper
+        # Extract projection weights and biases from state dict
         q_proj = substate(state_dict, "q_proj")["weight"].transpose(-1, -2)
-        q_proj_bias = substate(state_dict, "q_proj")["bias"]  # TODO: unsqueeze?
+        q_proj_bias = substate(state_dict, "q_proj")["bias"]
 
         k_proj = substate(state_dict, "k_proj")["weight"].transpose(-1, -2)
-        k_proj_bias = substate(state_dict, "k_proj")["bias"]  # TODO: unsqueeze?
+        k_proj_bias = substate(state_dict, "k_proj")["bias"]
 
         v_proj = substate(state_dict, "v_proj")["weight"].transpose(-1, -2)
-        v_proj_bias = substate(state_dict, "v_proj")["bias"]  # TODO: unsqueeze?
+        v_proj_bias = substate(state_dict, "v_proj")["bias"]
 
         o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
-        o_proj_bias = substate(state_dict, "o_proj")["bias"]  # TODO: unsqueeze?
+        o_proj_bias = substate(state_dict, "o_proj")["bias"]
 
         sinks = state_dict["sinks"].reshape(1, hf_config.num_attention_heads, 1, 1)
         decode_sinks = torch.nn.functional.pad(
@@ -62,9 +60,6 @@ class Attention:
         # Clean mesh mapping using MeshConfig
         col_mesh_mapper = self.mesh_config.column_parallel(mesh_device)
         row_mesh_mapper = self.mesh_config.row_parallel(mesh_device)
-        # if self.mesh_config.ep > 1:
-        #     col_mesh_mapper = self.mesh_config.shard_mapper(mesh_device, mesh_dims=(-2, -1))
-        #     row_mesh_mapper = self.mesh_config.shard_mapper(mesh_device, mesh_dims=(-1, -2))
 
         self.q_proj = ttnn.as_tensor(
             q_proj,
@@ -242,7 +237,6 @@ class Attention:
         tt_v = ttnn.matmul(x, self.v_proj)
         tt_v = ttnn.add(tt_v, self.v_proj_bias, output_tensor=tt_v)
         tt_v = ttnn.reshape(tt_v, [1, seq_len * batch_size, -1, self.head_dim])
-        # x.deallocate(True)
 
         apply_rope, tt_cos, tt_sin = rope_stuff
         tt_q_rope = apply_rope(tt_q, tt_cos, tt_sin)
@@ -324,7 +318,7 @@ class Attention:
             else:
                 k_cache, v_cache = self.kv_cache
 
-            # FIXME: Should eventually remove
+            # Transpose and cast tensors for cache compatibility
             tt_k = ttnn.transpose(tt_k, 1, 2)
             tt_k = ttnn.typecast(tt_k, k_cache.dtype)
 
@@ -355,7 +349,7 @@ class Attention:
                     batch_idx=0,
                 )
 
-            # FIXME: Should eventually remove
+            # Transpose tensors back for SDPA computation
             tt_k = ttnn.transpose(tt_k, 1, 2)
             tt_v = ttnn.transpose(tt_v, 1, 2)
 

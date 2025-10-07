@@ -31,7 +31,6 @@ def convert_bf16_to_fp32(weights_dict):
     for key, value in tqdm(weights_dict.items()):
         if isinstance(value, torch.Tensor) and value.dtype == torch.bfloat16:
             converted_dict[key] = value.to(torch.float32)
-            # print(f"Converted tensor '{key}' from bfloat16 to float32.")
         else:
             converted_dict[key] = value
     return converted_dict
@@ -80,7 +79,6 @@ def load_model_weights(
         ):
             weights_dict.update(future.result())
 
-    print("Loaded all weights")
     return weights_dict
 
 
@@ -100,16 +98,12 @@ def get_state_dict(model_path: str, prefix: str | None = None, dtype=torch.float
 
     if not os.path.exists(torch_state_dict_path):
         weights_dict = load_model_weights(model_path)
-        print(f"Saving weights to {torch_state_dict_path}")
         torch.save(weights_dict, torch_state_dict_path)
     else:
-        print(f"Loading weights from {torch_state_dict_path}")
         weights_dict = torch.load(torch_state_dict_path)
 
     if prefix is not None:
         weights_dict = {k[len(prefix) :]: v for k, v in weights_dict.items() if k.startswith(prefix)}
-
-    print(f"Loaded weights_dict with {len(weights_dict)} keys")
 
     if dtype == torch.float32:
         weights_dict = convert_bf16_to_fp32(weights_dict)

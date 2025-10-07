@@ -75,8 +75,6 @@ def sdpa(
         tt_v = ttnn.concat([tt_v_back, tt_v], dim=2)  # (nkv, 1, cache_len + num_tokens, dim)
 
         tt_cache = [tt_k, tt_v]  # Update cache with new keys and values
-        # ttnn.deallocate(tt_k_back)
-        # ttnn.deallocate(tt_v_back)
 
     kv_len = tt_k.shape[2]  # Length of keys/values in the cache
 
@@ -98,9 +96,7 @@ def sdpa(
     tt_sink = ttnn.repeat(tt_sink, [1, 1, num_tokens, 1])  # (nkv, nh // nkv, num_tokens, 1)
     tt_qk = ttnn.concat([tt_qk, tt_sink], dim=-1)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
 
-    # Softmax
-    # FIXME: Program cache issue!!
-    # tt_qk = ttnn.softmax(tt_qk, dim=-1, numeric_stable=True)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
+    # Softmax - using custom implementation for stability
     tt_qk = softmax(tt_qk, stable=True)  # (nkv, nh // nkv, num_tokens, kv_len + 1)
     tt_qk = tt_qk[:, :, :, :kv_len]
 

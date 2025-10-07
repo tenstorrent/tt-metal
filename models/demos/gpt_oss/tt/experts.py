@@ -28,7 +28,6 @@ class Experts:
         self.mesh_config = mesh_config or MeshConfig(
             mesh_device.shape, tp=mesh_device.shape[1], ep=mesh_device.shape[0]
         )
-        print("mesh_config", self.mesh_config, mesh_device.shape)
         self.intermediate_size_per_device = self.mesh_config.shard_size(self.intermediate_size)
 
         gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(1, self.num_experts, self.hidden_size, self.expert_dim)

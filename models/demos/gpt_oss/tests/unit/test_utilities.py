@@ -93,22 +93,16 @@ def test_rope_embeddings(mesh_device, batch_size, seq_len, reset_seeds):
     ]  # Back to [batch, num_heads, seq_len, head_dim]
 
     # Debug: Print shapes to understand the mismatch
-    print(f"q_tt_rotated_torch shape: {q_tt_rotated_torch.shape}")
-    print(f"q_rope_torch shape: {q_rope_torch.shape}")
-    print(f"k_tt_rotated_torch shape: {k_tt_rotated_torch.shape}")
-    print(f"k_rope_torch shape: {k_rope_torch.shape}")
 
     # Compare with reference using PCC like original
     from models.common.utility_functions import comp_pcc
 
     passing, pcc_message = comp_pcc(q_tt_rotated_torch, q_rope_torch)
     mse = torch.nn.functional.mse_loss(q_tt_rotated_torch, q_rope_torch)
-    print(f"Q: {pcc_message}, mse: {mse}")
     assert passing, f"q_tt_rotated_torch: {pcc_message}"
 
     passing, pcc_message = comp_pcc(k_tt_rotated_torch, k_rope_torch)
     mse = torch.nn.functional.mse_loss(k_tt_rotated_torch, k_rope_torch)
-    print(f"K: {pcc_message}, mse: {mse}")
     assert passing, f"k_tt_rotated_torch: {pcc_message}"
 
 

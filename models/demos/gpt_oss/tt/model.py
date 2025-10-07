@@ -13,6 +13,19 @@ from .rope import ApplyRotaryPosEmb
 
 
 class Model:
+    """
+    GPT-OSS TTNN Model Implementation
+
+    This class implements the GPT-OSS model using TTNN tensors and operations.
+    It supports both prefill and decode modes with sliding window attention.
+
+    Key Features:
+    - MoE (Mixture of Experts) architecture with router and experts
+    - Sliding window attention for efficient long sequences
+    - Paged attention support for memory efficiency
+    - Compatible with tt_transformers generator interface
+    """
+
     def __init__(
         self,
         mesh_device,
@@ -24,7 +37,19 @@ class Model:
         paged_attention_config=None,
         mesh_config=None,
     ):
-        """Original GPT-OSS constructor"""
+        """
+        Initialize GPT-OSS model
+
+        Args:
+            mesh_device: TTNN mesh device for computation
+            hf_config: HuggingFace model configuration
+            state_dict: Model weights dictionary
+            ccl_manager: Collective communication manager
+            dtype: Data type for tensors (default: bfloat16)
+            tensor_cache_path: Path for tensor caching
+            paged_attention_config: Configuration for paged attention
+            mesh_config: Mesh configuration for parallelization
+        """
         self._init_gpt_oss(
             mesh_device,
             hf_config,
@@ -397,10 +422,7 @@ class Model:
         ).transpose(1, 2)
 
         # Pad to tile alignment (TTNN TILE_LAYOUT requires dimensions to be multiples of 32)
-        # current_h = sliding_mask.shape[2]  # heads_per_device
-        # if current_h % 32 != 0:
-        #     pad_h = 32 - (current_h % 32)
-        #     sliding_mask = torch.nn.functional.pad(sliding_mask, (0, 0, 0, pad_h), value=-float("inf"))
+        # Note: Padding logic removed as it's handled by the mesh config sharding
 
         tt_mask = None  # No causal mask needed in decode mode
         # Convert sliding_mask to TTNN tensor on host first

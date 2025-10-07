@@ -64,7 +64,6 @@ class TestFactory:
 
         # Extract dimensions from config (works for any model size)
         num_experts = getattr(config, "num_local_experts", 128)
-        print(f"num_experts: {num_experts}")
         hidden_size = getattr(config, "hidden_size", 2048)
         intermediate_size = getattr(config, "intermediate_size", 5632)
         num_attention_heads = getattr(config, "num_attention_heads", 32)

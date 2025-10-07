@@ -103,9 +103,7 @@ def prepare_gpt_oss_generator_args(
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "mesh_shape",
-    [
-        (1, 8),
-    ],
+    [(1, 8), (4, 8)],
 )
 @parametrize_mesh_with_fabric()
 def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
@@ -136,7 +134,7 @@ def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
     max_seq_len = 1024
     max_generated_tokens = 200  # Reasonable limit for testing
     instruct = True
-    enable_trace = True  # Start with trace disabled
+    enable_trace = False if mesh_config.ep > 1 else True  # ep> 1 currently has a fallback
 
     page_params = {
         "page_block_size": 64,
