@@ -138,9 +138,9 @@ void kernel_main() {
 
             cb_wait_front(cb_id_in0_dm_out, out_block_num_tiles);
 
-            if (n_block_iter < N_num_blocks - 1) {
-                // This is not the last iteration of the N block loop, so we will get reuse on next block, so we should
-                // write output
+            // if (n_block_iter < N_num_blocks - 1) {
+            // This is not the last iteration of the N block loop, so we will get reuse on next block, so we should
+            // write output
 #ifndef SKIP_OUT
                 uint32_t out_read_ptr = get_read_ptr(cb_id_in0_dm_out);
                 // safe_print_bf16_tile(out_read_ptr);
@@ -157,9 +157,9 @@ void kernel_main() {
                 }
                 noc_async_writes_flushed();
 #endif
-            }
+                // }
 
-            cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
+                cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
         }
         n_forward = !n_forward;
     }
