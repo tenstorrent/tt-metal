@@ -525,6 +525,7 @@ ttnn::Tensor pad_to_tile_vol(
 }
 uint32_t wrap_index(int index, int size) { return index < 0 ? size + index : index; }
 
+// not unit tested, use with caution
 uint16_t float_to_uint16(float f) {
     // For positive infinity, return the maximum uint16_t value
     // For negative infinity, return the minimum uint16_t value
