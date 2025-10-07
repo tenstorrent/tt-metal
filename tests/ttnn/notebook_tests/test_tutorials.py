@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,14 +18,56 @@ The TUTORIALS_DATA_PATHS section contains paths for data needed by tutorials but
 on external server. When new tutorial will be added with data in external server,
 please update this part.
 """
-TUTORIAL_DATA_TTNN_SIMPLECNN_INFERENCE = Path("data")
-TUTORIALS_DATA_PATHS = [TUTORIAL_DATA_TTNN_SIMPLECNN_INFERENCE]
+LOCAL_SOURCE_PATH_KEY = "local"
+EXTERNAL_SOURCE_PATH_KEY = "external"
+
+TUTORIALS_DATA_PATHS = {
+    "ttnn_simplecnn_inference": {LOCAL_SOURCE_PATH_KEY: "./data", EXTERNAL_SOURCE_PATH_KEY: "ttnn_simplecnn_inference"},
+    # NOTE: Add entries here for new tutorials that require external data
+}
 
 
 # Helper functions
-def prepare_test_data(model_location_generator):
-    for path in TUTORIALS_DATA_PATHS:
-        model_location_generator(path, download_if_ci_v2=True)
+def prepare_test_data(model_location_generator) -> None:
+    """
+    Prepare test data for tutorial tests by setting up symbolic links.
+
+    This function iterates over data needed for tutorial tests. If the data is present
+    in CIv2 LFC, it downloads it. To avoid changing paths in the tutorials themselves
+    (so customers can download and run them without modifying the paths), we create
+    symbolic links between where the data was downloaded and where the tutorial
+    expects it to be.
+
+    Args:
+        model_location_generator: A callable that takes an external path and returns
+            the local path where the data should be placed. Should support
+            download_if_ci_v2 parameter for conditional downloading.
+
+    Returns:
+        None
+
+    Effect:
+        - Downloads data from external servers via model_location_generator
+        - Creates symbolic links from local paths to downloaded data locations
+        - Removes existing symlinks/files at local paths if they exist
+    """
+    for path in TUTORIALS_DATA_PATHS.keys():
+        # Download data from external server
+        local_path = TUTORIALS_DATA_PATHS[path][LOCAL_SOURCE_PATH_KEY]
+        external_path = TUTORIALS_DATA_PATHS[path][EXTERNAL_SOURCE_PATH_KEY]
+
+        # Skip if local path exists and has content
+        local_path_obj = Path(local_path)
+        if local_path_obj.exists() and any(local_path_obj.iterdir()):
+            continue
+
+        # Download data using model_location_generator
+        data_placement = model_location_generator(external_path, download_if_ci_v2=True)
+
+        # Create symbolic link from local_path to data_placement
+        if local_path_obj.exists():
+            local_path_obj.unlink()  # Remove existing symlink/file
+        local_path_obj.symlink_to(data_placement)
 
 
 def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
