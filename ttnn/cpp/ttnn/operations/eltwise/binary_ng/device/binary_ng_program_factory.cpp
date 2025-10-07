@@ -217,7 +217,7 @@ bool is_native_L1_sharding(
 
     // tensor scalar
     if (!b.has_value() && a.memory_config().is_sharded()) {
-        return true;
+        return !is_uneven(a);
     }
 
     // a and b identical shape, no broadcast on any dimension
