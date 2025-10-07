@@ -36,7 +36,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         l1_input_shard_width);
     TT_FATAL(
         output_shard_width % 8 == 0,
-        "Output shard height must be multiple of 8 to satisfy alignment constrains (was {})",
+        "Output shard width must be multiple of 8 to satisfy alignment constraints (was {})",
         output_shard_width);
 
     const auto create_circular_buffer = [&program, &l1_input_core_grid](

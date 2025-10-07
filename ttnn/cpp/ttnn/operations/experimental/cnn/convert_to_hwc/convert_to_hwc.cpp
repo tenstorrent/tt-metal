@@ -24,11 +24,6 @@ static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Ten
     const auto output_shard_width = tt::round_up(input_shard_height, 8);  // deduce rounding from element size
 
     const std::array<uint32_t, 2> output_shard_shape = {output_shard_height, output_shard_width};
-    log_info(
-        tt::LogType::LogAlways,
-        "input_shard_shape={}, output_shard_shape={}",
-        input_shard_spec.shape,
-        output_shard_shape);
 
     auto output_shard_spec =
         tt::tt_metal::ShardSpec(input_shard_spec.grid, output_shard_shape, input_shard_spec.orientation);
@@ -59,7 +54,7 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
     }
     TT_FATAL(
         output_memory_config.shard_spec()->shape[1] % 8 == 0,
-        "Output shard width must be rounded up to next multiple of 8 to satisfy alignment constrains (width was {})",
+        "Output shard width must be rounded up to next multiple of 8 to satisfy alignment constraints (width was {})",
         output_memory_config.shard_spec()->shape[1]);
 
     auto program = ConvertToHWC{output_memory_config, dtype.value_or(a.dtype())};
