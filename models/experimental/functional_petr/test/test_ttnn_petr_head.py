@@ -19,7 +19,8 @@ from ttnn.model_preprocessing import (
 )
 from torch.nn import Conv2d, Linear
 from torch import nn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
+from loguru import logger
 from models.experimental.functional_petr.reference.utils import LiDARInstance3DBoxes
 
 # from models.experimental.functional_petr.tt.ttnn_petr_head import ttnn_pos2posemb3d
@@ -139,7 +140,7 @@ def test_petr_head_without_saved_input(device, reset_seeds):
 
     img_metas_dict = dict()
     img_metas_dict["lidar2cam"] = np.random.randn(6, 4, 4)
-    img_metas_dict["img_shape"] = [(900, 600)] * 6
+    img_metas_dict["img_shape"] = [(320, 800)] * 6
     img_metas_dict["pad_shape"] = (320, 800)
     img_metas_dict["box_type_3d"] = LiDARInstance3DBoxes
     img_metas_dict["cam2img"] = [
@@ -218,7 +219,25 @@ def test_petr_head_without_saved_input(device, reset_seeds):
     ttnn_output = ttnn_model(mlvl_feats, img_metas, device=device)
     ttnn_output["all_cls_scores"] = ttnn.to_torch(ttnn_output["all_cls_scores"])
     ttnn_output["all_bbox_preds"] = ttnn.to_torch(ttnn_output["all_bbox_preds"])
+    passed, msg = check_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
+    passed1, msg1 = check_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)
 
+    logger.info(
+        f"petr_head_without_saved_input_cls_scores test passed: "
+        # f"batch_size={batch_size}, "
+        # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
+        # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
+        # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
+        f"PCC={msg}"
+    )
+    logger.info(
+        f"petr_head_without_saved_input_bbox_preds test passed: "
+        # f"batch_size={batch_size}, "
+        # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
+        # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
+        # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
+        f"PCC={msg1}"
+    )
     assert_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
     assert_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)  # Pcc > 0.99
 
@@ -297,5 +316,24 @@ def test_petr_head(device, reset_seeds):
     ttnn_output["all_cls_scores"] = ttnn.to_torch(ttnn_output["all_cls_scores"])
     ttnn_output["all_bbox_preds"] = ttnn.to_torch(ttnn_output["all_bbox_preds"])
 
+    passed, msg = check_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
+    passed1, msg1 = check_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)
+
+    logger.info(
+        f"petr_head_cls_scores test passed: "
+        # f"batch_size={batch_size}, "
+        # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
+        # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
+        # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
+        f"PCC={msg}"
+    )
+    logger.info(
+        f"petr_head_bbox_preds test passed: "
+        # f"batch_size={batch_size}, "
+        # # f"act_dtype={self.model_config['ACTIVATIONS_DTYPE']}, "
+        # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
+        # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
+        f"PCC={msg1}"
+    )
     assert_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
     assert_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)  # Pcc > 0.99

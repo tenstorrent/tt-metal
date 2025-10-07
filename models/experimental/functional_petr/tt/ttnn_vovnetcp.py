@@ -5,11 +5,6 @@
 import ttnn
 from models.experimental.functional_petr.tt.common import Conv, Conv_with_split
 import torch
-from tt_lib.fallback_ops import fallback_ops
-from models.common.utility_functions import (
-    tt_to_torch_tensor,
-    torch_to_tt_tensor_rm,
-)
 import torch.nn.functional as F
 
 
@@ -26,7 +21,7 @@ class ttnn_hsigmoid:
 
 class ttnn_esemodule:
     def __init__(self, parameters, is_split=False):
-        self.avg_pool = ttnn.global_avg_pool2d
+        # self.avg_pool = ttnn.global_avg_pool2d
         if is_split:
             self.fc = Conv_with_split([1, 1, 0, 0], parameters["fc"])
         else:
@@ -35,9 +30,12 @@ class ttnn_esemodule:
 
     def __call__(self, device, x):
         input = x
-        x = self.avg_pool(x)
+        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # x = self.avg_pool(x)
+        x = ttnn.global_avg_pool2d(x)
+        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.fc(device, x)
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.hsigmoid(x)
         # x = ttnn.div(ttnn.relu6(x + 3.0), 6.0)  # Hsigmoid()
         if input.get_layout() != ttnn.TILE_LAYOUT:
@@ -95,7 +93,7 @@ class ttnn_osa_module:
                 or "OSA3_3" in module_name_with_i
             ):
                 self.layers.append(
-                    Conv_with_split([1, 1, 1, 1], parameters["{}_{}".format(module_name, i)], activation="relu")
+                    Conv([1, 1, 1, 1], parameters["{}_{}".format(module_name, i)], activation="relu", act_block_h=128)
                 )
             else:
                 self.layers.append(Conv([1, 1, 1, 1], parameters["{}_{}".format(module_name, i)], activation="relu"))
@@ -105,8 +103,16 @@ class ttnn_osa_module:
                 self.conv_concat = Conv_with_split(
                     [1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")], activation="relu", split_factor=4
                 )
+            # elif module_name == "OSA3_1":
+            #     self.conv_concat = Conv_with_split([1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")],
+            #                     activation="relu", split_factor=2)  # Reduced from 4
+            # elif module_name == "OSA3_2" or module_name == "OSA3_3":
+            #     self.conv_concat = Conv_with_split([1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")],
+            #                     activation="relu", split_factor=8)  # Reduced from 16
             elif (
-                module_name == "OSA3_3" or module_name == "OSA4_1" or module_name == "OSA3_1" or module_name == "OSA3_2"
+                module_name
+                == "OSA4_1"
+                # module_name == "OSA3_3" or module_name == "OSA4_1" or module_name == "OSA3_1" or module_name == "OSA3_2"
             ):
                 self.conv_concat = Conv_with_split(
                     [1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")], activation="relu", split_factor=16
@@ -139,22 +145,8 @@ class ttnn_osa_module:
             module_name_with_i = "{}_{}".format(self.module_name, i)
 
             if "OSA2_1" in module_name_with_i:
-                x = ttnn.permute(x, (0, 3, 1, 2))
-                x = ttnn.to_torch(x)
-                if x.dtype == torch.bfloat16:
-                    x = x.to(torch.float)
-                x = F.conv2d(
-                    x,
-                    self.parameters["{}_{}".format(self.module_name, i)]["weight"],
-                    bias=self.parameters["{}_{}".format(self.module_name, i)]["bias"],
-                    stride=1,
-                    padding=1,
-                )
-                x = ttnn.from_torch(x.permute(0, 2, 3, 1), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
-                x = ttnn.relu(x)
-                if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-                    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-                # x = self.layers[i](device, x)
+                conv_layer = Conv([1, 1, 1, 1], self.parameters["{}_{}".format(self.module_name, i)], activation="relu")
+                x = conv_layer(device, x)
             else:
                 x = layer(device, x)
             if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
@@ -163,8 +155,10 @@ class ttnn_osa_module:
                 x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
             output.append(x)
         for idx in range(len(output)):
+            if output[idx].get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                output[idx] = ttnn.to_layout(output[idx], ttnn.ROW_MAJOR_LAYOUT)
             if hasattr(output[idx], "memory_config") and output[idx].memory_config().is_sharded():
-                output[idx] = ttnn.to_memory_config(output[idx], ttnn.DRAM_MEMORY_CONFIG)
+                output[idx] = ttnn.to_memory_config(output[idx], ttnn.L1_MEMORY_CONFIG)
 
         x = ttnn.concat(output, dim=3)
 
@@ -173,22 +167,10 @@ class ttnn_osa_module:
         if self.module_name != "OSA2_1":
             x = self.conv_concat(device, x)
         else:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.to_torch(x)
-            x = torch.permute(x, (0, 3, 1, 2))
-            x = torch_to_tt_tensor_rm(x, device, put_on_device=True)
-            xt = fallback_ops.conv2d(
-                x,
-                self.parameters["{}_{}".format(self.module_name, "concat")]["weight"],
-                self.parameters["{}_{}".format(self.module_name, "concat")]["bias"],
-                1,
-                0,
-                1,
-                1,
+            conv_layer = Conv(
+                [1, 1, 0, 0], self.parameters["{}_{}".format(self.module_name, "concat")], activation="relu"
             )
-            xt = tt_to_torch_tensor(xt)
-            xt = ttnn.from_torch(xt.permute(0, 2, 3, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            x = ttnn.relu(xt)
+            x = conv_layer(device, x)
 
         x = self.ese(device, x)
         if x.get_layout() != ttnn.TILE_LAYOUT:
@@ -218,11 +200,9 @@ class ttnn_osa_module:
             elif "OSA5" in self.module_name:
                 height, width = 10, 25
             else:
-                # Fallback: try to use input dimensions
                 if self.identity and len(input_shape) == 4:
                     height, width = input_shape[1], input_shape[2]
                 else:
-                    # Last resort: try to factor the total
                     height = int(total_spatial**0.5)
                     width = total_spatial // height
 
@@ -295,13 +275,6 @@ class ttnn_osa_stage:
 
     def __call__(self, device, x):
         if self.pooling is True:
-            # x = ttnn.permute(x, (0, 3, 1, 2))
-            # x = ttnn.to_torch(x)
-            # x = F.max_pool2d(x, kernel_size=3, stride=2, ceil_mode=True)
-            # x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16)
-            # if x.get_layout() != ttnn.TILE_LAYOUT:
-            #     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            # x = ttnn.permute(x, (0, 2, 3, 1))
             x = ttnn.max_pool2d(
                 input_tensor=x,
                 batch_size=x.shape[0],
