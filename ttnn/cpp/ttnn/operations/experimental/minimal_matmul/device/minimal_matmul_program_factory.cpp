@@ -176,8 +176,8 @@ tt::tt_metal::operation::ProgramWithCallbacks minimal_matmul_factory(
     std::vector<tt::tt_metal::KernelHandle> reader_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
 
-    tt::tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt::tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt::tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    tt::tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     // tt::tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     // tt::tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
