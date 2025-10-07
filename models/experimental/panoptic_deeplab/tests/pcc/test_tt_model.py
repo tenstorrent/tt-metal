@@ -119,7 +119,7 @@ def test_panoptic_deeplab(device, model_location_generator):
     logger.info(f"Semantic PCC: {sem_msg}")
     assert sem_passed, f"Semantic segmentation PCC failed: {sem_msg}"
 
-    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.94)
+    center_passed, center_msg = assert_with_pcc(pytorch_center, ttnn_center_torch, pcc=0.99)
     logger.info(f"Center PCC: {center_msg}")
     assert center_passed, f"Center heatmap PCC failed: {center_msg}"
 

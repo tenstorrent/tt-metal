@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from typing import Union
 from loguru import logger
 
 from models.experimental.panoptic_deeplab.tt.tt_stem import TtStem
@@ -19,13 +20,20 @@ class TtResNet(LightweightModule):
     - res3: 4 blocks, first has stride=2
     - res4: 6 blocks, first has stride=2
     - res5: 3 blocks, dilated convolutions (2, 4, 8)
+
+    Args:
+        parameters: Model parameters
+        device: TTNN device
+        dtype: Either a single DataType to apply to all layers, or a dict mapping
+               layer names ("stem", "res2", "res3", "res4", "res5") to DataTypes
+               for per-layer precision control.
     """
 
     def __init__(
         self,
         parameters,
         device: ttnn.MeshDevice,
-        dtype: ttnn.DataType = ttnn.bfloat8_b,
+        dtype: Union[ttnn.DataType, dict[str, ttnn.DataType]] = ttnn.bfloat8_b,
         layer_dtypes: dict = None,
         model_configs=None,
     ):
@@ -35,8 +43,10 @@ class TtResNet(LightweightModule):
 
         logger.debug("Initializing TtResNet")
 
-        # Default per-layer dtype configuration if not provided
-        if layer_dtypes is None:
+        # Handle dtype parameter - if it's a dict, use it as layer_dtypes, otherwise apply to all layers
+        if isinstance(dtype, dict):
+            layer_dtypes = dtype
+        else:
             layer_dtypes = {
                 "stem": dtype,
                 "res2": dtype,
@@ -119,7 +129,7 @@ class TtResNet(LightweightModule):
 
         return outputs
 
-    def _forward_res_layer(self, x: ttnn.Tensor, layer: []) -> ttnn.Tensor:
+    def _forward_res_layer(self, x: ttnn.Tensor, layer: list[TtBottleneck]) -> ttnn.Tensor:
         """Forward pass through a residual layer"""
         for block in layer:
             x = block(x)
