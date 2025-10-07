@@ -12,33 +12,30 @@ void MAIN {
     // - n_tiles
     // - any scalar params used in expression tree
     const auto n_tiles = get_arg_val<uint32_t>(0);
-    const auto value = get_arg_val<uint32_t>(1);
+
+    using namespace tt;
+    using namespace views;
 
     // ct args are:
     // - num_tiles_per_cycle
-    // - cb_indices for any intermediate buffered tiles in expression tree
-    // - cb_indices for input tensors
+    // - cb_indices for input and internal nodes in postfix order
     // - cb_index for output tensor
 
-    // 4 circular buffers: cb_in0, cb_in1, cb_in2, cb_out0
-    // and append 2 ct args (num_tiles_per_cycle, cb_temp)
-    const auto view = views::MakeComputeView<4, 2>();
+    // 5 circular buffers
+    using View = MakeComputeView<5>;
 
-    view.init_tiles(views::init_sfpu<tt::c_0, tt::c_3>());
+    View::init_tiles(init_sfpu<c_0, c_4>());
 
     // fused addcmul
-    // c_0 + ((c_1 * value) * c_2) -> c_3
-    const auto addcmul =
-        // c_1 * value -> c_4
-        views::with_cb_ids</*0*/ tt::c_1, /*1*/ tt::c_4>(
-            views::copy<0 /*c_1*/>(0, 0) | views::mul_unary(0, value) | views::pack<1 /*c_4*/>(0)) |
+    // c_0 + ((c_1 * value) * c_3) -> c_4
+    View::compute_tiles(
+        n_tiles,
+        // c_1 * value -> c_2
+        with_cb_ids</*0*/ c_1, /*1*/ c_2>(
+            copy<0 /*c_1*/>(0, 0), mul_unary(0, get_arg_val<uint32_t>(1)), pack<1 /*c_2*/>(0)),
         // c_4 * c_2 -> c_4
-        views::with_cb_ids</*0*/ tt::c_4, /*1*/ tt::c_2, /*2*/ tt::c_4>(
-            views::mul<0 /*c_4*/, 1 /*c_2*/>(0, 0, 0) | views::pack<2 /*c_4*/>(0)) |
+        with_cb_ids</*0*/ c_2, /*1*/ c_3, /*2*/ c_2>(mul<0 /*c_2*/, 1 /*c_3*/>(0, 0, 0), pack<2 /*c_2*/>(0)),
         // c_0 + c_4 -> c_3
-        views::with_cb_ids</*0*/ tt::c_0, /*1*/ tt::c_4, /*2*/ tt::c_3>(
-            views::add<0 /*c_0*/, 1 /*c_4*/>(0, 0, 0) | views::pack<2 /*c_3*/>(0));
-
-    view.compute_tiles(n_tiles, addcmul);
+        with_cb_ids</*0*/ c_0, /*1*/ c_2, /*2*/ c_4>(add<0 /*c_0*/, 1 /*c_2*/>(0, 0, 0), pack<2 /*c_4*/>(0)));
 }
 }  // namespace NAMESPACE
