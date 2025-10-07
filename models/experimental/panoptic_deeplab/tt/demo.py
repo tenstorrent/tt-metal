@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import argparse
 from loguru import logger
-
+from scipy.spatial.distance import cdist
 import ttnn
 from models.experimental.panoptic_deeplab.tt.model_preprocessing import (
     create_panoptic_deeplab_parameters,
@@ -34,8 +34,6 @@ def merge_nearby_instances(panoptic_seg: np.ndarray, max_distance: int = 15) -> 
     Returns:
         Updated panoptic segmentation map
     """
-
-    from scipy.spatial.distance import cdist
 
     result = panoptic_seg.copy()
     unique_ids = np.unique(panoptic_seg)
@@ -93,57 +91,6 @@ def merge_nearby_instances(panoptic_seg: np.ndarray, max_distance: int = 15) -> 
                     result[mask_j] = instance_ids[i]
                     merged.add(j)
                     logger.debug(f"Merged {category_id} instance {instance_ids[j]} into {instance_ids[i]}")
-
-    return result
-
-
-def expand_instances_to_semantic(
-    panoptic_seg: np.ndarray, semantic_classes: np.ndarray, expand_radius: int = 5
-) -> np.ndarray:
-    """
-    Expand existing instances to cover nearby pixels of the same semantic class.
-    Uses moderate expansion to avoid over-processing.
-
-    Args:
-        panoptic_seg: Panoptic segmentation map [H, W]
-        semantic_classes: Semantic segmentation map [H, W]
-        expand_radius: Radius for expanding instances
-
-    Returns:
-        Updated panoptic segmentation map
-    """
-    result = panoptic_seg.copy()
-    unique_ids = np.unique(panoptic_seg)
-    label_divisor = 1000
-
-    # For each instance, try to expand it moderately
-    for segment_id in unique_ids:
-        if segment_id == 0 or segment_id == 255:  # Skip background and void
-            continue
-
-        category_id = segment_id // label_divisor
-        if category_id < 11 or category_id > 18:  # Only expand thing classes
-            continue
-
-        # Get current instance mask
-        instance_mask = panoptic_seg == segment_id
-        if np.sum(instance_mask) == 0:
-            continue
-
-        # Use moderate expansion - same for all objects to avoid complexity
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (expand_radius * 2 + 1, expand_radius * 2 + 1))
-        expanded_mask = cv2.dilate(instance_mask.astype(np.uint8), kernel, iterations=1).astype(bool)
-
-        # Find pixels that are:
-        # 1. In the expanded region
-        # 2. Same semantic class
-        # 3. Currently background (0) or void (255)
-        background_mask = (result == 0) | (result == 255)
-        same_semantic = semantic_classes == category_id
-        expandable_pixels = expanded_mask & same_semantic & background_mask
-
-        # Add these pixels to the instance
-        result[expandable_pixels] = segment_id
 
     return result
 
@@ -206,38 +153,61 @@ def preprocess_image(
     return image_tensor
 
 
-def apply_imagenet_norm_on_device(input_tensor: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+class TtImageNetNormalization:
     """
-    Apply ImageNet normalization on Tensix cores.
+    Efficient ImageNet normalization module for TTNN tensors.
 
-    Args:
-        input_tensor: Input tensor in NHWC format on device, values in [0,1]
-        device: TTNN device
-
-    Returns:
-        ImageNet normalized tensor on device
+    Pre-loads mean and std tensors to device during initialization to avoid
+    repeated data movement on every forward pass.
     """
-    # ImageNet statistics
-    # mean = [0.485, 0.456, 0.406] for RGB channels
-    # std = [0.229, 0.224, 0.225] for RGB channels
 
-    # Create mean and std tensors on device
-    # Input is in NHWC format, so we need shape [1, H, W, 3]
-    batch_size, height, width, channels = input_tensor.shape
+    def __init__(self, device: ttnn.Device, target_size: Tuple[int, int]):
+        """
+        Initialize with device and target image size.
 
-    # Create mean tensor: [0.485, 0.456, 0.406] broadcasted to [1, H, W, 3]
-    mean_values = torch.tensor([0.485, 0.456, 0.406]).view(1, 1, 1, 3).expand(1, height, width, 3)
-    mean_tensor = ttnn.from_torch(mean_values, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        Args:
+            device: TTNN device
+            target_size: Target size as (height, width)
+        """
+        self.device = device
+        self.height, self.width = target_size
 
-    # Create std tensor: [0.229, 0.224, 0.225] broadcasted to [1, H, W, 3]
-    std_values = torch.tensor([0.229, 0.224, 0.225]).view(1, 1, 1, 3).expand(1, height, width, 3)
-    std_tensor = ttnn.from_torch(std_values, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        # ImageNet normalization constants
+        # mean = [0.485, 0.456, 0.406] for RGB channels
+        # std = [0.229, 0.224, 0.225] for RGB channels
 
-    # Apply normalization: (input - mean) / std
-    normalized = ttnn.subtract(input_tensor, mean_tensor)
-    normalized = ttnn.divide(normalized, std_tensor)
+        # Pre-create mean and std tensors on device with target size
+        # Shape: [1, H, W, 3] for NHWC format
+        mean_values = torch.tensor([0.485, 0.456, 0.406]).view(1, 1, 1, 3).expand(1, self.height, self.width, 3)
+        self.mean_tensor = ttnn.from_torch(mean_values, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-    return normalized
+        std_values = torch.tensor([0.229, 0.224, 0.225]).view(1, 1, 1, 3).expand(1, self.height, self.width, 3)
+        self.std_tensor = ttnn.from_torch(std_values, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+        logger.debug(f"TtImageNetNormalization initialized for size {target_size}")
+
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """
+        Apply ImageNet normalization to input tensor.
+
+        Args:
+            input_tensor: Input tensor in NHWC format on device, values in [0,1]
+
+        Returns:
+            ImageNet normalized tensor on device
+        """
+        # Verify input tensor size matches initialized size
+        batch_size, height, width, channels = input_tensor.shape
+        if height != self.height or width != self.width:
+            raise ValueError(
+                f"Input tensor size ({height}, {width}) doesn't match initialized size ({self.height}, {self.width})"
+            )
+
+        # Apply normalization: (input - mean) / std
+        normalized = ttnn.subtract(input_tensor, self.mean_tensor)
+        normalized = ttnn.divide(normalized, self.std_tensor)
+
+        return normalized
 
 
 def create_panoptic_visualization(
@@ -283,14 +253,11 @@ def create_panoptic_visualization(
     offset_tensor = torch.from_numpy(offset_pred).permute(2, 0, 1)  # [2, H, W]
 
     # Get panoptic segmentation using reference implementation
-    logger.info(
-        f"DEBUG: Using thresholds - center: {center_threshold}, score: {score_threshold}, stuff_area: {stuff_area}"
-    )
-    logger.info(f"DEBUG: Max center prediction: {center_tensor.max().item():.6f}")
-    logger.info(f"DEBUG: Number of pixels above center threshold: {(center_tensor > center_threshold).sum().item()}")
-
-    logger.debug(f"DEBUG: Center values > 0.01: {(center_tensor > 0.01).sum().item()}")
-    logger.debug(f"DEBUG: Center values > 0.05: {(center_tensor > 0.05).sum().item()}")
+    logger.info(f"Using thresholds - center: {center_threshold}, score: {score_threshold}, stuff_area: {stuff_area}")
+    logger.debug(f"Max center prediction: {center_tensor.max().item():.6f}")
+    logger.debug(f"Pixels above center threshold: {(center_tensor > center_threshold).sum().item()}")
+    logger.debug(f"Pixels with center > 0.01: {(center_tensor > 0.01).sum().item()}")
+    logger.debug(f"Pixels with center > 0.05: {(center_tensor > 0.05).sum().item()}")
 
     panoptic_seg, center_points = get_panoptic_segmentation(
         semantic_tensor,
@@ -306,7 +273,7 @@ def create_panoptic_visualization(
         foreground_mask=None,
     )
 
-    logger.debug(f"DEBUG: get_panoptic_segmentation returned {len(np.unique(panoptic_seg))} unique segments")
+    logger.debug(f"Panoptic segmentation returned {len(np.unique(panoptic_seg))} unique segments")
 
     # Create visualization
     panoptic_seg = panoptic_seg.squeeze(0).numpy()  # Remove batch dimension
@@ -576,28 +543,30 @@ def run_panoptic_deeplab_demo(
         logger.error("Please download the Panoptic DeepLab weights and place them at the specified path.")
         return
 
+    # Initialize ImageNet normalization module once for this inference
+    imagenet_normalizer = None
+    if use_imagenet_norm:
+        logger.info("Initializing ImageNet normalization module...")
+        imagenet_normalizer = TtImageNetNormalization(device, target_size)
+
     # Prepare inputs for both models
     # Convert to TTNN format (values still in [0,1] range)
     ttnn_input = ttnn.from_torch(
         input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
 
-    # Apply ImageNet normalization on Tensix cores if requested
+    # Apply ImageNet normalization
     if use_imagenet_norm:
-        logger.info("Applying ImageNet normalization on Tensix cores for both models...")
+        logger.info("Applying ImageNet normalization...")
 
-        # Apply normalization on device
-        ttnn_input = apply_imagenet_norm_on_device(ttnn_input, device)
+        # Apply normalization on device for TTNN using the efficient module
+        ttnn_input = imagenet_normalizer.forward(ttnn_input)
 
-        # For PyTorch: also apply normalization on device, then convert back to CPU
-        # Create a temporary tensor in NCHW format for device normalization
-        pytorch_input_device = ttnn.from_torch(
-            input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-        )
-        pytorch_input_device_norm = apply_imagenet_norm_on_device(pytorch_input_device, device)
-
-        # Convert back to PyTorch tensor in NCHW format
-        pytorch_input = ttnn.to_torch(pytorch_input_device_norm).permute(0, 3, 1, 2).to(dtype=torch.bfloat16)
+        # For PyTorch: Apply normalization on CPU
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+        pytorch_input = (input_tensor - mean) / std
+        pytorch_input = pytorch_input.to(dtype=torch.bfloat16)
     else:
         # No normalization case - just convert PyTorch input to bfloat16
         pytorch_input = input_tensor.to(dtype=torch.bfloat16)
@@ -662,6 +631,7 @@ def run_panoptic_deeplab_batch_demo(
 ):
     """
     Run Panoptic DeepLab inference on multiple images from a directory.
+    Optimized for batch processing - loads models once and reuses them.
 
     Args:
         device: TTNN device
@@ -671,6 +641,8 @@ def run_panoptic_deeplab_batch_demo(
         target_size: Input size as (height, width)
         max_images: Maximum number of images to process
     """
+    disable_persistent_kernel_cache()
+
     # Find image files
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
     image_files = [f for f in os.listdir(input_dir) if os.path.splitext(f.lower())[1] in image_extensions]
@@ -683,22 +655,153 @@ def run_panoptic_deeplab_batch_demo(
     image_files = image_files[:max_images]
     logger.info(f"Processing {len(image_files)} images from {input_dir}")
 
-    # Process each image
+    # Get model configuration (do this once)
+    config = get_panoptic_deeplab_config()
+    batch_size = config["batch_size"]
+    num_classes = config["num_classes"]
+    project_channels = config["project_channels"]
+    decoder_channels = config["decoder_channels"]
+    sem_seg_head_channels = config["sem_seg_head_channels"]
+    ins_embed_head_channels = config["ins_embed_head_channels"]
+    common_stride = config["common_stride"]
+
+    try:
+        # Load PyTorch model with weights (do this once)
+        logger.info("Loading PyTorch model...")
+        pytorch_model = PytorchPanopticDeepLab(
+            num_classes=num_classes,
+            common_stride=common_stride,
+            project_channels=project_channels,
+            decoder_channels=decoder_channels,
+            sem_seg_head_channels=sem_seg_head_channels,
+            ins_embed_head_channels=ins_embed_head_channels,
+            norm="SyncBN",
+            train_size=target_size,
+            weights_path=weights_path,
+        )
+        pytorch_model = pytorch_model.to(dtype=torch.bfloat16)
+        pytorch_model.eval()
+
+        # Create TTNN parameters (do this once)
+        logger.info("Creating TTNN parameters...")
+        ttnn_parameters = create_panoptic_deeplab_parameters(pytorch_model, device)
+
+        # Apply Conv+BatchNorm fusion (do this once)
+        logger.info("Applying Conv+BatchNorm fusion...")
+        fused_parameters = fuse_conv_bn_parameters(ttnn_parameters, eps=1e-5)
+
+        # Create TTNN model (do this once)
+        logger.info(f"Creating TTNN model with ResNet dtype config: {resnet_dtype_config}")
+        layer_dtypes = create_resnet_dtype_config(resnet_dtype_config)
+        logger.info(f"ResNet layer dtypes: {layer_dtypes}")
+
+        ttnn_model = TtPanopticDeepLab(
+            device=device,
+            parameters=fused_parameters,
+            num_classes=num_classes,
+            common_stride=common_stride,
+            project_channels=project_channels,
+            decoder_channels=decoder_channels,
+            sem_seg_head_channels=sem_seg_head_channels,
+            ins_embed_head_channels=ins_embed_head_channels,
+            norm="",
+            train_size=target_size,
+            resnet_layer_dtypes=layer_dtypes,
+        )
+
+        # Initialize ImageNet normalization module once for batch processing
+        imagenet_normalizer = None
+        if use_imagenet_norm:
+            logger.info("Initializing ImageNet normalization module...")
+            imagenet_normalizer = TtImageNetNormalization(device, target_size)
+
+    except FileNotFoundError:
+        logger.error(f"Weights file not found: {weights_path}")
+        logger.error("Please download the Panoptic DeepLab weights and place them at the specified path.")
+        return
+
+    # Process each image with pre-loaded models
     for i, image_file in enumerate(image_files):
         logger.info(f"Processing image {i+1}/{len(image_files)}: {image_file}")
         image_path = os.path.join(input_dir, image_file)
 
         try:
-            run_panoptic_deeplab_demo(
-                device,
-                image_path,
-                weights_path,
-                output_dir,
-                target_size,
-                resnet_dtype_config,
-                center_threshold,
-                use_imagenet_norm,
+            # Preprocess image
+            logger.info("Preprocessing image...")
+            input_tensor = preprocess_image(image_path, target_size, use_imagenet_norm)
+
+            # Load original image for visualization
+            original_image = cv2.imread(image_path)
+            original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+            original_image = cv2.resize(original_image, (target_size[1], target_size[0]))
+
+            # Prepare inputs for both models
+            # Convert to TTNN format (values still in [0,1] range)
+            ttnn_input = ttnn.from_torch(
+                input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
             )
+
+            # Apply ImageNet normalization
+            if use_imagenet_norm:
+                logger.info("Applying ImageNet normalization...")
+
+                # Apply normalization on device for TTNN using the pre-initialized module
+                ttnn_input = imagenet_normalizer.forward(ttnn_input)
+
+                # For PyTorch: Apply normalization on CPU
+                mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
+                std = torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+                pytorch_input = (input_tensor - mean) / std
+                pytorch_input = pytorch_input.to(dtype=torch.bfloat16)
+            else:
+                # No normalization case - just convert PyTorch input to bfloat16
+                pytorch_input = input_tensor.to(dtype=torch.bfloat16)
+
+            logger.info("Running PyTorch inference...")
+            with torch.no_grad():
+                pytorch_semantic_logits, pytorch_center_logits, pytorch_offset_logits, _ = pytorch_model.forward(
+                    pytorch_input
+                )
+
+            # Run inference
+            logger.info("Running TTNN inference...")
+            ttnn_semantic_logits, ttnn_center_logits, ttnn_offset_logits, _ = ttnn_model.forward(ttnn_input)
+
+            # Process TTNN results
+            logger.info("Processing TTNN results...")
+            semantic_np_ttnn = ttnn.to_torch(ttnn_semantic_logits).float().squeeze(0).numpy()
+            center_np_ttnn = ttnn.to_torch(ttnn_center_logits).float().squeeze(0).numpy()
+            offset_np_ttnn = ttnn.to_torch(ttnn_offset_logits).float().squeeze(0).numpy()
+            panoptic_vis_ttnn, panoptic_info_ttnn = create_panoptic_visualization(
+                semantic_np_ttnn,
+                center_np_ttnn,
+                offset_np_ttnn,
+                original_image,
+                center_threshold=center_threshold,
+                score_threshold=center_threshold,
+                stuff_area=1,
+                top_k=1000,
+                nms_kernel=11,
+            )
+
+            # Save TTNN results
+            image_name = os.path.basename(image_path)
+            ttnn_output_dir = os.path.join(output_dir, "ttnn_output")
+            save_predictions(ttnn_output_dir, image_name, original_image, panoptic_vis_ttnn)
+
+            # Process PyTorch results
+            logger.info("Processing PyTorch results...")
+            semantic_np_pytorch = pytorch_semantic_logits.float().squeeze(0).permute(1, 2, 0).numpy()
+            center_np_pytorch = pytorch_center_logits.float().squeeze(0).permute(1, 2, 0).numpy()
+            offset_np_pytorch = pytorch_offset_logits.float().squeeze(0).permute(1, 2, 0).numpy()
+            panoptic_vis_pytorch, panoptic_info_pytorch = create_panoptic_visualization(
+                semantic_np_pytorch, center_np_pytorch, offset_np_pytorch, original_image
+            )
+
+            # Save PyTorch results
+            pytorch_output_dir = os.path.join(output_dir, "pytorch_output")
+            save_predictions(pytorch_output_dir, image_name, original_image, panoptic_vis_pytorch)
+
         except Exception as e:
             logger.error(f"Failed to process {image_file}: {e}")
             continue
