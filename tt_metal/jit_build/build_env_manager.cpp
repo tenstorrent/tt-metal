@@ -233,4 +233,8 @@ void BuildEnvManager::build_firmware(chip_id_t device_id) {
     jit_build_subset(get_device_build_env(device_id).firmware_build_states, nullptr);
 }
 
+// Get device-specific firmware path for each device and build config
+const std::string& BuildEnvManager::get_out_firmware_root_path(chip_id_t device_id) {
+    return get_device_build_env(device_id).build_env.get_out_firmware_root_path();
+}
 }  // namespace tt::tt_metal

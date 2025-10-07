@@ -57,6 +57,9 @@ public:
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
+    const std::string& get_out_firmware_root_path() const {
+        return out_firmware_root_;
+    }  // Path to the firmware directory for this device
 
 private:
     tt::ARCH arch_{tt::ARCH::Invalid};

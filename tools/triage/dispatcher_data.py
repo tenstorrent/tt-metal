@@ -61,8 +61,25 @@ class DispatcherData:
         if len(self.kernels) == 0:
             raise TTTriageError("No kernels found in inspector data.")
         self._a_kernel_path = next(iter(self.kernels.values())).path
-        brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
-        idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
+        # Cache build_env per device to avoid multiple RPC calls
+        # Each device needs to have its own build_env to get the correct firmware path
+        self._build_env_cache = {}
+
+        # Get the firmware paths from Inspector RPC build environment instead of relative paths
+        # This ensures correct firmware paths for all devices and build configs
+        try:
+            device_id = 0
+            self._build_env_cache[device_id] = inspector_data.getBuildEnv(deviceId=device_id).buildInfo
+            brisc_elf_path = os.path.join(self._build_env_cache[device_id].firmwarePath, "brisc", "brisc.elf")
+            idle_erisc_elf_path = os.path.join(
+                self._build_env_cache[device_id].firmwarePath, "idle_erisc", "idle_erisc.elf"
+            )
+        except Exception as e:
+            raise TTTriageError(
+                f"Failed to get firmware path from Inspector RPC: {e}\n"
+                "Make sure Inspector RPC is available or serialized RPC data exists.\n"
+                "Set TT_METAL_INSPECTOR_RPC=1 when running your Metal application."
+            )
 
         # Check if firmware elf paths exist
         if not os.path.exists(brisc_elf_path):
@@ -133,6 +150,12 @@ class DispatcherData:
         }
         self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
+    def _get_build_env_for_device(self, device_id: int):
+        """Get build_env for a specific device, with caching"""
+        if device_id not in self._build_env_cache:
+            self._build_env_cache[device_id] = self.inspector_data.getBuildEnv(deviceId=device_id).buildInfo
+        return self._build_env_cache[device_id]
+
     def find_kernel(self, watcher_kernel_id):
         # Try to get kernel from RPC inspector data first, then fallback to cached kernels
         # RPC kernel find won't work if we are not connected to RPC, but are reading serialized data or logs
@@ -159,6 +182,13 @@ class DispatcherData:
             programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
             enum_values = self._enum_values_eth
 
+        # Get the build_env for the device to get the correct firmware path
+        # Each device may have different firmware paths based on its build configuration
+        device_id = location._device._id
+        try:
+            build_env = self._get_build_env_for_device(device_id)
+        except Exception as e:
+            raise TTTriageError(f"Cannot get firmware path for device {device_id}: {e}")
         proc_name = risc_name.upper()
         proc_type = enum_values["ProcessorTypes"][proc_name]
 
@@ -258,12 +288,14 @@ class DispatcherData:
         except:
             pass
 
+        # Construct the firmware path from the build_env instead of relative paths
+        # This ensures we get the correct firmware path for this device and build config
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-            firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
+            firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
         elif proc_name.lower() == "erisc1":
-            firmware_path = self._a_kernel_path + "../../../firmware/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+            firmware_path = os.path.join(build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf")
         else:
-            firmware_path = self._a_kernel_path + f"../../../firmware/{proc_name.lower()}/{proc_name.lower()}.elf"
+            firmware_path = os.path.join(build_env.firmwarePath, f"{proc_name.lower()}/{proc_name.lower()}.elf")
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
