@@ -5,9 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include <vector>
-#include "debug/waypoint.h"
-#include "debug/dprint.h"
-#include "debug/pause.h"
+
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
