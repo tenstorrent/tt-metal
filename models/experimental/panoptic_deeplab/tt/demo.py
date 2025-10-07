@@ -181,9 +181,10 @@ def preprocess_image(
     Args:
         image_path: Path to input image
         target_size: Target size as (height, width)
+        use_imagenet_norm: Whether to apply ImageNet normalization (will be done on device if True)
 
     Returns:
-        Preprocessed tensor in NCHW format
+        Preprocessed tensor in NCHW format (normalized to [0,1], ImageNet norm applied on device)
     """
     # Load image
     image = cv2.imread(image_path)
@@ -196,18 +197,47 @@ def preprocess_image(
     # Resize to target size
     image = cv2.resize(image, (target_size[1], target_size[0]))  # cv2 expects (width, height)
 
-    # Convert to tensor and normalize to [0, 1]
+    # Convert to tensor and normalize to [0, 1] only
     image_tensor = torch.from_numpy(image.transpose(2, 0, 1)).float() / 255.0
-
-    if use_imagenet_norm:
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-        image_tensor = (image_tensor - mean) / std
 
     # Add batch dimension
     image_tensor = image_tensor.unsqueeze(0)
 
     return image_tensor
+
+
+def apply_imagenet_norm_on_device(input_tensor: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
+    """
+    Apply ImageNet normalization on Tensix cores.
+
+    Args:
+        input_tensor: Input tensor in NHWC format on device, values in [0,1]
+        device: TTNN device
+
+    Returns:
+        ImageNet normalized tensor on device
+    """
+    # ImageNet statistics
+    # mean = [0.485, 0.456, 0.406] for RGB channels
+    # std = [0.229, 0.224, 0.225] for RGB channels
+
+    # Create mean and std tensors on device
+    # Input is in NHWC format, so we need shape [1, H, W, 3]
+    batch_size, height, width, channels = input_tensor.shape
+
+    # Create mean tensor: [0.485, 0.456, 0.406] broadcasted to [1, H, W, 3]
+    mean_values = torch.tensor([0.485, 0.456, 0.406]).view(1, 1, 1, 3).expand(1, height, width, 3)
+    mean_tensor = ttnn.from_torch(mean_values, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # Create std tensor: [0.229, 0.224, 0.225] broadcasted to [1, H, W, 3]
+    std_values = torch.tensor([0.229, 0.224, 0.225]).view(1, 1, 1, 3).expand(1, height, width, 3)
+    std_tensor = ttnn.from_torch(std_values, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # Apply normalization: (input - mean) / std
+    normalized = ttnn.subtract(input_tensor, mean_tensor)
+    normalized = ttnn.divide(normalized, std_tensor)
+
+    return normalized
 
 
 def create_panoptic_visualization(
@@ -547,10 +577,30 @@ def run_panoptic_deeplab_demo(
         return
 
     # Prepare inputs for both models
-    pytorch_input = input_tensor.to(dtype=torch.bfloat16)
+    # Convert to TTNN format (values still in [0,1] range)
     ttnn_input = ttnn.from_torch(
         input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
     )
+
+    # Apply ImageNet normalization on Tensix cores if requested
+    if use_imagenet_norm:
+        logger.info("Applying ImageNet normalization on Tensix cores for both models...")
+
+        # Apply normalization on device
+        ttnn_input = apply_imagenet_norm_on_device(ttnn_input, device)
+
+        # For PyTorch: also apply normalization on device, then convert back to CPU
+        # Create a temporary tensor in NCHW format for device normalization
+        pytorch_input_device = ttnn.from_torch(
+            input_tensor.permute(0, 2, 3, 1), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+        )
+        pytorch_input_device_norm = apply_imagenet_norm_on_device(pytorch_input_device, device)
+
+        # Convert back to PyTorch tensor in NCHW format
+        pytorch_input = ttnn.to_torch(pytorch_input_device_norm).permute(0, 3, 1, 2).to(dtype=torch.bfloat16)
+    else:
+        # No normalization case - just convert PyTorch input to bfloat16
+        pytorch_input = input_tensor.to(dtype=torch.bfloat16)
 
     logger.info("Running PyTorch inference...")
     with torch.no_grad():
