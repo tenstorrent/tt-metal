@@ -12,7 +12,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 def run_with_trace(
     mesh_device,
     sender_coord,
-    all_broadcast_topology,
+    broadcast_topology,
     input_tensor_mesh,
     num_links,
     output_mem_config,
@@ -26,7 +26,7 @@ def run_with_trace(
         sender_coord=sender_coord,
         num_links=num_links,
         memory_config=output_mem_config,
-        topology=all_broadcast_topology,
+        topology=broadcast_topology,
         subdevice_id=subdevice_id,
     )
     ttnn.synchronize_device(mesh_device)
@@ -40,7 +40,7 @@ def run_with_trace(
             sender_coord=sender_coord,
             num_links=num_links,
             memory_config=output_mem_config,
-            topology=all_broadcast_topology,
+            topology=broadcast_topology,
             subdevice_id=subdevice_id,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -65,7 +65,7 @@ def run_broadcast_impl(
     input_dtype,
     layout,
     function_level_defaults,
-    all_broadcast_topology,
+    broadcast_topology,
     num_iters=1,
     trace_mode=False,
     rand_tensor=True,
@@ -187,7 +187,7 @@ def run_broadcast_impl(
         tt_out_tensor = run_with_trace(
             mesh_device,
             sender_coord,
-            all_broadcast_topology,
+            broadcast_topology,
             input_tensor_mesh_list[0],
             num_links,
             output_mem_config,
@@ -202,7 +202,7 @@ def run_broadcast_impl(
                 sender_coord=sender_coord,
                 num_links=num_links,
                 memory_config=output_mem_config,
-                topology=all_broadcast_topology,
+                topology=broadcast_topology,
                 subdevice_id=worker_sub_device_id,
             )
             tt_out_tensor_list.append(tt_out_tensors)
@@ -272,9 +272,8 @@ def run_broadcast_impl(
 )
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_all_broadcast(
+def test_broadcast(
     t3k_mesh_device,
-    # pcie_mesh_device,
     output_shape,
     num_devices,
     sender_idx,
@@ -303,7 +302,7 @@ def test_all_broadcast(
         input_dtype,
         layout,
         function_level_defaults,
-        all_broadcast_topology=ttnn.Topology.Linear,
+        broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
@@ -329,10 +328,9 @@ def test_all_broadcast(
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 10000}], indirect=True
 )
-def test_all_broadcast_trace(
+def test_broadcast_trace(
     t3k_mesh_device,
     sender_idx,
-    # pcie_mesh_device,
     num_devices,
     output_shape,
     num_links,
@@ -361,7 +359,7 @@ def test_all_broadcast_trace(
         layout,
         function_level_defaults,
         cluster_axis=1,
-        all_broadcast_topology=ttnn.Topology.Linear,
+        broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
         mem_config=mem_config,
@@ -489,7 +487,7 @@ def test_broadcast_sharded(
         layout,
         function_level_defaults,
         cluster_axis=1,
-        all_broadcast_topology=ttnn.Topology.Linear,
+        broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,
@@ -561,7 +559,7 @@ def test_broadcast_sharded_2x4(
         layout,
         function_level_defaults,
         cluster_axis=1,
-        all_broadcast_topology=ttnn.Topology.Linear,
+        broadcast_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         rand_tensor=True,
         input_shard_shape=input_shard_shape,
@@ -569,4 +567,61 @@ def test_broadcast_sharded_2x4(
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
+    )
+
+
+# Enumerate the post-commit cases explicitly
+@pytest.mark.parametrize(
+    "num_devices, sender_idx, num_links, output_shape, layout, input_dtype",
+    [
+        (4, 0, 1, [64, 32], ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (2, 1, 1, [2, 90, 1042], ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config",
+    [
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+    ],
+)
+@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
+def test_broadcast_2d(
+    mesh_device,
+    mesh_shape,
+    output_shape,
+    num_devices,
+    sender_idx,
+    num_links,
+    input_dtype,
+    layout,
+    mem_config,
+    num_iters,
+    function_level_defaults,
+):
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
+        pytest.skip("bfloat8_b not supported for row-major")
+
+    sender_coord_tuple = (0, sender_idx)
+    sender_coord = ttnn.MeshCoordinate(sender_coord_tuple)
+
+    run_broadcast_impl(
+        mesh_device,
+        sender_coord,
+        sender_coord_tuple,
+        num_devices,
+        output_shape,
+        num_links,
+        input_dtype,
+        layout,
+        function_level_defaults,
+        broadcast_topology=ttnn.Topology.Linear,
+        num_iters=num_iters,
+        rand_tensor=True,
+        mem_config=mem_config,
+        cluster_axis=1,
     )
