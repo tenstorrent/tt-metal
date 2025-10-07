@@ -96,9 +96,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/blackhole");
-        includes.push_back("tt_metal/hw/inc/blackhole/blackhole_defines");
-        includes.push_back("tt_metal/hw/inc/blackhole/noc");
+        includes.push_back("tt_metal/hw/inc/tt-1xx");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/blackhole/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
@@ -138,26 +139,25 @@ public:
         auto srcs = HalJitBuildQueryBase::srcs(params);
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             switch (params.processor_id) {
-            case 0:
-                if (params.is_fw) {
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
-                    if (blackhole::is_2_erisc_mode()) {
-                        // not tmu-crt0
-                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                case 0:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
+                        if (blackhole::is_2_erisc_mode()) {
+                            // not tmu-crt0
+                            srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc-crt0.cc");
+                        }
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
                     }
-                } else {
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
-                }
-                break;
-            case 1:
-                if (params.is_fw) {
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc");
-                } else {
-                    srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
-                }
-                break;
-            default:
-                TT_THROW("Unkown processor id {}", params.processor_id);
+                    break;
+                case 1:
+                    if (params.is_fw) {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc");
+                    } else {
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
+                    }
+                    break;
+                default: TT_THROW("Unkown processor id {}", params.processor_id);
             }
         }
         return srcs;
