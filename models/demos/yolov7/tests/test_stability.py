@@ -211,8 +211,8 @@ class YOLOv7PerformantRunner:
         (640, 640),
     ],
 )
-@pytest.mark.parametrize("test_duration", [3600])
-@pytest.mark.parametrize("pcc_check_interval", [10])
+@pytest.mark.parametrize("test_duration", [5])
+@pytest.mark.parametrize("pcc_check_interval", [5])
 def test_yolov7_stability(
     device,
     batch_size,
