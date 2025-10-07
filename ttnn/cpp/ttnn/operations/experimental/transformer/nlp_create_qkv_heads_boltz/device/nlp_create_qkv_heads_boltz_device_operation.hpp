@@ -24,8 +24,8 @@ struct NlpCreateHeadsBoltzDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor_q;
-        const std::optional<Tensor>& input_tensor_kv;
+        const Tensor input_tensor_q;
+        const std::optional<Tensor> input_tensor_kv;
         std::vector<std::optional<Tensor>> optional_output_tensors;
     };
 

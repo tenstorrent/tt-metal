@@ -10,7 +10,7 @@ namespace ttnn::prim {
 
 struct ExecuteTestHangDeviceOperation {
     struct tensor_args_t {
-        const Tensor& tensor;
+        const Tensor tensor;
     };
 
     using spec_return_value_t = ttnn::TensorSpec;

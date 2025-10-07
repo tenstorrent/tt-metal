@@ -366,6 +366,9 @@ def to_torch(
     """
     import torch
 
+    if ttnn.experimental.is_lazy_enabled():
+        tensor.evaluate()
+
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, queue_id=cq_id)
 

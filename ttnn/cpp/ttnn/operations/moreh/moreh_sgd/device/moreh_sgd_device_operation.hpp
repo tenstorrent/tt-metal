@@ -24,11 +24,11 @@ struct MorehSgdOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& param_in;
-        const Tensor& grad;
-        const std::optional<Tensor>& momentum_buffer_in;
-        const std::optional<Tensor>& param_out;
-        const std::optional<Tensor>& momentum_buffer_out;
+        const Tensor param_in;
+        const Tensor grad;
+        const std::optional<Tensor> momentum_buffer_in;
+        const std::optional<Tensor> param_out;
+        const std::optional<Tensor> momentum_buffer_out;
     };
 
     using spec_return_value_t = std::vector<std::optional<TensorSpec>>;

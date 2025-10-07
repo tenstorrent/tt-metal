@@ -44,10 +44,10 @@ struct MorehNormBackwardOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input;
-        const Tensor& output;
-        const Tensor& output_grad;
-        const std::optional<Tensor>& input_grad;
+        const Tensor input;
+        const Tensor output;
+        const Tensor output_grad;
+        const std::optional<Tensor> input_grad;
     };
 
     using spec_return_value_t = TensorSpec;

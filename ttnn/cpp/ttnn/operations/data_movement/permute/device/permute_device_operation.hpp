@@ -23,7 +23,7 @@ struct PermuteDeviceOperation {
         const std::optional<float> pad_value;
     };
     struct tensor_args_t {
-        const Tensor& input_tensor;
+        const Tensor input_tensor;
         std::optional<Tensor> optional_output_tensor;
     };
 

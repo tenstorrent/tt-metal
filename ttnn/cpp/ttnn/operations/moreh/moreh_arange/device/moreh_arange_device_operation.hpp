@@ -19,8 +19,8 @@ struct MorehArangeOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& any;
-        const std::optional<Tensor>& output;
+        const Tensor any;
+        const std::optional<Tensor> output;
     };
 
     using spec_return_value_t = TensorSpec;

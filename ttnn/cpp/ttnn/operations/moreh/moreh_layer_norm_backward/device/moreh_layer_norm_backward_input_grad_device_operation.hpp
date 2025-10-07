@@ -18,12 +18,12 @@ struct MorehLayerNormBackwardInputGradOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& output_grad;
-        const Tensor& input;
-        const Tensor& mean;
-        const Tensor& rstd;
-        const std::optional<const Tensor>& input_grad;
-        const std::optional<const Tensor>& gamma;
+        const Tensor output_grad;
+        const Tensor input;
+        const Tensor mean;
+        const Tensor rstd;
+        const std::optional<const Tensor> input_grad;
+        const std::optional<const Tensor> gamma;
     };
 
     using spec_return_value_t = TensorSpec;

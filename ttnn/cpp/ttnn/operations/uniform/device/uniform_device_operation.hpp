@@ -19,7 +19,7 @@ struct UniformDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input;
+        const Tensor input;
     };
 
     using spec_return_value_t = TensorSpec;

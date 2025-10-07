@@ -18,8 +18,8 @@ struct BernoulliDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input;
-        const std::optional<Tensor>& output;
+        const Tensor input;
+        const std::optional<Tensor> output;
     };
 
     using spec_return_value_t = TensorSpec;

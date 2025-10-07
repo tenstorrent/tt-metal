@@ -9,6 +9,10 @@
 #include <tracy/Tracy.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/experimental/lazy/lazy_mode.hpp"
+#include "ttnn/experimental/lazy/lazy_device_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_composite_operation.hpp"
+#include "ttnn/experimental/lazy/lazy_utils.hpp"
 
 namespace ttnn {
 namespace decorators {
@@ -57,10 +61,17 @@ concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<ope
 template <typename operation_t>
 concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
 
+template <typename operation_t, typename... args_t>
+concept LazifyableCompositeOperationConcept =
+    composite_operation::LazifyableCompositeOperationConcept<operation_t, args_t&&...>;
+
 template <typename Op, typename... Args>
-concept HasInvoke = requires {
+concept HasStaticInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
+
+template <typename operation_t>
+concept CanBeMadeLazy = PrimitiveOperationConcept<operation_t>;
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
@@ -78,7 +89,6 @@ struct registered_operation_t {
     }
 
     template <typename... Args>
-        requires(HasInvoke<operation_t, Args && ...>)
     auto operator()(Args&&... args) const {
         return traced_invoke(std::forward<Args>(args)...);
     }
@@ -97,17 +107,82 @@ private:
     }
 
     template <typename... args_t>
-        requires PrimitiveOperationConcept<operation_t>
+        requires PrimitiveOperationConcept<operation_t> && HasStaticInvoke<operation_t, args_t&&...>
     auto invoke(args_t&&... args) const {
+        using tensor_return_value_t = typename operation_t::tensor_return_value_t;
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
+        using namespace ttnn::experimental;
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
+        auto lazy_op = lazy::make_lazy_device_operation<operation_t>(
+            operation_attributes,
+            tensors_args,
+            std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
+
+        auto lazy_inputs = lazy::make_lazy_device_operation_inputs<operation_t>(tensors_args);
+
+        if (lazy::is_lazy_enabled()) {
+            // We need to convert spec_return_value_t to vector<optional<TensorSpec>> to create lazy tensors
+            std::vector<std::optional<TensorSpec>> output_specs = lazy_op->compute_output_specs(tensors_args);
+            auto lazy_tensors = Tensor::make_lazy_tensors(lazy_inputs, lazy_op, output_specs);
+
+            // Reconstruct tensor_return_value_t from lazy tensors
+            return lazy::reconstruct_return_value<tensor_return_value_t>(lazy_tensors, output_specs);
+        }
+        // TODO: Make sure that there is no noticeable overhead in eager mode
+        // Regular eager execution
+        auto outputs = device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
+        tt::stl::reflection::visit_object_of_type<Tensor>(
+            [&](const Tensor& t) {
+                // TODO: We should probably update siblings too, but it seems a bit complex and expensive to do so
+                t.lazy()->set_op(lazy_op);
+                t.lazy()->set_op_inputs(lazy_inputs);
+            },
+            outputs);
+        return outputs;
     }
 
     template <typename... args_t>
-        requires(CompositeOperationConcept<operation_t>)
+        requires(LazifyableCompositeOperationConcept<operation_t, args_t && ...>)
+    auto invoke(args_t&&... args) const {
+        auto operation = operation_t(std::forward<args_t>(args)...);
+        auto inputs = operation_t::get_tensor_inputs(std::forward<args_t>(args)...);
+        operation.validate(inputs);
+
+        if (ttnn::experimental::lazy::is_lazy_enabled()) {
+            // Get output specs to create placeholder tensors
+            auto output_specs = operation.compute_output_specs(inputs);
+
+            // Create lazy operation wrapper
+            auto lazy_op = ttnn::experimental::lazy::make_lazy_composite_operation<operation_t>(
+                operation, std::string(cpp_fully_qualified_name.data, cpp_fully_qualified_name.size()));
+
+            auto lazy_inputs = ttnn::experimental::lazy::make_lazy_composite_operation_inputs<operation_t>(inputs);
+            // TODO: Support other return types for lazy execution
+            if constexpr (std::same_as<typename operation_t::tensor_return_value_t, Tensor>) {
+                // Single tensor output
+                static_assert(
+                    std::same_as<typename operation_t::spec_return_value_t, TensorSpec>,
+                    "Unsupported return type for lazy execution");
+                return Tensor::make_lazy_tensor(lazy_inputs, lazy_op, output_specs);
+            } else if constexpr (std::same_as<typename operation_t::tensor_return_value_t, std::vector<Tensor>>) {
+                // Multiple tensor outputs (vector)
+                static_assert(
+                    std::same_as<typename operation_t::spec_return_value_t, std::vector<TensorSpec>>,
+                    "Unsupported return type for lazy execution");
+                return Tensor::make_lazy_tensors(lazy_inputs, lazy_op, output_specs);
+            } else {
+                static_assert(
+                    std::same_as<typename operation_t::tensor_return_value_t, void>,
+                    "Unsupported return type for lazy execution");
+            }
+        }
+        return operation.invoke(inputs);
+    }
+
+    template <typename... args_t>
+        requires(CompositeOperationConcept<operation_t> && HasStaticInvoke<operation_t, args_t && ...>)
     auto invoke(args_t&&... args) const {
         return invoke_composite(std::forward<args_t>(args)...);
     }

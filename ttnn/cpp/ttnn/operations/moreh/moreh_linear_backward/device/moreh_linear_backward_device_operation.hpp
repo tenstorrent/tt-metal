@@ -21,9 +21,9 @@ struct MorehBiasAddBackwardOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& output_grad;
-        const std::optional<Tensor>& bias;
-        const std::optional<Tensor>& bias_grad;
+        const Tensor output_grad;
+        const std::optional<Tensor> bias;
+        const std::optional<Tensor> bias_grad;
     };
 
     using spec_return_value_t = TensorSpec;

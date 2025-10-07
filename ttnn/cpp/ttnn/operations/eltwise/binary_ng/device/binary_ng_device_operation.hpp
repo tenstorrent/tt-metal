@@ -49,7 +49,7 @@ struct BinaryNgDeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input_tensor_a;
+        const Tensor input_tensor_a;
         std::optional<Tensor> input_tensor_b;
         std::optional<Tensor> output_tensor;
     };

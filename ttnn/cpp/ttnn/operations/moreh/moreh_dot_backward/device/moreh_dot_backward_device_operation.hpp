@@ -20,9 +20,9 @@ struct MorehDotBackwardOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& output_grad;
-        const Tensor& input;
-        const Tensor& other;
+        const Tensor output_grad;
+        const Tensor input;
+        const Tensor other;
 
         // (o2buzzle): May I present: thanhnguyen's mistake that costed me 3 hours.
         const std::vector<std::optional<Tensor>> output_tensors;

@@ -18,8 +18,8 @@ struct IndexFillOperation {
         const MemoryConfig memory_config;
     };
     struct tensor_args_t {
-        const Tensor& input;
-        const Tensor& index;
+        const Tensor input;
+        const Tensor index;
     };
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;

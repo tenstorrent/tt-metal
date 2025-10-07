@@ -23,8 +23,8 @@ struct MorehClipGradNormStep2Operation {
     };
 
     struct tensor_args_t {
-        const Tensor& tmp_pow_sum;
-        const std::optional<Tensor>& total_norm;
+        const Tensor tmp_pow_sum;
+        const std::optional<Tensor> total_norm;
     };
 
     using spec_return_value_t = TensorSpec;

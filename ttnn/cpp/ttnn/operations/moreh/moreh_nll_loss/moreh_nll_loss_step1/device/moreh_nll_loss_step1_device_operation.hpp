@@ -22,8 +22,8 @@ struct MorehNllLossStep1DeviceOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& target_tensor;
-        const std::optional<Tensor>& weight_tensor;
+        const Tensor target_tensor;
+        const std::optional<Tensor> weight_tensor;
     };
 
     using spec_return_value_t = TensorSpec;
