@@ -213,6 +213,8 @@ struct PrefetchExecBufState {
     uint32_t length;
 };
 
+uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr);
+
 // Global Variables
 static uint32_t pcie_read_ptr = pcie_base;
 static uint32_t downstream_data_ptr = downstream_cb_base;
@@ -1435,6 +1437,11 @@ bool process_cmd(
             stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
             break;
 
+        case CQ_PREFETCH_CMD_RELAY_LINEAR_H:
+            // DPRINT << "relay_linear_h: " << HEX() << cmd_ptr << DEC() << ENDL();
+            stride = process_relay_linear_h_cmd(cmd_ptr, downstream_data_ptr);
+            break;
+
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT << "relay paged: " << cmd_ptr << ENDL();
             {
@@ -1588,31 +1595,37 @@ static uint32_t relay_pages_to_remote(
 }
 
 // Used in prefetch_h upstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
-uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
+uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr) {
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
-    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd =
-        (volatile CQPrefetchCmdLarge tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
+    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = nullptr;
+    if constexpr (not is_d_variant) {
+        cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)(cmd_ptr + sizeof(CQPrefetchHToPrefetchDHeader));
+    } else {
+        cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
+    }
+    uint64_t wlength = cmd->relay_linear_h.length;
+    uint32_t scratch_read_addr = scratch_db_top[0];
+    if constexpr (not is_d_variant) {
+        // kernel_h must relay user data from pinned buffer to downstream (kernel_d's cmddatq)
+        volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr =
+            (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)scratch_read_addr;
+        dptr->header.length = wlength + sizeof(CQPrefetchHToPrefetchDHeader);
+        dptr->header.raw_copy = true;
+        scratch_read_addr += sizeof(CQPrefetchHToPrefetchDHeader);
+    }
+
     uint32_t noc_xy_addr = cmd->relay_linear_h.noc_xy_addr;
     uint64_t read_addr = cmd->relay_linear_h.addr;
-    uint64_t wlength = cmd->relay_linear_h.length;
 
-    // DPRINT << "relay_linear_h: " << ((uint32_t)cmd_ptr) << " " << static_cast<uint32_t>(cmd->base.cmd_id) << " " <<
-    // wlength << " " << read_addr << " " << noc_xy_addr << " dest " << scratch_db_top[0] << ENDL();
-
-    uint32_t data_ptr = scratch_db_top[0];
-    volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* dptr =
-        (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)scratch_db_top[0];
-    uint64_t total_length = wlength + CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    dptr->header.length = total_length;
-    dptr->header.raw_copy = true;
+    // DPRINT << "relay_linear_h: cmd_ptr:0x" << HEX() << (uint32_t)cmd_ptr << ", length:0x " << wlength << ", addr:0x"
+    // << read_addr << ", nocxy:0x" << noc_xy_addr << DEC() << ENDL();
 
     // First step - read into DB0
-    uint32_t scratch_read_addr = data_ptr + sizeof(CQPrefetchHToPrefetchDHeader);
-    uint32_t amt_to_read = (scratch_db_half_size - sizeof(CQPrefetchHToPrefetchDHeader) > wlength)
-                               ? wlength
-                               : scratch_db_half_size - sizeof(CQPrefetchHToPrefetchDHeader);
+    constexpr uint32_t start_offset = is_d_variant ? 0 : sizeof(CQPrefetchHToPrefetchDHeader);
+    uint32_t amt_to_read =
+        (scratch_db_half_size - start_offset > wlength) ? wlength : scratch_db_half_size - start_offset;
     noc_read_64bit_any_len<true>(noc_xy_addr, read_addr, scratch_read_addr, amt_to_read);
 
     read_addr += amt_to_read;
@@ -1660,7 +1673,7 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
     cb_release_pages<my_noc_index, downstream_noc_xy, downstream_cb_sem_id>(npages);
     noc_async_writes_flushed();
 
-    return CQ_PREFETCH_CMD_BARE_MIN_SIZE + sizeof(CQPrefetchHToPrefetchDHeader);
+    return CQ_PREFETCH_CMD_BARE_MIN_SIZE + start_offset;
 }
 
 // This function is only valid when called on the H variant
@@ -1886,7 +1899,7 @@ void kernel_main_h() {
         // Infer that an exec_buf command is to be executed based on the stall state.
         bool is_exec_buf = (stall_state == STALLED);
         if (cmd_id == CQ_PREFETCH_CMD_RELAY_LINEAR_H) {
-            cmd_ptr += process_relay_linear_h_cmd(cmd_ptr);
+            cmd_ptr += process_relay_linear_h_cmd(cmd_ptr, downstream_data_ptr);
         } else {
             cmd_ptr = process_relay_inline_all(cmd_ptr, fence, is_exec_buf);
         }
