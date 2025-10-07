@@ -161,7 +161,6 @@ Checks: >
   -readability-convert-member-functions-to-static,
   -readability-else-after-return,
   -readability-enum-initial-value,
-  -readability-function-cognitive-complexity,
   -readability-function-size,
   -readability-identifier-length,
   -readability-implicit-bool-conversion,
@@ -187,6 +186,8 @@ Checks: >
 CheckOptions:
   - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
+  - key: readability-function-cognitive-complexity.Threshold
+    value: 339
   - key: portability-simd-intrinsics.Suggest
     value: true
   # May enable later; for now activate the check with a lighter touch
