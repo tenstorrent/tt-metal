@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/fused_eltwise_binary_reduce_multiple_tiles.h"
 
-#include "/localdev/vbabic/tt-metal/tt_metal/hw/inc/debug/dprint_tensix.h"
+#include "tt_metal/hw/inc/debug/dprint_tensix.h"
 
 #include <cstdint>
 
