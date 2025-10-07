@@ -97,7 +97,7 @@ public:
 
     Statistics get_statistics(const BufferType& buffer_type) const;
     MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const;
-    void dump_memory_blocks(const BufferType& buffer_type, std::ofstream& out) const;
+    void dump_memory_blocks(const BufferType& buffer_type, std::ostream& out) const;
 
     std::optional<DeviceAddr> get_lowest_occupied_l1_address(uint32_t bank_id) const;
 
