@@ -367,22 +367,26 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         
         
         // Here we do a couple of tricks so that the kernels can handle ND tensors
+        // implicitly reshape lower dims so we treat it as 4D
         uint32_t batch_head_size =
             std::accumulate(input_tensor_shape.cbegin(), input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
-
         auto dim_normalization = static_cast<int32_t>(input_tensor_shape.rank()) - 4;
                 uint32_t normalized_dim = (dim < std::abs(dim_normalization)) ? dim : dim - dim_normalization;
-        
-        if(normalized_dim > 0 &&  normalized_dim<2){
+        // if the gather dim is 4D normalized, 0,3,4 it's done
+        // but if not we have to roll up the lower dims from the gather dim up to 1 and gather on 1.
+        uint32_t c_includes_dim;
+        if(normalized_dim ==0 && dim !=0){
             normalized_dim=1;
+            c_includes_dim = dim;
         }
-        
-        std::cout << "DIM: " << dim << " NORMALIZED DIM: " << normalized_dim << std::endl;
+        else{
+            c_includes_dim=1+dim_normalization;
+        }
         uint32_t input_tensor_C = 
-            std::accumulate(input_tensor_shape.cbegin()+dim, input_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
+            std::accumulate(input_tensor_shape.view().rbegin()+2, input_tensor_shape.view().rend()-c_includes_dim, 1, std::multiplies<uint32_t>());
 
         uint32_t output_tensor_C =
-            std::accumulate(output_tensor_shape.cbegin()+dim, output_tensor_shape.cend() - 2, 1, std::multiplies<uint32_t>());
+            std::accumulate(output_tensor_shape.view().rbegin()+2, output_tensor_shape.view().rend()-c_includes_dim, 1, std::multiplies<uint32_t>());
 
 
         uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
