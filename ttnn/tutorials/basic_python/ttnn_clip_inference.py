@@ -471,12 +471,12 @@ def main():
             # Final layer normalization
             x = ttnn.layer_norm(x, weight=self.ln_final_weights, bias=self.ln_final_bias)
 
-            # Extract text features from the end-of-text (EOT) token position
-            # In CLIP, the EOT token aggregates information from the entire sequence
+            # Text Transformer is auto-regressive. This means that the last token has access to all the information in the sequence.
+            # We can thus extract text features from the end-of-text (EOT) token position
             # Note: Using PyTorch for argmax since TT-NN doesn't support advanced indexing yet
             torch_tokens = ttnn.to_torch(tokens)
             torch_x = ttnn.to_torch(x)
-            # Find EOT token position (highest token ID) and extract features at that position
+
             eot_indices = torch_tokens.argmax(dim=-1)  # [batch_size]
             torch_selected_features = torch_x[torch.arange(torch_x.shape[0]), eot_indices]  # [batch_size, embed_dim]
 
