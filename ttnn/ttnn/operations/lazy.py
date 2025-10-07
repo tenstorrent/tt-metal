@@ -15,5 +15,7 @@ from ttnn._ttnn.operations.lazy import (
     Ternary,
     Unary,
     Value,
+    defer,
     to_compute_kernel_string,
+    to_debug_string,
 )
