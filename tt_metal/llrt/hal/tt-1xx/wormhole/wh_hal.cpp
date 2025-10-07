@@ -9,7 +9,7 @@
 
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "hal_types.hpp"
-#include "hw/inc/wormhole/eth_l1_address_map.h"
+#include "eth_l1_address_map.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
@@ -94,9 +94,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/common");
         includes.push_back("tt_metal/hw/ckernels/wormhole_b0/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/wormhole");
-        includes.push_back("tt_metal/hw/inc/wormhole/wormhole_b0_defines");
-        includes.push_back("tt_metal/hw/inc/wormhole/noc");
+        includes.push_back("tt_metal/hw/inc/tt-1xx");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/wormhole_b0_defines");
+        includes.push_back("tt_metal/hw/inc/tt-1xx/wormhole/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib");
 
