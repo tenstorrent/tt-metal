@@ -328,6 +328,11 @@ tt::umd::CoreCoord translateNocCoordinatesToNoc0(
         enchantum::to_string(noc_used_for_transfer));
 }
 
+bool skipReadingDeviceTraceCounter() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() ||
+           tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only();
+}
+
 bool isMarkerAZoneEndpoint(const tracy::TTDeviceMarker& marker) {
     return marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START ||
            marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END;
@@ -1282,7 +1287,9 @@ void DeviceProfiler::readRiscProfilerResults(
                     // TODO(MO): Cleanup magic numbers
                     riscNumRead = data_buffer.at(index) & 0x7;
                     coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
-                    deviceTraceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
+                    if (!skipReadingDeviceTraceCounter()) {
+                        deviceTraceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
+                    }
                     runHostCounterRead = data_buffer.at(index + 1);
 
                     const uint32_t base_program_id =
@@ -1399,11 +1406,12 @@ void DeviceProfiler::readRiscProfilerResults(
         }
     }
 
-    // log_info(tt::LogMetal, "Device trace counter read: {}", deviceTraceCounterRead);
-    // log_info(tt::LogMetal, "Traces replayed size: {}", traces_replayed.size());
-
-    // Enabling this assert causes test_device_trace_run and test_dispatch_cores to fail
-    // TT_ASSERT(deviceTraceCounterRead == traces_replayed.size());
+    if (!skipReadingDeviceTraceCounter()) {
+        // TODO: #30169, This assert should be modified to be == once we've incorporated sub-device association for
+        // traces. Currently, we don't know which sub-device a trace belongs to, and so the final device trace counter
+        // that we read might not be the last trace that has been executed by the host.
+        TT_ASSERT(deviceTraceCounterRead <= traces_replayed.size());
+    }
 }
 
 void DeviceProfiler::updateFirstTimestamp(uint64_t timestamp) {
