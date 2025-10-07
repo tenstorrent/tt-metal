@@ -35,7 +35,7 @@ void kernel_main() {
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
+    constexpr uint32_t cb_id_in0_dm_out = tt::CBIndex::c_2;
 
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
@@ -77,13 +77,13 @@ void kernel_main() {
             k_forward = !k_forward;
             // We get reuse on in0 when striding N block
             reuse_block = true;
+            cb_wait_front(cb_id_in0_dm_out, out_block_num_tiles);
+
             if (n_block_iter < N_num_blocks - 1) {
                 // This is not the last iteration of the N block loop, so we will get reuse on next block, so we should
                 // write output
-                cb_wait_front(cb_id_out, out_block_num_tiles);
-
 #ifndef SKIP_OUT
-                uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                uint32_t out_read_ptr = get_read_ptr(cb_id_in0_dm_out);
                 // safe_print_bf16_tile(out_read_ptr);
                 DPRINT << "in0send: write out on m_block: " << m_block << ", n_block: " << n_block << ENDL();
                 for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -96,11 +96,11 @@ void kernel_main() {
                         out_read_ptr += input_tile_size;
                     }
                 }
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
 #endif
-
-                cb_pop_front(cb_id_out, out_block_num_tiles);
             }
+
+            cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
         }
         n_forward = !n_forward;
     }
