@@ -511,7 +511,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
     const uint16_t start_page = uint16_t(dispatch_params.dst_page_index & CQ_DISPATCH_CMD_PAGED_WRITE_MAX_PAGE_INDEX);
 
     bool use_pinned_transfer = dispatch_params.use_pinned_transfer;
-    const bool flush_prefetch = true;
+    const bool flush_prefetch = use_pinned_transfer ? false : true;
     command_sequence.add_dispatch_write_paged(
         flush_prefetch,
         is_dram,
@@ -522,7 +522,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
 
     if (use_pinned_transfer) {
         const uint64_t data_size_bytes = (uint64_t)dispatch_params.total_pages_to_write * dispatch_params.page_size_to_write;
-        command_sequence.add_prefetch_relay_linear(
+        command_sequence.add_prefetch_relay_linear_h(
             dispatch_params.pinned_src_noc_xy, data_size_bytes, dispatch_params.pinned_src_addr_lo);
     } else {
         const uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
@@ -651,7 +651,7 @@ void issue_buffer_dispatch_command_sequence(
         calculator.add_dispatch_write_paged<false>(dispatch_params.page_size_to_write, num_pages_to_write);
     }
     if (use_pinned_memory) {
-        calculator.add_prefetch_relay_linear();
+        calculator.add_prefetch_relay_linear_h();
     } else {
         calculator.add_data<false>(data_size_bytes);
     }
