@@ -219,16 +219,18 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
-    if (std::getenv("TT_METAL_SIMULATOR")) {
-        this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
-        this->runtime_target_device_ = tt::TargetDevice::Simulator;
-    }
-
     // Enable mock cluster if TT_METAL_MOCK is set to a descriptor path
     // This is used for initializing UMD without any hardware using a mock cluster descriptor
     if (const char* mock_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH")) {
         this->mock_cluster_desc_path = std::string(mock_path);
         this->runtime_target_device_ = tt::TargetDevice::Mock;
+    }
+
+    // Enable simulator if TT_METAL_SIMULATOR is set to a simulator path
+    // This must be set after the mock cluster path is set to have the correct TargetDevice
+    if (std::getenv("TT_METAL_SIMULATOR")) {
+        this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
+        this->runtime_target_device_ = tt::TargetDevice::Simulator;
     }
 
     if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
