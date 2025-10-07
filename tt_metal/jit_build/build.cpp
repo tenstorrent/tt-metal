@@ -122,6 +122,7 @@ void JitBuildEnv::init(
 #endif
     // Firmware build path is a combination of build_key and fw_compile_hash
     // If either change, the firmware build path will change and FW will be rebuilt
+    // if it's not already in MetalContext::firmware_built_keys_
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/" + to_string(fw_compile_hash) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
 
