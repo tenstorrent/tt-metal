@@ -1,6 +1,6 @@
-"""
-Ultra-minimal test factory - eliminates all test duplication
-"""
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-License-Identifier: Apache-2.0
+
 
 from typing import Dict
 
