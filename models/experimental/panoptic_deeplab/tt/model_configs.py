@@ -26,6 +26,7 @@ class ModelOptimisations:
             reshard_if_not_optimal=True,
             act_block_w_div=1,
             act_block_h_override=0,
+            config_tensors_in_dram=True,
         )
 
         # COMPUTE KERNEL CONFIGURATION (used by all convolutions)
