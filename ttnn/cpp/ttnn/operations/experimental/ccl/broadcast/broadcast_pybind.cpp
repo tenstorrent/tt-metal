@@ -19,8 +19,6 @@ namespace {
 
 template <typename ccl_operation_t>
 void bind_broadcast(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
-    // namespace py = pybind11;
-
     bind_registered_operation(
         module,
         operation,
