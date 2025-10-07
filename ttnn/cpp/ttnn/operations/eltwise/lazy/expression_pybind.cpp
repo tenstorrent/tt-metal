@@ -4,6 +4,7 @@
 
 #include "expression_pybind.hpp"
 #include "expression.hpp"
+#include "hostdevcommon/kernel_structs.h"
 #include "ttnn-pybind/export_enum.hpp"
 
 #include <fmt/format.h>
@@ -80,14 +81,17 @@ void py_module(py::module& module) {
     auto value = py::class_<Value>(module, "Value");
 
     expression_view.def(py::init<const ExpressionView&>())
+        .def(py::init<const FunctionView&>())
         .def(py::init<const Expression&>())
         .def(py::init<const Function&>())
-        .def(py::init<const FunctionView&>())
         .def_property_readonly("tensor", &ExpressionView::tensor)
         .def_property_readonly("function", &ExpressionView::function)
         .def_property_readonly("value", &ExpressionView::value)
         .def_property_readonly("dtype", &ExpressionView::dtype)
-        .def_property_readonly("shape", &ExpressionView::logical_shape);
+        .def_property_readonly("shape", &ExpressionView::logical_shape)
+        .def_property_readonly("index", &ExpressionView::index)
+        .def_property_readonly("inputs", &ExpressionView::inputs)
+        .def_property_readonly("circular_buffers", &ExpressionView::circular_buffers);
 
     function_view.def(py::init<const FunctionView&>())
         .def(py::init<const Function&>())
@@ -95,7 +99,10 @@ void py_module(py::module& module) {
         .def_property_readonly("arguments", &FunctionView::arguments)
         .def_property_readonly("params", &FunctionView::params)
         .def_property_readonly("dtype", &FunctionView::dtype)
-        .def_property_readonly("shape", &FunctionView::logical_shape);
+        .def_property_readonly("shape", &FunctionView::logical_shape)
+        .def_property_readonly("index", &FunctionView::index)
+        .def_property_readonly("inputs", &FunctionView::inputs)
+        .def_property_readonly("circular_buffers", &FunctionView::circular_buffers);
 
     auto tensor_overload_of = py::overload_cast<const Tensor&>;
     auto unary_overload_of = py::overload_cast<Unary, ExpressionView, Params>;
@@ -103,32 +110,37 @@ void py_module(py::module& module) {
     auto ternary_overload_of = py::overload_cast<Ternary, ExpressionView, ExpressionView, ExpressionView, Params>;
 
     expression.def(py::init<const Expression&>())
-        .def_static("from_tensor", tensor_overload_of(&Expression::from))
-        .def_static("from_unary", unary_overload_of(&Expression::from))
-        .def_static("from_binary", binary_overload_of(&Expression::from))
-        .def_static("from_ternary", ternary_overload_of(&Expression::from))
+        .def(py::init<const Function&>())
         .def_property_readonly("tensor", &Expression::tensor)
         .def_property_readonly("function", &Expression::function)
         .def_property_readonly("value", &Expression::value)
         .def_property_readonly("dtype", &Expression::dtype)
-        .def_property_readonly("shape", &Expression::logical_shape);
+        .def_property_readonly("shape", &Expression::logical_shape)
+        .def_property_readonly("index", &Expression::index)
+        .def_property_readonly("inputs", &Expression::inputs)
+        .def_property_readonly("circular_buffers", &Expression::circular_buffers);
 
     function.def(py::init<const Function&>())
-        .def_static("from_unary", unary_overload_of(&Function::from))
-        .def_static("from_binary", binary_overload_of(&Function::from))
-        .def_static("from_ternary", ternary_overload_of(&Function::from))
         .def_property_readonly("operation", &Function::operation)
         .def_property_readonly("arguments", &Function::arguments)
         .def_property_readonly("params", &Function::params)
         .def_property_readonly("dtype", &Function::dtype)
-        .def_property_readonly("shape", &Function::logical_shape);
+        .def_property_readonly("shape", &Function::logical_shape)
+        .def_property_readonly("index", &Function::index)
+        .def_property_readonly("inputs", &Function::inputs)
+        .def_property_readonly("circular_buffers", &Function::circular_buffers);
 
     py::implicitly_convertible<Expression, ExpressionView>();
     py::implicitly_convertible<Function, FunctionView>();
     py::implicitly_convertible<Function, ExpressionView>();
     py::implicitly_convertible<FunctionView, ExpressionView>();
 
-    module.def("to_compute_kernel_string", &to_compute_kernel_string);
+    module.def("defer", tensor_overload_of(&defer))
+        .def("defer", unary_overload_of(&defer))
+        .def("defer", binary_overload_of(&defer))
+        .def("defer", ternary_overload_of(&defer))
+        .def("to_compute_kernel_string", &to_compute_kernel_string)
+        .def("to_debug_string", &to_debug_string);
 }
 
 }  // namespace ttnn::operations::lazy
