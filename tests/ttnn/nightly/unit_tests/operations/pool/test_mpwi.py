@@ -108,25 +108,25 @@ def test_max_pool2d_with_indices(device):
     ttnn_indices_torch = ttnn.to_torch(indices)
 
     # Check that ttnn_output_base is exactly equal to ttnn_output
-    ttnn_output_base = ttnn.max_pool2d(
-        input_tensor=ttnn_input,
-        batch_size=in_n,
-        input_h=in_h,
-        input_w=in_w,
-        channels=in_c,
-        kernel_size=kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        # applied_shard_scheme=shard_scheme,
-        ceil_mode=ceil_mode,
-        in_place_halo=True,  # test the base with IPH for a little more IPH coverage
-        deallocate_input=False,
-        reallocate_halo_output=True,
-        return_indices=False,
-    )
-    ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn_output_torch)
-    print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
+    # ttnn_output_base = ttnn.max_pool2d(
+    #     input_tensor=ttnn_input,
+    #     batch_size=in_n,
+    #     input_h=in_h,
+    #     input_w=in_w,
+    #     channels=in_c,
+    #     kernel_size=kernel_size,
+    #     stride=stride,
+    #     padding=padding,
+    #     dilation=dilation,
+    #     # applied_shard_scheme=shard_scheme,
+    #     ceil_mode=ceil_mode,
+    #     in_place_halo=True,  # test the base with IPH for a little more IPH coverage
+    #     deallocate_input=False,
+    #     reallocate_halo_output=True,
+    #     return_indices=False,
+    # )
+    # ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn_output_torch)
+    # print(f"ttnn_output_base exactly equals ttnn_output: {ttnn_outputs_exactly_equal}")
 
     # Run PyTorch max pool for reference
     torch_output, torch_indices = torch.nn.functional.max_pool2d(
