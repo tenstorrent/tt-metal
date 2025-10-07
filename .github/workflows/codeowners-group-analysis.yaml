@@ -51,7 +51,11 @@ jobs:
       - name: Parse comment and get PR info
         id: parse
         run: |
-          COMMENT_BODY="${{ github.event.comment.body }}"
+          # Properly escape comment body to handle quotes
+          COMMENT_BODY=$(cat <<'COMMENT_EOF'
+          ${{ github.event.comment.body }}
+          COMMENT_EOF
+          )
           PR_NUMBER="${{ github.event.issue.number }}"
           COMMENT_AUTHOR="${{ github.event.comment.user.login }}"
 
@@ -1319,6 +1323,57 @@ jobs:
 
             # Add author notes if provided
             if [ -n "$AUTHOR_NOTES" ]; then
+              echo "Processing author notes for GitHub username mentions..."
+
+              # Process author notes to convert @username to full names or Slack mentions
+              PROCESSED_NOTES="$AUTHOR_NOTES"
+
+              # Find all GitHub usernames in author notes (pattern: @username)
+              GITHUB_USERNAMES=$(echo "$AUTHOR_NOTES" | grep -oE '@[a-zA-Z0-9_-]+' | sort | uniq)
+
+              if [ -n "$GITHUB_USERNAMES" ]; then
+                echo "Found GitHub usernames in author notes: $GITHUB_USERNAMES"
+
+                # Process each username (avoid subshell by using for loop with array)
+                for github_mention in $GITHUB_USERNAMES; do
+                  if [ -n "$github_mention" ]; then
+                    # Remove @ prefix to get clean username
+                    clean_username=$(echo "$github_mention" | sed 's/^@//')
+
+                    # Get full name from GitHub API
+                    USER_API="https://api.github.com/users/$clean_username"
+                    USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                                   -H "Accept: application/vnd.github.v3+json" \
+                                   "$USER_API" 2>/dev/null)
+                    USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                    if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
+                      USER_NAME="$clean_username"
+                    fi
+
+                    # Try to find Slack user ID
+                    SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$clean_username")
+
+                    if [ -n "$SLACK_USER_ID" ]; then
+                      # Use Slack mention for direct ping
+                      REPLACEMENT="<@$SLACK_USER_ID>"
+                      echo "✅ Converting $github_mention to Slack mention: $USER_NAME -> $SLACK_USER_ID"
+                    else
+                      # Use full name as fallback
+                      REPLACEMENT="@$USER_NAME"
+                      echo "⚠️  Converting $github_mention to full name: $USER_NAME"
+                    fi
+
+                    # Replace in notes (escape special characters for sed)
+                    ESCAPED_MENTION=$(echo "$github_mention" | sed 's/[[\.*^$()+?{|]/\\&/g')
+                    ESCAPED_REPLACEMENT=$(echo "$REPLACEMENT" | sed 's/[[\.*^$()+?{|\\]/\\&/g')
+                    PROCESSED_NOTES=$(echo "$PROCESSED_NOTES" | sed "s/$ESCAPED_MENTION/$ESCAPED_REPLACEMENT/g")
+                  fi
+                done
+
+                echo "Final processed author notes: $PROCESSED_NOTES"
+                AUTHOR_NOTES="$PROCESSED_NOTES"
+              fi
+
               SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"💬 *Author Notes:* $AUTHOR_NOTES"
             fi
 
