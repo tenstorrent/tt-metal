@@ -63,7 +63,7 @@ void py_module(nb::module_& m) {
             nb::arg("dampening"),
             nb::arg("weight_decay"),
             nb::arg("nesterov"),
-            "Create a SDGConfig object");
+            "Create a SGDConfig object");
     }
 
     {
