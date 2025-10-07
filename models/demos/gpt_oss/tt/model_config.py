@@ -75,8 +75,6 @@ class ModelArgs:
         else:
             # Load HF config to get model parameters
             self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
-            logger.debug(f"HF config: {self.hf_config}")
-
             # Set key attributes that tt_transformers expects
             self.vocab_size = self.hf_config.vocab_size
             self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)

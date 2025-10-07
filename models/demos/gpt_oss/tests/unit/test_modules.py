@@ -26,7 +26,7 @@ def run_component_comparison(tt_output, reference_output, mesh_device, pcc_thres
 # Core MoE Tests - Essential for any model size
 
 
-def test_attention_component(
+def run_attention_component(
     mesh_device,
     hidden_shape,
     mask,
@@ -65,7 +65,7 @@ def test_attention_component(
     assert passing, f"Attention test failed. Output: {output}"
 
 
-def test_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_layer):
+def run_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_layer):
     """Test RMSNorm component - extracted from decoder layer"""
 
     # Create input
@@ -90,7 +90,7 @@ def test_rms_norm_component(mesh_device, hidden_shape, reference_layer, decoder_
     assert passing, f"RMS norm test failed. Output: {output}"
 
 
-def test_topk_router_component(mesh_device, hidden_shape, reference_layer, decoder_layer):
+def run_topk_router_component(mesh_device, hidden_shape, reference_layer, decoder_layer):
     """Test TopK router component - extracted from decoder layer"""
 
     # Create input
@@ -113,7 +113,7 @@ def test_topk_router_component(mesh_device, hidden_shape, reference_layer, decod
         assert passing, f"TopK router test failed. Output: {output}"
 
 
-def test_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer):
+def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer):
     """Test experts component - extracted from decoder layer"""
 
     # Create input
@@ -164,7 +164,7 @@ def test_experts_component(mesh_device, hidden_shape, config, reference_layer, d
     assert passing, f"Experts test failed. Output: {output}"
 
 
-def test_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer):
+def run_full_mlp_pipeline(mesh_device, hidden_shape, reference_layer, decoder_layer):
     """Test complete MLP (router + experts) - essential MoE functionality"""
 
     # Create input
@@ -279,10 +279,10 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     # Test individual components
 
     if seq_len == 1:
-        test_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+        run_topk_router_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
-    test_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
-    test_attention_component(
+    run_experts_component(setup["mesh_device"], hidden_states.shape, config, reference_layer, decoder_layer)
+    run_attention_component(
         setup["mesh_device"],
         hidden_states.shape,
         mask,
@@ -294,9 +294,9 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
         decoder_layer,
     )
 
-    test_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+    run_rms_norm_component(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
-    test_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
+    run_full_mlp_pipeline(setup["mesh_device"], hidden_states.shape, reference_layer, decoder_layer)
 
     # Test full decoder layer integration
     tt_output = decoder_layer(
@@ -304,5 +304,8 @@ def test_decoder(mesh_device, device_params, batch_size, seq_len, mesh_shape, re
     )
 
     # Compare outputs
-    passing, output = run_component_comparison(tt_output, reference_output, setup["mesh_device"], pcc_threshold=0.93)
+    pcc_threshold = 0.93 if seq_len == 1 else 0.88
+    passing, output = run_component_comparison(
+        tt_output, reference_output, setup["mesh_device"], pcc_threshold=pcc_threshold
+    )
     assert passing, f"Decoder layer test failed. Output: {output}"

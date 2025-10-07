@@ -104,6 +104,7 @@ def prepare_gpt_oss_generator_args(
 @pytest.mark.parametrize(
     "mesh_shape",
     [(1, 8), (4, 8)],
+    ids=["mesh_1x8", "mesh_4x8"],
 )
 @parametrize_mesh_with_fabric()
 def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
@@ -115,8 +116,7 @@ def test_gpt_oss_demo(mesh_device, device_params, mesh_shape):
     config = setup["config"]
     mesh_config = setup["mesh_config"]
 
-    logger.info(f"Using mesh config: {mesh_config}")
-    logger.info(f"Using config: {config}")
+    logger.info(f"Using mesh config: {mesh_config}, model config: {config}")
 
     # Configuration matching tt_transformers defaults
     num_devices = mesh_device.get_num_devices()

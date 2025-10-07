@@ -2,7 +2,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import nearest_y
-from models.demos.gpt_oss.moe import MeshConfig
+from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.experimental.stable_diffusion_35_large.tt.substate import substate
 

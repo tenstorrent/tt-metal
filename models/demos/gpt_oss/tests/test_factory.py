@@ -109,23 +109,19 @@ class TestFactory:
         }
 
 
-# Use real reference implementations from models.demos.gpt_oss.reference.modeling_gpt_oss
-
-
-# Universal Test Parametrization Decorators (no more copy-paste!)
-def parametrize_mesh(shapes=["1x8"]):
-    """Universal mesh parametrization with FABRIC_1D_RING"""
-    mesh_params = [pytest.param(TestFactory.MESH_SHAPES[s], id=f"{s}_grid") for s in shapes]
-    return pytest.mark.parametrize("mesh_device", mesh_params, indirect=True)
-
-
 def parametrize_mesh_with_fabric():
     """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
     # Always use 4x8 base mesh like original working tests
-    mesh_params = [pytest.param((4, 8), id="4x8_base")]
+    num_devices = ttnn.get_num_devices()
+    if num_devices == 8:
+        mesh_params = [pytest.param((1, 8))]
+    elif num_devices == 32:
+        mesh_params = [pytest.param((4, 8))]
+    else:
+        raise ValueError(f"Invalid number of devices: {num_devices}")
     fabric_params = [
         pytest.param(
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 20000000}, id="fabric_1d_ring"
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 30000000}, id="fabric_1d_ring"
         ),
     ]
 

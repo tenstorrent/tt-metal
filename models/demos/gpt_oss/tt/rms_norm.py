@@ -1,7 +1,8 @@
 from torch import nn
 
 import ttnn
-from models.demos.gpt_oss.moe import MeshConfig
+from models.demos.gpt_oss.config import MeshConfig
+from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 
 class RMSNorm(nn.Module):
@@ -17,7 +18,7 @@ class RMSNorm(nn.Module):
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            # cache_file_name=get_#cache_file_name(tensor_cache_path, "weight"),
+            cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2))
             if self.is_distributed

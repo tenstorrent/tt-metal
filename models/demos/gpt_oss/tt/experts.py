@@ -1,7 +1,7 @@
 import torch
 
 import ttnn
-from models.demos.gpt_oss.moe import MeshConfig
+from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 

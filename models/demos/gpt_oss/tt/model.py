@@ -1,7 +1,7 @@
 import torch
 
 import ttnn
-from models.demos.gpt_oss.moe import MeshConfig
+from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_decode_mask
 from models.experimental.tt_dit.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
@@ -369,7 +369,7 @@ class Model:
         """
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-
+        self.update_attention_masks(current_pos)
         # Return 4 values to match tt_transformers interface:
         # tokens, current_pos, rope_idxs, page_table
         return (
