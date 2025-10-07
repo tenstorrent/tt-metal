@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include <third_party/umd/device/api/umd/device/cluster.hpp>
 #include <tt_stl/assert.hpp>
 
