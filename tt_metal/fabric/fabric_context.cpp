@@ -321,6 +321,8 @@ std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_addre
         this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
 }
 
+FabricType FabricContext::get_torus_type() const { return get_fabric_type(fabric_config_); }
+
 tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_tensix_config() const {
     TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
     return *tensix_config_;

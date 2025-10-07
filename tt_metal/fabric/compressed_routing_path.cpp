@@ -10,8 +10,8 @@ namespace tt::tt_fabric {
 // 1D routing specialization
 template <>
 void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, size_t mesh_shape[2], bool is_torus) {
-    uint8_t num_chips = mesh_shape[1];
+    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
+    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&paths);
     route_ptr[0] = 0;
     for (uint16_t hops = 1; hops < num_chips; ++hops) {
@@ -23,18 +23,21 @@ void intra_mesh_routing_path_t<1, false>::calculate_chip_to_all_routing_fields(
 // 1D compressed routing specialization. No-op
 template <>
 void intra_mesh_routing_path_t<1, true>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, size_t mesh_shape[2], bool is_torus) {
+    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
     // No-op
 }
 
 // 2D compressed routing specialization
 template <>
 void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
-    uint16_t src_chip_id, size_t mesh_shape[2], bool is_torus) {
+    uint16_t src_chip_id, tt_metal::distributed::MeshShape& mesh_shape, FabricType torus_type) {
     // Calculate NS dimension size (assuming rectangular grid)
-    uint8_t num_chips = mesh_shape[0] * mesh_shape[1];
+    uint16_t num_chips = mesh_shape[0] * mesh_shape[1];
     uint8_t ew_dim = mesh_shape[1];
     uint8_t ns_dim = mesh_shape[0];
+    // Axis-aware torus handling
+    const bool torus_y = (torus_type == FabricType::TORUS_Y || torus_type == FabricType::TORUS_XY);
+    const bool torus_x = (torus_type == FabricType::TORUS_X || torus_type == FabricType::TORUS_XY);
 
     for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
         if (src_chip_id == dst_chip_id) {
@@ -52,56 +55,40 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint8_t ns_hops, ew_hops;
         uint8_t ns_direction, ew_direction;
 
-        if (is_torus) {
-            // Torus topology: consider wrap-around paths
-
-            // Calculate NS direction and hops
-            uint8_t ns_direct =
-                (dst_col != src_col) ? ((dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col)) : 0;
-            uint8_t ns_wrap = ns_dim - ns_direct;
-
-            if (ns_direct < ns_wrap) {
-                // Direct path is shorter
+        // North-South (Y axis, mesh_coord[0])
+        {
+            uint8_t ns_direct = (dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col);
+            if (torus_y && ns_direct != 0) {
+                uint8_t ns_wrap = ns_dim - ns_direct;
+                if (ns_direct < ns_wrap) {
+                    ns_hops = ns_direct;
+                    ns_direction = dst_col > src_col;  // 0=north, 1=south
+                } else {
+                    ns_hops = ns_wrap;
+                    ns_direction = src_col > dst_col;  // Reverse direction for wrap
+                }
+            } else {
                 ns_hops = ns_direct;
-                ns_direction = (dst_col > src_col) ? 1 : 0;  // 0=north, 1=south
-            } else if (ns_direct > ns_wrap) {
-                // Wrap-around path is shorter
-                ns_hops = ns_wrap;
-                ns_direction = (dst_col > src_col) ? 0 : 1;  // Reverse direction for wrap
-            } else {
-                // Equal distance: always choose North (matches RoutingTableGenerator behavior)
-                ns_hops = ns_direct;  // Same as ns_wrap
-                ns_direction = 0;     // North
+                ns_direction = dst_col > src_col;  // 0=north, 1=south
             }
+        }
 
-            // Calculate EW direction and hops
-            uint8_t ew_direct =
-                (dst_row != src_row) ? ((dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row)) : 0;
-            uint8_t ew_wrap = ew_dim - ew_direct;
-
-            if (ew_direct < ew_wrap) {
-                // Direct path is shorter
+        // East-West (X axis, mesh_coord[1])
+        {
+            uint8_t ew_direct = (dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row);
+            if (torus_x && ew_direct != 0) {
+                uint8_t ew_wrap = ew_dim - ew_direct;
+                if (ew_direct < ew_wrap) {
+                    ew_hops = ew_direct;
+                    ew_direction = dst_row > src_row;  // 0=west, 1=east
+                } else {
+                    ew_hops = ew_wrap;
+                    ew_direction = src_row > dst_row;  // Reverse direction for wrap
+                }
+            } else {
                 ew_hops = ew_direct;
-                ew_direction = (dst_row > src_row) ? 1 : 0;  // 0=west, 1=east
-            } else if (ew_direct > ew_wrap) {
-                // Wrap-around path is shorter
-                ew_hops = ew_wrap;
-                ew_direction = (dst_row > src_row) ? 0 : 1;  // Reverse direction for wrap
-            } else {
-                // Equal distance: always choose East (matches RoutingTableGenerator behavior)
-                ew_hops = ew_direct;  // Same as ew_wrap
-                ew_direction = 1;     // East
+                ew_direction = dst_row > src_row;  // 0=west, 1=east
             }
-        } else {
-            // Mesh topology: original implementation
-            ns_hops = (dst_col != src_col) ? ((dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col)) : 0;
-            ew_hops = (dst_row != src_row) ? ((dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row)) : 0;
-
-            // Encode directions
-            // ns_direction: 0=north, 1=south
-            // ew_direction: 0=west, 1=east
-            ns_direction = (dst_col > src_col) ? 1 : 0;
-            ew_direction = (dst_row > src_row) ? 1 : 0;
         }
 
         uint8_t turn_after_ns = ns_hops;  // XY routing: complete NS first, then EW
