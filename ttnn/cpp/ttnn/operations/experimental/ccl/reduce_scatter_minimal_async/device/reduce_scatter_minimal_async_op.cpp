@@ -177,11 +177,13 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
                 intermediate_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
                 "Error, intermediate tensor page config should be same as input tensor page config but has {}",
                 intermediate_tensor.tensor_spec().page_config());
-            TT_FATAL(
-                this->optional_intermediate_mem_config.has_value() &&
+
+            if (this->optional_intermediate_mem_config.has_value()) {
+                TT_FATAL(
                     intermediate_tensor.memory_config() == this->optional_intermediate_mem_config.value(),
-                "Error, intermediate tensor memory config should be same as intermediate_mem_config but has {}",
-                intermediate_tensor.memory_config());
+                    "Error, intermediate tensor memory config should be same as intermediate_mem_config but has {}",
+                    intermediate_tensor.memory_config());
+            }
 
             // Don't support DRAM block sharding
             if (intermediate_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
