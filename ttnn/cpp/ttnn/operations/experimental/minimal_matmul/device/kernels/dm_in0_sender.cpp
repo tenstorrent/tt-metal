@@ -46,16 +46,18 @@ void kernel_main() {
     *(in0_valid_semaphore_addr_ptr) = VALID;
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
+
+    /**** WORKS ****/
     volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
     const uint64_t in0_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_mcast_sender_semaphore_addr);
+    /**************/
+    // in0_mcast_sender_semaphore_addr -> in0_mcast_sender_semaphore_noc_addr via get_noc_addr
+    // in0_mcast_sender_semaphore_addr -> in0_mcast_sender_semaphore_addr_ptr via cast
 
-    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in0_dest_noc_x, in0_dest_noc_y, in0_dest_noc_x, in0_dest_noc_y, in0_mcast_receiver_semaphore_addr);
-
-    const uint64_t in0_multicast_data_noc =
-        get_noc_multicast_addr(in0_dest_noc_x, in0_dest_noc_y, in0_dest_noc_x, in0_dest_noc_y, 0);
+    const uint64_t in0_mcast_receiver_semaphore_noc_addr =
+        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_mcast_receiver_semaphore_addr);
 
     // DPRINT << "in0send: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
     //        << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
@@ -101,18 +103,12 @@ void kernel_main() {
                     DPRINT << "in0 after wait to send sem" << ENDL();
                     noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
-                    uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
+                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
-                    noc_async_write_multicast(
-                        in0_start_address,
-                        in0_multicast_data_addr,
-                        in0_block_num_tiles * input_tile_size,
-                        in0_mcast_num_dests,
-                        true);
+                    noc_async_write(in0_start_address, in0_unicast_data_addr, in0_block_num_tiles * input_tile_size);
 
                     DPRINT << "in0 after send data" << ENDL();
-                    noc_semaphore_set_multicast(
-                        in0_valid_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_dests);
+                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr);
                     DPRINT << "in0 after send set receiver sem valid" << ENDL();
                 }
 #endif

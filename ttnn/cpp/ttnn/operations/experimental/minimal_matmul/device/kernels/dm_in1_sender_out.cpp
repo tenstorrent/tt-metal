@@ -58,11 +58,8 @@ void kernel_main() {
     const uint64_t in1_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in1_sender_noc_x, in1_sender_noc_y, in1_mcast_sender_semaphore_addr);
 
-    const uint64_t in1_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in1_dest_noc_x, in1_dest_noc_y, in1_dest_noc_x, in1_dest_noc_y, in1_mcast_receiver_semaphore_addr);
-
-    const uint64_t in1_multicast_data_noc =
-        get_noc_multicast_addr(in1_dest_noc_x, in1_dest_noc_y, in1_dest_noc_x, in1_dest_noc_y, 0);
+    const uint64_t in1_mcast_receiver_semaphore_noc_addr =
+        get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_mcast_receiver_semaphore_addr);
 
     DPRINT << "in1 is first chip " << (uint32_t)is_first_chip << ENDL();
     DPRINT << "in1 is last chip " << (uint32_t)is_last_chip << ENDL();
@@ -107,18 +104,12 @@ void kernel_main() {
                     DPRINT << "in1 after wait for send sem" << ENDL();
                     noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
 
-                    uint64_t in1_multicast_data_addr = in1_multicast_data_noc | in1_start_address;
+                    uint64_t in1_unicast_data_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_start_address);
 
-                    noc_async_write_multicast(
-                        in1_start_address,
-                        in1_multicast_data_addr,
-                        in1_block_num_tiles * input_tile_size,
-                        in1_mcast_num_dests,
-                        true);
+                    noc_async_write(in1_start_address, in1_unicast_data_addr, in1_block_num_tiles * input_tile_size);
 
                     DPRINT << "in1 after send data" << ENDL();
-                    noc_semaphore_set_multicast(
-                        in1_valid_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr, in1_mcast_num_dests);
+                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_mcast_receiver_semaphore_noc_addr);
                     DPRINT << "in1 after send set receiver sem valid" << ENDL();
                 }
 #endif
