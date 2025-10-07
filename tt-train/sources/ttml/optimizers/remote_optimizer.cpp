@@ -7,8 +7,6 @@
 #include <numeric>
 #include <vector>
 
-#include "ttnn/distributed/create_socket.hpp"
-
 namespace ttml::optimizers {
 
 namespace {
@@ -20,9 +18,8 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t num_workers) {
 }
 }  // namespace
 
-RemoteOptimizer::RemoteOptimizer(
-    serialization::NamedParameters parameters, int aggregator_rank, ttnn::distributed::SocketType socket_type) :
-    OptimizerBase(std::move(parameters)), m_socket_manager(socket_type) {
+RemoteOptimizer::RemoteOptimizer(serialization::NamedParameters parameters, int aggregator_rank) :
+    OptimizerBase(std::move(parameters)) {
     m_aggregator_rank = core::distributed::Rank{aggregator_rank};
     m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
 
@@ -68,18 +65,20 @@ SortedParameters RemoteOptimizer::get_sorted_parameters() const {
 }
 
 void RemoteOptimizer::send_gradients() {
+    auto& socket_manager = autograd::ctx().get_socket_manager();
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
             auto grad = tensor_ptr->get_grad();
-            m_socket_manager.send(grad, m_distributed_ctx, m_aggregator_rank);
+            socket_manager.send(grad, m_distributed_ctx, m_aggregator_rank);
         }
     }
 }
 
 void RemoteOptimizer::receive_weights() {
+    auto& socket_manager = autograd::ctx().get_socket_manager();
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         auto tensor = tensor_ptr->get_value();
-        tensor = m_socket_manager.recv(tensor, m_distributed_ctx, m_aggregator_rank);
+        tensor = socket_manager.recv(tensor, m_distributed_ctx, m_aggregator_rank);
         tensor_ptr->set_value(tensor);
     }
 }

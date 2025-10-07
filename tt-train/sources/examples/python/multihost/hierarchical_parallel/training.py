@@ -23,7 +23,7 @@ from trainer import train
 
 
 @click.command()
-@click.option("-c", "--config", type=str, default="training_shakespeare_llama7b_pp_fabric.yaml")
+@click.option("-c", "--config", type=str, default="training_shakespeare_tinyllama_tensor_parallel_3tier_fabric.yaml")
 def main(config: str):
     """Main training function.
 
@@ -67,17 +67,16 @@ def main(config: str):
     # Initialize device mesh
     initialize_device(yaml_config)
 
-    # Create model, optimizer, and training configuration
+    # Create model, and training configuration
     model_factory = TransformerModelFactory(yaml_config)
     model = model_factory.create_model()
-    optimizer = create_optimizer(model, yaml_config)
 
     training_cfg = TrainingConfig(yaml_config)
     device_config = DeviceConfig(yaml_config)
 
     # Execute training
     train_losses, val_losses = train(
-        training_cfg, model, optimizer, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
+        training_cfg, model, train_ids, val_ids, device_config.enable_ddp, device_config.enable_tp
     )
 
     # Cleanup

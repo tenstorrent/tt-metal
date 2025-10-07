@@ -21,10 +21,7 @@ using SortedParameters = std::map<std::string, autograd::TensorPtr>;
 
 class RemoteOptimizer : public OptimizerBase {
 public:
-    RemoteOptimizer(
-        serialization::NamedParameters parameters,
-        int aggregator_rank,
-        ttnn::distributed::SocketType socket_type = ttnn::distributed::SocketType::MPI);
+    RemoteOptimizer(serialization::NamedParameters parameters, int aggregator_rank);
 
     void zero_grad() override;
 
@@ -53,8 +50,6 @@ private:
     SortedParameters m_sorted_parameters;
     core::distributed::Rank m_aggregator_rank{0};
     std::shared_ptr<core::distributed::DistributedContext> m_distributed_ctx;
-
-    core::distributed::SocketManager m_socket_manager;
 };
 
 }  // namespace ttml::optimizers

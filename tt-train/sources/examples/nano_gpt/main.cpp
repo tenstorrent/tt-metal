@@ -820,7 +820,7 @@ int main(int argc, char **argv) {
     auto select_optimizer = [&model, &adamw_params, &config]() -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (is_three_tier_training(config)) {
             return std::make_unique<ttml::optimizers::RemoteOptimizer>(
-                get_model_parameters(model), config.num_mh_workers, config.socket_type);
+                get_model_parameters(model), config.num_mh_workers);
         } else if (config.use_no_op) {
             return std::make_unique<ttml::optimizers::NoOp>(get_model_parameters(model));
         } else if (config.use_moreh_adamw) {

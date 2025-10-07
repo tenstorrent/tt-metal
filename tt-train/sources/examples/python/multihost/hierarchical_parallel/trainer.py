@@ -67,33 +67,31 @@ class PerformanceMeter:
         return samples_per_second, tokens_per_second
 
 
-def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False):
-    """Execute pipeline parallel training loop.
+def aggregator_worker(
+    cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False
+):
+    pass
 
-    In pipeline parallelism:
-    - First rank (rank 0) receives input data and processes through initial layers
-    - Middle ranks receive activations from previous rank and process through their layers
-    - Final rank receives activations, processes through final layers, and computes loss
 
-    Args:
-        cfg: Training configuration object
-        model: Pipeline parallel model to train
-        optim: Optimizer
-        train_ids: Training data token IDs
-        val_ids: Validation data token IDs (unused, for API compatibility)
-        use_ddp: Whether to use distributed data parallel
-        use_tp: Whether to use tensor parallel
+def optimizer_worker(
+    cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False
+):
+    pass
 
-    Returns:
-        Tuple of (train_losses, val_losses) lists
-    """
-    # Setup loss function and causal mask
-    loss_fn = ttml.ops.loss.cross_entropy_loss
-    reduce = ttml.ops.ReduceType.MEAN
 
-    causal_mask = build_causal_mask(cfg.seq_len)
-    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
+def training_worker(
+    cfg,
+    model,
+    train_ids: np.ndarray,
+    val_ids: np.ndarray,
+    aggregator_rank: int,
+    use_ddp: bool = False,
+    use_tp: bool = False,
+):
+    remote_optimizer = ttml.optimizers.RemoteOptimizer(model.parameters(), aggregator_rank)
 
+
+def train_3tier(cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False):
     # Setup distributed context
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     distributed_ctx = autograd_ctx.get_distributed_context()
@@ -102,10 +100,28 @@ def train(cfg, model, optim, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp
 
     rank = distributed_ctx.rank()
     world_size = distributed_ctx.size()
-    is_first_stage = rank == 0
-    is_final_stage = rank == world_size - 1
 
-    assert world_size > 1, f"Pipeline parallel requires world_size > 1, got {world_size}"
+    is_optimizer_rank = rank == world_size - 1
+    is_aggregator_rank = rank == world_size - 2
+
+    if is_optimizer_rank:
+        optimizer_worker(cfg, model, train_ids, val_ids, use_ddp, use_tp)
+    elif is_aggregator_rank:
+        aggregator_worker(cfg, model, train_ids, val_ids, use_ddp, use_tp)
+    else:
+        training_worker(cfg, model, train_ids, val_ids, use_ddp, use_tp)
+
+    print("Training done")
+    return
+
+    assert world_size > 1, f"3-tier architecture training requires world_size > 2, got {world_size}"
+
+    # Setup loss function and causal mask
+    loss_fn = ttml.ops.loss.cross_entropy_loss
+    reduce = ttml.ops.ReduceType.MEAN
+
+    causal_mask = build_causal_mask(cfg.seq_len)
+    tt_mask = ttml.autograd.Tensor.from_numpy(causal_mask, ttml.Layout.TILE, ttml.autograd.DataType.BFLOAT16)
 
     # Create composer for distributed tensors if using DDP or TP
     composer = None

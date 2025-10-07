@@ -97,10 +97,7 @@ void py_module(nb::module_& m) {
     {
         auto py_remote_optimizer = static_cast<nb::class_<RemoteOptimizer, OptimizerBase>>(m.attr("RemoteOptimizer"));
         py_remote_optimizer.def(
-            nb::init<serialization::NamedParameters, int, ttnn::distributed::SocketType>(),
-            nb::arg("parameters"),
-            nb::arg("aggregator_rank"),
-            nb::arg("socket_type") = ttnn::distributed::SocketType::MPI);
+            nb::init<serialization::NamedParameters, int>(), nb::arg("parameters"), nb::arg("aggregator_rank"));
         py_remote_optimizer.def("send_gradients", &RemoteOptimizer::send_gradients);
         py_remote_optimizer.def("receive_weights", &RemoteOptimizer::receive_weights);
         py_remote_optimizer.def("get_sorted_parameters", &RemoteOptimizer::get_sorted_parameters);
