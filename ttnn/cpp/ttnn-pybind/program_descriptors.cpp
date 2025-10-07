@@ -171,7 +171,11 @@ void py_module_types(py::module& module) {
         Defines whether the kernel source is provided as a file path or inline source code.
     )pbdoc")
         .value("FILE_PATH", tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH, "Kernel source is a file path")
-        .value("SOURCE_CODE", tt::tt_metal::KernelDescriptor::SourceType::SOURCE_CODE, "Kernel source is inline code");
+        .value("SOURCE_CODE", tt::tt_metal::KernelDescriptor::SourceType::SOURCE_CODE, "Kernel source is inline code")
+        .value(
+            "BINARY_PATH",
+            tt::tt_metal::KernelDescriptor::SourceType::EXPERIMENTAL_BINARY_PATH,
+            "Kernel source is a binary path");
 
     kernel_descriptor_class
         .def(py::init<>(), R"pbdoc(
@@ -181,6 +185,7 @@ void py_module_types(py::module& module) {
             py::init<
                 const std::string&,
                 tt::tt_metal::KernelDescriptor::SourceType,
+                std::variant<std::string, size_t>,
                 CoreRangeSet,
                 tt::tt_metal::KernelDescriptor::CompileTimeArgs,
                 tt::tt_metal::KernelDescriptor::Defines,
@@ -190,6 +195,7 @@ void py_module_types(py::module& module) {
                 tt::tt_metal::KernelDescriptor::ConfigDescriptor>(),
             py::arg("kernel_source"),
             py::arg("source_type") = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH,
+            py::arg("binary_hash") = "",
             py::arg("core_ranges"),
             py::arg("compile_time_args"),
             py::arg("defines") = tt::tt_metal::KernelDescriptor::Defines(),
@@ -202,7 +208,8 @@ void py_module_types(py::module& module) {
 
                 Args:
                     kernel_source: Path to kernel source file or inline kernel source code
-                    source_type: Type of source (FILE_PATH or INLINE)
+                    source_type: Type of source (FILE_PATH, INLINE, BINARY_PATH)
+                    binary_hash: Original path or hash of the kernel source when providing a binary path
                     core_ranges: Set of core ranges where the kernel will execute
                     compile_time_args: Arguments provided at compile time
                     defines: Preprocessor definitions for kernel compilation
