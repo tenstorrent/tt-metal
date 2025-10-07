@@ -42,6 +42,9 @@ class TtModelArgs:
         # Model hyperparameters
         self.num_hidden_layers = 64
 
+        # Embedding hyperparameters
+        self.embedding_multiplier_scale = 90.50966799187809
+
         # Attention hyperparameters
         self.num_attention_heads = 64
         self.num_key_value_heads = 8
