@@ -1091,40 +1091,68 @@ jobs:
               local full_name="$1"
               local github_username="$2"
 
-              # Try to find user by display name first
-              USER_SEARCH_RESPONSE=$(curl -s -X GET \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
-                -H "Content-Type: application/json" \
-                "https://slack.com/api/users.list?limit=1000")
+              # Fetch ALL users using pagination
+              ALL_USERS=""
+              CURSOR=""
 
-              # Check if API call was successful
-              if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
-                # Try to match by real_name (full name)
-                USER_ID=$(echo "$USER_SEARCH_RESPONSE" | jq -r --arg name "$full_name" '.members[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
-
-                # If not found by full name, try by display name
-                if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-                  USER_ID=$(echo "$USER_SEARCH_RESPONSE" | jq -r --arg name "$full_name" '.members[] | select(.profile.display_name == $name) | .id' | head -n1)
-                fi
-
-                # If still not found, try by GitHub username in profile
-                if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-                  USER_ID=$(echo "$USER_SEARCH_RESPONSE" | jq -r --arg username "$github_username" '.members[] | select(.name == $username or .profile.display_name == $username) | .id' | head -n1)
-                fi
-
-                if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
-                  echo "$USER_ID"
+              while true; do
+                if [ -n "$CURSOR" ]; then
+                  API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
                 else
-                  echo ""
+                  API_URL="https://slack.com/api/users.list?limit=1000"
                 fi
+
+                USER_SEARCH_RESPONSE=$(curl -s -X GET \
+                  -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+                  -H "Content-Type: application/json" \
+                  "$API_URL")
+
+                # Check if API call was successful
+                if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
+                  # Append users from this page
+                  USERS_PAGE=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.members')
+                  if [ "$ALL_USERS" = "" ]; then
+                    ALL_USERS="$USERS_PAGE"
+                  else
+                    # Merge arrays
+                    ALL_USERS=$(echo "$ALL_USERS $USERS_PAGE" | jq -s 'add')
+                  fi
+
+                  # Check if there's a next page
+                  CURSOR=$(echo "$USER_SEARCH_RESPONSE" | jq -r '.response_metadata.next_cursor // empty')
+                  if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+                    break
+                  fi
+                else
+                  echo "Error: Failed to search Slack users: $(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')"
+                  echo ""
+                  return
+                fi
+              done
+
+              # Try to match by real_name (full name)
+              USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
+
+              # If not found by full name, try by display name
+              if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                USER_ID=$(echo "$ALL_USERS" | jq -r --arg name "$full_name" '.[] | select(.profile.display_name == $name) | .id' | head -n1)
+              fi
+
+              # If still not found, try by GitHub username in profile
+              if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                USER_ID=$(echo "$ALL_USERS" | jq -r --arg username "$github_username" '.[] | select(.name == $username or .profile.display_name == $username) | .id' | head -n1)
+              fi
+
+              if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
+                echo "$USER_ID"
               else
-                echo "Error: Failed to search Slack users: $(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')"
                 echo ""
               fi
             }
 
             # Build Slack message with user mentions
-            SLACK_MESSAGE="🔔 *CodeOwners Review Request*\n\nHi"
+            SLACK_MESSAGE="🔔 *CodeOwners Review Request*"
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Hi"
             SLACK_USER_MENTIONS=""
 
             IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
@@ -1147,18 +1175,18 @@ jobs:
                   SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
                   echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
                 else
-                  # Fallback to GitHub username if Slack user not found
-                  SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS @$owner"
-                  echo "⚠️  Slack user not found for: $USER_NAME (@$owner), using fallback"
+                  # Fallback to full name if Slack user not found (more readable than @username)
+                  SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS $USER_NAME"
+                  echo "⚠️  Slack user not found for: $USER_NAME (@$owner), using full name fallback"
                 fi
               fi
             done
 
-            SLACK_MESSAGE="$SLACK_MESSAGE$SLACK_USER_MENTIONS!\n\n"
-            SLACK_MESSAGE="$SLACK_MESSAGE📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>\n"
-            SLACK_MESSAGE="$SLACK_MESSAGE👤 *Author:* $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)\n"
-            SLACK_MESSAGE="$SLACK_MESSAGE🔍 *Action Required:* This PR needs your code review/approval to proceed with merging.\n\n"
-            SLACK_MESSAGE="${SLACK_MESSAGE}Please review when you have a moment. Thank you! 🚀"
+            SLACK_MESSAGE="$SLACK_MESSAGE$SLACK_USER_MENTIONS!"
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>"
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)"
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
+            SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Please review when you have a moment. Thank you! 🚀"
 
             # Prepare Slack API payload (simplified to match working curl command)
             SLACK_PAYLOAD=$(jq -n \
