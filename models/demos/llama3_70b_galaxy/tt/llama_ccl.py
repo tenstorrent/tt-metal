@@ -524,8 +524,6 @@ class TT_CCL:
                 "FF3": [(1, 1, seqlen, 3584)],
                 "FF2": [(1, 1, seqlen, 2048)],
                 "LAYERNORM": [(1, 1, seqlen, 128)],
-                "LM_HEAD": [(1, 1, 32, 16384)],
-                "SAMPLING": [(1, 1, 32, 128 * 1024)],
             }
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
@@ -539,6 +537,25 @@ class TT_CCL:
                 )
                 ag_persistent_buffers[key] = tt_buffer
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
+
+        # Additional buffers for fixed lengths (1 Tile = 32)
+        buffers_fixed_length = {
+            "LM_HEAD": [(4, 1, 32, 16384)],
+            "SAMPLING": [(1, 1, 32, 128 * 1024)],
+        }
+        for key, shape in buffers_fixed_length.items():
+            tt_buffer = ttnn.as_tensor(
+                torch.zeros(shape[0]),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                cache_file_name=self.weight_cache_path / ("pb_ag_" + key + "_" + str(seqlen)),
+            )
+            ag_persistent_buffers[key] = tt_buffer
+
+        ag_persistent_buffers_all[32] = ag_persistent_buffers
         return ag_persistent_buffers_all
 
     def line_all_reduce(
