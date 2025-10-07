@@ -250,6 +250,10 @@ int main(int argc, char* argv[]) {
         log_error(tt::LogAlways, "Local telemetry collection can only be disabled when in aggregator mode");
         return 1;
     }
+    if (telemetry_enabled && !use_mock_telemetry && !result.contains("fsd")) {
+        log_error(tt::LogAlways, "Factory system descriptor must be provided with --fsd option to collect telemetry");
+        return 1;
+    }
     log_info(tt::LogAlways, "Application mode: {}", aggregator_mode ? "AGGREGATOR" : "COLLECTOR");
     log_info(tt::LogAlways, "Telemetry collection: {}", telemetry_enabled ? "ENABLED" : "DISABLED");
 
@@ -295,11 +299,6 @@ int main(int argc, char* argv[]) {
         mock_telemetry.run();
     } else {
         // Real telemetry
-        if (!result.contains("fsd")) {
-            log_error(
-                tt::LogAlways, "Factory system descriptor must be provided with --fsd option to collect telemetry");
-            return 1;
-        }
         log_info(tt::LogAlways, "Using real hardware telemetry data");
         auto rtoptions = tt::llrt::RunTimeOptions();
         std::string fsd_filepath = result["fsd"].as<std::string>();
