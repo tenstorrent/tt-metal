@@ -820,6 +820,9 @@ jobs:
               echo "send-slack<<EOF"
               echo "$SEND_SLACK"
               echo "EOF"
+              echo "author-notes<<EOF"
+              echo "$AUTHOR_NOTES"
+              echo "EOF"
             } >> $GITHUB_OUTPUT
 
       - name: Post comment to PR
@@ -869,6 +872,7 @@ jobs:
           APPROVED_REVIEWERS="${{ needs.get-reviews.outputs.approved-reviewers }}"
           PING_OWNERS="${{ steps.generate-comment.outputs.ping-owners }}"
           SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
+          AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
 
           # Use hardcoded Slack channel ID
           SLACK_CHANNEL="C09HT5VSXRB"
