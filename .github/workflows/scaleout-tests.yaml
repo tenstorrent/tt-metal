@@ -45,7 +45,7 @@ jobs:
 
       - name: Run scaleout tests
         run: |
-          ./build/test/scaleout/test_factory_system_descriptor
+          ./build/test/tools/scaleout/test_factory_system_descriptor
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         if: ${{ !cancelled() }}
