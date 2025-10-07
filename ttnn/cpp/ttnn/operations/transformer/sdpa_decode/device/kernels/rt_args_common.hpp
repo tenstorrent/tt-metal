@@ -43,7 +43,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_runtime_
 
     if (sliding_window.has_value() && sliding_window.value() > 0) {
         // Calculate actual window bounds
-        uint32_t window_end = cur_pos + 1;  // exclusive end
+        uint32_t window_end = cur_pos;  // exclusive end
         window_start_unaligned = (window_end > sliding_window.value()) ? (window_end - sliding_window.value()) : 0;
 
         // Round window_start down to chunk boundary to ensure we capture the full window
@@ -53,7 +53,7 @@ inline std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_runtime_
         uint32_t window_end_aligned = nearest_n(window_end, k_chunk_size);
 
         // Calculate valid_seq_len based on the sliding window range
-        valid_seq_len = window_end_aligned;
+        valid_seq_len = window_end_aligned - window_start_aligned;
         window_start = window_start_aligned;  // Use aligned start for chunk calculations
     } else {
         // Standard behavior: process from beginning up to cur_pos
