@@ -834,6 +834,7 @@ std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape> Conv2dSliceAttr::
     return {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}};
 }
 uint32_t Conv2dSliceAttr::get_L1_usage() { return 0; }
+
 tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
     IOShape output_slice_start, IOShape output_slice_end) {
     auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -842,6 +843,13 @@ tt::tt_metal::MemoryConfig Conv2dSliceAttr::get_input_memory_config(
     uint32_t input_slice_width = std::get<1>(input_end) - std::get<1>(input_start);
     uint32_t output_slice_height = std::get<0>(output_slice_end) - std::get<0>(output_slice_start);
     uint32_t output_slice_width = std::get<1>(output_slice_end) - std::get<1>(output_slice_start);
+    uint32_t width_rounding_value =
+        (conv_config.output_layout == tt::tt_metal::Layout::TILE) ? tt::constants::TILE_HEIGHT : 1;
+
+    if (output_slice_width % width_rounding_value != 0) {
+        uint32_t additional_padded_width = width_rounding_value - (output_slice_width % width_rounding_value);
+        output_slice_width += additional_padded_width;
+    }
 
     if (!conv_config.shard_layout.has_value()) {
         if (!conv_config.weights_dtype.has_value()) {
@@ -921,6 +929,17 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
         pad_right += additional_padded_width * stride[1];
         output_slice_width += additional_padded_width;
     }
+    auto this_op_padding = std::array<uint32_t, 4>({pad_top, pad_bottom, pad_left, pad_right});
+    log_info(
+        tt::LogOp,
+        "Conv input {}, padding {}, dilation {}, kernel {}, stride {}, output slice {}x{}",
+        sliced_input_tensor.logical_shape(),
+        this_op_padding,
+        dilation,
+        kernel_size,
+        stride,
+        output_slice_height_end - output_slice_height_start,
+        output_slice_width);
 
     auto conv_config_l1 = conv_config;
 
@@ -944,7 +963,7 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
         input_slice_width,
         kernel_size,
         stride,
-        std::array<uint32_t, 4>({pad_top, pad_bottom, pad_left, pad_right}),
+        this_op_padding,
         dilation,
         groups,
         output_dtype,
