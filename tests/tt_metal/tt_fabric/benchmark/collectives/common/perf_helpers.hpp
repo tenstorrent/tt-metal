@@ -19,12 +19,13 @@ using HelpersFixture = ::tt::tt_metal::MeshDeviceFixtureBase;
 inline constexpr uint32_t kDefaultMeshId = 0;
 inline constexpr chip_id_t kDefaultSrcChip = 0;
 inline constexpr chip_id_t kDefaultDstChip = 1;
-inline constexpr chip_id_t kDefaultDstChip2 = 2;
 inline constexpr bool kDefaultUseDramDst = true;
 inline constexpr uint32_t kDefaultTensorBytes = 1u << 20;  // 1 MiB
 inline constexpr uint32_t kDefaultPageSize = 4096;         // 4 KiB
 inline constexpr tt::tt_metal::CoreCoord kDefaultCore = {0, 0};
 inline constexpr uint32_t kDefaultTraceIters = 100;
+inline constexpr uint32_t kDefaultMeshRows = 0;  // 0 => use full mesh height
+inline constexpr uint32_t kDefaultMeshCols = 0;  // 0 => use full mesh width
 
 // ---- Shared data types ----
 struct PerfPoint {
@@ -38,14 +39,15 @@ struct PerfParams {
     uint32_t mesh_id = kDefaultMeshId;
     chip_id_t src_chip = kDefaultSrcChip;
     chip_id_t dst_chip = kDefaultDstChip;
-    chip_id_t dst_chip2 = kDefaultDstChip2;
     bool use_dram_dst = kDefaultUseDramDst;
     uint32_t tensor_bytes = kDefaultTensorBytes;
     uint32_t page_size = kDefaultPageSize;
     tt::tt_metal::CoreCoord sender_core = kDefaultCore;
     tt::tt_metal::CoreCoord receiver_core = kDefaultCore;
-    tt::tt_metal::CoreCoord receiver_core2 = kDefaultCore;
     uint32_t trace_iters = kDefaultTraceIters;  // number of enqueues captured per trace
+    // Multicast-to-mesh controls:
+    uint32_t mesh_rows = kDefaultMeshRows;
+    uint32_t mesh_cols = kDefaultMeshCols;
 };
 
 struct PerfStats {

@@ -25,17 +25,10 @@ using namespace tt::tt_fabric;
 //   1: PAGE_SIZE
 //
 // RT args (must match host):
-//   0:  dst_base         (u32)
-//   1:  dst1_mesh_id     (u32)  // logical → u16
-//   2:  dst1_dev_id      (u32)  // logical → u16
-//   3:  rx1_noc_x        (u32)
-//   4:  rx1_noc_y        (u32)
-//   5:  sem1_l1_addr     (u32)
-//   6:  dst2_mesh_id     (u32)  // logical → u16
-//   7:  dst2_dev_id      (u32)  // logical → u16
-//   8:  rx2_noc_x        (u32)
-//   9:  rx2_noc_y        (u32)
-//   10: sem2_l1_addr     (u32)
+//   0:  dst_base       (u32)
+//   1:  rx_noc_x       (u32)   // same worker on every chip
+//   2:  rx_noc_y       (u32)
+//   3:  sem_l1_addr    (u32)   // same L1 offset on every chip
 //   … fabric-connection args … (inserted by append_fabric_connection_rt_args on host)
 //   … then optional Phase-A diagnostics:
 //      e_hops (u32), w_hops (u32), n_hops (u32), s_hops (u32)
@@ -49,18 +42,9 @@ void kernel_main() {
 
     size_t idx = 0;
     const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
-    // Receiver #1
-    const uint16_t dst1_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint16_t dst1_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint32_t rx1_noc_x = get_arg_val<uint32_t>(idx++);
-    const uint32_t rx1_noc_y = get_arg_val<uint32_t>(idx++);
-    const uint32_t sem1_l1_addr = get_arg_val<uint32_t>(idx++);
-    // Receiver #2
-    const uint16_t dst2_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint16_t dst2_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint32_t rx2_noc_x = get_arg_val<uint32_t>(idx++);
-    const uint32_t rx2_noc_y = get_arg_val<uint32_t>(idx++);
-    const uint32_t sem2_l1_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
+    const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
+    const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
     // Build the fabric connection next (these args were appended by the host
     // right after the fixed 6 args).
@@ -116,11 +100,8 @@ void kernel_main() {
     noc_async_writes_flushed();
 
     // === Single multicast completion to identical mailboxes on all destination chips ===
-    ASSERT(sem1_l1_addr != 0);
-    ASSERT(sem1_l1_addr == sem2_l1_addr);                      // same L1 semaphore offset on all chips
-    ASSERT(rx1_noc_x == rx2_noc_x && rx1_noc_y == rx2_noc_y);  // same worker coords on all chips
-
-    const uint64_t sem_noc = safe_get_noc_addr(rx1_noc_x, rx1_noc_y, sem1_l1_addr, /*NOC_INDEX=*/0);
+    ASSERT(sem_l1_addr != 0);
+    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
     fabric_set_mcast_route(
         reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
