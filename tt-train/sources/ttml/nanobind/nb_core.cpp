@@ -7,6 +7,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/unique_ptr.h>
+#include <nanobind/stl/vector.h>
 
 #include "nanobind/nb_export_enum.hpp"
 #include "serialization/serializable.hpp"
@@ -41,6 +42,16 @@ void py_module_types(nb::module_& m) {
 }
 
 void py_module(nb::module_& m) {
+    // Core utility functions
+    m.def(
+        "empty_like",
+        [](const ttml::autograd::TensorPtr& tensor) -> ttml::autograd::TensorPtr {
+            auto empty = ttnn::empty_like(tensor->get_value());
+            return ttml::autograd::create_tensor(empty);
+        },
+        nb::arg("tensor"),
+        "Create an empty tensor with the same shape and properties as the input tensor");
+
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def("enable_fabric", &ttnn_fixed::distributed::enable_fabric);
@@ -110,6 +121,9 @@ void py_module(nb::module_& m) {
                bool use_grad) -> ttml::autograd::Tensor& {
                 std::shared_ptr<DistributedContext> ctx(distributed_ctx, [](DistributedContext*) {});
                 if (use_grad) {
+                    if (!tensor.is_grad_initialized()) {
+                        tensor.set_grad(ttnn::empty_like(tensor.get_value()));
+                    }
                     auto filled = self.recv(tensor.get_grad(), ctx, Rank{rank});
                     tensor.set_grad(filled);
                 } else {

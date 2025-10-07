@@ -74,6 +74,22 @@ class PerformanceMeter:
 
 
 class no_grad:
+    """Context manager and decorator to disable gradient computation.
+
+    Usage as context manager:
+        with no_grad():
+            # code here runs without gradients
+
+    Usage as decorator:
+        @no_grad()
+        def my_function():
+            # function runs without gradients
+    """
+
+    def __init__(self):
+        self._ctx = None
+        self._prev = None
+
     def __enter__(self):
         self._ctx = ttml.autograd.AutoContext.get_instance()
         self._prev = self._ctx.get_gradient_mode() if hasattr(self._ctx, "get_gradient_mode") else None
@@ -86,6 +102,15 @@ class no_grad:
         else:
             self._ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
         return False
+
+    def __call__(self, func):
+        """Allow using as a decorator."""
+
+        def wrapper(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+
+        return wrapper
 
 
 def worker(cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool = False, use_tp: bool = False):
@@ -193,7 +218,7 @@ def worker(cfg, model, train_ids: np.ndarray, val_ids: np.ndarray, use_ddp: bool
     return train_losses, val_losses
 
 
-@no_grad
+@no_grad()
 def aggregator(model, cfg, use_ddp: bool = False):
     """Aggregator that averages gradients from workers and broadcasts weights.
 
@@ -232,12 +257,13 @@ def aggregator(model, cfg, use_ddp: bool = False):
     aggregator_and_optimizer_ranks = [rank, rank + 1]
     aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(aggregator_and_optimizer_ranks)
 
-    optimizer_rank = rank + 1
+    # In sub-context: aggregator is local rank 0, optimizer is local rank 1
+    optimizer_local_rank = 1
 
     # Receive and broadcast initial weights from optimizer to workers
-    print(f"[Aggregator {rank}] Waiting for initial weights from optimizer {optimizer_rank}")
+    print(f"[Aggregator {rank}] Waiting for initial weights from optimizer {rank + 1}")
     for name, tensor_ptr in sorted_parameters.items():
-        socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_rank)
+        socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank)
 
         # Broadcast to all workers
         for worker_id in range(num_workers):
@@ -248,15 +274,13 @@ def aggregator(model, cfg, use_ddp: bool = False):
     # Training loop
     for step in range(cfg.steps):
         # Receive and average gradients from all workers
-        for name in sorted_parameters.keys():
-            tensor_ptr = sorted_parameters[name]
-
+        for name, tensor_ptr in sorted_parameters.items():
             # Receive gradient from first worker
             socket_manager.recv(tensor_ptr, workers_and_aggregator_ctx, 0)
 
             # Receive and accumulate gradients from remaining workers
+            to_add = ttml.core.empty_like(tensor_ptr)
             for worker_id in range(1, num_workers):
-                to_add = ttml.core.empty_like(tensor_ptr)
                 socket_manager.recv(to_add, workers_and_aggregator_ctx, worker_id)
                 tensor_ptr = tensor_ptr + to_add
 
@@ -267,12 +291,12 @@ def aggregator(model, cfg, use_ddp: bool = False):
             if use_ddp:
                 tensor_ptr = ttml.ops.distributed.all_reduce(tensor_ptr)
 
-            # Send averaged gradient to optimizer
-            socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_rank)
+            # Send averaged gradient to optimizer (local rank 1 in sub-context)
+            socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank)
 
         # Receive updated weights from optimizer and broadcast to all workers
         for name, tensor_ptr in sorted_parameters.items():
-            socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_rank)
+            socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, optimizer_local_rank)
 
             # Broadcast to all workers
             for worker_id in range(num_workers):
@@ -307,28 +331,31 @@ def optimizer(model, cfg, optimizer_instance):
     sorted_parameters = dict(sorted(parameters.items()))
 
     # Create sub-context for aggregator-optimizer communication
-    aggregator_rank = rank - 1
-    aggregator_and_optimizer_ranks = [aggregator_rank, rank]
+    aggregator_global_rank = rank - 1
+    aggregator_and_optimizer_ranks = [aggregator_global_rank, rank]
     aggregator_and_optimizer_ctx = distributed_ctx.create_sub_context(aggregator_and_optimizer_ranks)
 
+    # In sub-context: aggregator is local rank 0, optimizer is local rank 1
+    aggregator_local_rank = 0
+
     # Send initial weights to aggregator
-    print(f"[Optimizer {rank}] Sending initial weights to aggregator {aggregator_rank}")
+    print(f"[Optimizer {rank}] Sending initial weights to aggregator {aggregator_global_rank}")
     for name, tensor_ptr in sorted_parameters.items():
-        socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_rank)
+        socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank)
 
     print(f"[Optimizer {rank}] Starting training loop for {cfg.steps} steps")
 
     # Training loop
     for step in range(cfg.steps):
-        # Receive gradients from aggregator
+        # Receive gradients from aggregator (local rank 0 in sub-context)
         for name, tensor_ptr in sorted_parameters.items():
-            socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_rank, use_grad=True)
+            socket_manager.recv(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank, use_grad=True)
 
         # Apply optimizer step
         optimizer_instance.step()
 
-        # Send updated weights back to aggregator
+        # Send updated weights back to aggregator (local rank 0 in sub-context)
         for name, tensor_ptr in sorted_parameters.items():
-            socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_rank)
+            socket_manager.send(tensor_ptr, aggregator_and_optimizer_ctx, aggregator_local_rank)
 
     print(f"[Optimizer {rank}] Completed {cfg.steps} steps")
