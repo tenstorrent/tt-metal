@@ -14,6 +14,9 @@ namespace sfpu {
 
 sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 
+#define POLYVAL7(coef6, coef5, coef4, coef3, coef2, coef1, coef0, t4) \
+    (t4 * (t4 * (t4 * (t4 * (t4 * (coef6 * t4 + coef5) + coef4) + coef3) + coef2) + coef1) + coef0)
+
 /*
  * Both _float_to_int32_ and _float_to_int32_positive_ use branch to handle special cases
  * With exp21f function, some of these cases never happen (e.g. negative exponent, overflow)
@@ -91,7 +94,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
         y = sfpi::reinterpret<sfpi::vFloat>(exponential_part);
 
         y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
-    } else {
+    } else {  //---exp 61f algorithm---
         v_if(val > -87.3f) {
             // The paper relies on the following formula (c.f. Section 2 and 3 of paper):
             // z = (bias + x * factor * N_m; where:
@@ -101,30 +104,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
             sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
             sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
-            //---exp 61f algorithm---
-
             // Normalize mantissa field into a fractional value in [0,1)
             sfpi::vFloat frac = sfpi::int32_to_float(zif, 0) * sfpi::vFloat(1.1920929e-7f);
 
-            // Degree-6 polynomial coefficients
-            constexpr float C0 = 1.0000000018f;
-            constexpr float C1 = 0.69314699f;
-            constexpr float C2 = 0.24022982f;
-            constexpr float C3 = 0.055483369f;
-            constexpr float C4 = 0.0096788315f;
-            constexpr float C5 = 0.001243946f;
-            constexpr float C6 = 0.0002170391f;
-
-            // Evaluate polynomial using Horner’s rule
-            sfpi::vFloat poly =
-                ((((((sfpi::vFloat(C6) * frac + sfpi::vFloat(C5)) * frac + sfpi::vFloat(C4)) * frac +
-                    sfpi::vFloat(C3)) *
-                       frac +
-                   sfpi::vFloat(C2)) *
-                      frac +
-                  sfpi::vFloat(C1)) *
-                     frac +
-                 sfpi::vFloat(C0));
+            // Evaluate degree-6 polynomial coefficients using Horner’s rule
+            sfpi::vFloat poly = POLYVAL7(
+                sfpi::vFloat(0.0002170391f),
+                sfpi::vFloat(0.001243946f),
+                sfpi::vFloat(0.0096788315f),
+                sfpi::vFloat(0.055483369f),
+                sfpi::vFloat(0.24022982f),
+                sfpi::vFloat(0.69314699f),
+                sfpi::vFloat(1.0000000018f),
+                frac);
 
             // Restore exponent
             zii = sfpi::reinterpret<sfpi::vInt>(sfpi::setexp(poly, 127U + zii));
