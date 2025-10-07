@@ -1157,19 +1157,13 @@ jobs:
             SLACK_MESSAGE="$SLACK_MESSAGE🔍 *Action Required:* This PR needs your code review/approval to proceed with merging.\n\n"
             SLACK_MESSAGE="$SLACK_MESSAGE_Please review when you have a moment. Thank you! 🚀_"
 
-            # Prepare Slack API payload
+            # Prepare Slack API payload (simplified to match working curl command)
             SLACK_PAYLOAD=$(jq -n \
               --arg channel "$SLACK_CHANNEL" \
               --arg text "$SLACK_MESSAGE" \
-              --arg username "CodeOwners Bot" \
-              --arg icon_emoji ":gear:" \
               '{
                 channel: $channel,
-                text: $text,
-                username: $username,
-                icon_emoji: $icon_emoji,
-                unfurl_links: false,
-                unfurl_media: false
+                text: $text
               }')
 
             # Send message to Slack
