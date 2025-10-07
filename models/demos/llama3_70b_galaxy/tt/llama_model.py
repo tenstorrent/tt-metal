@@ -18,8 +18,6 @@ from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetche
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 
-import gc
-
 
 class TtTransformer(LightweightModule):
     def __init__(
@@ -95,7 +93,6 @@ class TtTransformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
-
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -603,12 +600,6 @@ class TtTransformer(LightweightModule):
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
-
-        # Reset the semaphore indices as a safeguard
-        self.tt_ccl.reset_gather_and_buffer_idx()
-
-        # Test an explicit garbage collection at the end of the switch_mode function
-        gc.collect()
 
     def forward(
         self,
