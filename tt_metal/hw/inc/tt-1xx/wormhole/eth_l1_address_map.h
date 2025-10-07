@@ -34,7 +34,8 @@ struct address_map {
     //  Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS +
     //  NUM_L1_BANKS)
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_XY_SIZE = 1024;
-    // Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+    // Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
+    // NUM_L1_BANKS)
     static constexpr std::int32_t ERISC_MEM_BANK_OFFSET_SIZE = 1024;
 
     // Kernel config buffer is WIP
@@ -109,7 +110,8 @@ struct address_map {
     // We use ROUTING_ENABLED_ERISC_L1_UNRESERVED_BASE as this is a safe address both with/without routing FW
     // enabled.
     static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = ROUTING_ENABLED_ERISC_L1_UNRESERVED_BASE;
-    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE = ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE =
+        ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
     static_assert(ERISC_MEM_BANK_TO_NOC_SCRATCH + ERISC_MEM_BANK_TO_NOC_SIZE <= MAX_L1_LOADING_ADDR);
 
     static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;

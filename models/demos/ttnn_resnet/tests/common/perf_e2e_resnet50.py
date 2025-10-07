@@ -9,7 +9,7 @@ from transformers import AutoImageProcessor
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra, load_resnet50_model
+from models.demos.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra, load_resnet50_model
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 
@@ -17,7 +17,7 @@ try:
     from tracy import signpost
 
     use_signpost = True
-except ModuleNotFoundError:
+except:
     use_signpost = False
 
 
@@ -78,10 +78,13 @@ def _run_model_pipeline(
         signpost(header="stop")
     ttnn.read_device_profiler(device)
 
+    logger.info(f"Running validation with {len(outputs)} outputs")
+    profiler.start("validation")
     for i, output in enumerate(outputs):
         passed, pcc_message = test_infra.validate(output)
         logger.info(f"Output {i} validation: {pcc_message}")
         assert passed, f"Output {i} validation failed: {pcc_message}"
+    profiler.end("validation")
 
     pipeline.cleanup()
 
@@ -224,3 +227,4 @@ def run_perf_resnet(
         f"{model_name} {comments} inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
     )
     logger.info(f"{model_name} compile time: {compile_time}")
+    logger.info(f"{model_name} validation time: {profiler.get('validation')}")
