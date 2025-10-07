@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple, overload
 
 import ttnn
 
@@ -127,7 +127,9 @@ class Module:
 
         error_msg = ""
         if strict and missing_keys:
-            error_msg += "missing Torch state keys: " + ", ".join(missing_keys) + "; "
+            error_msg += "missing Torch state keys: " + ", ".join(missing_keys)
+            if unexpected_keys:
+                error_msg += "; "
         if strict and unexpected_keys:
             error_msg += "unexpected Torch state keys: " + ", ".join(unexpected_keys) + "\n"
         if error_msg:
@@ -213,12 +215,28 @@ class ModuleList(Module):
     def __len__(self) -> int:
         return len(self._children)
 
-    def __getitem__(self, idx: int) -> Module:
-        if idx < 0:
-            idx += len(self._children)
-        if idx < 0 or idx >= len(self._children):
-            raise IndexError
-        return self._children[str(idx)]
+    @overload
+    def __getitem__(self, key: int) -> Module: ...
+
+    @overload
+    def __getitem__(self, key: slice) -> ModuleList: ...
+
+    def __getitem__(self, key: int | slice) -> Module | ModuleList:
+        n = len(self._children)
+
+        if isinstance(key, slice):
+            start, stop, step = key.indices(n)
+            return ModuleList(self._children[str(i)] for i in range(start, stop, step))
+
+        if isinstance(key, int):
+            if key < 0:
+                key += n
+            if key < 0 or key >= n:
+                raise IndexError
+            return self._children[str(key)]
+
+        msg = f"expected int or slice argument, got {key}"
+        raise ValueError(msg)
 
 
 class Parameter:
@@ -231,7 +249,7 @@ class Parameter:
         dtype: ttnn.DataType = ttnn.bfloat16,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapping: Mapping[int, int] | None = None,
-        to_host: bool = False,
+        on_host: bool = False,
     ) -> None:
         self.shape = tuple(shape)
         self.device = device
@@ -239,7 +257,7 @@ class Parameter:
         self.dtype = dtype
         self.memory_config = memory_config
         self.mesh_mapping = dict(mesh_mapping) if mesh_mapping else {}
-        self.to_host = to_host
+        self.on_host = on_host
         self._data = None
 
         local_shape = list(self.shape)
@@ -261,14 +279,14 @@ class Parameter:
             dtype=self.dtype,
             memory_config=self.memory_config,
             mesh_mapping=self.mesh_mapping,
-            to_host=self.to_host,
+            on_host=self.on_host,
         )
 
     def save(self, path: str | Path, /) -> None:
         ttnn.dump_tensor(path, self.data)
 
     def load(self, path: str | Path, /) -> None:
-        self.data = ttnn.load_tensor(path, device=None if self.to_host else self.device)
+        self.data = ttnn.load_tensor(path, device=None if self.on_host else self.device)
 
     @property
     def data(self) -> ttnn.Tensor:
@@ -281,7 +299,7 @@ class Parameter:
         self._data = value
 
     def _check_data(self, value: ttnn.Tensor) -> None:
-        if self.to_host:
+        if self.on_host:
             if value.device() is not None:
                 msg = "expected host tensor, got device tensor"
                 raise ParameterLoadingError(msg)
