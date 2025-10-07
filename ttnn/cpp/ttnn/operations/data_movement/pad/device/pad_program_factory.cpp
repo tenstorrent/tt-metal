@@ -70,13 +70,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);
     const std::vector<uint32_t>& writer_ct_args = reader_ct_args;
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    bfloat16 bfloat_zero = bfloat16(0.0f);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
     }
 
     KernelHandle reader_kernel_id = CreateKernel(
@@ -213,12 +213,13 @@ operation::ProgramWithCallbacks pad_tile(
             .set_page_size(src1_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
     uint32_t num_unpadded_Xt = a.padded_shape()[3] / TILE_WIDTH;
@@ -339,6 +340,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
                     ncores_h = 8;
                     ntiles_per_core_h = 8;
                     break;
+                default: TT_THROW("Unsupported ntiles_h value {}", ntiles_h);
             }
             ncores_per_batch_h = ncores_h;
             break;
@@ -369,6 +371,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
                     ncores_h = ncores_per_batch_h * nbatch;
                     ntiles_per_core_h = 16;
                     break;
+                default: TT_THROW("Unsupported ntiles_h value {}", ntiles_h);
             }
             break;
 
@@ -419,6 +422,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
         case 4: ncores_w = 4; break;
         case 8:
         case 64: ncores_w = 8; break;
+        default: TT_THROW("Unsupported ntiles_w value {}", ntiles_w);
     }
     ncores = ncores_h * ncores_w;
     ntiles_per_core_w = ntiles_w / ncores_w;
@@ -516,13 +520,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    bfloat16 bfloat_zero = bfloat16(0.0f);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(0.0f), bfloat16(pad_value)});
     }
 
     KernelHandle reader_kernel_id = CreateKernel(
@@ -843,12 +847,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
     std::vector<uint32_t> reader_ct_args = {
@@ -1252,12 +1257,13 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
             .set_page_size(src1_cb_index, stick_size_padded);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
-    bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
         packed_pad_value = pad_value;
+    } else if (a.dtype() == DataType::UINT16) {
+        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
     } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
     }
 
     std::vector<uint32_t> reader_ct_args = {(std::uint32_t)stick_size_padded, (std::uint32_t)shard_height_padded};
@@ -1399,6 +1405,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
+    } else if (input_tensor.dtype() == tt::tt_metal::DataType::UINT16) {
+        padding_value_as_u32 = pack_two_uint16_into_uint32({0, float_to_uint16(pad_value)});
     } else if (
         input_tensor.dtype() == tt::tt_metal::DataType::INT32 ||
         input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
