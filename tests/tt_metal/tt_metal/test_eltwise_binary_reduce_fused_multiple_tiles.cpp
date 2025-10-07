@@ -10,6 +10,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -23,7 +24,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -60,10 +61,6 @@ using namespace tt::tt_metal;
 // - Uses the fused API from fused_eltwise_binary_reduce.h
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     bool pass = true;
 
     // Operation definitions for eltwise binary
@@ -76,8 +73,6 @@ int main(int argc, char** argv) {
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
     tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-
-    CommandQueue& cq = device->command_queue();
 
     // Test parameters - MULTIPLE TILES TEST
     uint32_t tile_H = 32, tile_W = 32;      // Standard tile dimensions
@@ -244,26 +239,26 @@ int main(int argc, char** argv) {
 
         // Note: create_random_vector_of_bfloat16 packs 2 bfloat16 values per uint32_t
         // std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(input_buffer_size, 5.0f, seed, -5.0f);
-        // std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(input_buffer_size, 10.0f);
-        std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(input_buffer_size, false);
+        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(input_buffer_size, 10.0f);
+        // std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(input_buffer_size, false);
 
         // std::vector<uint32_t> src1_vec = create_random_vector_of_bfloat16(input_buffer_size, 5.0f, seed + 1, -5.0f);
-        // std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(input_buffer_size, 1.5f);
-        std::vector<uint32_t> src1_vec = create_arange_vector_of_bfloat16(input_buffer_size, false);
+        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(input_buffer_size, 1.5f);
+        // std::vector<uint32_t> src1_vec = create_arange_vector_of_bfloat16(input_buffer_size, false);
 
         // Write input data to device
         log_info(LogTest, "Writing input data to device...");
-        EnqueueWriteBuffer(cq, std::ref(src0_dram_buffer), src0_vec, false);
-        EnqueueWriteBuffer(cq, std::ref(src1_dram_buffer), src1_vec, false);
+        tt_metal::detail::WriteToBuffer(*src0_dram_buffer, src0_vec);
+        tt_metal::detail::WriteToBuffer(*src1_dram_buffer, src1_vec);
 
         // Execute the fused kernel
         log_info(LogTest, "Executing fused eltwise binary + reduce kernel for {} tiles...", num_input_tiles);
-        EnqueueProgram(cq, program, false);
+        tt_metal::detail::LaunchProgram(device, program, true, true);  // wait_until_cores_done=true, force_slow_dispatch=true
 
         // Read results
         log_info(LogTest, "Reading results from device...");
         std::vector<uint32_t> result_vec;
-        EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+        tt_metal::detail::ReadFromBuffer(*dst_dram_buffer, result_vec);
 
         log_info(LogTest, "Actually read {} uint32s from device", result_vec.size());
 
