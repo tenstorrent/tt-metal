@@ -357,9 +357,7 @@ class MotifPipeline:
                             fill_value=sigma_difference,
                             layout=ttnn.TILE_LAYOUT,
                             dtype=ttnn.bfloat16,
-                            device=submesh_device
-                            if not traced
-                            else None,  # Not used in trace region, can be on device always.
+                            device=submesh_device if not traced else None,
                         )
                         tt_sigma_difference_list.append(tt_sigma_difference)
 
