@@ -74,12 +74,9 @@ class TtTransformer(LightweightModule):
         self.mesh_sub_device_manager_id_decode = None
         self.mesh_sub_device_manager_id_prefill = None
 
-        if mode == "decode":
-            self.setup_decode()
-            self.is_decode_setup = True
-        else:
-            self.setup_prefill()
-            self.is_prefill_setup = True
+        # First initialization of decode CCLs and prefetcher
+        self.setup_decode()
+        self.is_decode_setup = True
 
         self.layers = [
             TtTransformerBlock(
@@ -98,6 +95,7 @@ class TtTransformer(LightweightModule):
             )
             for i in tqdm(range(self.n_layers))
         ]
+
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -127,6 +125,17 @@ class TtTransformer(LightweightModule):
             tt_ccl=self.tt_ccl,
             prefetcher_setup=self.prefetcher_setup,
         )
+        # First initialization of prefill CCLs and prefetcher. It needs to be after initialization of layers, norm and lm_head since those switch modes as well
+        # This initialization is required to avoid race condition due to all buffers and semaphores not being allocated at initialization
+        self.switch_mode("prefill")
+        self.setup_prefill()
+        self.is_prefill_setup = True
+
+        # Since we can start the model in decode mode (for example in demo_decode.py) we have to ensure the following check (this is a 1 time penalty)
+        if mode == "decode":
+            self.setup_decode()
+            self.is_decode_setup = True
+
         if mode == "decode":
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
