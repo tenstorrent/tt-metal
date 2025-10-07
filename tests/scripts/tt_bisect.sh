@@ -132,7 +132,7 @@ while [[ "$found" == "false" ]]; do
   while [ $attempt -le $max_retries ]; do
     echo "Attempt $attempt on $(git rev-parse HEAD)"
     echo "Run: $test"
-    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" >"$output_file" 2>&1; then
+    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
       timeout_rc=0
       echo "--- Logs (attempt $attempt) ---"
       sed -n '1,200p' "$output_file" || true
