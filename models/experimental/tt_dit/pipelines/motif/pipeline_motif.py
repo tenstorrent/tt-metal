@@ -238,6 +238,7 @@ class MotifPipeline:
         negative_prompt_2: list[str | None],
         negative_prompt_3: list[str | None],
         linear_quadratic_emulating_steps: int = 100,
+        negative_strategy_switch_time: float = 0.85,
         num_inference_steps: int,
         seed: int | None = None,
         traced: bool = False,
@@ -259,7 +260,7 @@ class MotifPipeline:
                 if self.desired_encoder_submesh_shape != self.original_submesh_shape:
                     # HACK: reshape submesh device 0 from 2D to 1D
                     self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
-                prompt_embeds, pooled_prompt_embeds, prompt_embeds_alt, pooled_prompt_embeds_alt = self._encode_prompts(
+                prompt_embeds1, pooled_prompt_embeds1, prompt_embeds2, pooled_prompt_embeds2 = self._encode_prompts(
                     prompt_1=prompt_1,
                     prompt_2=prompt_2,
                     prompt_3=prompt_3,
@@ -296,20 +297,44 @@ class MotifPipeline:
                 torch.randn(shape, dtype=torch.float32).to(dtype=torch.bfloat16).permute(0, 2, 3, 1)
             )
 
-            tt_prompt_embeds_list = []
-            tt_pooled_prompt_embeds_list = []
+            tt_prompt_embeds_device_list = []
+            tt_prompt_embeds1_list = []
+            tt_prompt_embeds2_list = []
+            tt_pooled_prompt_embeds_device_list = []
+            tt_pooled_prompt_embeds1_list = []
+            tt_pooled_prompt_embeds2_list = []
             tt_latents_step_list = []
             for i, submesh_device in enumerate(self._submesh_devices):
-                tt_prompt_embeds = tensor.from_torch(
-                    prompt_embeds[i : i + 1] if cfg_factor == 2 else prompt_embeds,
+                tt_prompt_embeds_device = tensor.from_torch(
+                    prompt_embeds1[i : i + 1] if cfg_factor == 2 else prompt_embeds1,
                     device=submesh_device,
                     on_host=traced,
                 )
+                tt_prompt_embeds1 = tensor.from_torch(
+                    prompt_embeds1[i : i + 1] if cfg_factor == 2 else prompt_embeds1,
+                    device=submesh_device,
+                    on_host=True,
+                )
+                tt_prompt_embeds2 = tensor.from_torch(
+                    prompt_embeds2[i : i + 1] if cfg_factor == 2 else prompt_embeds2,
+                    device=submesh_device,
+                    on_host=True,
+                )
 
-                tt_pooled_prompt_embeds = tensor.from_torch(
-                    pooled_prompt_embeds[i : i + 1] if cfg_factor == 2 else pooled_prompt_embeds,
+                tt_pooled_prompt_embeds_device = tensor.from_torch(
+                    pooled_prompt_embeds1[i : i + 1] if cfg_factor == 2 else pooled_prompt_embeds1,
                     device=submesh_device,
                     on_host=traced,
+                )
+                tt_pooled_prompt_embeds1 = tensor.from_torch(
+                    pooled_prompt_embeds1[i : i + 1] if cfg_factor == 2 else pooled_prompt_embeds1,
+                    device=submesh_device,
+                    on_host=True,
+                )
+                tt_pooled_prompt_embeds2 = tensor.from_torch(
+                    pooled_prompt_embeds2[i : i + 1] if cfg_factor == 2 else pooled_prompt_embeds2,
+                    device=submesh_device,
+                    on_host=True,
                 )
 
                 tt_initial_latents = tensor.from_torch(
@@ -319,19 +344,23 @@ class MotifPipeline:
                 if traced:
                     if self._traces is None:
                         tt_initial_latents = tt_initial_latents.to(submesh_device)
-                        tt_prompt_embeds = tt_prompt_embeds.to(submesh_device)
-                        tt_pooled_prompt_embeds = tt_pooled_prompt_embeds.to(submesh_device)
+                        tt_prompt_embeds_device = tt_prompt_embeds_device.to(submesh_device)
+                        tt_pooled_prompt_embeds_device = tt_pooled_prompt_embeds_device.to(submesh_device)
                     else:
                         ttnn.copy_host_to_device_tensor(tt_initial_latents, self._traces[i].spatial_input)
-                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds, self._traces[i].prompt_input)
-                        ttnn.copy_host_to_device_tensor(tt_pooled_prompt_embeds, self._traces[i].pooled_input)
+                        ttnn.copy_host_to_device_tensor(tt_prompt_embeds_device, self._traces[i].prompt_input)
+                        ttnn.copy_host_to_device_tensor(tt_pooled_prompt_embeds_device, self._traces[i].pooled_input)
 
                         tt_initial_latents = self._traces[i].spatial_input
-                        tt_prompt_embeds = self._traces[i].prompt_input
-                        tt_pooled_prompt_embeds = self._traces[i].pooled_input
+                        tt_prompt_embeds_device = self._traces[i].prompt_input
+                        tt_pooled_prompt_embeds_device = self._traces[i].pooled_input
 
-                tt_prompt_embeds_list.append(tt_prompt_embeds)
-                tt_pooled_prompt_embeds_list.append(tt_pooled_prompt_embeds)
+                tt_prompt_embeds_device_list.append(tt_prompt_embeds_device)
+                tt_prompt_embeds1_list.append(tt_prompt_embeds1)
+                tt_prompt_embeds2_list.append(tt_prompt_embeds2)
+                tt_pooled_prompt_embeds_device_list.append(tt_pooled_prompt_embeds_device)
+                tt_pooled_prompt_embeds1_list.append(tt_pooled_prompt_embeds1)
+                tt_pooled_prompt_embeds2_list.append(tt_pooled_prompt_embeds2)
                 tt_latents_step_list.append(tt_initial_latents)
 
             logger.info("denoising...")
@@ -342,7 +371,7 @@ class MotifPipeline:
 
                     tt_timestep_list = []
                     tt_sigma_difference_list = []
-                    for submesh_device in self._submesh_devices:
+                    for submesh_nr, submesh_device in enumerate(self._submesh_devices):
                         tt_timestep = ttnn.full(
                             [1, 1],
                             fill_value=t,
@@ -361,12 +390,31 @@ class MotifPipeline:
                         )
                         tt_sigma_difference_list.append(tt_sigma_difference)
 
+                        if t >= 1000 * negative_strategy_switch_time:
+                            ttnn.copy_host_to_device_tensor(
+                                tt_prompt_embeds1_list[submesh_nr],
+                                tt_prompt_embeds_device_list[submesh_nr],
+                            )
+                            ttnn.copy_host_to_device_tensor(
+                                tt_pooled_prompt_embeds1_list[submesh_nr],
+                                tt_pooled_prompt_embeds_device_list[submesh_nr],
+                            )
+                        else:
+                            ttnn.copy_host_to_device_tensor(
+                                tt_prompt_embeds2_list[submesh_nr],
+                                tt_prompt_embeds_device_list[submesh_nr],
+                            )
+                            ttnn.copy_host_to_device_tensor(
+                                tt_pooled_prompt_embeds2_list[submesh_nr],
+                                tt_pooled_prompt_embeds_device_list[submesh_nr],
+                            )
+
                     tt_latents_step_list = self._step(
                         timestep=tt_timestep_list,
                         latents=tt_latents_step_list,
                         cfg_enabled=cfg_enabled,
-                        prompt_embeds=tt_prompt_embeds_list,
-                        pooled_prompt_embeds=tt_pooled_prompt_embeds_list,
+                        prompt_embeds=tt_prompt_embeds_device_list,
+                        pooled_prompt_embeds=tt_pooled_prompt_embeds_device_list,
                         cfg_scale=cfg_scale,
                         sigma_difference=tt_sigma_difference_list,
                         traced=traced,
