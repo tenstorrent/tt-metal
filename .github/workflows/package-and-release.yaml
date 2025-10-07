@@ -44,7 +44,7 @@ jobs:
       - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
         run: |
-          if [[ "${{ inputs.release-type }}" != "" ]]; then
+          if [[ "${{ inputs.release-type }}" != "" && "${{ inputs.release-type }}" != "null" ]]; then
             if [[ "${{ inputs.release-type }}" != "dev" && "${{ inputs.release-type }}" != "rc" && "${{ inputs.release-type }}" != "prod" ]]; then
               echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
               exit 1
