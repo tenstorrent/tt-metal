@@ -212,7 +212,7 @@ void RunSetUnicastRouteTest(
     bool is_2d_fabric = topology == Topology::Mesh;
     uint32_t ew_dim = is_2d_fabric ? mesh_shape[1] : 0;
 
-    uint32_t MAX_ROUTE_BUFFER_SIZE = is_2d_fabric ? 32 : 4;
+    uint32_t MAX_ROUTE_BUFFER_SIZE = is_2d_fabric ? HYBRID_MESH_MAX_ROUTE_BUFFER_SIZE : SINGLE_ROUTE_SIZE_1D;
     uint32_t RESULT_SIZE_PER_DEVICE = (MAX_ROUTE_BUFFER_SIZE * 2);  // 2 route buffers
     // 0x100000 (1MB) is safe on Tensix L1
     uint32_t FABRIC_TEST_BUFFER_BASE_ADDR = 0x100000;
