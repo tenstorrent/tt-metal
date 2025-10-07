@@ -135,3 +135,36 @@ ttnn/ttnn/runtime
 ClangBuildAnalyzer.ini
 ttnn/ttnn/.rpath_checked__ttnn
 Testing
+
+
+# Python build artifacts
+dist/
+build/
+build_*/
+*.egg-info/
+
+# If you use cibuildwheel
+wheelhouse/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local envs
+.venv/
+venv/
+python_env/
+
+# Generated runtime/assets
+.ttnn_runtime_artifacts/
+
+# Optional: compiled extensions (remove if you need to track .so)
+*.so
+
+# Common tooling caches
+.mypy_cache/
+.ruff_cache/
+.coverage*
+.cache/
+ttnn-0.*
