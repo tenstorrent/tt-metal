@@ -22,6 +22,11 @@ on:
         required: false
         default: false
         type: boolean
+      author-notes:
+        description: 'Optional message from PR author to include in notifications'
+        required: false
+        default: ''
+        type: string
   issue_comment:
     types: [created]
 
@@ -41,6 +46,7 @@ jobs:
       ping-pending-owners: ${{ steps.parse.outputs.ping-pending-owners }}
       send-slack-notification: ${{ steps.parse.outputs.send-slack-notification }}
       pr-number: ${{ steps.parse.outputs.pr-number }}
+      author-notes: ${{ steps.parse.outputs.author-notes }}
     steps:
       - name: Parse comment and get PR info
         id: parse
@@ -106,6 +112,19 @@ jobs:
                 echo "send-slack-notification=false" >> $GITHUB_OUTPUT
                 echo "Command: update existing comment"
               fi
+
+              # Extract author notes from comment if provided (format: "quoted text" after command)
+              AUTHOR_NOTES=""
+              # Look for quoted text after /codeowners ping
+              if echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping\s+" > /dev/null; then
+                # Extract text between quotes after the command
+                QUOTED_TEXT=$(echo "$COMMENT_BODY" | sed -n 's/^\/codeowners\?\s\+ping\s\+.*"\([^"]*\)".*/\1/p')
+                if [ -n "$QUOTED_TEXT" ]; then
+                  AUTHOR_NOTES="$QUOTED_TEXT"
+                  echo "Found author notes: $AUTHOR_NOTES"
+                fi
+              fi
+              echo "author-notes=$AUTHOR_NOTES" >> $GITHUB_OUTPUT
 
               # Add success reaction
               curl -s -X POST \
@@ -556,11 +575,13 @@ jobs:
             CREATE_NEW="${{ github.event.inputs.create-new-comment }}"
             PING_OWNERS="${{ github.event.inputs.ping-pending-owners }}"
             SEND_SLACK="${{ github.event.inputs.send-slack-notification }}"
+            AUTHOR_NOTES="${{ github.event.inputs.author-notes }}"
           else
             # Comment trigger - use parsed parameters
             CREATE_NEW="${{ needs.parse-comment.outputs.create-new-comment }}"
             PING_OWNERS="${{ needs.parse-comment.outputs.ping-pending-owners }}"
             SEND_SLACK="${{ needs.parse-comment.outputs.send-slack-notification }}"
+            AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
           fi
 
           # Use hardcoded Slack channel ID
@@ -1242,6 +1263,12 @@ jobs:
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"👤 *Author:* $PR_AUTHOR_MENTION"
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n'"🔍 *Action Required:* This PR needs your code review/approval to proceed with merging."
+
+            # Add author notes if provided
+            if [ -n "$AUTHOR_NOTES" ]; then
+              SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"💬 *Author Notes:* $AUTHOR_NOTES"
+            fi
+
             SLACK_MESSAGE="$SLACK_MESSAGE"$'\n\n'"Please review when you have a moment. Thank you! 🚀"
 
             # Prepare Slack API payload (simplified to match working curl command)
