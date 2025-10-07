@@ -1594,7 +1594,7 @@ def test_sdpa_decode_sliding_window(
 
     # Test different positions to ensure sliding window works correctly
     test_positions = [
-        sliding_window + 32,  # Window fully slides
+        sliding_window + 10,  # Window fully slides
         sliding_window // 2,  # Window partially filled
         # sliding_window - 1,   # Window almost full
         # s // 2,               # Middle of sequence
