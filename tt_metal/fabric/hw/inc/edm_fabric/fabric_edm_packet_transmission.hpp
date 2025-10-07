@@ -250,7 +250,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 
 FORCE_INLINE void update_packet_header_for_next_hop(
     volatile tt_l1_ptr tt::tt_fabric::HybridMeshPacketHeader* packet_header,
-    tt::tt_fabric::LowLatencyMeshRoutingFieldsV2 cached_routing_fields) {
+    tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
     if constexpr (UPDATE_PKT_HDR_ON_RX_CH) {
         packet_header->routing_fields.value = cached_routing_fields.value + 1;
     }
@@ -260,7 +260,7 @@ template <uint8_t NUM_SENDER_BUFFERS>
 void update_packet_header_for_next_hop(
     tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface, uint32_t value) {
 #if defined(DYNAMIC_ROUTING_ENABLED)
-    tt::tt_fabric::MeshPacketHeader* packet_base = nullptr;
+    tt::tt_fabric::HybridMeshPacketHeader* packet_base = nullptr;
     // Clear north/south when turning from trunk->branch
     downstream_edm_interface.template update_edm_buffer_slot_word<false>(
         reinterpret_cast<std::uintptr_t>(&(packet_base->mcast_params[tt::tt_fabric::eth_chan_directions::NORTH])),
@@ -278,10 +278,6 @@ void update_packet_header_for_next_hop(
     }
 #endif
 }
-
-FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* /*packet_header*/,
-    tt::tt_fabric::LowLatencyMeshRoutingFields /*cached_routing_fields*/) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring

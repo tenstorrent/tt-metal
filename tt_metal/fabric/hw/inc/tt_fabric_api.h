@@ -97,52 +97,26 @@ void fabric_set_route(
 }
 
 void fabric_set_unicast_route(
-    volatile tt_l1_ptr MeshPacketHeader* packet_header,
-    uint16_t my_dev_id,  // Ignore this: Dynamic Routing does not need src chip ID
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint16_t ew_dim  // Ignore this: Dynamic Routing does not need mesh dimensions
-) {
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    // Minimize writes to L1 by doing 1 u64 write (decomposed to 2 u32 writes) instead of 4 u16 writes
-    packet_header->mcast_params_64 = 0;
-    packet_header->is_mcast_active = 0;
-}
-
-void fabric_set_mcast_route(
-    volatile tt_l1_ptr MeshPacketHeader* packet_header,
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,
-    uint16_t e_num_hops,
-    uint16_t w_num_hops,
-    uint16_t n_num_hops,
-    uint16_t s_num_hops) {
-    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
-    // Minimize writes to L1 by doing 1 u64 write (decomposed to 2 u32 writes) instead of 4 u16 writes
-    packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
-                                     ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
-    packet_header->is_mcast_active = 0;
-}
-
-void fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
     uint16_t my_dev_id,
     uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+    uint16_t dst_mesh_id,
     uint16_t ew_dim) {
     uint32_t ns_hops = 0;
     uint32_t target_dev = dst_dev_id;
     uint32_t target_col = 0;
 
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     uint16_t my_mesh_id = routing_table->my_mesh_id;
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->routing_fields.value = 0;
     packet_header->mcast_params_16 = 0;
+    packet_header->is_mcast_active = 0;
     if (my_mesh_id != dst_mesh_id) {
-        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
-        // dst_dev_id = exit_node;
+        tt_l1_ptr exit_node_table_t* exit_node_table =
+            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
+        target_dev = exit_node_table->nodes[dst_mesh_id];
     }
 
     while (target_dev >= ew_dim) {
@@ -207,17 +181,17 @@ void fabric_set_mcast_route(
     uint32_t mcast_branch = 0;
 
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
-        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
+        reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     uint16_t my_mesh_id = routing_table->my_mesh_id;
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->routing_fields.value = 0;
-    packet_header->mcast_params_16 = ((uint16_t)s_num_hops << 12) | ((uint16_t)n_num_hops << 8) |
-                                     ((uint16_t)w_num_hops << 4) | ((uint16_t)e_num_hops);
+    packet_header->mcast_params_16 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+                                     ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
+    packet_header->is_mcast_active = 0;
     if (my_mesh_id != dst_mesh_id) {
-        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
-        // dst_dev_id = exit_node;
-        // fabric_set_unicast_route(packet_header, my_mesh_id, dst_dev_id, dst_mesh_id, ew_dim);
-        // return;
+        tt_l1_ptr exit_node_table_t* exit_node_table =
+            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
+        dst_dev_id = exit_node_table->nodes[dst_mesh_id];
     }
 
     // For 2D Mcast, mcast spine runs N/S and branches are E/W
@@ -263,6 +237,7 @@ bool fabric_set_unicast_route(
     uint16_t dst_mesh_id = MAX_NUM_MESHES) {
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->mcast_params_16 = 0;
+    packet_header->is_mcast_active = 0;
     auto* routing_info = reinterpret_cast<tt_l1_ptr intra_mesh_routing_path_t<2, true>*>(ROUTING_PATH_BASE_2D);
 #if defined(COMPILE_FOR_ERISC)
     // ACTIVE_ETH doesn't have information yet
@@ -270,12 +245,9 @@ bool fabric_set_unicast_route(
 #endif
     auto* routing_table = reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(ROUTING_TABLE_BASE);
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
-        // TODO: https://github.com/tenstorrent/tt-metal/issues/27881
         tt_l1_ptr exit_node_table_t* exit_node_table =
-            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(MEM_TENSIX_EXIT_NODE_TABLE_BASE);
+            reinterpret_cast<tt_l1_ptr exit_node_table_t*>(EXIT_NODE_TABLE_BASE);
         dst_dev_id = exit_node_table->nodes[dst_mesh_id];
-        while (true) {
-        }  // not fully supported yet
     }
     bool ok = routing_info->decode_route_to_buffer(dst_dev_id, packet_header->route_buffer);
 
