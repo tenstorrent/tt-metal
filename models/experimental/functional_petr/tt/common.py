@@ -53,7 +53,8 @@ class Conv:
         # Check for small spatial dimensions that might cause issues
         is_small_spatial = input_height < 32 or input_width < 32
 
-        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # if input_tensor.shape[3] == 1024 or input_tensor.shape[3] == 384:
         #     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # else:
@@ -66,7 +67,8 @@ class Conv:
 
         # check weights are also properly formatted
         if hasattr(self.weights, "memory_config") and self.weights.memory_config().is_sharded():
-            self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.DRAM_MEMORY_CONFIG)
+            self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.L1_MEMORY_CONFIG)
+            # self.weights = ttnn.sharded_to_interleaved(self.weights, ttnn.DRAM_MEMORY_CONFIG)
 
         compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -84,7 +86,8 @@ class Conv:
             if self.kernel_size[0] == 3 and self.kernel_size[1] == 3:
                 # For 3x3 convolutions, use the minimal configuration that works
                 temp_input = ttnn.from_device(input_tensor) if hasattr(input_tensor, "device") else input_tensor
-                temp_input = ttnn.to_device(temp_input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                # temp_input = ttnn.to_device(temp_input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                temp_input = ttnn.to_device(temp_input, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
                 # Minimal config that works reliably
                 conv_config = ttnn.Conv2dConfig(

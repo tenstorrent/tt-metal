@@ -67,23 +67,28 @@ class ttnn_osa_module:
         if self.depthwise and in_channel != stage_ch:
             self.isReduced = True
             self.conv_reduction = Conv(
-                [1, 1, 0, 0], parameters["{}_reduction_0".format(module_name)], activation="relu"
+                [1, 1, 0, 0], parameters["{}_reduction_0".format(module_name)], activation="relu", height_sharding=True
             )
         for i in range(layer_per_block):
             module_name_with_i = "{}_{}".format(module_name, i)
             if module_name_with_i == "OSA3_1_0":
                 self.layers.append(
-                    Conv_with_split(
-                        [1, 1, 1, 1], parameters["{}_{}".format(module_name, i)], activation="relu", split_factor=4
+                    Conv(
+                        [1, 1, 1, 1],
+                        parameters["{}_{}".format(module_name, i)],
+                        activation="relu",
+                        act_block_h=128,
+                        height_sharding=True,
                     )
                 )
             elif i == 0 and "OSA3_1" not in module_name_with_i and "OSA2" not in module_name_with_i:
                 self.layers.append(
-                    Conv_with_split(
+                    Conv(
                         [1, 1, 1, 1],
                         parameters["{}_{}".format(module_name, i)],
                         activation="relu",
-                        split_factor=8,
+                        act_block_h=128,
+                        height_sharding=True,
                     )
                 )
             elif (
@@ -93,15 +98,31 @@ class ttnn_osa_module:
                 or "OSA3_3" in module_name_with_i
             ):
                 self.layers.append(
-                    Conv([1, 1, 1, 1], parameters["{}_{}".format(module_name, i)], activation="relu", act_block_h=128)
+                    Conv(
+                        [1, 1, 1, 1],
+                        parameters["{}_{}".format(module_name, i)],
+                        activation="relu",
+                        act_block_h=128,
+                        height_sharding=True,
+                    )
                 )
             else:
-                self.layers.append(Conv([1, 1, 1, 1], parameters["{}_{}".format(module_name, i)], activation="relu"))
+                self.layers.append(
+                    Conv(
+                        [1, 1, 1, 1],
+                        parameters["{}_{}".format(module_name, i)],
+                        activation="relu",
+                        height_sharding=True,
+                    )
+                )
 
         if module_name != "OSA2_1":
             if "OSA4" in module_name and module_name != "OSA4_1":
-                self.conv_concat = Conv_with_split(
-                    [1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")], activation="relu", split_factor=4
+                self.conv_concat = Conv(
+                    [1, 1, 0, 0],
+                    parameters["{}_{}".format(module_name, "concat")],
+                    activation="relu",
+                    height_sharding=True,
                 )
             # elif module_name == "OSA3_1":
             #     self.conv_concat = Conv_with_split([1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")],
@@ -114,16 +135,25 @@ class ttnn_osa_module:
                 == "OSA4_1"
                 # module_name == "OSA3_3" or module_name == "OSA4_1" or module_name == "OSA3_1" or module_name == "OSA3_2"
             ):
-                self.conv_concat = Conv_with_split(
-                    [1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")], activation="relu", split_factor=16
+                self.conv_concat = Conv(
+                    [1, 1, 0, 0],
+                    parameters["{}_{}".format(module_name, "concat")],
+                    activation="relu",
+                    height_sharding=True,
                 )
             elif "OSA5" in module_name:
-                self.conv_concat = Conv_with_split(
-                    [1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")], activation="relu", split_factor=16
+                self.conv_concat = Conv(
+                    [1, 1, 0, 0],
+                    parameters["{}_{}".format(module_name, "concat")],
+                    activation="relu",
+                    height_sharding=True,
                 )
             else:
                 self.conv_concat = Conv(
-                    [1, 1, 0, 0], parameters["{}_{}".format(module_name, "concat")], activation="relu"
+                    [1, 1, 0, 0],
+                    parameters["{}_{}".format(module_name, "concat")],
+                    activation="relu",
+                    height_sharding=True,
                 )
         if module_name == "OSA5_1" or module_name == "OSA5_2" or module_name == "OSA5_3":
             self.ese = ttnn_esemodule(parameters, is_split=True)

@@ -57,10 +57,10 @@ def create_custom_preprocessor(device):
         parameters = {}
         if isinstance(model, PETRHead):
             parameters["input_proj"] = {}
-            parameters["input_proj"]["weight"] = ttnn.from_torch(model.input_proj.weight, dtype=ttnn.bfloat16)
+            parameters["input_proj"]["weight"] = ttnn.from_torch(model.input_proj.weight, dtype=ttnn.float32)
             parameters["input_proj"]["bias"] = ttnn.from_torch(
                 torch.reshape(model.input_proj.bias, (1, 1, 1, -1)),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
             )
 
             parameters["cls_branches"] = {}
@@ -70,17 +70,17 @@ def create_custom_preprocessor(device):
                     parameters["cls_branches"][index][index1] = {}
                     if isinstance(child1, Linear):
                         parameters["cls_branches"][index][index1]["weight"] = preprocess_linear_weight(
-                            child1.weight, dtype=ttnn.bfloat8_b
+                            child1.weight, dtype=ttnn.float32
                         )
                         parameters["cls_branches"][index][index1]["bias"] = preprocess_linear_bias(
-                            child1.bias, dtype=ttnn.bfloat8_b
+                            child1.bias, dtype=ttnn.float32
                         )
                     elif isinstance(child1, nn.LayerNorm):
                         parameters["cls_branches"][index][index1]["weight"] = preprocess_layernorm_parameter(
-                            child1.weight, dtype=ttnn.bfloat8_b
+                            child1.weight, dtype=ttnn.float32
                         )
                         parameters["cls_branches"][index][index1]["bias"] = preprocess_layernorm_parameter(
-                            child1.bias, dtype=ttnn.bfloat8_b
+                            child1.bias, dtype=ttnn.float32
                         )
 
             parameters["reg_branches"] = {}
@@ -90,30 +90,30 @@ def create_custom_preprocessor(device):
                     parameters["reg_branches"][index][index1] = {}
                     if isinstance(child1, Linear):
                         parameters["reg_branches"][index][index1]["weight"] = preprocess_linear_weight(
-                            child1.weight, dtype=ttnn.bfloat8_b
+                            child1.weight, dtype=ttnn.float32
                         )
                         parameters["reg_branches"][index][index1]["bias"] = preprocess_linear_bias(
-                            child1.bias, dtype=ttnn.bfloat8_b
+                            child1.bias, dtype=ttnn.float32
                         )
 
             parameters["adapt_pos3d"] = {}
             for index, child in enumerate(model.adapt_pos3d):
                 parameters["adapt_pos3d"][index] = {}
                 if isinstance(child, Conv2d):
-                    parameters["adapt_pos3d"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.bfloat16)
+                    parameters["adapt_pos3d"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.float32)
                     parameters["adapt_pos3d"][index]["bias"] = ttnn.from_torch(
                         torch.reshape(child.bias, (1, 1, 1, -1)),
-                        dtype=ttnn.bfloat16,
+                        dtype=ttnn.float32,
                     )
 
             parameters["position_encoder"] = {}
             for index, child in enumerate(model.position_encoder):
                 parameters["position_encoder"][index] = {}
                 if isinstance(child, Conv2d):
-                    parameters["position_encoder"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.bfloat16)
+                    parameters["position_encoder"][index]["weight"] = ttnn.from_torch(child.weight, dtype=ttnn.float32)
                     parameters["position_encoder"][index]["bias"] = ttnn.from_torch(
                         torch.reshape(child.bias, (1, 1, 1, -1)),
-                        dtype=ttnn.bfloat16,
+                        dtype=ttnn.float32,
                     )
 
             parameters["query_embedding"] = {}
@@ -121,10 +121,10 @@ def create_custom_preprocessor(device):
                 parameters["query_embedding"][index] = {}
                 if isinstance(child, Linear):
                     parameters["query_embedding"][index]["weight"] = preprocess_linear_weight(
-                        child.weight, dtype=ttnn.bfloat8_b
+                        child.weight, dtype=ttnn.float32
                     )
                     parameters["query_embedding"][index]["bias"] = preprocess_linear_bias(
-                        child.bias, dtype=ttnn.bfloat8_b
+                        child.bias, dtype=ttnn.float32
                     )
             parameters["reference_points"] = {}
             parameters["reference_points"]["weight"] = ttnn.from_torch(model.reference_points.weight, device=device)
@@ -237,6 +237,31 @@ def test_petr_head_without_saved_input(device, reset_seeds):
         # f"weight_dtype={self.model_config['WEIGHTS_DTYPE']}, "
         # f"math_fidelity={self.model_config['MATH_FIDELITY']}, "
         f"PCC={msg1}"
+    )
+    torch_bbox = output["all_bbox_preds"]
+    ttnn_bbox = ttnn_output["all_bbox_preds"]
+
+    logger.info(f"Overall bbox PCC: {check_with_pcc(torch_bbox, ttnn_bbox, pcc=0.99)}")
+
+    for lvl in range(torch_bbox.shape[0]):
+        passed, msg = check_with_pcc(torch_bbox[lvl], ttnn_bbox[lvl], pcc=0.99)
+        logger.info(f"Layer {lvl} bbox PCC: {msg}")
+
+    # Compare each coordinate dimension
+    for dim in range(torch_bbox.shape[-1]):
+        passed, msg = check_with_pcc(torch_bbox[..., dim], ttnn_bbox[..., dim], pcc=0.99)
+        logger.info(f"Dimension {dim} bbox PCC: {msg}")
+
+    # Check for NaN or Inf
+    logger.info(f"Torch bbox - NaN: {torch.isnan(torch_bbox).any()}, Inf: {torch.isinf(torch_bbox).any()}")
+    logger.info(f"TTNN bbox - NaN: {torch.isnan(ttnn_bbox).any()}, Inf: {torch.isinf(ttnn_bbox).any()}")
+
+    # Statistical comparison
+    logger.info(
+        f"Torch bbox stats - mean: {torch_bbox.mean()}, std: {torch_bbox.std()}, min: {torch_bbox.min()}, max: {torch_bbox.max()}"
+    )
+    logger.info(
+        f"TTNN bbox stats - mean: {ttnn_bbox.mean()}, std: {ttnn_bbox.std()}, min: {ttnn_bbox.min()}, max: {ttnn_bbox.max()}"
     )
     assert_with_pcc(output["all_cls_scores"], ttnn_output["all_cls_scores"], pcc=0.99)
     assert_with_pcc(output["all_bbox_preds"], ttnn_output["all_bbox_preds"], pcc=0.99)  # Pcc > 0.99
