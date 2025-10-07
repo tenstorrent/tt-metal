@@ -60,12 +60,18 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
                 (dst_col != src_col) ? ((dst_col > src_col) ? (dst_col - src_col) : (src_col - dst_col)) : 0;
             uint8_t ns_wrap = ns_dim - ns_direct;
 
-            if (ns_direct <= ns_wrap) {
+            if (ns_direct < ns_wrap) {
+                // Direct path is shorter
                 ns_hops = ns_direct;
                 ns_direction = (dst_col > src_col) ? 1 : 0;  // 0=north, 1=south
-            } else {
+            } else if (ns_direct > ns_wrap) {
+                // Wrap-around path is shorter
                 ns_hops = ns_wrap;
                 ns_direction = (dst_col > src_col) ? 0 : 1;  // Reverse direction for wrap
+            } else {
+                // Equal distance: always choose North (matches RoutingTableGenerator behavior)
+                ns_hops = ns_direct;  // Same as ns_wrap
+                ns_direction = 0;     // North
             }
 
             // Calculate EW direction and hops
@@ -73,12 +79,18 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
                 (dst_row != src_row) ? ((dst_row > src_row) ? (dst_row - src_row) : (src_row - dst_row)) : 0;
             uint8_t ew_wrap = ew_dim - ew_direct;
 
-            if (ew_direct <= ew_wrap) {
+            if (ew_direct < ew_wrap) {
+                // Direct path is shorter
                 ew_hops = ew_direct;
                 ew_direction = (dst_row > src_row) ? 1 : 0;  // 0=west, 1=east
-            } else {
+            } else if (ew_direct > ew_wrap) {
+                // Wrap-around path is shorter
                 ew_hops = ew_wrap;
                 ew_direction = (dst_row > src_row) ? 0 : 1;  // Reverse direction for wrap
+            } else {
+                // Equal distance: always choose East (matches RoutingTableGenerator behavior)
+                ew_hops = ew_direct;  // Same as ew_wrap
+                ew_direction = 1;     // East
             }
         } else {
             // Mesh topology: original implementation
