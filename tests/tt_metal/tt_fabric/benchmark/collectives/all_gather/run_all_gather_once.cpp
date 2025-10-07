@@ -194,42 +194,16 @@ Notes:
     // Fabric guarantees payload is visible before the bump is seen.
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
     tt::tt_metal::Program receiver_prog2 = tt::tt_metal::CreateProgram();
-    static std::optional<tt::tt_metal::GlobalSemaphore> gsemA;
-    static std::optional<tt::tt_metal::GlobalSemaphore> gsemB;
-    static std::optional<tt::tt_metal::GlobalSemaphore> gsemA2;
-    static std::optional<tt::tt_metal::GlobalSemaphore> gsemB2;
-    // Create the semaphore on the MeshDevice at exactly the receiver logical core.
-    tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
-    tt::tt_metal::CoreRangeSet rx_core_set2(tt::tt_metal::CoreRange(p.receiver_core2, p.receiver_core2));
-    if (!gsemA) {
-        gsemA = tt::tt_metal::CreateGlobalSemaphore(
-            mesh.get(),
-            rx_core_set,
-            /*initial_value=*/0);
-    }
-    if (!gsemB) {
-        gsemB = tt::tt_metal::CreateGlobalSemaphore(
-            mesh.get(),
-            rx_core_set,
-            /*initial_value=*/0);
-    }
-    if (!gsemA2) {
-        gsemA2 = tt::tt_metal::CreateGlobalSemaphore(
-            mesh.get(),
-            rx_core_set2,
-            /*initial_value=*/0);
-    }
-    if (!gsemB2) {
-        gsemB2 = tt::tt_metal::CreateGlobalSemaphore(
-            mesh.get(),
-            rx_core_set2,
-            /*initial_value=*/0);
-    }
 
-    static uint32_t sem_sel = 0;
-    auto& gsem = (sem_sel++ & 1) ? *gsemB : *gsemA;
-    static uint32_t sem_sel2 = 0;
-    auto& gsem2 = (sem_sel2++ & 1) ? *gsemB2 : *gsemA2;
+    // ONE semaphore at a single logical core; MeshDevice replication gives same L1 addr per chip.
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsem_done;
+    tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
+    if (!gsem_done) {
+        gsem_done = tt::tt_metal::CreateGlobalSemaphore(
+            mesh.get(),
+            rx_core_set,
+            /*initial_value=*/0);
+    }
 
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/all_gather/kernels/";
@@ -240,7 +214,7 @@ Notes:
         receiver_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
+    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem_done->address(), 1u});
 
     const tt::tt_metal::CoreCoord receiver_core2 = p.receiver_core2;
     auto rx_wait_k2 = tt::tt_metal::CreateKernel(
@@ -249,7 +223,22 @@ Notes:
         receiver_core2,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-    tt::tt_metal::SetRuntimeArgs(receiver_prog2, rx_wait_k2, receiver_core2, {gsem2.address(), 1u});
+    tt::tt_metal::SetRuntimeArgs(receiver_prog2, rx_wait_k2, receiver_core2, {gsem_done->address(), 1u});
+
+    // For multicast completion, the worker XY must match on every chip.
+    if (rx_xy.x != rx2_xy.x || rx_xy.y != rx2_xy.y) {
+        ADD_FAILURE() << "Multicast completion requires identical worker XY on all destination chips. "
+                      << "Got rx1=(" << rx_xy.x << "," << rx_xy.y << "), "
+                      << "rx2=(" << rx2_xy.x << "," << rx2_xy.y << ").";
+        return PerfPoint{};
+    }
+
+    log_info(
+        tt::LogTest,
+        "Multicast completion: RX XY=({},{}) on all chips, sem_l1=0x{:08x}",
+        rx_xy.x,
+        rx_xy.y,
+        (uint32_t)gsem_done->address());
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
@@ -300,17 +289,17 @@ Notes:
     }
 
     std::vector<uint32_t> writer_rt = {
-        (uint32_t)dst_buf->address(),  // 0: dst_base
-        (uint32_t)p.mesh_id,           // 1: dst1_mesh_id (logical)
-        (uint32_t)p.dst_chip,          // 2: dst1_dev_id  (logical)
-        (uint32_t)rx_xy.x,             // 3: rx1_noc_x
-        (uint32_t)rx_xy.y,             // 4: rx1_noc_y
-        (uint32_t)gsem.address(),      // 5: sem1_l1_addr
-        (uint32_t)p.mesh_id,           // 6: dst2_mesh_id (logical)
-        (uint32_t)p.dst_chip2,         // 7: dst2_dev_id  (logical)
-        (uint32_t)rx2_xy.x,            // 8: rx2_noc_x
-        (uint32_t)rx2_xy.y,            // 9: rx2_noc_y
-        (uint32_t)gsem2.address()      // 10: sem2_l1_addr
+        (uint32_t)dst_buf->address(),    // 0: dst_base
+        (uint32_t)p.mesh_id,             // 1: dst1_mesh_id (logical)
+        (uint32_t)p.dst_chip,            // 2: dst1_dev_id  (logical)
+        (uint32_t)rx_xy.x,               // 3: rx1_noc_x
+        (uint32_t)rx_xy.y,               // 4: rx1_noc_y
+        (uint32_t)gsem_done->address(),  // 5: sem1_l1_addr (shared)
+        (uint32_t)p.mesh_id,             // 6: dst2_mesh_id (logical)
+        (uint32_t)p.dst_chip2,           // 7: dst2_dev_id  (logical)
+        (uint32_t)rx_xy.x,               // 8: rx2_noc_x  (same XY!)
+        (uint32_t)rx_xy.y,               // 9: rx2_noc_y  (same XY!)
+        (uint32_t)gsem_done->address()   // 10: sem2_l1_addr (same L1!)
     };
 
     // Pack the fabric-connection runtime args for the writer kernel.

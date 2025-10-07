@@ -115,22 +115,24 @@ void kernel_main() {
 
     noc_async_writes_flushed();
 
-    // Final signals: bump both receiver semaphores so both RX wait kernels exit.
+    // === Single multicast completion to identical mailboxes on all destination chips ===
     ASSERT(sem1_l1_addr != 0);
-    ASSERT(sem2_l1_addr != 0);
+    ASSERT(sem1_l1_addr == sem2_l1_addr);                      // same L1 semaphore offset on all chips
+    ASSERT(rx1_noc_x == rx2_noc_x && rx1_noc_y == rx2_noc_y);  // same worker coords on all chips
 
-    const uint64_t sem1_noc = safe_get_noc_addr(rx1_noc_x, rx1_noc_y, sem1_l1_addr, /*NOC_INDEX=*/0);
-    const uint64_t sem2_noc = safe_get_noc_addr(rx2_noc_x, rx2_noc_y, sem2_l1_addr, /*NOC_INDEX=*/0);
+    const uint64_t sem_noc = safe_get_noc_addr(rx1_noc_x, rx1_noc_y, sem1_l1_addr, /*NOC_INDEX=*/0);
 
-    // Completion to RX#1
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst1_dev_id, /*dst_mesh_id=*/dst1_mesh_id);
-    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem1_noc, /*inc=*/1, /*width_bits=*/32));
-    sender.wait_for_empty_write_slot();
-    sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+    fabric_set_mcast_route(
+        reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
+        /*dst_dev_id (ignored)*/ 0,
+        /*dst_mesh_id (ignored)*/ 0,
+        /*e_num_hops*/ e_hops,
+        /*w_num_hops*/ w_hops,
+        /*n_num_hops*/ n_hops,
+        /*s_num_hops*/ s_hops);
 
-    // Completion to RX#2
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst2_dev_id, /*dst_mesh_id=*/dst2_mesh_id);
-    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem2_noc, /*inc=*/1, /*width_bits=*/32));
+    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+
     sender.wait_for_empty_write_slot();
     sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
 
