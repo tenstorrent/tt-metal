@@ -474,7 +474,7 @@ set(TTML_SRC_NANOBIND
 )
 nanobind_add_module(
     _ttml
-    STABLE_ABI NB_SHARED LTO
+    STABLE_ABI NB_STATIC
     ${TTML_SRC_NANOBIND}
 )
 target_link_libraries(
@@ -486,12 +486,6 @@ target_link_libraries(
         Python3::Python
         ttml
 )
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR})
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/ttnn/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_metal/third_party/umd/device/api)
-target_include_directories(_ttml PUBLIC ${CMAKE_SOURCE_DIR}/tt_stl)
 target_include_directories(_ttml PUBLIC ${PROJECT_SOURCE_DIR})
 install(
     TARGETS
