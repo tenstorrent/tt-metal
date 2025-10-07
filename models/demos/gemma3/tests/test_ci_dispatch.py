@@ -15,13 +15,20 @@ from loguru import logger
     ids=["gemma-3-4b-it", "gemma-3-27b-it"],
 )
 def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_generator):
-    if not is_ci_env and not is_ci_v2_env:
-        pytest.skip("Skipping CI dispatch tests when running locally.")
+    print(f"{os.getenv('IS_LOCAL_MSTOJKO')=}")
+
+    if os.getenv("IS_LOCAL_MSTOJKO") is None:
+        if not is_ci_env and not is_ci_v2_env:
+            pytest.skip("Skipping CI dispatch tests when running locally.")
+    else:
+        is_ci_v2_env = True
 
     os.environ["HF_MODEL"] = hf_model_name
 
-    model_weights_path = str(model_location_generator(hf_model_name))
+    model_weights_path = str(model_location_generator(hf_model_name, download_if_ci_v2=True, ci_v2_timeout_in_s=1800))
     os.environ["TT_CACHE_PATH"] = model_weights_path
+
+    logger.info(f"Running fast dispatch tests for {model_weights_path}")
 
     logger.info(f"Running fast dispatch tests for {model_weights_path}")
 
@@ -56,10 +63,8 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
     else:
         tests = performance_tests
 
-    args = tests + ["-x"]  # Fail if one of the tests fails
-
     # Pass the exit code of pytest to proper keep track of failures during runtime
-    exit_code = pytest.main(args)
+    exit_code = pytest.main(tests + ["-x"])
     if exit_code == pytest.ExitCode.TESTS_FAILED:
         pytest.fail(
             f"One or more CI dispatch tests failed for {model_weights_path}. Please check the log above for more info",
