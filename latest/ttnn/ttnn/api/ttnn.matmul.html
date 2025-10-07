@@ -283,15 +283,55 @@ problems appropriately.</p></li>
 </tbody>
 </table>
 </div>
-<dl class="simple">
+<dl>
 <dt>Memory Support:</dt>
 <dd>
-<ul class="simple">
-<li><p>Interleaved: DRAM and L1</p></li>
-<li><p>Input A also supports sharding (width, height, block), with row major orientation, depending on the program config</p></li>
-<li><p>Input B also supports sharding (width, height, block), with row major orientation depending on the program config, although in a more limited manner than Input A</p></li>
-<li><p>Sharded outputs (when used): must match Input A buffer type and memory layout; some configs disallow width sharded outputs</p></li>
-</ul>
+<p>The supported memory configurations for the two input tensors are program config dependent, as described below:</p>
+<table class="docutils align-default" id="id4">
+<caption>
+<span class="caption-text">Supported Memory Configurations</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
+</caption>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Config</p></th>
+<th class="head"><p>Input A</p></th>
+<th class="head"><p>Input B</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>MatmulMultiCoreReuseProgramConfig</p></td>
+<td><p>Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)</p></td>
+<td><p>Interleaved (L1/DRAM), Height Sharded (L1), or Block Sharded (L1)</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</p></td>
+<td><p>Width Sharded (L1)</p></td>
+<td><p>Width Sharded (DRAM)</p></td>
+</tr>
+<tr class="row-even">
+<td><p>MatmulMultiCoreReuseMultiCastProgramConfig</p></td>
+<td><p>Interleaved (L1/DRAM), Block Sharded (L1)</p></td>
+<td><p>Interleaved (L1/DRAM)</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>MatmulMultiCoreReuseMultiCastProgramConfig (only for row major orientation without transpose multicast)</p></td>
+<td><p>Interleaved (L1/DRAM), Height Sharded (L1)</p></td>
+<td><p>Interleaved (L1/DRAM), Width Sharded (L1)</p></td>
+</tr>
+<tr class="row-even">
+<td><p>MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=False)</p></td>
+<td><p>Interleaved (L1/DRAM), Width Sharded (L1)</p></td>
+<td><p>Interleaved (L1/DRAM), Width Sharded (L1)</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>MatmulMultiCoreReuseMultiCast1DProgramConfig (mcast_in0=True)</p></td>
+<td><p>Interleaved (L1/DRAM), Height Sharded (L1)</p></td>
+<td><p>Interleaved (L1/DRAM)</p></td>
+</tr>
+</tbody>
+</table>
+<p>When sharded output tensors are provided, they should match <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>’s buffer type and memory layout.</p>
 </dd>
 </dl>
 <div class="admonition-example admonition">
