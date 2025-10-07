@@ -240,3 +240,40 @@ def tt_distributed_rmsnorm(inp, epsilon, gamma, mesh_device, tt_ccl, compute_ker
     # inp.deallocate(True)
 
     return tt_out
+
+
+def tt_sharded_distributed_rmsnorm(
+    inp, epsilon, gamma, mesh_device, tt_ccl, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
+):
+    inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
+    # Run distributed rmsnorm part 1
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg, use_2d_core_grid=True)
+
+    # All gather stats
+    cluster_axis = 1
+    tt_stats = ttnn.experimental.all_gather_async(
+        tt_stats,
+        persistent_output_buffer=None,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+        num_links=1,
+        cluster_axis=cluster_axis,
+        topology=ttnn.Topology.Linear,
+        memory_config=ln_sharded_stats_memcfg,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )
+
+    # Run distributed rmsnorm part 2
+    tt_out = ttnn.rms_norm_post_all_gather(
+        inp,
+        epsilon=epsilon,
+        weight=gamma,
+        program_config=ln_sharded_progcfg,
+        stats=tt_stats,
+    )
+    tt_stats.deallocate(True)
+
+    return tt_out

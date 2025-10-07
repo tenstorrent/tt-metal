@@ -2,8 +2,9 @@ import math
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
 from models.demos.grok.tt.attention import Attention
-from models.demos.grok.tt.ccl import tt_distributed_rmsnorm
+from models.demos.grok.tt.distributed_norm import DistributedNorm
 from models.demos.grok.tt.expert_mlp import ExpertMLP
 from models.demos.grok.tt.mlp import MLP
 from models.demos.grok.tt.moe import TtMoE
@@ -75,93 +76,113 @@ class Decoder(LightweightModule):
         )
 
         # We have 4 norms: pre-attn, post-attn, pre-moe, post-moe
-        self.pre_attn_norm_weight = ttnn.from_torch(
-            state_dict[f"model.layers.{layer_num}.pre_attn_norm.weight"]
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .reshape(1, 1, 8192 // 32, 32),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=(8, 4)),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        self.pre_attn_norm = DistributedNorm(
+            RMSNorm(
+                device=self.mesh_device,
+                dim=self.args.dim,
+                eps=1e-5,
+                state_dict={
+                    f"model.layers.{layer_num}.pre_attn_norm.weight": state_dict[
+                        f"model.layers.{layer_num}.pre_attn_norm.weight"
+                    ]
+                },
+                weight_dtype=ttnn.bfloat16,
+                weight_key=f"model.layers.{layer_num}.pre_attn_norm",
+                is_distributed=True,
+                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                ccl_topology=ttnn.Topology.Ring,
+                tt_ccl=tt_ccl,
+            ),
+            self.args,
+            tt_ccl=tt_ccl,
         )
-        self.post_attn_norm_weight = ttnn.from_torch(
-            state_dict[f"model.layers.{layer_num}.post_attn_norm.weight"]
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .reshape(1, 1, 8192 // 32, 32),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=(8, 4)),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        self.post_attn_norm = DistributedNorm(
+            RMSNorm(
+                device=self.mesh_device,
+                dim=self.args.dim,
+                eps=1e-5,
+                state_dict={
+                    f"model.layers.{layer_num}.post_attn_norm.weight": state_dict[
+                        f"model.layers.{layer_num}.post_attn_norm.weight"
+                    ]
+                },
+                weight_dtype=ttnn.bfloat16,
+                weight_key=f"model.layers.{layer_num}.post_attn_norm",
+                is_distributed=True,
+                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                ccl_topology=ttnn.Topology.Ring,
+                tt_ccl=tt_ccl,
+            ),
+            self.args,
+            tt_ccl=tt_ccl,
         )
-        self.pre_moe_norm_weight = ttnn.from_torch(
-            state_dict[f"model.layers.{layer_num}.pre_moe_norm.weight"]
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .reshape(1, 1, 8192 // 32, 32),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=(8, 4)),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        self.pre_moe_norm = DistributedNorm(
+            RMSNorm(
+                device=self.mesh_device,
+                dim=self.args.dim,
+                eps=1e-5,
+                state_dict={
+                    f"model.layers.{layer_num}.pre_moe_norm.weight": state_dict[
+                        f"model.layers.{layer_num}.pre_moe_norm.weight"
+                    ]
+                },
+                weight_dtype=ttnn.bfloat16,
+                weight_key=f"model.layers.{layer_num}.pre_moe_norm",
+                is_distributed=True,
+                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                ccl_topology=ttnn.Topology.Ring,
+                tt_ccl=tt_ccl,
+            ),
+            self.args,
+            tt_ccl=tt_ccl,
         )
-        self.post_moe_norm_weight = ttnn.from_torch(
-            state_dict[f"model.layers.{layer_num}.post_moe_norm.weight"]
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .reshape(1, 1, 8192 // 32, 32),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=(8, 4)),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        self.post_moe_norm = DistributedNorm(
+            RMSNorm(
+                device=self.mesh_device,
+                dim=self.args.dim,
+                eps=1e-5,
+                state_dict={
+                    f"model.layers.{layer_num}.post_moe_norm.weight": state_dict[
+                        f"model.layers.{layer_num}.post_moe_norm.weight"
+                    ]
+                },
+                weight_dtype=ttnn.bfloat16,
+                weight_key=f"model.layers.{layer_num}.post_moe_norm",
+                is_distributed=True,
+                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                ccl_topology=ttnn.Topology.Ring,
+                tt_ccl=tt_ccl,
+            ),
+            self.args,
+            tt_ccl=tt_ccl,
         )
 
     def forward(self, hidden_states, current_pos, rot_mats, page_table=None):
         # Pre-attn norm
         residual = hidden_states
-        hidden_states = tt_distributed_rmsnorm(
-            hidden_states,
-            1e-5,
-            self.pre_attn_norm_weight,
-            self.mesh_device,
-            self.tt_ccl,
-            self.model_config["NORM_COMPUTE_KERNEL_CONFIG"],
-        )
+        input_memory_config = hidden_states.memory_config()
+
+        hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
+        # hidden_states = self.pre_attn_norm(hidden_states, mode="decode")
 
         # Attention
         attn_out = self.attention.forward(hidden_states, current_pos, rot_mats, page_table=page_table)
 
         # Post-attn norm
-        attn_out = tt_distributed_rmsnorm(
-            attn_out,
-            1e-5,
-            self.post_attn_norm_weight,
-            self.mesh_device,
-            self.tt_ccl,
-            self.model_config["NORM_COMPUTE_KERNEL_CONFIG"],
-        )
+        # attn_out = self.post_attn_norm(attn_out, mode="decode")
+
         # Residual connection
         hidden_states = ttnn.add(residual, attn_out)
         residual_memory_config = hidden_states.memory_config()
 
         # Pre-MoE norm
         residual = hidden_states
-        hidden_states = tt_distributed_rmsnorm(
-            hidden_states,
-            1e-5,
-            self.pre_moe_norm_weight,
-            self.mesh_device,
-            self.tt_ccl,
-            self.model_config["NORM_COMPUTE_KERNEL_CONFIG"],
-        )
+        # hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
+        # hidden_states = self.pre_moe_norm(hidden_states, mode="decode")
 
         # MLP
         mlp_in = ttnn.to_memory_config(hidden_states, self.model_config["MLP_ACT_MEMCFG"])
@@ -176,14 +197,10 @@ class Decoder(LightweightModule):
         moe_out = ttnn.div(moe_out, math.sqrt(2))
 
         # Post-MoE norm
-        moe_out = tt_distributed_rmsnorm(
-            moe_out,
-            1e-5,
-            self.post_moe_norm_weight,
-            self.mesh_device,
-            self.tt_ccl,
-            self.model_config["NORM_COMPUTE_KERNEL_CONFIG"],
-        )
+        # moe_out = ttnn.typecast(moe_out, ttnn.bfloat16)
+        # moe_out = self.post_moe_norm(moe_out, mode="decode")
+
         hidden_states = ttnn.add(residual, moe_out)
+        hidden_states = ttnn.to_memory_config(hidden_states, input_memory_config)
 
         return hidden_states

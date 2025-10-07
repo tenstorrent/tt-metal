@@ -357,18 +357,18 @@ class GrokDecoder(nn.Module):
         """
         # Pre-attention residual
         residual = hidden_states
-        hidden_states = self.pre_attn_norm(hidden_states)
+        # hidden_states = self.pre_attn_norm(hidden_states)
 
         # Attention (no pre-norm as in TT implementation)
         attn_out = self.attention(hidden_states, start_pos, freqs_cis, mask)
-        attn_out = self.post_attn_norm(attn_out)
+        # attn_out = self.post_attn_norm(attn_out)
 
         # Post-attention residual connection (no post-norm as in TT implementation)
         hidden_states = residual + attn_out
 
         # Pre-MLP residual
         residual = hidden_states
-        hidden_states = self.pre_moe_norm(hidden_states)
+        # hidden_states = self.pre_moe_norm(hidden_states)
 
         # Shared MLP
         shared_mlp_out = self.shared_mlp(hidden_states)
@@ -379,7 +379,7 @@ class GrokDecoder(nn.Module):
         # Combine shared MLP and MoE outputs, then divide by sqrt(2)
         combined_out = shared_mlp_out + moe_out
         combined_out = combined_out / math.sqrt(2.0)
-        combined_out = self.post_moe_norm(combined_out)
+        # combined_out = self.post_moe_norm(combined_out)
 
         # Post-MLP residual connection (no post-norm as in TT implementation)
         hidden_states = residual + combined_out

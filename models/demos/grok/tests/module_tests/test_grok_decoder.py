@@ -182,7 +182,10 @@ def test_grok_decoder_inference(
         tt_decoder_input = pt_decoder_input.clone()
 
         decoder_input = model_args.prepare_residual_tensor_decode(
-            tt_decoder_input, model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"], force_replicated=False
+            # tt_decoder_input, model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"], force_replicated=False
+            tt_decoder_input,
+            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
+            force_replicated=False,
         )
 
         # Get cos/sin matrices for the current position of each user

@@ -73,6 +73,7 @@ class TtModelArgs:
         self.dummy_weights = True  # For testing
         self.hidden_dim = self.intermediate_size  # For MLP
         self.unpadded_hidden_dim = self.intermediate_size
+        self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
 
         self.n_local_heads = self.n_heads // self.cluster_shape[1]
         grid = self.mesh_device.compute_with_storage_grid_size()
@@ -355,11 +356,33 @@ class TtModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
+    def create_sharded_norm_config(self, grid):
+        """Helper function to create LayerNormShardedMultiCoreProgramConfig for RMS NORM.
+
+        Args:
+            grid (ttnn.CoreGrid): Grid specification for the norm operation
+        """
+        block_w = self.dim // grid.num_cores // self.tile_size
+        # Find largest value <= 4 that evenly divides block_w
+        subblock_w = 4
+        while subblock_w > 0:
+            if block_w % subblock_w == 0:
+                break
+            subblock_w -= 1
+        return ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[grid.x, grid.y],
+            subblock_w=subblock_w,
+            block_h=self.tile_padded_batch_rows // self.tile_size,
+            block_w=block_w,
+            inplace=False,
+        )
+
     def get_model_config(self):
         """Create and return the model configuration dictionary with all required configs"""
         model_config = {}
 
         # Basic memory and layout configs
+        model_config["DECODE_RESIDUAL_MEMCFG"] = ttnn.L1_MEMORY_CONFIG
         model_config["ATTN_W_LAYOUT_TILE"] = ttnn.TILE_LAYOUT
 
         model_config["MOE_INPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
@@ -452,6 +475,14 @@ class TtModelArgs:
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
+        )
+        model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(
+            ttnn.CoreGrid(y=lm_head_num_rows, x=8)
+        )
+        model_config["GATHER_IN_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, 8192 // 4),
+            core_grid=ttnn.CoreGrid(y=4, x=8),
+            strategy=ttnn.ShardStrategy.WIDTH,
         )
         model_config["SHARDED_ATTN_INPUT_MEMCFG_SINGLE_EXPERT"] = ttnn.create_sharded_memory_config(
             shape=(256, nearest_32(self.hidden_size // (8 * lm_head_num_rows) // 4)),
