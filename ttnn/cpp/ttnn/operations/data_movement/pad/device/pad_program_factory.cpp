@@ -339,6 +339,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
                     ncores_h = 8;
                     ntiles_per_core_h = 8;
                     break;
+                default: TT_THROW("Unsupported ntiles_h value {}", ntiles_h);
             }
             ncores_per_batch_h = ncores_h;
             break;
@@ -369,6 +370,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
                     ncores_h = ncores_per_batch_h * nbatch;
                     ntiles_per_core_h = 16;
                     break;
+                default: TT_THROW("Unsupported ntiles_h value {}", ntiles_h);
             }
             break;
 
@@ -419,6 +421,7 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
         case 4: ncores_w = 4; break;
         case 8:
         case 64: ncores_w = 8; break;
+        default: TT_THROW("Unsupported ntiles_w value {}", ntiles_w);
     }
     ncores = ncores_h * ncores_w;
     ntiles_per_core_w = ntiles_w / ncores_w;

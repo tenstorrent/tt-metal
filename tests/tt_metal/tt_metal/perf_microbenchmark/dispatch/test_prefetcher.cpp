@@ -957,6 +957,7 @@ void gen_rnd_inline_cmd(
             // packed unicast write
             gen_rnd_dispatcher_packed_write_cmd(device, dispatch_cmds, device_data);
             break;
+        default: TT_THROW("Invalid which_cmd {} in gen_rnd_inline_cmd", which_cmd);
     }
 
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_RELAY_INLINE, dispatch_cmds);
@@ -1189,6 +1190,7 @@ void gen_rnd_test(
                     gen_rnd_debug_cmd(prefetch_cmds, cmd_sizes, device_data);
                 }
                 break;
+            default: TT_THROW("Invalid prefetch cmd {} in gen_rnd_test", cmd);
         }
     }
 }
