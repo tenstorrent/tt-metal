@@ -80,6 +80,7 @@ set_target_properties(
             TRUE
 )
 
+target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
 target_compile_options(libprotobuf PRIVATE -fno-semantic-interposition)
 
 ############################################################################################################################

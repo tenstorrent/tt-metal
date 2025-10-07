@@ -401,6 +401,7 @@ bool test_compile_program_with_modified_program(IDevice* device) {
 int main(int argc, char** argv) {
     bool pass = true;
 
+    try {
         int device_id = 0;
         IDevice* device = CreateDevice(device_id);
 
@@ -411,6 +412,13 @@ int main(int argc, char** argv) {
         pass &= test_compile_program_with_modified_program(device);
 
         pass &= CloseDevice(device);
+    } catch (const std::exception& e) {
+        pass = false;
+        // Capture the exception error message
+        log_error(LogTest, "{}", e.what());
+        // Capture system call errors that may have returned from driver/kernel
+        log_error(LogTest, "System error message: {}", std::strerror(errno));
+    }
 
     if (pass) {
         log_info(LogTest, "Test Passed");

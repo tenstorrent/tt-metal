@@ -92,12 +92,9 @@ target_link_libraries(
         protobuf::libprotobuf
 )
 
-# NEW: Apply link flag to fabric (affects symbol binding when linking fabric)
-target_link_options(fabric PRIVATE -Wl,-Bsymbolic)
-
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
 
-target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast -fno-semantic-interposition)
+target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
 
 install(
     TARGETS
