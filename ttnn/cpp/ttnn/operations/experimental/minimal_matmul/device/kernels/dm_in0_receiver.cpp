@@ -18,30 +18,35 @@ void kernel_main() {
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
     constexpr uint32_t input_tile_size = get_compile_time_arg_val(9);
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
+    constexpr uint32_t buffer_factor = get_compile_time_arg_val(10);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_mcast_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_mcast_sender_noc_y = get_arg_val<uint32_t>(argidx++);
+    uint32_t* in0_valid_sem_ids = reinterpret_cast<uint32_t*>(get_arg_addr(argidx));
+    argidx += buffer_factor;
+    uint32_t* in0_ack_sem_ids = reinterpret_cast<uint32_t*>(get_arg_addr(argidx));
+
+    uint32_t in0_valid_sem_addrs[buffer_factor];
+    uint32_t in0_ack_sem_addrs[buffer_factor];
+    for (uint32_t i = 0; i < buffer_factor; i++) {
+        in0_valid_sem_addrs[i] = get_semaphore(in0_valid_sem_ids[i]);
+        in0_ack_sem_addrs[i] = get_semaphore(in0_ack_sem_ids[i]);
+    }
 
     constexpr uint32_t K_num_blocks = K_tiles / K_block_tiles;
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
 
-    constexpr auto out_args = TensorAccessorArgs<12>();
+    constexpr auto out_args = TensorAccessorArgs<11>();
     const auto out_reader = TensorAccessor(out_args, out_addr, input_tile_size);
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in0_dm_out = tt::CBIndex::c_2;
 
-    volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
-
-    const uint64_t in0_mcast_sender_semaphore_noc_addr =
-        get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
+    const uint64_t in0_sender_base_noc_addr = get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, 0);
 
     DPRINT << "in0recv: M_start_block: " << M_start_block << ", M_end_block: " << M_end_block
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
@@ -60,6 +65,9 @@ void kernel_main() {
     uint32_t defer_write_m_block = 0;
     uint32_t defer_write_n_block = 0;
     bool defer_write = false;
+
+    uint32_t num_received = 0;
+    uint32_t buf_idx = 0;
 
     for (uint32_t m_block = M_start_block; m_block <= M_end_block; m_block++) {
         reuse_block = false;
@@ -100,9 +108,21 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
 #ifndef SKIP_IN0
-                noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
-                noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
-                noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+                // noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+                // noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+                // noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+                volatile tt_l1_ptr uint32_t* in0_valid_sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_sem_addrs[buf_idx]);
+                uint64_t in0_ack_sem_noc_addr = in0_sender_base_noc_addr | in0_ack_sem_addrs[buf_idx];
+                if (num_received >= buffer_factor) {
+                    noc_semaphore_inc(in0_ack_sem_noc_addr, 1);
+                } else {
+                    // Only increment while the buffer has not filled at least once to avoid overflow
+                    num_received++;
+                }
+                noc_semaphore_wait(in0_valid_sem_ptr, VALID);
+                noc_semaphore_set(in0_valid_sem_ptr, INVALID);
+                buf_idx = (buf_idx + 1) % buffer_factor;
 #endif
 
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
