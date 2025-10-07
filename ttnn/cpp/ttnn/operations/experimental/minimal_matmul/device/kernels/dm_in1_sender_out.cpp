@@ -147,4 +147,6 @@ void kernel_main() {
         // We get reuse on in1 when striding M block
         reuse_block = true;
     }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }

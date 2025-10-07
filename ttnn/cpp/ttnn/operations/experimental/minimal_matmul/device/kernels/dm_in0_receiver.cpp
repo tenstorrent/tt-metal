@@ -62,6 +62,29 @@ void kernel_main() {
         for (uint32_t n_block_iter = 0; n_block_iter < N_num_blocks; n_block_iter++) {
             uint32_t n_block = n_forward ? N_start_block + n_block_iter : N_end_block - n_block_iter;
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                if (defer_write && k_block_iter == defer_write_k_block) {
+                    cb_wait_front(cb_id_in0_dm_out, out_block_num_tiles);
+#ifndef SKIP_OUT
+                    uint32_t out_read_ptr = get_read_ptr(cb_id_in0_dm_out);
+                    // safe_print_bf16_tile(out_read_ptr);
+                    DPRINT << "in0send: write out on defer_write_m_block: " << defer_write_m_block
+                           << ", defer_write_n_block: " << defer_write_n_block << ENDL();
+                    for (uint32_t m = 0; m < M_block_tiles; m++) {
+                        uint32_t m_id = defer_write_m_block * M_block_tiles + m;
+                        for (uint32_t n = 0; n < N_block_tiles; n++) {
+                            uint32_t n_id = defer_write_n_block * N_block_tiles + n;
+                            uint32_t tile_id = m_id * N_tiles + n_id;
+                            // DPRINT << "write out tile " << tile_id << ENDL();
+                            noc_async_write_tile(tile_id, out_reader, out_read_ptr);
+                            out_read_ptr += input_tile_size;
+                        }
+                    }
+                    noc_async_writes_flushed();
+#endif
+
+                    cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
+                }
+
                 if (reuse_block && k_block_iter == 0) {
                     // We strided an N block and this is the first k block, so we get reuse and do not need to read in0
                     reuse_block = false;
@@ -84,11 +107,20 @@ void kernel_main() {
             // We get reuse on in0 when striding N block
             reuse_block = true;
 
-            cb_wait_front(cb_id_in0_dm_out, out_block_num_tiles);
+            defer_write_m_block = m_block;
+            defer_write_n_block = n_block;
+            /**
+             * If this isn't the last output block, defer writing until the defer_k_write_block iteration
+             * of the next output block.
+             */
+            defer_write = !((m_block == M_end_block) && (n_block_iter == (N_num_blocks - 1)));
 
-            // if (n_block_iter < N_num_blocks - 1) {
-            // This is not the last iteration of the N block loop, so we will get reuse on next block, so we should
-            // write output
+            if (!defer_write) {
+                cb_wait_front(cb_id_in0_dm_out, out_block_num_tiles);
+
+                // if (n_block_iter < N_num_blocks - 1) {
+                // This is not the last iteration of the N block loop, so we will get reuse on next block, so we should
+                // write output
 #ifndef SKIP_OUT
                 uint32_t out_read_ptr = get_read_ptr(cb_id_in0_dm_out);
                 // safe_print_bf16_tile(out_read_ptr);
@@ -108,7 +140,10 @@ void kernel_main() {
                 // }
 
                 cb_pop_front(cb_id_in0_dm_out, out_block_num_tiles);
+            }
         }
         n_forward = !n_forward;
     }
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
