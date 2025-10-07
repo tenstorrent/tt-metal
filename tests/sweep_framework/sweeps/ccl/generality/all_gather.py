@@ -116,6 +116,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if cluster_axis is not None and test_vector["mesh_shape"][cluster_axis] == 1:
         return True, "Only one device along axis"
 
+    if (
+        cluster_axis is not None
+        and test_vector["topology"] == ttnn.Topology.Ring
+        and test_vector["mesh_shape"][cluster_axis] == 2
+    ):
+        return True, "Ring config requires more than two devices"
+
     if test_vector["dim"] >= len(input_shape):
         return True, "Dim greater than rank"
     if (
