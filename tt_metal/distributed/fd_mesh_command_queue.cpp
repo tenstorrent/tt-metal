@@ -519,7 +519,6 @@ void FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
     if (!mesh_device_->is_local(device_coord)) {
         return;
     }
@@ -546,7 +545,6 @@ void FDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    ZoneScoped;
     if (!mesh_device_->is_local(device_coord)) {
         return;
     }
@@ -782,7 +780,6 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::g
 
 void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
-        ZoneScopedN("copy_buffer_data_to_user_space lambda");
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
         chip_id_t mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());

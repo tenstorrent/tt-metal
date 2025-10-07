@@ -168,12 +168,10 @@ auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_conte
 
 CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges) :
     ranges_(core_ranges.begin(), core_ranges.end()) {
-    ZoneScoped;
     this->validate_no_overlap();
 }
 
 CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(core_ranges.begin(), core_ranges.end()) {
-    ZoneScoped;
     this->validate_no_overlap();
 }
 
@@ -196,7 +194,6 @@ CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) = default;
 CoreRangeSet::CoreRangeSet(CoreRangeSet&& other) noexcept { swap(*this, other); }
 
 CoreRangeSet::CoreRangeSet(std::vector<CoreRange>&& core_ranges) : ranges_(std::move(core_ranges)) {
-    ZoneScoped;
     this->validate_no_overlap();
 }
 
@@ -552,7 +549,6 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
     const uint32_t grid_size_x,
     const uint32_t grid_size_y,
     const bool row_wise) {
-    ZoneScoped;
     std::vector<CoreCoord> cores;
     cores.reserve(grid_size_x * grid_size_y);
     TT_ASSERT(bbox_x < grid_size_x);
@@ -590,7 +586,6 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
 // Noop cores are appended at the end with no guarantees on ordering
 std::vector<CoreCoord> grid_to_cores_with_noop(
     const CoreRangeSet& used_cores, const CoreRangeSet& all_cores, const bool row_wise) {
-    ZoneScoped;
     TT_ASSERT(all_cores.contains(used_cores));
     // Most likely a lot of optimizations to do here
     // Implemented this way for simplicity for now

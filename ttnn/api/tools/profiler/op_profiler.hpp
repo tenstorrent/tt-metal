@@ -177,9 +177,6 @@ inline ProgramHashToOpName program_hash_to_opname_{};
 inline void start_tracy_zone(
     const std::string& source, const std::string& functName, uint32_t lineNum, uint32_t color = 0) {
 #if defined(TRACY_ENABLE)
-    if (!is_op_profiler_enabled()) {
-        return;
-    }
     auto tracySrcLoc =
         ___tracy_alloc_srcloc(lineNum, source.c_str(), source.length(), functName.c_str(), functName.length());
     TracyCZoneCtx ctx = ___tracy_emit_zone_begin_alloc(tracySrcLoc, 1);
@@ -194,9 +191,6 @@ inline void start_tracy_zone(
 inline bool stop_tracy_zone(const std::string& name = "", uint32_t color = 0) {
     bool callStackWasEmpty = true;
 #if defined(TRACY_ENABLE)
-    if (!is_op_profiler_enabled()) {
-        return callStackWasEmpty;
-    }
     if (!call_stack.empty()) {
         callStackWasEmpty = false;
         TracyCZoneCtx ctx = call_stack.top();
@@ -218,9 +212,6 @@ constexpr auto tracy_max_message_length =
 
 inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) {
 #if defined(TRACY_ENABLE)
-    if (!is_op_profiler_enabled()) {
-        return;
-    }
     const auto truncated_size = std::min(source.size(), tracy_max_message_length - 1);
     if (source.size() > truncated_size) {
         log_warning(
@@ -236,9 +227,6 @@ inline void tracy_message(const std::string& source, uint32_t color = 0xf0f8ff) 
 
 inline void tracy_frame() {
 #if defined(TRACY_ENABLE)
-    if (!is_op_profiler_enabled()) {
-        return;
-    }
     FrameMark;
 #endif
 }
