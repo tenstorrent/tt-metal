@@ -442,7 +442,6 @@ class TtTransformer(LightweightModule):
             )
 
             tt_logits = ttnn.untilize(tt_logits_tilized, use_multicore=True)
-            tt_logits_tilized.deallocate(True)
 
             tt_logits = ttnn.reshape(
                 tt_logits,

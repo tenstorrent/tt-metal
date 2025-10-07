@@ -555,6 +555,8 @@ class TT_CCL:
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                     dtype=ttnn.bfloat8_b,
                 )
                 ag_persistent_buffers[key] = tt_buffer
