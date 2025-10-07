@@ -305,7 +305,7 @@ struct ReceiverMemoryMap {
     // Receiver-specific memory regions
     BaseMemoryRegion payload_chunks;
     BaseMemoryRegion atomic_counters;
-    BaseMemoryRegion credit_headers;  // NEW: Pre-allocated space for credit return packet headers
+    BaseMemoryRegion credit_headers;
 
     // Store the payload chunk size for later access
     uint32_t payload_chunk_size_;

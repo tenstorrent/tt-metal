@@ -19,10 +19,6 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(7);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(8);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(9);
 
-// NOTE: FLOW_CONTROL_ENABLED has been removed - credit management is now automatic and handled
-// internally by each traffic config based on its credit_management_enabled flag
-
-// NOTE: Unified architecture - SenderKernelConfig now handles both fabric and mux connections
 using SenderKernelConfigType =
     SenderKernelConfig<NUM_TRAFFIC_CONFIGS, IS_2D_FABRIC, USE_DYNAMIC_ROUTING, LINE_SYNC, NUM_LOCAL_SYNC_CORES>;
 
@@ -36,7 +32,6 @@ static_assert(
     NUM_FABRIC_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_FABRIC_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
 
 void kernel_main() {
-    DPRINT << "=== SENDER KERNEL STARTED ===" << ENDL();
     size_t rt_args_idx = 0;
     size_t local_args_idx = 0;  // Initialize local args index
 
@@ -65,7 +60,6 @@ void kernel_main() {
 
     sender_config->open_connections();
 
-    DPRINT << "Entering packet sending loop..." << ENDL();
     bool packets_left_to_send = true;
     uint64_t total_packets_sent = 0;
     uint32_t loop_count = 0;
@@ -111,9 +105,6 @@ void kernel_main() {
         }
     }
 
-    DPRINT << "Packet sending loop complete, sent " << loop_count << " total iterations" << ENDL();
-
-    DPRINT << "sender closing connections" << ENDL();
     sender_config->close_connections();
 
     // Local sync (as participant, not master) for end of sync
@@ -138,6 +129,4 @@ void kernel_main() {
     // Terminate muxes and wait for completion
     mux_termination_manager.terminate_muxes();
     noc_async_full_barrier();
-
-    DPRINT << "=== SENDER COMPLETE: sent " << total_packets_sent << " packets ===" << ENDL();
 }

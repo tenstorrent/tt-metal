@@ -14,15 +14,7 @@ namespace fabric_tests {
 void FabricConnectionManager::register_client(
     const CoreCoord& core, RoutingDirection direction, uint32_t link_idx, TestWorkerType worker_type) {
     ConnectionKey key = {direction, link_idx};
-    auto& conn = connections_[key];  // Auto-creates if new
-
-    log_info(
-        tt::LogTest,
-        "FabricConnectionManager::register_client: core={} direction={} link_idx={} worker_type={}",
-        core,
-        static_cast<int>(direction),
-        link_idx,
-        static_cast<int>(worker_type));
+    auto& conn = connections_[key];
 
     // Store worker type for this core (for channel assignment later)
     conn.core_worker_types[core] = worker_type;
@@ -57,18 +49,6 @@ void FabricConnectionManager::process(
         size_t total_clients = conn.sender_cores.size() + conn.receiver_cores.size() + conn.sync_cores.size();
         conn.needs_mux = total_clients > 1;
 
-        log_info(
-            tt::LogTest,
-            "FabricConnectionManager::process: direction={} link_idx={} senders={} receivers={} sync={} total={} "
-            "needs_mux={}",
-            static_cast<int>(key.direction),
-            key.link_idx,
-            conn.sender_cores.size(),
-            conn.receiver_cores.size(),
-            conn.sync_cores.size(),
-            total_clients,
-            conn.needs_mux);
-
         if (conn.needs_mux) {
             assign_and_validate_channels(conn, key);
 
@@ -99,12 +79,6 @@ void FabricConnectionManager::process(
                     num_header_only_channels++;
                 }
             }
-
-            log_info(
-                tt::LogTest,
-                "FabricConnectionManager::process: num_full_size_channels={} num_header_only_channels={}",
-                num_full_size_channels,
-                num_header_only_channels);
 
             const uint8_t num_buffers_full_size_channel = BUFFERS_PER_CHANNEL;
             const uint8_t num_buffers_header_only_channel = BUFFERS_PER_CHANNEL;
@@ -185,7 +159,6 @@ uint32_t FabricConnectionManager::get_connection_array_index_for_key(
 }
 
 bool FabricConnectionManager::is_mux_client(const CoreCoord& core) const {
-    log_info(tt::LogTest, "all mux client cores: {}", all_mux_client_cores_);
     return all_mux_client_cores_.count(core) > 0;
 }
 
@@ -305,15 +278,6 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
         } else {
             // Generate fabric connection args directly using passed parameters
             const auto neighbor_node_id = route_manager->get_neighbor_node_id(fabric_node_id, key.direction);
-            log_info(
-                tt::LogTest,
-                "adding fabric connection args for core {} direction {} link {} fabric_node_id {} neighbor_node_id "
-                "{}",
-                core,
-                static_cast<int>(key.direction),
-                key.link_idx,
-                fabric_node_id,
-                neighbor_node_id);
             append_fabric_connection_rt_args(
                 fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
         }
@@ -752,22 +716,11 @@ void TestDevice::create_kernels() {
 }
 
 void TestDevice::create_mux_kernels() {
-    log_info(tt::LogTest, "Creating mux kernels for device {} based on FabricConnectionManager", fabric_node_id_);
-
     for (const auto& [mux_core, mux_worker] : muxes_) {
         auto* mux_config = mux_worker.config_;
         const auto& connection_key = mux_worker.connection_key_;
 
         const auto dst_node_id = route_manager_->get_neighbor_node_id(fabric_node_id_, connection_key.direction);
-
-        log_info(
-            tt::LogTest,
-            "num full size channels: {}",
-            mux_config->get_num_channels(FabricMuxChannelType::FULL_SIZE_CHANNEL));
-        log_info(
-            tt::LogTest,
-            "num header only channels: {}",
-            mux_config->get_num_channels(FabricMuxChannelType::HEADER_ONLY_CHANNEL));
 
         auto mux_ct_args = mux_config->get_fabric_mux_compile_time_args();
         auto mux_rt_args = mux_config->get_fabric_mux_run_time_args(
@@ -782,7 +735,7 @@ void TestDevice::create_mux_kernels() {
             {}   // no addresses and size to clear
         );
 
-        log_info(tt::LogTest, "created mux kernel on core: {}", mux_core);
+        log_debug(tt::LogTest, "created mux kernel on core: {}", mux_core);
     }
 }
 
@@ -805,7 +758,6 @@ void TestDevice::create_sync_kernel() {
 
     size_t num_sync_connections =
         sync_connection_manager.get_connection_count_for_core(sync_core, TestWorkerType::SYNC);
-    log_info(tt::LogTest, "sync core: {}, num sync connections: {}", sync_core, num_sync_connections);
 
     // Check if sync core has mux connections
     bool has_mux_connections = sync_connection_manager.is_mux_client(sync_core);
@@ -904,20 +856,6 @@ void TestDevice::create_sender_kernels() {
         TT_FATAL(sender_memory_map_ != nullptr, "Sender memory map is required for creating sender kernels");
         TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
 
-        // Determine if any traffic configs need flow control (for logging/debugging)
-        bool any_traffic_needs_flow_control = false;
-        for (const auto& [config, _] : sender.configs_) {
-            log_info(
-                tt::LogTest,
-                "Sender core {} traffic config: enable_flow_control={}",
-                core,
-                config.parameters.enable_flow_control);
-            if (config.parameters.enable_flow_control) {
-                any_traffic_needs_flow_control = true;
-                break;
-            }
-        }
-
         // Get connection count and generate all connection args via FabricConnectionManager
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::SENDER);
 
@@ -1013,11 +951,7 @@ void TestDevice::create_sender_kernels() {
             sender_memory_map_->get_local_args_address(),
             addresses_and_size_to_clear);
 
-        log_info(
-            tt::LogTest,
-            "Created sender kernel on core {} (flow_control_patterns={})",
-            core,
-            any_traffic_needs_flow_control);
+        log_debug(tt::LogTest, "Created sender kernel on core {}", core);
     }
 }
 
@@ -1029,30 +963,12 @@ void TestDevice::create_receiver_kernels() {
         TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
         TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
 
-        // NEW: Determine if any traffic configs need flow control (receivers need mux connections for credit return)
-        bool any_traffic_needs_flow_control = false;
-        for (const auto& [config, credit_connection_key] : receiver.configs_) {
-            log_info(
-                tt::LogTest,
-                "Receiver core {} traffic config: enable_flow_control={}",
-                core,
-                config.parameters.enable_flow_control);
-            if (config.parameters.enable_flow_control) {
-                any_traffic_needs_flow_control = true;
-                break;
-            }
-        }
-
         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
-        // NOTE: Use RECEIVER to match how the receiver registers its credit return connections
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
 
         // Check if this core has mux connections
         bool has_mux_connections = connection_manager_.is_mux_client(core);
         uint32_t num_muxes_to_terminate = connection_manager_.get_num_muxes_to_terminate();
-
-        log_info(tt::LogTest, "has mux connections: {}", has_mux_connections);
-        log_info(tt::LogTest, "num_muxes_to_terminate: {}", num_muxes_to_terminate);
 
         // Compile-time args (order must match receiver kernel .cpp file)
         std::vector<uint32_t> ct_args = {
@@ -1131,11 +1047,7 @@ void TestDevice::create_receiver_kernels() {
             receiver_memory_map_->get_local_args_address(),
             addresses_and_size_to_clear);
 
-        log_info(
-            tt::LogTest,
-            "Created receiver kernel on core {} (flow_control_patterns={})",
-            core,
-            any_traffic_needs_flow_control);
+        log_debug(tt::LogTest, "Created receiver kernel on core {}", core);
     }
 }
 
@@ -1241,8 +1153,7 @@ uint64_t TestSender::get_total_packets() const {
     for (const auto& [config, _] : configs_) {
         total += config.parameters.num_packets;
     }
-    // Note: We don't add global_sync_configs_ packets here
-    // because sync packets are not traffic packets
+
     return total;
 }
 

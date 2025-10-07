@@ -18,12 +18,12 @@
 #include <tt-metalium/routing_table_generator.hpp>  // For FabricNodeId
 #include <tt-metalium/mesh_graph.hpp>               // For MeshId
 
-// Forward declarations (in global namespace, where they're actually defined)
+// Forward declarations
 class TestContext;
 
 namespace tt::tt_fabric::fabric_tests {
 
-struct TestDevice;  // Note: TestDevice is a struct, not a class
+struct TestDevice;
 
 // Progress monitoring configuration
 struct ProgressMonitorConfig {

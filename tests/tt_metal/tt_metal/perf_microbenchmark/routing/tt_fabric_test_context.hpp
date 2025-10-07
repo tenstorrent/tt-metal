@@ -164,16 +164,6 @@ public:
     }
 
     void process_traffic_config(TestConfig& config) {
-        // NOTE: Flow control (mux) is now handled automatically based on per-pattern enable_flow_control
-        // via the FabricConnectionManager during kernel creation. No global enable_mux flag needed.
-
-        log_info(
-            tt::LogTest,
-            "process_traffic_config: test={} enable_flow_control={} global_sync={}",
-            config.name,
-            config.enable_flow_control,
-            config.global_sync);
-
         // Allocate resources
         log_debug(tt::LogTest, "Allocating resources for test config");
         this->allocator_->allocate_resources(config);
@@ -244,8 +234,6 @@ public:
                         auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                             sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
 
-                        log_info(tt::LogTest, "sync sender: {}, dst_node_ids: {}", sync_sender.device, dst_node_ids);
-
                         // for 2d, we need to spcify the mcast start node id
                         std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
                         if (fixture_->is_2D_routing_enabled() &&
@@ -304,13 +292,6 @@ public:
                 // The allocator has already filled in all the necessary details.
                 // We just need to construct the TrafficConfig and pass it to add_traffic_config.
                 const auto& dest = pattern.destination.value();
-
-                log_info(
-                    tt::LogTest,
-                    "Creating traffic config for sender device {} core {} with enable_flow_control={}",
-                    sender.device,
-                    sender.core.value(),
-                    config.enable_flow_control);
 
                 TrafficParameters traffic_parameters = {
                     .chip_send_type = pattern.ftype.value(),
@@ -720,7 +701,6 @@ private:
             .payload_buffer_size = payload_buffer_size,
             .link_id = traffic_config.link_id};  // Derive from sender's link_id
 
-        // NEW: Add credit flow info if flow control is enabled
         if (traffic_config.parameters.enable_flow_control) {
             // Calculate credit configuration based on receiver's payload buffer capacity
             // This prevents sender from overrunning receiver's buffer without handshake

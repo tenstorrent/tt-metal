@@ -332,8 +332,6 @@ private:
 
     // Helper: Common connection registration logic for senders and receivers
     // Registers a fabric connection for the specified direction and link
-    // If outgoing_direction is nullopt (local communication), returns nullopt
-    // Otherwise validates link_idx and registers the connection
     ConnectionKey register_fabric_connection(
         CoreCoord logical_core,
         TestWorkerType worker_type,
@@ -361,14 +359,11 @@ private:
     uint32_t global_sync_val_ = 0;
     CoreCoord sync_core_coord_;
 
-    // NOTE: Mux support is now handled per-pattern via enable_flow_control and FabricConnectionManager
     // Map from direction to mux core coordinate
     std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord> mux_cores_;
 
     bool use_unified_connection_manager_ = false;
 };
-
-// All implementations moved to tt_fabric_test_device_setup.cpp
 
 }  // namespace fabric_tests
 }  // namespace tt::tt_fabric

@@ -20,7 +20,6 @@ constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(7);
 // Flow control is enabled if we have any credit connections
 constexpr bool FLOW_CONTROL_ENABLED = (NUM_CREDIT_CONNECTIONS > 0);
 
-// NOTE: Unified architecture - ReceiverKernelConfig handles both 1D/2D fabrics and mux connections
 using ReceiverKernelConfigType =
     ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS, NUM_CREDIT_CONNECTIONS, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>;
 
@@ -34,13 +33,8 @@ static_assert(
     NUM_CREDIT_CONNECTIONS <= MAX_NUM_FABRIC_CONNECTIONS, "NUM_CREDIT_CONNECTIONS exceeds MAX_NUM_FABRIC_CONNECTIONS");
 
 void kernel_main() {
-    DPRINT << "=== RECEIVER KERNEL STARTED ===" << ENDL();
     size_t rt_args_idx = 0;
     size_t local_args_idx = 0;
-
-    DPRINT << "receiver NUM_CREDIT_CONNECTIONS: " << (uint32_t)NUM_CREDIT_CONNECTIONS << ENDL();
-    DPRINT << "receiver HAS_MUX_CONNECTIONS: " << (uint32_t)HAS_MUX_CONNECTIONS << ENDL();
-    DPRINT << "receiver NUM_MUXES_TO_TERMINATE: " << (uint32_t)NUM_MUXES_TO_TERMINATE << ENDL();
 
     // Get kernel config address from runtime args
     CommonMemoryMap common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
@@ -104,8 +98,6 @@ void kernel_main() {
         }
     }
 
-    DPRINT << "Validation loop complete, total_packets_received=" << total_packets_received << ENDL();
-
     // Close credit connections (automatically flushes remaining credits, no-op if NUM_CREDIT_CONNECTIONS == 0)
     receiver_config->close_credit_connections();
 
@@ -115,10 +107,6 @@ void kernel_main() {
     write_test_status(receiver_config->get_result_buffer_address(), final_status);
 
     // Terminate muxes and wait for completion
-    DPRINT << "receiver terminating muxes" << ENDL();
     mux_termination_manager.terminate_muxes();
-    DPRINT << "receiver terminating muxes done, starting barrier" << ENDL();
     noc_async_full_barrier();
-
-    DPRINT << "=== RECEIVER COMPLETE: received " << total_packets_received << " packets ===" << ENDL();
 }

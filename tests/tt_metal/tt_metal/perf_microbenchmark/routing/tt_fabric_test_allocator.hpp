@@ -418,15 +418,6 @@ inline void TestDeviceResources::reserve_mux_cores() {
     }
 
     mux_reservation_.is_enabled = true;
-
-    log_info(
-        tt::LogTest,
-        "Reserved mux cores on device {}: N={}, E={}, S={}, W={}",
-        node_id_,
-        mux_reservation_.reserved_cores[tt::tt_fabric::RoutingDirection::N],
-        mux_reservation_.reserved_cores[tt::tt_fabric::RoutingDirection::E],
-        mux_reservation_.reserved_cores[tt::tt_fabric::RoutingDirection::S],
-        mux_reservation_.reserved_cores[tt::tt_fabric::RoutingDirection::W]);
 }
 
 inline const std::unordered_map<tt::tt_fabric::RoutingDirection, CoreCoord>& TestDeviceResources::get_mux_cores()

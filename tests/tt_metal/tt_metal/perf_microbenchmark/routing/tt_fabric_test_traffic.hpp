@@ -240,7 +240,7 @@ struct TrafficParameters {
     std::optional<uint16_t> atomic_inc_val;
     std::optional<uint16_t> atomic_inc_wrap;
     std::optional<uint32_t> mcast_start_hops;
-    bool enable_flow_control = false;  // NEW: Per-pattern flow control
+    bool enable_flow_control = false;
 
     // Global context
     uint32_t seed;
@@ -302,7 +302,7 @@ struct TestTrafficSenderConfig {
     uint32_t payload_buffer_size;  // Add payload buffer size field
     uint32_t link_id;              // Link ID for multi-link tests
 
-    // NEW: Credit flow info (when enable_flow_control is true)
+    // Credit flow info (when enable_flow_control is true)
     std::optional<SenderCreditInfo> sender_credit_info;
 
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
@@ -316,7 +316,7 @@ struct TestTrafficReceiverConfig {
     uint32_t payload_buffer_size;  // Add payload buffer size field
     uint32_t link_id;              // Link ID derived from corresponding sender
 
-    // NEW: Credit flow info (when enable_flow_control is true)
+    // Credit flow info (when enable_flow_control is true)
     std::optional<ReceiverCreditInfo> receiver_credit_info;
 
     std::vector<uint32_t> get_args() const;
@@ -477,7 +477,6 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         default: TT_FATAL(false, "Unsupported noc send type");
     }
 
-    // NEW: Add credit management info at the end of traffic config args
     if (!is_sync_config) {
         bool credit_management_enabled = this->parameters.enable_flow_control;
         args.push_back(credit_management_enabled ? 1u : 0u);  // credit_management_enabled
@@ -563,7 +562,6 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
         default: TT_FATAL(false, "Unsupported noc send type");
     }
 
-    // NEW: Add receiver credit info presence flag and data (when flow control enabled)
     bool has_credit_info = parameters.enable_flow_control && receiver_credit_info.has_value();
     args.push_back(has_credit_info ? 1u : 0u);  // credit_info_present flag
 
@@ -604,7 +602,6 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
         auto atomic_inc_fields = NocUnicastAtomicIncFields(
             receiver_credit_info->credit_return_address, receiver_credit_info->sender_noc_encoding);
         atomic_inc_fields.set_atomic_inc_val(receiver_credit_info->credit_return_batch_size);  // Batch credits
-        // Note: atomic_inc_wrap defaults to 0 (no wrap), no need to set explicitly
         const auto atomic_inc_args = atomic_inc_fields.get_args<true>();  // true = include noc encoding
         args.insert(args.end(), atomic_inc_args.begin(), atomic_inc_args.end());
     }
