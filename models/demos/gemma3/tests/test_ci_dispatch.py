@@ -51,12 +51,10 @@ def test_ci_dispatch(hf_model_name, is_ci_env, is_ci_v2_env, model_location_gene
     ]
 
     # at the time of writing this performance tests can't/shouldn't be run on CIV2, so this is why we have this hybrid approach
-    if is_ci_env and not is_ci_v2_env:
-        tests = performance_tests
-    elif is_ci_v2_env and not is_ci_env:
+    if is_ci_v2_env:
         tests = functional_tests
     else:
-        assert False, "Something is very wrong here. You can be either CIv1 or CIv2"
+        tests = performance_tests
 
     args = tests + ["-x"]  # Fail if one of the tests fails
 
