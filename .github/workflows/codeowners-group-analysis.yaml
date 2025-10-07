@@ -277,7 +277,13 @@ jobs:
             APPROVED_REVIEWERS=$(echo "$ALL_REVIEWS_DATA" | jq -r '
               [.[] | {user: .user.login, state: .state, date: .submitted_at}] |
               group_by(.user) |
-              map(sort_by(.date) | reverse | .[0]) |
+              map(
+                # For each user, get their latest state-changing review (ignore COMMENTED)
+                map(select(.state != "COMMENTED")) |
+                sort_by(.date) |
+                reverse |
+                .[0] // empty
+              ) |
               map(select(.state == "APPROVED")) |
               .[].user
             ' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
