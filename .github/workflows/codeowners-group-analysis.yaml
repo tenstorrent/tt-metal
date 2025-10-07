@@ -1158,7 +1158,7 @@ jobs:
             SLACK_MESSAGE="$SLACK_MESSAGE📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>\n"
             SLACK_MESSAGE="$SLACK_MESSAGE👤 *Author:* $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)\n"
             SLACK_MESSAGE="$SLACK_MESSAGE🔍 *Action Required:* This PR needs your code review/approval to proceed with merging.\n\n"
-            SLACK_MESSAGE="$SLACK_MESSAGE_Please review when you have a moment. Thank you! 🚀_"
+            SLACK_MESSAGE="${SLACK_MESSAGE}Please review when you have a moment. Thank you! 🚀"
 
             # Prepare Slack API payload (simplified to match working curl command)
             SLACK_PAYLOAD=$(jq -n \
