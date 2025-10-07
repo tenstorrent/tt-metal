@@ -118,6 +118,7 @@ void py_bind_matmul_reduce_scatter_async(pybind11::module& module) {
         Keyword Args:
             * :attr:`bias` (ttnn.Tensor): the bias tensor to be added. If specified, needs to be on the device. Defaults to `None`.
             * :attr:`num_links` (int): Number of links to use for the all-gather operation.
+            * :attr:`topology` (ttnn.Topology): Communication topology for the reduce-scatter phase. Defaults to `ttnn.Topology.Ring`.
             * :attr:`memory_config_rs` (Optional[ttnn.MemoryConfig]): Memory configuration for the Reduce Scatter operation.
             * :attr:`memory_config_mm` (Optional[ttnn.MemoryConfig]): Memory configuration for the Matmul operation.
             * :attr:`transpose_a` (bool)
