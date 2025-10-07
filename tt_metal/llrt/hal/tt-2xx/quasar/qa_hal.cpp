@@ -64,16 +64,16 @@ public:
     std::vector<std::string> link_objs(const Params& params) const override {
         std::vector<std::string> objs;
         if (params.is_fw) {
-            objs.push_back("runtime/hw/lib/blackhole/tmu-crt0.o");
+            objs.push_back("runtime/hw/lib/quasar/tmu-crt0.o");
         }
         if ((params.core_type == HalProgrammableCoreType::TENSIX and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0) or
             (params.core_type == HalProgrammableCoreType::IDLE_ETH and
              params.processor_class == HalProcessorClassType::DM and params.processor_id == 0)) {
             // Brisc and Idle Erisc.
-            objs.push_back("runtime/hw/lib/blackhole/noc.o");
+            objs.push_back("runtime/hw/lib/quasar/noc.o");
         }
-        objs.push_back("runtime/hw/lib/blackhole/substitutes.o");
+        objs.push_back("runtime/hw/lib/quasar/substitutes.o");
         return objs;
     }
 
@@ -83,9 +83,10 @@ public:
         // Common includes for all core types
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/common");
         includes.push_back("tt_metal/hw/ckernels/blackhole/metal/llk_io");
-        includes.push_back("tt_metal/hw/inc/quasar");
-        includes.push_back("tt_metal/hw/inc/quasar/quasar_defines");
-        includes.push_back("tt_metal/hw/inc/quasar/noc");
+        includes.push_back("tt_metal/hw/inc/tt-2xx");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/quasar_defines");
+        includes.push_back("tt_metal/hw/inc/tt-2xx/quasar/noc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc");
         includes.push_back("tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib");
 
@@ -169,6 +170,7 @@ public:
                     case 1:
                         return params.is_fw ? "runtime/hw/toolchain/quasar/firmware_subordinate_ierisc.ld"
                                             : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
+                    default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
             default:
                 TT_THROW(

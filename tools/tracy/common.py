@@ -10,12 +10,7 @@ from pathlib import Path
 from loguru import logger
 
 ENVS = dict(os.environ)
-TT_METAL_HOME = ""
-if "TT_METAL_HOME" in ENVS.keys():
-    TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
-else:
-    logger.error("TT_METAL_HOME environment variable is not set up properly.")
-    sys.exit(1)
+TT_METAL_HOME = Path(ENVS.get("TT_METAL_HOME", Path.cwd()))
 
 PROFILER_DEVICE_SIDE_LOG = "profile_log_device.csv"
 PROFILER_HOST_SIDE_LOG = "profile_log_host.csv"

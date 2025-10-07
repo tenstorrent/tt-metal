@@ -31,19 +31,20 @@ void kernel_main() {
     auto get_idx = [n_pages](size_t i, size_t j) -> size_t { return i * n_pages + j; };
 
     for (int32_t i = 0; i < n_cbs; i++) {
+        experimental::CircularBuffer cb(i);
         auto* const output_buffer = reinterpret_cast<uint8_t*>(output_buffer_addrs[i]);
         for (int32_t j = 0; j < n_pages; j++) {
             if (j > 0) {
                 // Induce some memory load to the CB, indicating that fewer pages are available
                 // for reservation (writer) and that more are available for popping (reader)
-                cb_reserve_back(i, j);
-                cb_push_back(i, j);
+                cb.reserve_back(j);
+                cb.push_back(j);
             }
 
             master_sem.up(1);
             subordinate_sem.down(1);
             for (int32_t k = 0; k < n_pages; k++) {
-                bool result = cb_pages_reservable_at_back(i, k);
+                bool result = cb.pages_reservable_at_back(k);
                 output_buffer[get_idx(j, k)] = static_cast<uint8_t>(result);
             }
 
@@ -53,8 +54,8 @@ void kernel_main() {
 
             // snap back to alignment
             if (j > 0) {
-                cb_reserve_back(i, n_pages - j);
-                cb_push_back(i, n_pages - j);
+                cb.reserve_back(n_pages - j);
+                cb.push_back(n_pages - j);
             }
         }
     }
