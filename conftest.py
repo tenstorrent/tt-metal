@@ -411,6 +411,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     try:
         param = request.param
     except (ValueError, AttributeError):
+        # Get number of devices from the system mesh descriptor.
         param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
 
     if isinstance(param, tuple):

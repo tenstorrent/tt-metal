@@ -63,6 +63,7 @@ jobs:
           docker_opts: |
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
@@ -72,11 +73,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            mpirun --hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_strict_connection_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
+            ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-galaxy:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost == 'true' }}
@@ -121,6 +118,7 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e PYTHON_ENV_DIR=${{ github.workspace }}/python_env
             -e TT_METAL_HOME=${{ github.workspace }}
+            -e ARCH_NAME=wormhole_b0
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
@@ -130,5 +128,4 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            source ./python_env/bin/activate
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx04,g10glx03 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" bash -c "source ./python_env/bin/activate && pytest -svv "models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs""
+            ./tests/scripts/multihost/run_dual_galaxy_tests.sh
