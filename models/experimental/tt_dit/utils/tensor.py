@@ -111,6 +111,44 @@ def from_torch(
     )
 
 
+def to_torch(
+    x: ttnn.Tensor,
+    /,
+    *,
+    mesh_axes: Sequence[int | None] | None = None,
+    composer_device: ttnn.MeshDevice | None = None,
+) -> torch.Tensor:
+    """Converts a ttnn.Tensor to a torch.Tensor.
+
+    Strips away redundant data returned by calling ttnn.to_torch on a replicated tensor. If the
+    tensor is distributed and not on device, composer_device must be provided.
+    """
+    if mesh_axes is None:
+        if x.tensor_topology().distribution_shape() != ttnn.MeshShape([1]):
+            msg = "mesh_axes must be specified for distributed tensors"
+            raise ValueError(msg)
+        return ttnn.to_torch(x)
+
+    composer_device = composer_device or x.device()
+    if composer_device is None:
+        msg = "composer_device must be specified for distributed host tensors"
+        raise ValueError(msg)
+
+    mesh_rank = len(list(composer_device.shape))
+    verify_tensor_mesh_axes(mesh_axes, tensor_rank=len(x.shape), mesh_rank=mesh_rank)
+
+    replicated_mesh_axes = list(set(range(mesh_rank)) - {axis for axis in mesh_axes if axis is not None})
+    mesh_axes = replicated_mesh_axes + list(mesh_axes)
+
+    placements = _invert_placements(mesh_axes, output_rank=mesh_rank)
+    assert all(p is not None for p in placements)
+
+    mesh_composer = ttnn.create_mesh_composer(composer_device, ttnn.MeshComposerConfig(placements))
+
+    x = x.reshape([1] * len(replicated_mesh_axes) + list(x.shape))
+    return ttnn.to_torch(x, mesh_composer=mesh_composer)[(0,) * len(replicated_mesh_axes)]
+
+
 def verify_tensor_mesh_axes(mesh_axes: Sequence[int | None], /, *, tensor_rank: int, mesh_rank: int) -> None:
     if len(mesh_axes) != tensor_rank:
         msg = f"mesh axis list {tuple(mesh_axes)} should have length {tensor_rank}"

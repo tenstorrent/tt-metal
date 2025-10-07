@@ -55,7 +55,9 @@ class Linear(Module):
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation_fn == "gelu":
+        if self.activation_fn == "silu":
+            output = ttnn.silu(output)
+        elif self.activation_fn == "gelu":
             output = ttnn.gelu(output)
         elif self.activation_fn == "decomposed_gelu":
             output = gelu_decomposed(output)
@@ -176,7 +178,9 @@ class ColParallelLinear(Module):
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation_fn == "gelu":
+        if self.activation_fn == "silu":
+            output = ttnn.silu(output)
+        elif self.activation_fn == "gelu":
             output = ttnn.gelu(output)
         elif self.activation_fn == "decomposed_gelu":
             output = gelu_decomposed(output)
