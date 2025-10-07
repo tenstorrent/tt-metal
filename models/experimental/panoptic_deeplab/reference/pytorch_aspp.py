@@ -173,7 +173,7 @@ class ASPP(nn.Module):
 
         # Process pooling branch (convs[4]) with interpolation
         pool_out = self.convs[-1](x)
-        pool_out = F.interpolate(pool_out, size=size, mode="nearest").to(x.dtype)
+        pool_out = F.interpolate(pool_out, size=size, mode="bilinear", align_corners=False).to(x.dtype)
         res.append(pool_out)
 
         res = torch.cat(res, dim=1)
