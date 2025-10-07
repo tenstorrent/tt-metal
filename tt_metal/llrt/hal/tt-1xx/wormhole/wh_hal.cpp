@@ -199,6 +199,7 @@ public:
                     case 1:
                         return params.is_fw ? "runtime/hw/toolchain/wormhole/firmware_subordinate_ierisc.ld"
                                             : "runtime/hw/toolchain/wormhole/kernel_subordinate_ierisc.ld";
+                    default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
                 break;
             default:
