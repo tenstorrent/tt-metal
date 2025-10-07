@@ -71,6 +71,8 @@ HalCoreInfoType create_active_eth_mem_map() {
 
     std::vector<DeviceAddr> mem_map_bases;
     mem_map_bases.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
+
+    fmt::println(stderr, "Ncrisc mailbox addre: {}", GET_ETH_MAILBOX_ADDRESS_HOST(ncrisc_halt));
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BASE)] = MEM_ERISC_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BARRIER)] = MEM_L1_BARRIER;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_AERISC_MAILBOX_BASE;

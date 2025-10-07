@@ -103,6 +103,81 @@ inline void initialize_local_memory() {
     // Copy data from data_image in __ldm_data_start for ldm_data_size bytes
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
 }
+#define STR(x) #x
+#define XSTR(s) STR(s)
+#define XSTR2(s) XSTR(s)
+#define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS (MEM_AERISC_MAILBOX_BASE + 4)
+#define ERISC_TEMP (MEM_AERISC_MAILBOX_BASE)
+extern "C" __attribute__((naked, used)) void resume_from_reset() {
+    __asm__ volatile(
+    "li ra, 5\n"
+
+    "sw ra, " XSTR2(ERISC_TEMP) "( zero )\n"
+      "li   t0, 0x00040000\n\t"   // src (256 KiB)
+  "li   t1, 0xFFB00000\n\t"   // dst
+  "li   t2, 2048\n\t"
+  "0:\n\t"
+  "lw   t3, 0(t0)\n\t"
+  "sw   t3, 0(t1)\n\t"
+  "addi t0, t0, 4\n\t"
+  "addi t1, t1, 4\n\t"
+  "addi t2, t2, -1\n\t"
+  "bnez t2, 0b\n\t"
+	"sload :lw  sp, " XSTR2(MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS) "( zero )\n"
+	"lw  ra, 0 * 4( sp )\n"
+	"lw  s0, 1 * 4( sp )\n"
+	"lw  s1, 2 * 4( sp )\n"
+	"lw  s2, 3 * 4( sp )\n"
+	"lw  s3, 4 * 4( sp )\n"
+	"lw  s4, 5 * 4( sp )\n"
+	"lw  s5, 6 * 4( sp )\n"
+	"lw  s6, 7 * 4( sp )\n"
+	"lw  s7, 8 * 4( sp )\n"
+	"lw  s8, 9 * 4( sp )\n"
+	"lw  s9, 10 * 4( sp )\n"
+	"lw  s10, 11 * 4( sp )\n"
+	"lw  s11, 12 * 4( sp )\n"
+    //"j sload\n"
+	"addi sp, sp, (16 * 4)\n"
+	"ret\n"
+    );
+}
+
+extern "C" __attribute__((naked)) void enter_reset(void) {
+    __asm__ volatile(
+        "addi sp, sp, -(16 * 4)\n"
+	"sstore: sw ra, 0 * 4( sp )\n"  
+	"sw s0, 1 * 4( sp )\n"
+	"sw s1, 2 * 4( sp )\n"
+	"sw s2, 3 * 4( sp )\n"
+	"sw s3, 4 * 4( sp )\n"
+	"sw s4, 5 * 4( sp )\n"
+	"sw s5, 6 * 4( sp )\n"
+	"sw s6, 7 * 4( sp )\n"
+	"sw s7, 8 * 4( sp )\n"
+	"sw s8, 9 * 4( sp )\n"
+	"sw s9, 10 * 4( sp )\n"
+	"sw s10, 11 * 4( sp )\n"
+	"sw s11, 12 * 4( sp )\n"
+   // "li a1, " XSTR2(AERISC_RESET_PC) "\n"
+    "li ra, 4\n"
+    "li   t0, 0xFFB00000\n\t"   // src
+  "li   t1, 0x00040000\n\t"   // dst (256 KiB)
+  "li   t2, 2048\n\t"         // 8 KiB / 4B = 2048 words
+  "0:\n\t"
+  "lw   t3, 0(t0)\n\t"
+  "sw   t3, 0(t1)\n\t"
+  "addi t0, t0, 4\n\t"
+  "addi t1, t1, 4\n\t"
+  "addi t2, t2, -1\n\t"
+  "bnez t2, 0b\n\t"
+    "sw ra, " XSTR2(ERISC_TEMP) "( zero )\n"
+   // "j sstore\n"
+	"sw sp, " XSTR2(MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS) "( zero )\n"
+    "done_loop:\n"
+    "j done_loop\n"
+    );
+}
 
 int __attribute__((noinline)) main(void) {
     WAYPOINT("I");
@@ -127,10 +202,10 @@ int __attribute__((noinline)) main(void) {
 
 #if defined(ENABLE_2_ERISC_MODE)
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    // mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
+     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 #endif
 
-    // set_deassert_addresses();
+     set_deassert_addresses();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
@@ -139,9 +214,15 @@ int __attribute__((noinline)) main(void) {
     ncrisc_noc_full_sync();
 
 #if defined(ENABLE_2_ERISC_MODE)
-    // deassert_all_reset();
+     deassert_all_reset();
 #endif
-    // wait_subordinate_eriscs();
+   WRITE_REG(0xFFB12224, 0xffffffff);
+   READ_REG(0xFFB12224);
+
+   WRITE_REG(AERISC_RESET_PC, (uint32_t)(void*)resume_from_reset);
+ enter_reset();
+   WRITE_REG(0xFFB12224, 0x0);
+     wait_subordinate_eriscs();
     flag_disable[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0

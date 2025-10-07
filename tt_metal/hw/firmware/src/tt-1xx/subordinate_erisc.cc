@@ -105,6 +105,28 @@ int main() {
     risc_init();
     signal_subordinate_erisc_completion();
 
+        #if 1
+
+    if ( k_ProgrammableCoreType == ProgrammableCoreType::ACTIVE_ETH) {
+
+        while (true) {
+            if (mailboxes->ncrisc_halt.stack_save != 0) { 
+                uint32_t sp_addr = mailboxes->ncrisc_halt.resume_addr;
+                static constexpr uint32_t TENSIX_SOFT_RESET_ADDR = 0xFFB121B0;
+                WRITE_REG(TENSIX_SOFT_RESET_ADDR, 1 << 11);
+                riscv_wait(100);
+                WRITE_REG(TENSIX_SOFT_RESET_ADDR, 0);
+
+
+                break;
+
+
+            }
+            invalidate_l1_cache();
+        }
+    }
+    #endif
+
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
