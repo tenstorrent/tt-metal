@@ -295,7 +295,7 @@ class DispatcherData:
         elif proc_name.lower() == "erisc1":
             firmware_path = os.path.join(build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf")
         else:
-            firmware_path = os.path.join(build_env.firmwarePath, f"{proc_name.lower()}/{proc_name.lower()}.elf")
+            firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
         firmware_path = os.path.realpath(firmware_path)
 
         if kernel:
