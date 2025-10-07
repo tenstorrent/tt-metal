@@ -236,6 +236,7 @@ jobs:
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest
+    #Only run on schedule or main branch pushes
     if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout stable branch
@@ -285,6 +286,7 @@ jobs:
             echo "has-new-commits=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Trigger RC release workflow
+        #This is only run if there are new commits on stable
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'true' }}
         uses: benc-uk/workflow-dispatch@v1
         with:
@@ -304,6 +306,7 @@ jobs:
   trigger-prod-after-rc-success:
     needs: [build-test-publish, release-precheck, create-tag]
     runs-on: ubuntu-latest
+    # Only trigger if we are on an RC and the RC build-test-publish succeeded
     if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
     steps:
       - name: Wait for RC workflow completion
