@@ -236,9 +236,15 @@ jobs:
                            -H "Accept: application/vnd.github.v3+json" \
                            "$REVIEWS_API")
 
-          # Extract approved reviews (state: APPROVED)
+          # Extract approved reviews (get the LATEST review from each user)
           if [ "$REVIEWS_HTTP_CODE" = "200" ] && [ -n "$REVIEWS_DATA" ] && [ "$REVIEWS_DATA" != "null" ]; then
-            APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+            # Group reviews by user and get the latest review state from each user
+            APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '
+              group_by(.user.login) |
+              map(sort_by(.submitted_at) | reverse | .[0]) |
+              map(select(.state == "APPROVED")) |
+              .[].user.login
+            ' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
           else
             echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
             APPROVED_REVIEWERS=""
