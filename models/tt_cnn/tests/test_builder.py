@@ -15,7 +15,6 @@ from models.tt_cnn.tt.builder import (
     HeightShardedStrategyConfiguration,
     HeightSliceStrategyConfiguration,
     MaxPool2dConfiguration,
-    NoSliceStrategyConfiguration,
     ShardedStrategyConfiguration,
     TtConv2d,
     TtMaxPool2d,
@@ -595,7 +594,7 @@ def test_conv2d_slicing_strategies(input_size, channels, batch_size, slice_confi
 
     # Create slice strategy based on config
     if slice_config["type"] == "no_slice":
-        slice_strategy = NoSliceStrategyConfiguration()
+        slice_strategy = None
     elif slice_config["type"] == "height_slice":
         slice_strategy = HeightSliceStrategyConfiguration(num_slices=slice_config["num_slices"])
     elif slice_config["type"] == "width_slice":
@@ -655,10 +654,6 @@ def test_conv2d_slicing_validation_errors(device):
     # Test channel slicing with non-divisible channels
     with pytest.raises(ValueError, match="Channel slicing requires num_slices > 1"):
         ChannelSliceStrategyConfiguration(num_slices=1)
-
-    # Test no slice with non-zero num_slices
-    with pytest.raises(ValueError, match="Non-zero num_slices is not allowed for no slice strategy"):
-        NoSliceStrategyConfiguration(num_slices=2)
 
 
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
@@ -1088,7 +1083,7 @@ def test_upsample_slicing_strategies(input_size, channels, batch_size, slice_con
 
     # Create slice strategy based on config
     if slice_config["type"] == "no_slice":
-        slice_strategy = NoSliceStrategyConfiguration()
+        slice_strategy = None
     elif slice_config["type"] == "channel_slice":
         slice_strategy = ChannelSliceStrategyConfiguration(num_slices=slice_config["num_slices"])
     else:

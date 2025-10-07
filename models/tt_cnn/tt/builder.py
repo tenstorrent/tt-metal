@@ -26,14 +26,6 @@ class SliceStrategyConfiguration:
 # For now, we identify channel slicing by having a num_slices > 0 with a slice_type of None
 # Normally, num_slices of 0 for a not None slice_type means auto-slice, so we don't have that feature for channel slice
 # Once Conv2D supports channel slicing natively, we should be able to support it without API changes
-@dataclass
-class NoSliceStrategyConfiguration(SliceStrategyConfiguration):
-    def get_slice_type(self):
-        return None
-
-    def __post_init__(self):
-        if self.num_slices != 0:
-            raise ValueError(f"Non-zero num_slices is not allowed for no slice strategy")
 
 
 @dataclass
@@ -59,7 +51,6 @@ class ChannelSliceStrategyConfiguration(SliceStrategyConfiguration):
 
 
 SliceStrategy = Union[
-    NoSliceStrategyConfiguration,
     HeightSliceStrategyConfiguration,
     WidthSliceStrategyConfiguration,
     ChannelSliceStrategyConfiguration,
@@ -159,7 +150,7 @@ class Conv2dConfiguration:
     output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
 
     sharding_strategy: ShardedStrategyConfiguration = AutoShardedStrategyConfiguration()
-    slice_strategy: SliceStrategyConfiguration = NoSliceStrategyConfiguration()
+    slice_strategy: Optional[SliceStrategy] = None
 
     math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     fp32_dest_acc_en: bool = False
@@ -322,17 +313,19 @@ class MaxPool2dConfiguration:
     deallocate_input: bool = False
     reallocate_halo_output: bool = True
 
-    slice_strategy: SliceStrategyConfiguration = NoSliceStrategyConfiguration()
+    slice_strategy: Optional[SliceStrategy] = None
 
     def __post_init__(self):
         # Validate that only channel slicing is supported for MaxPool2d
-        if isinstance(self.slice_strategy, (HeightSliceStrategyConfiguration, WidthSliceStrategyConfiguration)):
+        if self.slice_strategy is not None and isinstance(
+            self.slice_strategy, (HeightSliceStrategyConfiguration, WidthSliceStrategyConfiguration)
+        ):
             raise ValueError(
                 "Height and Width slicing are not supported for MaxPool2d. Only channel slicing is supported."
             )
 
         # Validate channel slicing configuration
-        if isinstance(self.slice_strategy, ChannelSliceStrategyConfiguration):
+        if self.slice_strategy is not None and isinstance(self.slice_strategy, ChannelSliceStrategyConfiguration):
             if self.channels % self.slice_strategy.get_num_slices() != 0:
                 raise ValueError(
                     f"Number of channels ({self.channels}) must be divisible by number of slices ({self.slice_strategy.get_num_slices()})"
@@ -374,17 +367,19 @@ class UpsampleConfiguration:
     scale_factor: Union[int, Tuple[int, int]]
     mode: str = "nearest"
 
-    slice_strategy: SliceStrategyConfiguration = NoSliceStrategyConfiguration()
+    slice_strategy: Optional[SliceStrategy] = None
 
     def __post_init__(self):
         # Validate that only channel slicing is supported for Upsample
-        if isinstance(self.slice_strategy, (HeightSliceStrategyConfiguration, WidthSliceStrategyConfiguration)):
+        if self.slice_strategy is not None and isinstance(
+            self.slice_strategy, (HeightSliceStrategyConfiguration, WidthSliceStrategyConfiguration)
+        ):
             raise ValueError(
                 "Height and Width slicing are not supported for Upsample. Only channel slicing is supported."
             )
 
         # Validate channel slicing configuration
-        if isinstance(self.slice_strategy, ChannelSliceStrategyConfiguration):
+        if self.slice_strategy is not None and isinstance(self.slice_strategy, ChannelSliceStrategyConfiguration):
             if self.channels % self.slice_strategy.get_num_slices() != 0:
                 raise ValueError(
                     f"Number of channels ({self.channels}) must be divisible by number of slices ({self.slice_strategy.get_num_slices()})"
@@ -484,6 +479,9 @@ def to_compute_config(configuration: Conv2dConfiguration, device: ttnn.Device):
 
 
 def to_slice_config(configuration: Conv2dConfiguration):
+    if configuration.slice_strategy is None:
+        return None
+    # Channel slicing returns None for slice_type and is handled manually
     if configuration.slice_strategy.get_slice_type() is None:
         return None
     return ttnn.Conv2dSliceConfig(
@@ -512,7 +510,11 @@ class TtConv2d:
         self.weight_slices = []
 
         # Check for channel slicing
-        if self.slice_config is None and configuration.slice_strategy.get_num_slices() > 0:
+        if (
+            self.slice_config is None
+            and configuration.slice_strategy is not None
+            and configuration.slice_strategy.get_num_slices() > 0
+        ):
             split_in_channels = configuration.in_channels // configuration.slice_strategy.get_num_slices()
 
             # slice weights - this should only run on first inference
@@ -653,7 +655,9 @@ class TtMaxPool2d:
         self.device = device
 
         # Check for channel slicing
-        self.use_channel_slicing = isinstance(configuration.slice_strategy, ChannelSliceStrategyConfiguration)
+        self.use_channel_slicing = configuration.slice_strategy is not None and isinstance(
+            configuration.slice_strategy, ChannelSliceStrategyConfiguration
+        )
 
         if self.use_channel_slicing:
             self.num_slices = configuration.slice_strategy.get_num_slices()
@@ -731,7 +735,9 @@ class TtUpsample:
         self.device = device
 
         # Check for channel slicing
-        self.use_channel_slicing = isinstance(configuration.slice_strategy, ChannelSliceStrategyConfiguration)
+        self.use_channel_slicing = configuration.slice_strategy is not None and isinstance(
+            configuration.slice_strategy, ChannelSliceStrategyConfiguration
+        )
 
         if self.use_channel_slicing:
             self.num_slices = configuration.slice_strategy.get_num_slices()
