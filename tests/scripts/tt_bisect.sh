@@ -10,6 +10,7 @@ Usage:
   -b BAD_SHA     : known bad commit
   -t TIMEOUT     : per-iteration timeout (default 30m)
   -p PROFILING   : enable Tracy profiling
+  -r RETRIES     : number of retries (default 3)
 END
 
 timeout_duration_iteration="30m"
@@ -17,14 +18,16 @@ test=""
 good_commit=""
 bad_commit=""
 tracy_enabled=0
+retries=3
 
-while getopts ":f:g:b:t:p" opt; do
+while getopts ":f:g:b:t:p:r" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
     b) bad_commit="$OPTARG" ;;
     t) timeout_duration_iteration="$OPTARG" ;;
     p) tracy_enabled=1 ;;
+    r) retries="$OPTARG" ;;
     \?) die "Invalid option: -$OPTARG" ;;
     :)  die "Option -$OPTARG requires an argument." ;;
   esac
@@ -123,7 +126,7 @@ while [[ "$found" == "false" ]]; do
 
   echo "::group::Testing $rev"
   timeout_rc=1
-  max_retries=3
+  max_retries=$retries
   attempt=1
   output_file="bisect_test_output.log"
   while [ $attempt -le $max_retries ]; do
