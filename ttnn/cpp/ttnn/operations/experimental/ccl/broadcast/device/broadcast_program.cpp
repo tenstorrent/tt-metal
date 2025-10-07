@@ -127,11 +127,7 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    printf("self coord x y: %u ,%u\n", self_coord.coords()[0], self_coord.coords()[1]);
-    printf("sender coord x y: %u ,%u\n", sender_coord.coords()[0], sender_coord.coords()[1]);
     bool is_sender = self_coord == sender_coord;
-    printf("is_sender: %d, with %u %u\n", is_sender, sender_coord.coords()[0], sender_coord.coords()[1]);
-    printf("barrier semaophore address: %lu\n", barrier_semaphore.address());
 
     // KERNEL CREATION
     // Reader
@@ -150,10 +146,6 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
             num_packets_per_page,                               // num_packets_per_page
             max_packet_size,
             is_sender};
-        printf("reader compile args: ");
-        for (auto a : reader_compile_args) {
-            printf("%u ", a);
-        }
     }
 
     std::vector<uint32_t> writer_compile_args = {
@@ -176,10 +168,6 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
             num_targets_forward,                                // num_targets_forward_direction
             num_targets_backward,                               // num_targets_backward_direction
             is_sender};
-        printf("writer compile args: ");
-        for (auto a : writer_compile_args) {
-            printf("%u ", a);
-        }
     }
     std::vector<uint32_t> mcast_forward_args(2, 0);
     std::vector<uint32_t> mcast_backward_args(2, 0);
@@ -313,7 +301,6 @@ tt::tt_metal::operation::ProgramWithCallbacks broadcast_multicore(
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
             log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", barrier_semaphore.address());
-            printf("barrier semaphore address: %lu\n", barrier_semaphore.address());
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);

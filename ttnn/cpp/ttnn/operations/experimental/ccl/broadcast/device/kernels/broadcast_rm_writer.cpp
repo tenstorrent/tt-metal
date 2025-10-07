@@ -48,8 +48,6 @@ void kernel_main() {
     // ARGS
     ///////////////////////////////////////////////////
 
-    DPRINT << "WRITER RM is sender: " << (uint32_t)is_sender << ENDL();
-
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
@@ -235,5 +233,4 @@ void kernel_main() {
 
             noc_async_write_barrier();
         }
-    DPRINT << "WRITER RM done" << ENDL();
 }
