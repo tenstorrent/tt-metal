@@ -24,19 +24,13 @@ TIMEOUT = 30
 def randomize_torch_tensor(
     torch_tensor_map,
     tensor_shape,
-    dtype=torch.bfloat16,
-    generate_positive_numbers=False,
 ):
-    """Generate or retrieve cached tensors based on shape."""
-    if generate_positive_numbers:
-        return torch.randn(tensor_shape, dtype=dtype).float().abs_()
+    if tensor_shape in torch_tensor_map:
+        torch_tensor = torch_tensor_map[tensor_shape]
     else:
-        if torch_tensor_map is not None and tuple(tensor_shape) in torch_tensor_map:
-            torch_tensor = torch_tensor_map[tuple(tensor_shape)]
-        else:
-            torch_tensor = torch.randn(tensor_shape, dtype=dtype).float()
-            if torch_tensor_map is not None:
-                torch_tensor_map[tuple(tensor_shape)] = torch_tensor
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.float32)
+        torch_tensor_map[tensor_shape] = torch_tensor
+
     return torch_tensor
 
 
