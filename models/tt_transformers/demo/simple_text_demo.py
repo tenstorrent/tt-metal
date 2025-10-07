@@ -201,6 +201,8 @@ def prepare_generator_args(
     max_seq_len,
     page_params,
     paged_attention,
+    model_location_generator,
+    is_ci_v2_env,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -229,6 +231,8 @@ def prepare_generator_args(
             paged_attention_config=paged_attention_config,
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
+            model_location_generator=model_location_generator,
+            is_ci_v2_env=is_ci_v2_env,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -627,11 +631,14 @@ def test_demo_text(
     token_accuracy,
     stress_test,
     enable_trace,
+    model_location_generator,
+    is_ci_v2_env,
 ):
     """
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
+    logger.info(f"Is CI v2 env: {is_ci_v2_env}")
     if is_ci_env:
         if not ci_only:
             pytest.skip("CI only runs the CI-only tests")
@@ -750,6 +757,8 @@ def test_demo_text(
         max_seq_len=max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
+        model_location_generator=model_location_generator,
+        is_ci_v2_env=is_ci_v2_env,
     )
 
     if token_accuracy:
