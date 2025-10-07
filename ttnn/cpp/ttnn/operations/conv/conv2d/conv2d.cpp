@@ -824,8 +824,8 @@ std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape> Conv2dSliceAttr::
     int input_slice_height_start = (output_slice_height_start * stride[0]) - padding_n4[0];
     int input_slice_height_end = ((output_slice_height_end - 1) * stride[0]) - padding_n4[0] +
                                  ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
-    int input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[1];
-    int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding_n4[1] +
+    int input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[2];
+    int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding_n4[2] +
                                 ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
     input_slice_height_start = std::max<int>(0, input_slice_height_start);
     input_slice_height_end = std::min<int>(std::get<0>(input_shape), input_slice_height_end);
@@ -901,8 +901,8 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     int input_slice_height_start = (output_slice_height_start * stride[0]) - padding_n4[0];
     int input_slice_height_end = ((output_slice_height_end - 1) * stride[0]) - padding_n4[0] +
                                  ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
-    int input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[1];
-    int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding_n4[1] +
+    int input_slice_width_start = (output_slice_width_start * stride[1]) - padding_n4[2];
+    int input_slice_width_end = ((output_slice_width_end - 1) * stride[1]) - padding_n4[2] +
                                 ((kernel_size[1] - 1) * (dilation[1] - 1)) + kernel_size[1];
 
     int pad_top = std::max<int>(0, -input_slice_height_start);
