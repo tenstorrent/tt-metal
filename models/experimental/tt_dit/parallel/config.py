@@ -30,10 +30,12 @@ class VaeHWParallelConfig(NamedTuple):
     height_parallel: ParallelFactor
     width_parallel: ParallelFactor
 
+
 class MochiVAEParallelConfig(NamedTuple):
     time_parallel: ParallelFactor
     h_parallel: ParallelFactor
     w_parallel: ParallelFactor
+
 
 class OldParallelConfig(NamedTuple):
     mesh_shape: tuple[int, int]
