@@ -83,6 +83,7 @@ int CompileFabricLite(
         root_dir / "tt_metal/hw/inc/ethernet",
         root_dir / "tt_metal/hostdevcommon/api",
         root_dir / "tt_metal/hw/inc/debug",
+        root_dir / "tt_metal/hw/inc/tt-1xx/",
         root_dir / "tt_metal/hw/inc/tt-1xx/blackhole",
         root_dir / "tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines",
         root_dir / "tt_metal/hw/inc/tt-1xx/blackhole/noc",
