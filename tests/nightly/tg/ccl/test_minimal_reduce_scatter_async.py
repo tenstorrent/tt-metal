@@ -107,7 +107,7 @@ def test_reduce_scatter_async(
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
-        (8, [1, 1, 512, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [1, 1, 8, 7168], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
     ],
     ids=[
         "deepseek_like",
