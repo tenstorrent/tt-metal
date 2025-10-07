@@ -295,6 +295,10 @@ void MAIN {
                     cb_mask_in,
                     cb_zero_in);
 
+                /* Logit soft-capping with eltwise scaling + tanh */
+                // Workaround: first apply scaling by sqrt(head_dim) and then de-scale after taking tanh
+                // mul_block_bcast_scalar_inplace(cb_qk_im, cb_scale_in, qk_chunk_tiles_dynamic);
+
                 /* QK += MASK */
                 if (!add_mask_fusion) {
                     if constexpr (is_causal) {

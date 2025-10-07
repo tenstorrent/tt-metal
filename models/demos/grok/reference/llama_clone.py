@@ -130,27 +130,6 @@ class Attention(nn.Module):
         self.n_local_kv_heads = 8
         self.n_rep = 8
 
-        # self.wq = ColumnParallelLinear(
-        #     8192,
-        #     8192,
-        #     bias=False,
-        #     gather_output=False,
-        #     init_method=lambda x: x,
-        # )
-        # self.wk = ColumnParallelLinear(
-        #     8192,
-        #     1024,
-        #     bias=False,
-        #     gather_output=False,
-        #     init_method=lambda x: x,
-        # )
-        # self.wv = ColumnParallelLinear(
-        #     8192,
-        #     1024,
-        #     bias=False,
-        #     gather_output=False,
-        #     init_method=lambda x: x,
-        # )
         self.wqkv = ColumnParallelLinear(
             10240,
             8192,
@@ -236,6 +215,10 @@ class Attention(nn.Module):
         keys = keys.transpose(1, 2)  # (bs, n_local_heads, cache_len + seqlen, head_dim)
         values = values.transpose(1, 2)  # (bs, n_local_heads, cache_len + seqlen, head_dim)
         scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(self.head_dim)
+
+        # Logit soft-capping with cap=30.0
+        # scores = 30.0 * torch.tanh(scores / 30.0)
+
         if mask is not None:
             scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
         scores = F.softmax(scores.float(), dim=-1).type_as(xq)
@@ -257,24 +240,6 @@ class FeedForward(nn.Module):
     def forward(self, x):
         # Note that the SGLang implementation uses the tanh approximation on the first element to gelu
         return self.w2(F.gelu(self.w1(x)) * self.w3(x))
-
-
-class Gate(nn.Module):
-    def __init__(self, num_experts=8):
-        super().__init__()
-        self.num_experts = num_experts
-        self.gate = nn.Linear(8192, num_experts, bias=False)
-        self.top_k = 2
-
-    def forward(self, x):
-        B, S, T, H = x.shape
-        E = self.num_experts
-        gate_logits = self.gate(x)
-        topk_logits, topk_idx = torch.topk(gate_logits, self.top_k, dim=-1)
-        topk_weights = F.softmax(topk_logits, dim=-1, dtype=torch.float32).to(x.dtype)
-        weights = torch.zeros(B, S, T, E, dtype=x.dtype, device=x.device)
-        weights.scatter_(dim=-1, index=topk_idx, src=topk_weights)
-        return weights
 
 
 class MoE(nn.Module):
@@ -300,6 +265,8 @@ class MoE(nn.Module):
             # If your gate returns (B, T, E), add back the singleton stream dim:
             if gate_logits.dim() == 3:
                 gate_logits = gate_logits.unsqueeze(1)  # -> (B, 1, T, E)
+
+            gate_logits = 30.0 * torch.tanh(gate_logits / 30.0)
 
             topk_weights = F.softmax(gate_logits, dim=-1, dtype=torch.float32).to(x.dtype)  # (B, S, T, E)
             topk_logits, topk_idx = torch.topk(topk_weights, self.top_k, dim=-1)  # (B, S, T, K), (B, S, T, K)

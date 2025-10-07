@@ -116,5 +116,8 @@ class LMHead(LightweightModule):
             sharded=False,
             use_composite=True,
         )
+        output = ttnn.div(output, 50.0)
+        output = ttnn.tanh(output)
+        output = ttnn.mul(output, 50.0)
 
         return output

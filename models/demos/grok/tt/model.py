@@ -38,9 +38,24 @@ class Transformer(LightweightModule):
                 dtype=dtype,
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
-                layer_num=i,
+                layer_num=layer_idx,
                 transformation_mats=self.transformation_mats,
                 paged_attention_config=paged_attention_config,
             )
             for layer_idx in self.args.num_hidden_layers
         ]
+        self.norm = DistributedNorm(
+            RMSNorm(
+                device=self.mesh_device,
+                dim=self.args.dim,
+                eps=1e-5,
+                state_dict={f"model.norm.weight": state_dict[f"model.norm.weight"]},
+                weight_dtype=ttnn.bfloat16,
+                weight_key=f"model.norm",
+                is_distributed=True,
+                ccl_topology=ttnn.Topology.Ring,
+                tt_ccl=tt_ccl,
+            ),
+            self.args,
+            tt_ccl=tt_ccl,
+        )

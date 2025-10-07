@@ -10,7 +10,7 @@ from models.demos.grok.tt.ccl import tt_all_reduce
 from ttnn import ReplicateTensorToMesh
 
 
-def topk_router(g, experts_per_token):
+def topk_router(g, mask, experts_per_token):
     compute_config = ttnn.init_device_compute_kernel_config(
         g.device().arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -18,6 +18,12 @@ def topk_router(g, experts_per_token):
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
+    # Gate logit softcapping
+    g = ttnn.div(g, 30.0)
+    g = ttnn.tanh(g)
+    g = ttnn.mul(g, 30.0)
+    g = ttnn.add(g, mask)
+
     expert_weights = ttnn.softmax(g, dim=-1, numeric_stable=True, compute_kernel_config=compute_config)
     expert_weights, expert_indices = ttnn.topk(expert_weights, k=experts_per_token, dim=-1, sorted=True)
     router_scores = ttnn.scatter(ttnn.zeros_like(g), dim=-1, index=expert_indices, src=expert_weights)
@@ -98,9 +104,8 @@ class TtMoE(LightweightModule):
             use_composite=True,
             skip_reshape=True,
         )
-        gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
 
-        router_scores, expert_weights, expert_indices = topk_router(gate_logits_1SB8, 2)
+        router_scores, expert_weights, expert_indices = topk_router(gate_logits_1SB8, self.top8_mask_11B_64, 2)
         router_scores = router_scores[:, :, :, :8]
         router_scores = ttnn.permute(router_scores, (0, 3, 2, 1))
 
