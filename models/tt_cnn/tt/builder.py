@@ -26,8 +26,6 @@ class SliceStrategyConfiguration:
 # For now, we identify channel slicing by having a num_slices > 0 with a slice_type of None
 # Normally, num_slices of 0 for a not None slice_type means auto-slice, so we don't have that feature for channel slice
 # Once Conv2D supports channel slicing natively, we should be able to support it without API changes
-
-
 @dataclass
 class HeightSliceStrategyConfiguration(SliceStrategyConfiguration):
     def get_slice_type(self):
@@ -573,6 +571,66 @@ class TtConv2d:
             "slice_config": self.slice_config,
         }
 
+    def _apply_channel_slicing(self, x):
+        """Apply channel slicing to the input tensor and return the result."""
+        # slice input
+        input_slices = []
+        for i in range(self.configuration.slice_strategy.get_num_slices()):
+            input_slices.append(
+                ttnn.slice(
+                    x,
+                    [
+                        0,
+                        0,
+                        0,
+                        i * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
+                    ],
+                    [
+                        self.configuration.batch_size,
+                        self.configuration.input_height,
+                        self.configuration.input_width,
+                        (i + 1) * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
+                    ],
+                )
+            )
+
+        # perform conv2d on each slice
+        accumulated_output = None
+        channels_per_slice = self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices()
+
+        for i in range(self.configuration.slice_strategy.get_num_slices()):
+            # Create kwargs with correct in_channels for this slice
+            slice_kwargs = self.get_conv2d_kwargs()
+            slice_kwargs["in_channels"] = channels_per_slice
+
+            output_slice, self.weight_slices[i] = ttnn.conv2d(
+                input_tensor=input_slices[i],
+                weight_tensor=self.weight_slices[i],
+                bias_tensor=None,
+                return_output_dim=False,
+                return_weights_and_bias=True,
+                compute_config=self.compute_config,
+                **slice_kwargs,
+            )
+            # Without this, some edge case convs OOM
+            output_slice = ttnn.move(output_slice)
+            if i == 0:
+                accumulated_output = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                accumulated_output = ttnn.add(output_slice, accumulated_output, output_tensor=accumulated_output)
+            output_slice.deallocate(True)
+
+        # Apply bias
+        if self.bias is not None:
+            # ttnn.add will fail if layout is not tile or dtype doesn't match
+            # this should only run on first inference
+            if self.bias.layout != ttnn.TILE_LAYOUT or self.bias.dtype != accumulated_output.dtype:
+                self.bias = ttnn.to_layout(self.bias, ttnn.TILE_LAYOUT, dtype=accumulated_output.dtype)
+
+            accumulated_output = ttnn.add(accumulated_output, self.bias, output_tensor=accumulated_output)
+
+        return accumulated_output
+
     def __call__(self, x):
         if not self.weight_slices:
             # No slicing
@@ -586,65 +644,7 @@ class TtConv2d:
                 **self.get_conv2d_kwargs(),
             )
         else:
-            # slice input
-            input_slices = []
-            for i in range(self.configuration.slice_strategy.get_num_slices()):
-                input_slices.append(
-                    ttnn.slice(
-                        x,
-                        [
-                            0,
-                            0,
-                            0,
-                            i * self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices(),
-                        ],
-                        [
-                            self.configuration.batch_size,
-                            self.configuration.input_height,
-                            self.configuration.input_width,
-                            (i + 1)
-                            * self.configuration.in_channels
-                            // self.configuration.slice_strategy.get_num_slices(),
-                        ],
-                    )
-                )
-
-            # perform conv2d on each slice
-            accumulated_output = None
-            channels_per_slice = self.configuration.in_channels // self.configuration.slice_strategy.get_num_slices()
-
-            for i in range(self.configuration.slice_strategy.get_num_slices()):
-                # Create kwargs with correct in_channels for this slice
-                slice_kwargs = self.get_conv2d_kwargs()
-                slice_kwargs["in_channels"] = channels_per_slice
-
-                output_slice, self.weight_slices[i] = ttnn.conv2d(
-                    input_tensor=input_slices[i],
-                    weight_tensor=self.weight_slices[i],
-                    bias_tensor=None,
-                    return_output_dim=False,
-                    return_weights_and_bias=True,
-                    compute_config=self.compute_config,
-                    **slice_kwargs,
-                )
-                # Without this, some edge case convs OOM
-                output_slice = ttnn.move(output_slice)
-                if i == 0:
-                    accumulated_output = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
-                else:
-                    accumulated_output = ttnn.add(output_slice, accumulated_output, output_tensor=accumulated_output)
-                output_slice.deallocate(True)
-
-            # Apply bias
-            if self.bias is not None:
-                # ttnn.add will fail if layout is not tile or dtype doesn't match
-                # this should only run on first inference
-                if self.bias.layout != ttnn.TILE_LAYOUT or self.bias.dtype != accumulated_output.dtype:
-                    self.bias = ttnn.to_layout(self.bias, ttnn.TILE_LAYOUT, dtype=accumulated_output.dtype)
-
-                accumulated_output = ttnn.add(accumulated_output, self.bias, output_tensor=accumulated_output)
-
-            x = accumulated_output
+            x = self._apply_channel_slicing(x)
 
         return x
 
@@ -678,6 +678,47 @@ class TtMaxPool2d:
             "reallocate_halo_output": self.configuration.reallocate_halo_output,
         }
 
+    def _apply_channel_slicing(self, x):
+        """Apply channel slicing to the input tensor and return the result."""
+        # Slice input tensor along channel dimension
+        input_slices = []
+        for i in range(self.num_slices):
+            start_channel = i * self.channels_per_slice
+            end_channel = (i + 1) * self.channels_per_slice
+
+            input_slice = ttnn.slice(
+                x,
+                [0, 0, 0, start_channel],
+                [
+                    1,
+                    1,
+                    self.configuration.batch_size * self.configuration.input_height * self.configuration.input_width,
+                    end_channel,
+                ],
+            )
+            input_slices.append(input_slice)
+
+        # Perform max pooling on each slice
+        output_slices = []
+        for i in range(self.num_slices):
+            output_slice = ttnn.max_pool2d(
+                input_tensor=input_slices[i],
+                channels=self.channels_per_slice,
+                **self.get_maxpool2d_kwargs(),
+            )
+            # Output slice to DRAM
+            output_slice = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
+            output_slices.append(output_slice)
+
+        # Concatenate output slices along channel dimension
+        x = ttnn.concat(output_slices, dim=3)
+
+        # Clean up intermediate tensors
+        for slice_tensor in input_slices + output_slices:
+            slice_tensor.deallocate(True)
+
+        return x
+
     def __call__(self, x):
         if not self.use_channel_slicing:
             # No slicing
@@ -687,44 +728,7 @@ class TtMaxPool2d:
                 **self.get_maxpool2d_kwargs(),
             )
         else:
-            # Slice input tensor along channel dimension
-            input_slices = []
-            for i in range(self.num_slices):
-                start_channel = i * self.channels_per_slice
-                end_channel = (i + 1) * self.channels_per_slice
-
-                input_slice = ttnn.slice(
-                    x,
-                    [0, 0, 0, start_channel],
-                    [
-                        1,
-                        1,
-                        self.configuration.batch_size
-                        * self.configuration.input_height
-                        * self.configuration.input_width,
-                        end_channel,
-                    ],
-                )
-                input_slices.append(input_slice)
-
-            # Perform max pooling on each slice
-            output_slices = []
-            for i in range(self.num_slices):
-                output_slice = ttnn.max_pool2d(
-                    input_tensor=input_slices[i],
-                    channels=self.channels_per_slice,
-                    **self.get_maxpool2d_kwargs(),
-                )
-                # Output slice to DRAM
-                output_slice = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
-                output_slices.append(output_slice)
-
-            # Concatenate output slices along channel dimension
-            x = ttnn.concat(output_slices, dim=3)
-
-            # Clean up intermediate tensors
-            for slice_tensor in input_slices + output_slices:
-                slice_tensor.deallocate(True)
+            x = self._apply_channel_slicing(x)
 
         return x
 
@@ -757,6 +761,46 @@ class TtUpsample:
             "mode": self.configuration.mode,
         }
 
+    def _apply_channel_slicing(self, x):
+        """Apply channel slicing to the input tensor and return the result."""
+        # Slice input tensor along channel dimension
+        input_slices = []
+        for i in range(self.num_slices):
+            start_channel = i * self.channels_per_slice
+            end_channel = (i + 1) * self.channels_per_slice
+
+            input_slice = ttnn.slice(
+                x,
+                [0, 0, 0, start_channel],
+                [
+                    self.configuration.batch_size,
+                    self.configuration.input_height,
+                    self.configuration.input_width,
+                    end_channel,
+                ],
+            )
+            input_slices.append(input_slice)
+
+        # Perform upsampling on each slice
+        output_slices = []
+        for i in range(self.num_slices):
+            output_slice = ttnn.upsample(
+                input_tensor=input_slices[i],
+                **self.get_upsample_kwargs(),
+            )
+            # Output slice to DRAM
+            output_slice = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
+            output_slices.append(output_slice)
+
+        # Concatenate output slices along channel dimension
+        x = ttnn.concat(output_slices, dim=3)
+
+        # Clean up intermediate tensors
+        for slice_tensor in input_slices + output_slices:
+            slice_tensor.deallocate(True)
+
+        return x
+
     def __call__(self, x):
         if not self.use_channel_slicing:
             # No slicing
@@ -765,40 +809,6 @@ class TtUpsample:
                 **self.get_upsample_kwargs(),
             )
         else:
-            # Slice input tensor along channel dimension
-            input_slices = []
-            for i in range(self.num_slices):
-                start_channel = i * self.channels_per_slice
-                end_channel = (i + 1) * self.channels_per_slice
-
-                input_slice = ttnn.slice(
-                    x,
-                    [0, 0, 0, start_channel],
-                    [
-                        self.configuration.batch_size,
-                        self.configuration.input_height,
-                        self.configuration.input_width,
-                        end_channel,
-                    ],
-                )
-                input_slices.append(input_slice)
-
-            # Perform upsampling on each slice
-            output_slices = []
-            for i in range(self.num_slices):
-                output_slice = ttnn.upsample(
-                    input_tensor=input_slices[i],
-                    **self.get_upsample_kwargs(),
-                )
-                # Output slice to DRAM
-                output_slice = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
-                output_slices.append(output_slice)
-
-            # Concatenate output slices along channel dimension
-            x = ttnn.concat(output_slices, dim=3)
-
-            # Clean up intermediate tensors
-            for slice_tensor in input_slices + output_slices:
-                slice_tensor.deallocate(True)
+            x = self._apply_channel_slicing(x)
 
         return x
