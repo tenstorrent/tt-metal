@@ -261,7 +261,7 @@ jobs:
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/dpopov-automate-release-flow' }}
+    if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout stable branch
         uses: actions/checkout@v4
