@@ -1,6 +1,7 @@
 import pytest
 import torch
 import ttnn
+import os
 from loguru import logger
 
 from ....utils.tensor import bf16_tensor
@@ -66,6 +67,35 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
     check_result = run_test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w)
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, K, N",
+    [(4096, 4096, 4096)],
+)
+@pytest.mark.parametrize(
+    "M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [(8, 8, 8, 2, 2)],
+)
+def test_linear_ablate_datamovement(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    device.disable_and_clear_program_cache()  # since env vars aren't captured by hash
+    for skip_in0 in [False, True]:
+        for skip_in1 in [False, True]:
+            for skip_out in [False, True]:
+                if skip_in0:
+                    os.environ["TT_MM_SKIP_IN0"] = "1"
+                if skip_in1:
+                    os.environ["TT_MM_SKIP_IN1"] = "1"
+                if skip_out:
+                    os.environ["TT_MM_SKIP_OUT"] = "1"
+
+                print(f"skip_in0: {skip_in0}, skip_in1: {skip_in1}, skip_out: {skip_out}")
+                check_result = run_test_linear(
+                    device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+                )
+                os.environ.pop("TT_MM_SKIP_IN0", None)
+                os.environ.pop("TT_MM_SKIP_IN1", None)
+                os.environ.pop("TT_MM_SKIP_OUT", None)
 
 
 def test_linear_sweep_subblocks(device):
