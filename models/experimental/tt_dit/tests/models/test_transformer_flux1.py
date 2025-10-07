@@ -23,18 +23,21 @@ from ...utils.check import assert_quality
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard, bf16_tensor_host
 from ...pipelines.flux1.pipeline_flux1 import _calculate_shift
+from tracy import signpost
+from time import time
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
-        pytest.param((2, 4), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
-        pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
-        pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
+        pytest.param((1, 8), (1, 8), 0, 1, 1, "1x8sp0tp1", id="1x8sp0tp1"),
+        pytest.param((2, 4), (1, 2), 0, 1, 1, "1x2sp0tp1", id="1x2sp0tp1"),
+        pytest.param((2, 4), (2, 1), 1, 0, 1, "2x1sp1tp0", id="2x1sp1tp0"),
+        pytest.param((2, 4), (2, 2), 0, 1, 1, "2x2sp0tp1", id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 2), 1, 0, 1, "2x2sp1tp0", id="2x2sp1tp0"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+        pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
     ],
     indirect=["mesh_device"],
 )
@@ -54,16 +57,18 @@ def test_single_transformer_block(
     batch_size: int,
     prompt_seq_len: int,
     spatial_seq_len: int,
+    id: str,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     sp_factor = tuple(submesh_device.shape)[sp_axis]
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
     parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(
-        "black-forest-labs/FLUX.1-schnell", subfolder="transformer"
+        "black-forest-labs/FLUX.1-dev", subfolder="transformer"
     )
     torch_model = parent_torch_model.single_transformer_blocks[0]
-    assert isinstance(torch_model, reference.FluxSingleTransformerBlock)
+    # assert isinstance(torch_model, reference.FluxSingleTransformerBlock)
+    assert isinstance(torch_model, reference.models.transformers.transformer_flux.FluxSingleTransformerBlock)
     torch_model.eval()
 
     inner_dim = torch_model.attn.inner_dim
@@ -104,14 +109,11 @@ def test_single_transformer_block(
     rope_cos = torch.randn([prompt_seq_len + spatial_seq_len, head_dim])
     rope_sin = torch.randn([prompt_seq_len + spatial_seq_len, head_dim])
 
-    # tt_combined = bf16_tensor_2dshard(combined, device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2})
     tt_spatial = bf16_tensor_2dshard(
         combined[:, prompt_seq_len:], device=submesh_device, shard_mapping={sp_axis: 1, tp_axis: 2}
     )
     tt_prompt = bf16_tensor(combined[:, :prompt_seq_len], device=submesh_device, mesh_axis=tp_axis, shard_dim=2)
     tt_time_embed = bf16_tensor(time_embed.unsqueeze(1), device=submesh_device)
-    # tt_rope_cos = bf16_tensor(rope_cos, device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
-    # tt_rope_sin = bf16_tensor(rope_sin, device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
     tt_spatial_rope_cos = bf16_tensor(rope_cos[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
     tt_spatial_rope_sin = bf16_tensor(rope_sin[prompt_seq_len:], device=submesh_device, mesh_axis=sp_axis, shard_dim=0)
     tt_prompt_rope_cos = bf16_tensor(rope_cos[:prompt_seq_len], device=submesh_device)
@@ -124,24 +126,31 @@ def test_single_transformer_block(
             image_rotary_emb=(rope_cos, rope_sin),
         )
 
+    signpost("caching")
     tt_spatial_out, tt_prompt_out = tt_model.forward(
-        # combined=tt_combined,
         spatial=tt_spatial,
         prompt=tt_prompt,
         time_embed=tt_time_embed,
-        # rope=(tt_rope_cos, tt_rope_sin),
         spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
-        # sequence_length=prompt_seq_len + spatial_seq_len,
         spatial_sequence_length=spatial_seq_len,
     )
 
-    # shard_dims = [None, None]
-    # shard_dims[sp_axis], shard_dims[tp_axis] = 1, 2
-    # tt_combined_torch = ttnn.to_torch(
-    #     tt_combined_out,
-    #     mesh_composer=ttnn.create_mesh_composer(submesh_device, ttnn.MeshComposerConfig(shard_dims)),
-    # )
+    signpost("performance")
+    itr = 10
+    start = time()
+    for _ in range(itr):
+        tt_spatial_out, tt_prompt_out = tt_model.forward(
+            spatial=tt_spatial,
+            prompt=tt_prompt,
+            time_embed=tt_time_embed,
+            spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+            prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+            spatial_sequence_length=spatial_seq_len,
+        )
+        # ttnn.synchronize_device(submesh_device)
+    ttnn.synchronize_device(submesh_device)
+    logger.info(f"Time taken for {id}: {(time() - start)*1000/itr} ms")
 
     shard_dims = [None, None]
     shard_dims[sp_axis], shard_dims[tp_axis] = 1, 2
@@ -163,15 +172,16 @@ def test_single_transformer_block(
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "id"),
     [
-        pytest.param((2, 4), (1, 2), 0, 1, 1, id="1x2sp0tp1"),
-        pytest.param((2, 4), (2, 1), 1, 0, 1, id="2x1sp1tp0"),
-        pytest.param((2, 4), (2, 2), 0, 1, 1, id="2x2sp0tp1"),
-        pytest.param((2, 4), (2, 2), 1, 0, 1, id="2x2sp1tp0"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="2x4sp0tp1"),
-        pytest.param((2, 4), (2, 4), 1, 0, 1, id="2x4sp1tp0"),
-        pytest.param((4, 8), (4, 4), 0, 1, 4, id="4x4sp0tp1"),
+        pytest.param((1, 8), (1, 8), 0, 1, 1, "1x8sp0tp1", id="1x8sp0tp1"),
+        pytest.param((2, 4), (1, 2), 0, 1, 1, "1x2sp0tp1", id="1x2sp0tp1"),
+        pytest.param((2, 4), (2, 1), 1, 0, 1, "2x1sp1tp0", id="2x1sp1tp0"),
+        pytest.param((2, 4), (2, 2), 0, 1, 1, "2x2sp0tp1", id="2x2sp0tp1"),
+        pytest.param((2, 4), (2, 2), 1, 0, 1, "2x2sp1tp0", id="2x2sp1tp0"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, "2x4sp0tp1", id="2x4sp0tp1"),
+        pytest.param((2, 4), (2, 4), 1, 0, 1, "2x4sp1tp0", id="2x4sp1tp0"),
+        pytest.param((4, 8), (4, 4), 0, 1, 4, "4x4sp0tp1", id="4x4sp0tp1"),
     ],
     indirect=["mesh_device"],
 )
@@ -191,16 +201,18 @@ def test_transformer_block(
     batch_size: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
+    id: str,
 ) -> None:
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     sp_factor = tuple(submesh_device.shape)[sp_axis]
     tp_factor = tuple(submesh_device.shape)[tp_axis]
 
     parent_torch_model = reference.FluxTransformer2DModel.from_pretrained(
-        "black-forest-labs/FLUX.1-schnell", subfolder="transformer"
+        "black-forest-labs/FLUX.1-dev", subfolder="transformer"
     )
     torch_model = parent_torch_model.transformer_blocks[0]
-    assert isinstance(torch_model, reference.FluxTransformerBlock)
+    # ssert isinstance(torch_model, reference.FluxTransformerBlock)
+    assert isinstance(torch_model, reference.models.transformers.transformer_flux.FluxTransformerBlock)
     torch_model.eval()
 
     inner_dim = torch_model.attn.inner_dim
@@ -233,7 +245,6 @@ def test_transformer_block(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         padding_config=padding_config,
-        init=False,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
@@ -257,6 +268,7 @@ def test_transformer_block(
             spatial, prompt, temb=time_embed, image_rotary_emb=(rope_cos, rope_sin)
         )
 
+    signpost("caching")
     tt_spatial_out, tt_prompt_out = tt_model.forward(
         tt_spatial,
         tt_prompt,
@@ -265,6 +277,22 @@ def test_transformer_block(
         spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
         prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
     )
+
+    signpost("performance")
+    itr = 10
+    start = time()
+    for _ in range(itr):
+        tt_spatial_out, tt_prompt_out = tt_model.forward(
+            tt_spatial,
+            tt_prompt,
+            tt_time_embed,
+            spatial_sequence_length=spatial_seq_len,
+            spatial_rope=(tt_spatial_rope_cos, tt_spatial_rope_sin),
+            prompt_rope=(tt_prompt_rope_cos, tt_prompt_rope_sin),
+        )
+        # ttnn.synchronize_device(submesh_device)
+    ttnn.synchronize_device(submesh_device)
+    logger.info(f"Time taken for {id}: {(time() - start)*1000/itr} ms")
 
     shard_dims = [None, None]
     shard_dims[sp_axis], shard_dims[tp_axis] = 1, 2
