@@ -38,13 +38,11 @@ inline bool validate_workload_or_fail(const PerfParams& p) {
 
 // Resolve forwarding link and fail early if none found.
 inline bool pick_forwarding_link_or_fail(
-    const tt::tt_fabric::FabricNodeId& /*src*/,
-    const tt::tt_fabric::FabricNodeId& /*dst*/,
+    const tt::tt_fabric::FabricNodeId& src,
+    const tt::tt_fabric::FabricNodeId& dst,
     uint32_t& out_link_idx,
     const PerfParams& p) {
-    auto links = tt::tt_fabric::get_forwarding_link_indices(
-        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
-        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
+    auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
 
     if (links.empty()) {
         ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
@@ -288,21 +286,9 @@ Notes:
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = writer_cta});
 
-    // Resolve forwarding and append fabric connection args
-    uint32_t link_idx = 0;
-    if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
-        return PerfPoint{};
-    }
-
     // Writer kernel RT args (short): dst_base, rx_x, rx_y, sem_l1
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(), (uint32_t)rx_xy.x, (uint32_t)rx_xy.y, (uint32_t)gsem_done->address()};
-
-    // Pack the fabric-connection runtime args for the writer kernel.
-    // This establishes the send path (routing/link identifiers) for fabric traffic.
-    // The device kernel must unpack these in the same order via build_from_args(...).
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
 
     tt::tt_metal::Program local_prog = tt::tt_metal::CreateProgram();
 
@@ -376,12 +362,81 @@ Notes:
         n_hops = (uint16_t)(src_r - min_r);
     }
 
-    // Append hops AFTER fabric connection args so the kernel’s parsing isn’t disturbed.
+    // ---- Choose representative neighbors to discover per-leg link indices (AFTER hop extents) ----
+    auto in_mesh = [&](int r, int c) -> bool {
+        return 0 <= r && r < (int)shape[0] && 0 <= c && c < (int)shape[1] && (view.get_device({r, c}) != nullptr);
+    };
+    auto fabric_id_of = [&](Dist::MeshCoordinate mc) -> tt::tt_fabric::FabricNodeId {
+        auto* d = view.get_device(mc);
+        TT_FATAL(d != nullptr, "No device at mesh coord [{},{}]", (int)mc[0], (int)mc[1]);
+        chip_id_t phys = d->id();  // on this rig, physical id == fabric chip id
+        return tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, phys};
+    };
+
+    const bool want_W = (w_hops > 0);
+    const bool want_E = (e_hops > 0);
+    const bool want_N = (n_hops > 0);
+    const bool want_S = (s_hops > 0);
+
+    auto src_fid = tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, src_phys};
+    std::optional<tt::tt_fabric::FabricNodeId> dstW, dstE, dstN, dstS;
+    uint32_t link_W = 0, link_E = 0, link_N = 0, link_S = 0;
+
+    if (want_W) {
+        TT_FATAL(in_mesh(src_r, src_c - 1), "No west neighbor for source.");
+        dstW = fabric_id_of({src_r, src_c - 1});
+        TT_FATAL(pick_forwarding_link_or_fail(src_fid, *dstW, link_W, p), "No west link from source.");
+    }
+    if (want_E) {
+        TT_FATAL(in_mesh(src_r, src_c + 1), "No east neighbor for source.");
+        dstE = fabric_id_of({src_r, src_c + 1});
+        TT_FATAL(pick_forwarding_link_or_fail(src_fid, *dstE, link_E, p), "No east link from source.");
+    }
+    if (want_N) {
+        TT_FATAL(in_mesh(src_r - 1, src_c), "No north neighbor for source.");
+        dstN = fabric_id_of({src_r - 1, src_c});
+        TT_FATAL(pick_forwarding_link_or_fail(src_fid, *dstN, link_N, p), "No north link from source.");
+    }
+    if (want_S) {
+        TT_FATAL(in_mesh(src_r + 1, src_c), "No south neighbor for source.");
+        dstS = fabric_id_of({src_r + 1, src_c});
+        TT_FATAL(pick_forwarding_link_or_fail(src_fid, *dstS, link_S, p), "No south link from source.");
+    }
+
+    // Fallback for unused legs: duplicate any available leg so kernel arg layout stays fixed (W,E,N,S).
+    const int have_any = (want_W ? 1 : 0) + (want_E ? 1 : 0) + (want_N ? 1 : 0) + (want_S ? 1 : 0);
+    TT_FATAL(have_any > 0, "No active multicast legs detected.");
+    auto pick_any = [&]() {
+        if (want_E) {
+            return std::pair{*dstE, link_E};
+        }
+        if (want_W) {
+            return std::pair{*dstW, link_W};
+        }
+        if (want_N) {
+            return std::pair{*dstN, link_N};
+        }
+        return std::pair{*dstS, link_S};
+    };
+    auto [any_dst, any_link] = pick_any();
+
+    // Append FOUR connections in fixed order: W, E, N, S (so kernel can parse uniformly).
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        src_fid, (want_W ? *dstW : any_dst), (want_W ? link_W : any_link), sender_prog, p.sender_core, writer_rt);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        src_fid, (want_E ? *dstE : any_dst), (want_E ? link_E : any_link), sender_prog, p.sender_core, writer_rt);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        src_fid, (want_N ? *dstN : any_dst), (want_N ? link_N : any_link), sender_prog, p.sender_core, writer_rt);
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        src_fid, (want_S ? *dstS : any_dst), (want_S ? link_S : any_link), sender_prog, p.sender_core, writer_rt);
+
+    // Pack hop extents and leg mask after connections.
     writer_rt.push_back((uint32_t)e_hops);
     writer_rt.push_back((uint32_t)w_hops);
     writer_rt.push_back((uint32_t)n_hops);
     writer_rt.push_back((uint32_t)s_hops);
-
+    uint32_t leg_mask = (want_W ? 1u : 0u) | (want_E ? 2u : 0u) | (want_N ? 4u : 0u) | (want_S ? 8u : 0u);
+    writer_rt.push_back(leg_mask);
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 
     // Build two workloads so the RX wait kernel is always running before TX starts.

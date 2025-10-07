@@ -46,78 +46,100 @@ void kernel_main() {
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
 
-    // Build the fabric connection next (these args were appended by the host
-    // right after the fixed 6 args).
-    auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    // Four fabric connections in fixed order: W, E, N, S
+    auto conn_W = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    auto conn_E = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    auto conn_N = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    auto conn_S = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
 
-    // Phase A diagnostics (optional): hops were appended by the host
-    // AFTER the fabric-connection args, so read them now.
+    // Hops + leg mask
     const uint16_t e_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint16_t w_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint16_t n_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
     const uint16_t s_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint32_t leg_mask = get_arg_val<uint32_t>(idx++);
 
-    // TEMP (2D API): manual packet header. Post-uplift this becomes implicit.
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_W = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_E = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_N = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_S = PacketHeaderPool::allocate_header();
+    auto mh_W = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_W);
+    auto mh_E = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_E);
+    auto mh_N = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_N);
+    auto mh_S = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_S);
 
-    // We'll program the multicast route per "stripe" (row) below.
-    auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
+    const bool use_W = (w_hops > 0) && (leg_mask & 1u);
+    const bool use_E = (e_hops > 0) && (leg_mask & 2u);
+    const bool use_N = (n_hops > 0) && (leg_mask & 4u);
+    const bool use_S = (s_hops > 0) && (leg_mask & 8u);
 
-    sender.open<true>();
+    if (use_W) {
+        conn_W.open();
+    }
+    if (use_E) {
+        conn_E.open();
+    }
+    if (use_N) {
+        conn_N.open();
+    }
+    if (use_S) {
+        conn_S.open();
+    }
 
     const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base, /*page_size=*/PAGE_SIZE);
 
     for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
+        uint64_t dest_noc_addr = dst_acc.get_noc_addr(i, 0, 0);
 
-        // Compute destination NOC address (DRAM or L1 interleaved)
-        uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
-
-        // -------- Stripe 0: source row (E/W only) --------
-        sender.wait_for_empty_write_slot();
-        fabric_set_mcast_route(
-            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
-            /*dst_dev_id (ignored)*/ 0,
-            /*dst_mesh_id (ignored)*/ 0,
-            /*e_num_hops*/ e_hops,
-            /*w_num_hops*/ w_hops,
-            /*n_num_hops*/ 0,
-            /*s_num_hops*/ 0);
-        header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-        sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-        sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-
-        // -------- Stripes north of source row (k = 1..n_hops) --------
-        for (uint16_t k = 1; k <= n_hops; ++k) {
-            sender.wait_for_empty_write_slot();
+        // NORTH trunk (fan-out E/W on each north row)
+        if (use_N) {
+            conn_N.wait_for_empty_write_slot();
             fabric_set_mcast_route(
-                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
-                /*dst_dev_id (ignored)*/ 0,
-                /*dst_mesh_id (ignored)*/ 0,
-                /*e_num_hops*/ e_hops,
-                /*w_num_hops*/ w_hops,
-                /*n_num_hops*/ k,
-                /*s_num_hops*/ 0);
-            header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_N),
+                0,
+                0,
+                e_hops,
+                w_hops,
+                n_hops,
+                0);
+            hdr_N->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+            conn_N.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            conn_N.send_payload_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
         }
-
-        // -------- Stripes south of source row (k = 1..s_hops) --------
-        for (uint16_t k = 1; k <= s_hops; ++k) {
-            sender.wait_for_empty_write_slot();
+        // SOUTH trunk
+        if (use_S) {
+            conn_S.wait_for_empty_write_slot();
             fabric_set_mcast_route(
-                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
-                /*dst_dev_id (ignored)*/ 0,
-                /*dst_mesh_id (ignored)*/ 0,
-                /*e_num_hops*/ e_hops,
-                /*w_num_hops*/ w_hops,
-                /*n_num_hops*/ 0,
-                /*s_num_hops*/ k);
-            header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-            sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_S),
+                0,
+                0,
+                e_hops,
+                w_hops,
+                0,
+                s_hops);
+            hdr_S->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+            conn_S.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            conn_S.send_payload_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
+        }
+        // WEST branch on source row
+        if (use_W) {
+            conn_W.wait_for_empty_write_slot();
+            fabric_set_mcast_route(
+                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_W), 0, 0, 0, w_hops, 0, 0);
+            hdr_W->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+            conn_W.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
+        }
+        // EAST branch on source row
+        if (use_E) {
+            conn_E.wait_for_empty_write_slot();
+            fabric_set_mcast_route(
+                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E), 0, 0, e_hops, 0, 0, 0);
+            hdr_E->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+            conn_E.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            conn_E.send_payload_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
         }
 
         cb_pop_front(CB_ID, 1);
@@ -127,67 +149,71 @@ void kernel_main() {
 
     // === Single multicast completion to identical mailboxes on all destination chips ===
     ASSERT(sem_l1_addr != 0);
-    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
+    const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, 0);
 
-    // Send completion INC along the same stripes.
-    const uint32_t total_groups = 1u + (uint32_t)n_hops + (uint32_t)s_hops;
-    uint32_t group_idx = 0;
+    uint32_t legs = (use_N ? 1u : 0u) + (use_S ? 1u : 0u) + (use_W ? 1u : 0u) + (use_E ? 1u : 0u);
+    uint32_t sent = 0;
+    auto mark_last = [&]() { return ++sent == legs; };
 
-    // Source row
-    sender.wait_for_empty_write_slot();
-    fabric_set_mcast_route(
-        reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
-        /*dst_dev_id (ignored)*/ 0,
-        /*dst_mesh_id (ignored)*/ 0,
-        /*e_num_hops*/ e_hops,
-        /*w_num_hops*/ w_hops,
-        /*n_num_hops*/ 0,
-        /*s_num_hops*/ 0);
-    header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-    // Block or flush depending if this is the last group
-    if (++group_idx == total_groups) {
-        sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-    } else {
-        sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-    }
-
-    // North rows
-    for (uint16_t k = 1; k <= n_hops; ++k) {
-        sender.wait_for_empty_write_slot();
+    if (use_N) {
+        conn_N.wait_for_empty_write_slot();
         fabric_set_mcast_route(
-            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
-            /*dst_dev_id (ignored)*/ 0,
-            /*dst_mesh_id (ignored)*/ 0,
-            /*e_num_hops*/ e_hops,
-            /*w_num_hops*/ w_hops,
-            /*n_num_hops*/ k,
-            /*s_num_hops*/ 0);
-        header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-        if (++group_idx == total_groups) {
-            sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_N), 0, 0, e_hops, w_hops, n_hops, 0);
+        hdr_N->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
+        bool last = mark_last();
+        if (last) {
+            conn_N.send_payload_flush_non_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
         } else {
-            sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+            conn_N.send_payload_blocking_from_address((uint32_t)hdr_N, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
+    if (use_S) {
+        conn_S.wait_for_empty_write_slot();
+        fabric_set_mcast_route(
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_S), 0, 0, e_hops, w_hops, 0, s_hops);
+        hdr_S->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
+        bool last = mark_last();
+        if (last) {
+            conn_S.send_payload_flush_non_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            conn_S.send_payload_blocking_from_address((uint32_t)hdr_S, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
+    if (use_W) {
+        conn_W.wait_for_empty_write_slot();
+        fabric_set_mcast_route(
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_W), 0, 0, 0, w_hops, 0, 0);
+        hdr_W->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
+        bool last = mark_last();
+        if (last) {
+            conn_W.send_payload_flush_non_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            conn_W.send_payload_blocking_from_address((uint32_t)hdr_W, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
+    if (use_E) {
+        conn_E.wait_for_empty_write_slot();
+        fabric_set_mcast_route(
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh_E), 0, 0, e_hops, 0, 0, 0);
+        hdr_E->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, 1, 32));
+        bool last = mark_last();
+        if (last) {
+            conn_E.send_payload_flush_non_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            conn_E.send_payload_blocking_from_address((uint32_t)hdr_E, sizeof(PACKET_HEADER_TYPE));
         }
     }
 
-    // South rows
-    for (uint16_t k = 1; k <= s_hops; ++k) {
-        sender.wait_for_empty_write_slot();
-        fabric_set_mcast_route(
-            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
-            /*dst_dev_id (ignored)*/ 0,
-            /*dst_mesh_id (ignored)*/ 0,
-            /*e_num_hops*/ e_hops,
-            /*w_num_hops*/ w_hops,
-            /*n_num_hops*/ 0,
-            /*s_num_hops*/ k);
-        header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-        if (++group_idx == total_groups) {
-            sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-        } else {
-            sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-        }
+    if (use_W) {
+        conn_W.close();
     }
-
-    sender.close();
+    if (use_E) {
+        conn_E.close();
+    }
+    if (use_N) {
+        conn_N.close();
+    }
+    if (use_S) {
+        conn_S.close();
+    }
 }
