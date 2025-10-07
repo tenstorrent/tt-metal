@@ -149,125 +149,6 @@ class TtModelArgs:
             x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         return x
 
-    def load_weights_to_state_dict_no_experts(self, weights_path="/localdev/ricozhu/grok_2_weights/", fuse_qkv=True):
-        """
-        Weights are stored as follows:  (all bfloat16)                                                dims:
-          - 00000-TP-common: embedding                                                                      [128*1024, 8192]
-          - 00001-TP-common: lm head                                                                        [128*1024, 8192]
-          - 00002-TP-common: model.norm                                                                     [8192]
-          - 00003-TP-common: shared_mlp.gate_proj, 64 layers                                                [32768, 8192]
-          - 00004-TP-common: shared_mlp.down_proj, 64 layers                                                [8192, 32768]
-          - 00005-TP-common: shared_mlp.up_proj, 64 layers                                                  [32768, 8192]
-
-          - 00006-TP-00[0-7]: block_sparse_moe.experts.[0-7].w1, shard [0-7], 64 layers                     [2048 * 8, 8192]
-          - 00007-TP-00[0-7]: block_sparse_moe.experts.[0-7].w2, shard [0-7], 64 layers                     [8192, 2048 * 8]
-          - 00008-TP-00[0-7]: block_sparse_moe.experts.[0-7].w3, shard [0-7], 64 layers                     [2048 * 8, 8192]
-
-          - 00009-TP-common: self_attn.k_proj, 64 layers                                                    [8192, 1024]
-          - 00010-TP-common: self_attn.o_proj, 64 layers                                                    [8192, 8192]
-          - 00011-TP-common: self_attn.q_proj, 64 layers                                                    [8192, 8192]
-          - 00012-TP-common: self_attn.v_proj, 64 layers                                                    [8192, 1024]
-
-          - 00013-TP-common: pre_attn_norm, 64 layers                                                       [8192]
-          - 00014-TP-common: post_attn_norm, 64 layers                                                      [8192]
-          - 00015-TP-common: pre_moe_norm, 64 layers                                                        [8192]
-          - 00016-TP-common: post_moe_norm, 64 layers                                                       [8192]
-
-          - 00017-TP-common: block_sparse_moe.gate, 64 layers                                               [8, 8192]
-        """
-
-        state_dict = {}
-
-        # --- embeddings / head / final norm ---
-        state_dict["model.embed_tokens.weight"] = load_file(
-            os.path.join(weights_path, "pytorch_model-00000-TP-common.safetensors")
-        )["model.embed_tokens.weight"]
-        state_dict["lm_head.weight"] = load_file(
-            os.path.join(weights_path, "pytorch_model-00001-TP-common.safetensors")
-        )["lm_head.weight"]
-        state_dict["model.norm.weight"] = load_file(
-            os.path.join(weights_path, "pytorch_model-00002-TP-common.safetensors")
-        )["model.norm.weight"]
-
-        # --- shared MLP projections (64 layers) ---
-        for proj, fname, pname in [
-            ("w1", "pytorch_model-00003-TP-common.safetensors", "gate_proj"),
-            ("w2", "pytorch_model-00004-TP-common.safetensors", "down_proj"),
-            ("w3", "pytorch_model-00005-TP-common.safetensors", "up_proj"),
-        ]:
-            arr = load_file(os.path.join(weights_path, fname))
-            for layer_idx in range(64):
-                grok_weight_key = f"model.layers.{layer_idx}.mlp.{pname}.weight"
-                weight_key = f"model.layers.{layer_idx}.mlp.{proj}.weight"
-                state_dict[weight_key] = arr[grok_weight_key]
-
-        # --- self-attention projections ---
-        for proj, fname, pname in [
-            ("k_proj", "pytorch_model-00009-TP-common.safetensors", "self_attn.k_proj"),
-            ("o_proj", "pytorch_model-00010-TP-common.safetensors", "self_attn.o_proj"),
-            ("q_proj", "pytorch_model-00011-TP-common.safetensors", "self_attn.q_proj"),
-            ("v_proj", "pytorch_model-00012-TP-common.safetensors", "self_attn.v_proj"),
-        ]:
-            arr = load_file(os.path.join(weights_path, fname))
-            for layer_idx in range(64):
-                weight_key = f"model.layers.{layer_idx}.self_attn.{proj}.weight"
-                state_dict[weight_key] = arr[weight_key]
-
-        for layer_idx in range(64):
-            q_proj = state_dict[f"model.layers.{layer_idx}.self_attn.q_proj.weight"]
-            # q_proj = reverse_permute(q_proj, 64, q_proj.shape[0], q_proj.shape[1])
-            k_proj = state_dict[f"model.layers.{layer_idx}.self_attn.k_proj.weight"]
-            # k_proj = reverse_permute(k_proj, 8, k_proj.shape[0], k_proj.shape[1])
-            v_proj = state_dict[f"model.layers.{layer_idx}.self_attn.v_proj.weight"]
-
-            if fuse_qkv:
-                qkv_list = []
-                for i in range(self.num_devices_per_group):
-                    # Chunk weights
-                    wq_selected = torch.chunk(q_proj, self.num_devices_per_group, dim=0)[i]
-                    wk_selected = torch.chunk(k_proj, self.num_devices_per_group, dim=0)[i]
-                    wv_selected = torch.chunk(v_proj, self.num_devices_per_group, dim=0)[i]
-
-                    # Transpose the selected chunks
-                    wq = torch.transpose(wq_selected, -2, -1)
-                    wk = torch.transpose(wk_selected, -2, -1)
-                    wv = torch.transpose(wv_selected, -2, -1)
-
-                    qkv = torch.cat([wq, wk, wv], dim=-1)
-                    qkv_list.append(qkv)
-
-                qkv_cat = torch.cat(qkv_list, dim=-1)
-                state_dict[f"model.layers.{layer_idx}.self_attn.wqkv.weight"] = qkv_cat
-
-            del state_dict[f"model.layers.{layer_idx}.self_attn.q_proj.weight"]
-            del state_dict[f"model.layers.{layer_idx}.self_attn.k_proj.weight"]
-            del state_dict[f"model.layers.{layer_idx}.self_attn.v_proj.weight"]
-
-            state_dict[f"model.layers.{layer_idx}.self_attn.wo.weight"] = state_dict[
-                f"model.layers.{layer_idx}.self_attn.o_proj.weight"
-            ]
-            del state_dict[f"model.layers.{layer_idx}.self_attn.o_proj.weight"]
-
-        # --- norms ---
-        for norm_key, fname, pname in [
-            ("pre_attn_norm", "pytorch_model-00013-TP-common.safetensors", "pre_attn_norm"),
-            ("post_attn_norm", "pytorch_model-00014-TP-common.safetensors", "post_attn_norm"),
-            ("pre_moe_norm", "pytorch_model-00015-TP-common.safetensors", "pre_moe_layernorm"),
-            ("post_moe_norm", "pytorch_model-00016-TP-common.safetensors", "post_moe_layernorm"),
-        ]:
-            arr = load_file(os.path.join(weights_path, fname))
-            for layer_idx in range(64):
-                weight_key = f"model.layers.{layer_idx}.{norm_key}.weight"
-                state_dict[weight_key] = arr[weight_key]
-
-        # --- gating for MoE ---
-        gate = load_file(os.path.join(weights_path, "pytorch_model-00017-TP-common.safetensors"))
-        for layer_idx in range(64):
-            weight_key = f"model.layers.{layer_idx}.block_sparse_moe.gate.weight"
-            state_dict[weight_key] = gate[weight_key]
-
-        return state_dict
-
     def matmul_1d_config_from_tensor_shapes(
         self,
         in0_shape,
@@ -636,6 +517,125 @@ class TtModelArgs:
 
     def weight_cache_path(self, dtype):
         return self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+
+    def load_weights_to_state_dict_no_experts(self, weights_path="/localdev/ricozhu/grok_2_weights/", fuse_qkv=True):
+        """
+        Weights are stored as follows:  (all bfloat16)                                                dims:
+          - 00000-TP-common: embedding                                                                      [128*1024, 8192]
+          - 00001-TP-common: lm head                                                                        [128*1024, 8192]
+          - 00002-TP-common: model.norm                                                                     [8192]
+          - 00003-TP-common: shared_mlp.gate_proj, 64 layers                                                [32768, 8192]
+          - 00004-TP-common: shared_mlp.down_proj, 64 layers                                                [8192, 32768]
+          - 00005-TP-common: shared_mlp.up_proj, 64 layers                                                  [32768, 8192]
+
+          - 00006-TP-00[0-7]: block_sparse_moe.experts.[0-7].w1, shard [0-7], 64 layers                     [2048 * 8, 8192]
+          - 00007-TP-00[0-7]: block_sparse_moe.experts.[0-7].w2, shard [0-7], 64 layers                     [8192, 2048 * 8]
+          - 00008-TP-00[0-7]: block_sparse_moe.experts.[0-7].w3, shard [0-7], 64 layers                     [2048 * 8, 8192]
+
+          - 00009-TP-common: self_attn.k_proj, 64 layers                                                    [8192, 1024]
+          - 00010-TP-common: self_attn.o_proj, 64 layers                                                    [8192, 8192]
+          - 00011-TP-common: self_attn.q_proj, 64 layers                                                    [8192, 8192]
+          - 00012-TP-common: self_attn.v_proj, 64 layers                                                    [8192, 1024]
+
+          - 00013-TP-common: pre_attn_norm, 64 layers                                                       [8192]
+          - 00014-TP-common: post_attn_norm, 64 layers                                                      [8192]
+          - 00015-TP-common: pre_moe_norm, 64 layers                                                        [8192]
+          - 00016-TP-common: post_moe_norm, 64 layers                                                       [8192]
+
+          - 00017-TP-common: block_sparse_moe.gate, 64 layers                                               [8, 8192]
+        """
+
+        state_dict = {}
+
+        # --- embeddings / head / final norm ---
+        state_dict["model.embed_tokens.weight"] = load_file(
+            os.path.join(weights_path, "pytorch_model-00000-TP-common.safetensors")
+        )["model.embed_tokens.weight"]
+        state_dict["lm_head.weight"] = load_file(
+            os.path.join(weights_path, "pytorch_model-00001-TP-common.safetensors")
+        )["lm_head.weight"]
+        state_dict["model.norm.weight"] = load_file(
+            os.path.join(weights_path, "pytorch_model-00002-TP-common.safetensors")
+        )["model.norm.weight"]
+
+        # --- shared MLP projections (64 layers) ---
+        for proj, fname, pname in [
+            ("w1", "pytorch_model-00003-TP-common.safetensors", "gate_proj"),
+            ("w2", "pytorch_model-00004-TP-common.safetensors", "down_proj"),
+            ("w3", "pytorch_model-00005-TP-common.safetensors", "up_proj"),
+        ]:
+            arr = load_file(os.path.join(weights_path, fname))
+            for layer_idx in range(64):
+                grok_weight_key = f"model.layers.{layer_idx}.mlp.{pname}.weight"
+                weight_key = f"model.layers.{layer_idx}.mlp.{proj}.weight"
+                state_dict[weight_key] = arr[grok_weight_key]
+
+        # --- self-attention projections ---
+        for proj, fname, pname in [
+            ("k_proj", "pytorch_model-00009-TP-common.safetensors", "self_attn.k_proj"),
+            ("o_proj", "pytorch_model-00010-TP-common.safetensors", "self_attn.o_proj"),
+            ("q_proj", "pytorch_model-00011-TP-common.safetensors", "self_attn.q_proj"),
+            ("v_proj", "pytorch_model-00012-TP-common.safetensors", "self_attn.v_proj"),
+        ]:
+            arr = load_file(os.path.join(weights_path, fname))
+            for layer_idx in range(64):
+                weight_key = f"model.layers.{layer_idx}.self_attn.{proj}.weight"
+                state_dict[weight_key] = arr[weight_key]
+
+        for layer_idx in range(64):
+            q_proj = state_dict[f"model.layers.{layer_idx}.self_attn.q_proj.weight"]
+            # q_proj = reverse_permute(q_proj, 64, q_proj.shape[0], q_proj.shape[1])
+            k_proj = state_dict[f"model.layers.{layer_idx}.self_attn.k_proj.weight"]
+            # k_proj = reverse_permute(k_proj, 8, k_proj.shape[0], k_proj.shape[1])
+            v_proj = state_dict[f"model.layers.{layer_idx}.self_attn.v_proj.weight"]
+
+            if fuse_qkv:
+                qkv_list = []
+                for i in range(self.num_devices_per_group):
+                    # Chunk weights
+                    wq_selected = torch.chunk(q_proj, self.num_devices_per_group, dim=0)[i]
+                    wk_selected = torch.chunk(k_proj, self.num_devices_per_group, dim=0)[i]
+                    wv_selected = torch.chunk(v_proj, self.num_devices_per_group, dim=0)[i]
+
+                    # Transpose the selected chunks
+                    wq = torch.transpose(wq_selected, -2, -1)
+                    wk = torch.transpose(wk_selected, -2, -1)
+                    wv = torch.transpose(wv_selected, -2, -1)
+
+                    qkv = torch.cat([wq, wk, wv], dim=-1)
+                    qkv_list.append(qkv)
+
+                qkv_cat = torch.cat(qkv_list, dim=-1)
+                state_dict[f"model.layers.{layer_idx}.self_attn.wqkv.weight"] = qkv_cat
+
+            del state_dict[f"model.layers.{layer_idx}.self_attn.q_proj.weight"]
+            del state_dict[f"model.layers.{layer_idx}.self_attn.k_proj.weight"]
+            del state_dict[f"model.layers.{layer_idx}.self_attn.v_proj.weight"]
+
+            state_dict[f"model.layers.{layer_idx}.self_attn.wo.weight"] = state_dict[
+                f"model.layers.{layer_idx}.self_attn.o_proj.weight"
+            ]
+            del state_dict[f"model.layers.{layer_idx}.self_attn.o_proj.weight"]
+
+        # --- norms ---
+        for norm_key, fname, pname in [
+            ("pre_attn_norm", "pytorch_model-00013-TP-common.safetensors", "pre_attn_norm"),
+            ("post_attn_norm", "pytorch_model-00014-TP-common.safetensors", "post_attn_norm"),
+            ("pre_moe_norm", "pytorch_model-00015-TP-common.safetensors", "pre_moe_layernorm"),
+            ("post_moe_norm", "pytorch_model-00016-TP-common.safetensors", "post_moe_layernorm"),
+        ]:
+            arr = load_file(os.path.join(weights_path, fname))
+            for layer_idx in range(64):
+                weight_key = f"model.layers.{layer_idx}.{norm_key}.weight"
+                state_dict[weight_key] = arr[weight_key]
+
+        # --- gating for MoE ---
+        gate = load_file(os.path.join(weights_path, "pytorch_model-00017-TP-common.safetensors"))
+        for layer_idx in range(64):
+            weight_key = f"model.layers.{layer_idx}.block_sparse_moe.gate.weight"
+            state_dict[weight_key] = gate[weight_key]
+
+        return state_dict
 
     def load_experts_weights_to_state_dict(self, state_dict, weights_path="/localdev/ricozhu/grok_2_weights/"):
         # --- experts (3 matrices, 8 shards each) ---
