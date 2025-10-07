@@ -238,13 +238,20 @@ jobs:
 
           # Extract approved reviews (get the LATEST review from each user)
           if [ "$REVIEWS_HTTP_CODE" = "200" ] && [ -n "$REVIEWS_DATA" ] && [ "$REVIEWS_DATA" != "null" ]; then
-            # Group reviews by user and get the latest review state from each user
+            # First, let's see all reviewers for debugging
+            echo "All reviews found:"
+            echo "$REVIEWS_DATA" | jq -r '.[] | "\(.user.login): \(.state) (\(.submitted_at))"' 2>/dev/null || echo "Failed to parse reviews"
+
+            # Get latest review from each user, then filter for APPROVED
             APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '
-              group_by(.user.login) |
-              map(sort_by(.submitted_at) | reverse | .[0]) |
+              [.[] | {user: .user.login, state: .state, date: .submitted_at}] |
+              group_by(.user) |
+              map(sort_by(.date) | reverse | .[0]) |
               map(select(.state == "APPROVED")) |
-              .[].user.login
+              .[].user
             ' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+
+            echo "Final approved reviewers: $APPROVED_REVIEWERS"
           else
             echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
             APPROVED_REVIEWERS=""
