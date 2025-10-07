@@ -1083,6 +1083,30 @@ jobs:
           if [ "$SEND_SLACK" = "true" ] && [ -n "$SELECTED_OWNERS" ]; then
             echo "Sending Slack notification to channel: $SLACK_CHANNEL"
 
+            # First, verify the bot can access the channel
+            CHANNEL_INFO_RESPONSE=$(curl -s -X GET \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+              -H "Content-Type: application/json" \
+              "https://slack.com/api/conversations.info?channel=$SLACK_CHANNEL")
+
+            if [ "$(echo "$CHANNEL_INFO_RESPONSE" | jq -r '.ok')" != "true" ]; then
+              CHANNEL_ERROR=$(echo "$CHANNEL_INFO_RESPONSE" | jq -r '.error // "Unknown error"')
+              if [ "$CHANNEL_ERROR" = "channel_not_found" ]; then
+                echo "❌ Channel not found. Possible solutions:"
+                echo "   1. Make sure the bot is added to the channel"
+                echo "   2. Use /invite @your-bot-name in the channel"
+                echo "   3. Verify the channel ID is correct: $SLACK_CHANNEL"
+                echo "   4. Check if the channel is private and bot needs explicit invitation"
+              else
+                echo "❌ Cannot access channel: $CHANNEL_ERROR"
+              fi
+              echo "Channel info response: $CHANNEL_INFO_RESPONSE"
+              exit 0  # Don't fail the entire workflow, just skip Slack notification
+            fi
+
+            CHANNEL_NAME=$(echo "$CHANNEL_INFO_RESPONSE" | jq -r '.channel.name // "unknown"')
+            echo "✅ Channel verified: #$CHANNEL_NAME ($SLACK_CHANNEL)"
+
             # Function to find Slack user ID by full name
             find_slack_user_id() {
               local full_name="$1"
@@ -1142,9 +1166,11 @@ jobs:
 
                 if [ -n "$SLACK_USER_ID" ]; then
                   SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
+                  echo "✅ Found Slack user: $USER_NAME -> $SLACK_USER_ID"
                 else
                   # Fallback to GitHub username if Slack user not found
                   SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS @$owner"
+                  echo "⚠️  Slack user not found for: $USER_NAME (@$owner), using fallback"
                 fi
               fi
             done
@@ -1180,11 +1206,27 @@ jobs:
             # Check if message was sent successfully
             if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
               SLACK_TS=$(echo "$SLACK_RESPONSE" | jq -r '.ts')
-              echo "✅ Successfully sent Slack notification to #$SLACK_CHANNEL (message ts: $SLACK_TS)"
+              echo "✅ Successfully sent Slack notification to #$CHANNEL_NAME (message ts: $SLACK_TS)"
             else
               SLACK_ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "Unknown error"')
               echo "❌ Failed to send Slack notification: $SLACK_ERROR"
               echo "Response: $SLACK_RESPONSE"
+
+              # Provide specific error guidance
+              case "$SLACK_ERROR" in
+                "not_in_channel")
+                  echo "💡 Solution: Invite the bot to the channel with: /invite @your-bot-name"
+                  ;;
+                "channel_not_found")
+                  echo "💡 Solution: Verify channel ID and ensure bot has access"
+                  ;;
+                "missing_scope")
+                  echo "💡 Solution: Bot needs 'chat:write' permission"
+                  ;;
+                "invalid_auth")
+                  echo "💡 Solution: Check if CODEOWNERS_PING_BOT token is valid"
+                  ;;
+              esac
             fi
           elif [ "$SEND_SLACK" = "true" ] && [ -z "$SELECTED_OWNERS" ]; then
             echo "Slack notification enabled but no pending owners to notify"
