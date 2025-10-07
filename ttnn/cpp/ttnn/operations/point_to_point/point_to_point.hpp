@@ -27,7 +27,7 @@ ttnn::TensorSpec p2p_compute_intermediate_tensor_spec(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,
-    const ccl::Topology topology);
+    ccl::Topology topology);
 
 }  // namespace operations::point_to_point
 
