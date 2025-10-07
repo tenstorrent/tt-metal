@@ -14,7 +14,6 @@ class ExpertMLP(LightweightModule):
     def __init__(self, mesh_device, tt_ccl, state_dict, args, layer_num, dtypes):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.dtypes = dtypes
@@ -28,7 +27,7 @@ class ExpertMLP(LightweightModule):
         # Concatenate weights from all 8 experts
         torch_weight = lambda name: torch.concat(
             [
-                self.state_dict[f"{base_name(expert_num)}.{name}.weight"]
+                state_dict[f"{base_name(expert_num)}.{name}.weight"]
                 .permute(1, 0)
                 .unsqueeze(0)
                 .unsqueeze(0)  # [1, 1, 8192, 16384]
@@ -86,28 +85,10 @@ class ExpertMLP(LightweightModule):
 
         # Decode mode memory config
         memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
-        # w1_out = ttnn.linear(
-        #     x,
-        #     self.w1,
-        #     dtype=ttnn.bfloat8_b,  # TG=True
-        #     core_grid=None,
-        #     compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-        #     program_config=pc_1,
-        #     memory_config=memory_config,
-        # )
         w1_out = ttnn.matmul(x, self.w1)
 
-        # w3_out = ttnn.linear(
-        #     x,
-        #     self.w3,
-        #     dtype=ttnn.bfloat8_b,
-        #     core_grid=None,
-        #     compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-        #     program_config=pc_3,
-        #     memory_config=memory_config,
-        # )
         w3_out = ttnn.matmul(x, self.w3)
-        ttnn.deallocate(x)
+        # ttnn.deallocate(x)
 
         input_mem_cfg = w1_out.memory_config()
         w1_out = ttnn.experimental.reduce_scatter_minimal_async(
@@ -171,16 +152,6 @@ class ExpertMLP(LightweightModule):
         # Always decode mode
         w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
-        li_ff2_compute_kernel_cfg = self.args.compute_kernel_config_hifi2
-        # w2_out = ttnn.linear(
-        #     w2_in,
-        #     self.w2,
-        #     compute_kernel_config=li_ff2_compute_kernel_cfg,
-        #     dtype=self.args.ccl_dtype,  # TG=True
-        #     program_config=pc_2,
-        #     memory_config=memory_config,
-        #     core_grid=None,
-        # )
         w2_out = ttnn.matmul(w2_in, self.w2)
         ttnn.deallocate(w2_in)
 

@@ -42,8 +42,6 @@ class TtMoE(LightweightModule):
 
         # Prepare gate tensor - pad to 64 for top-k operation compatibility
         gates_tensor = (
-            # torch.nn.functional.pad(state_dict[gate_name].permute(1, 0), (0, 56), "constant", 0)
-            # state_dict[gate_name].permute(1, 0)
             torch.nn.functional.pad(state_dict[gate_name].permute(1, 0), (0, 56), "constant", 0)
             .unsqueeze(0)
             .unsqueeze(0)
@@ -105,17 +103,15 @@ class TtMoE(LightweightModule):
         router_scores, expert_weights, expert_indices = topk_router(gate_logits_1SB8, 2)
         router_scores = router_scores[:, :, :, :8]
         router_scores = ttnn.permute(router_scores, (0, 3, 2, 1))
-        print(expert_indices)
-        print(expert_weights)
 
         gate_logits_1SB8.deallocate()
 
         # Apply expert MLP
         expert_output = expert_i_HH(input_i_1SBH)
-        # expert_output = input_i_1SBH
 
         # Apply expert weights
         results_11BH = ttnn.mul(expert_output, router_scores)
         results_11BH = ttnn.sum(results_11BH, dim=1, keepdim=True)
+        ttnn.deallocate(expert_output)
 
         return results_11BH

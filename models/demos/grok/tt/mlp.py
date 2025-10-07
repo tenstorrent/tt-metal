@@ -117,7 +117,7 @@ class MLP(LightweightModule):
             program_config=pc_3,
             memory_config=memory_config,
         )
-        ttnn.deallocate(x)
+        # ttnn.deallocate(x)
 
         input_mem_cfg = w1_out.memory_config()
         w1_out = ttnn.experimental.reduce_scatter_minimal_async(

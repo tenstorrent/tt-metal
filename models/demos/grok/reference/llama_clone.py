@@ -267,6 +267,8 @@ class Gate(nn.Module):
         self.top_k = 2
 
     def forward(self, x):
+        B, S, T, H = x.shape
+        E = self.num_experts
         gate_logits = self.gate(x)
         topk_logits, topk_idx = torch.topk(gate_logits, self.top_k, dim=-1)
         topk_weights = F.softmax(topk_logits, dim=-1, dtype=torch.float32).to(x.dtype)
@@ -293,13 +295,13 @@ class MoE(nn.Module):
         E = self.num_experts
 
         if self.gate is not None:
-            gate_logits = self.gate(x)  # (B, S, T, E)
+            gate_logits = self.gate(x.to(torch.bfloat16))  # (B, S, T, E)
 
             # If your gate returns (B, T, E), add back the singleton stream dim:
             if gate_logits.dim() == 3:
                 gate_logits = gate_logits.unsqueeze(1)  # -> (B, 1, T, E)
 
-            topk_weights = F.softmax(gate_logits, dim=-1, dtype=torch.float32).to(x.dtype)  # (B, S, T, K)
+            topk_weights = F.softmax(gate_logits, dim=-1, dtype=torch.float32).to(x.dtype)  # (B, S, T, E)
             topk_logits, topk_idx = torch.topk(topk_weights, self.top_k, dim=-1)  # (B, S, T, K), (B, S, T, K)
 
             # Scatter top-k weights back into full (B, S, T, E)
@@ -309,16 +311,72 @@ class MoE(nn.Module):
             # Uniform mix over all experts
             weights = torch.full((B, S, T, E), 1.0 / E, dtype=x.dtype, device=x.device)
 
-        print(weights)
-        print(topk_idx)
-
-        # return weights, topk_weights, topk_idx
         # Weighted sum across experts
         y = torch.zeros_like(x)  # (B, S, T, H)
         for e, expert in enumerate(self.experts):
             y = y + expert(x) * weights[..., e].unsqueeze(-1)  # (B, S, T, H) * (B, S, T, 1)
 
         return y
+
+
+class GrokDecoder(nn.Module):
+    """
+    Reference implementation of Grok decoder layer without normalization layers.
+    This matches the TT implementation in decoder.py which has norms commented out.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.dim = 8192
+        self.attention = Attention()
+        self.shared_mlp = FeedForward(hidden_dim=32768, dim=8192)  # Shared MLP
+        self.moe = MoE(num_experts=8, gate=True)  # MoE with 8 experts
+
+        # Note: Norms are not used in this implementation to match TT decoder
+        # which has all norms commented out
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        start_pos: int,
+        freqs_cis: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+    ):
+        """
+        Forward pass matching the TT decoder implementation.
+
+        Args:
+            hidden_states: Input tensor [batch, seq_len, dim]
+            start_pos: Starting position for attention
+            freqs_cis: Rotary position embeddings
+            mask: Attention mask (optional)
+        """
+        # Pre-attention residual
+        residual = hidden_states
+
+        # Attention (no pre-norm as in TT implementation)
+        attn_out = self.attention(hidden_states, start_pos, freqs_cis, mask)
+
+        # Post-attention residual connection (no post-norm as in TT implementation)
+        hidden_states = residual + attn_out
+
+        # Pre-MLP residual
+        residual = hidden_states
+
+        # Shared MLP
+        shared_mlp_out = self.shared_mlp(hidden_states)
+
+        # MoE
+        moe_out = self.moe(hidden_states.unsqueeze(0).float())
+
+        # Combine shared MLP and MoE outputs, then divide by sqrt(2)
+        combined_out = shared_mlp_out + moe_out
+        combined_out = combined_out / math.sqrt(2.0)
+
+        # Post-MLP residual connection (no post-norm as in TT implementation)
+        hidden_states = residual + combined_out
+
+        return hidden_states
 
 
 class TransformerBlock(nn.Module):

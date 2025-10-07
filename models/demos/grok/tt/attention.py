@@ -208,7 +208,7 @@ class Attention(LightweightModule):
             dtype=self.ccl_dtype,  # TG=True
         )
 
-        ttnn.deallocate(x)
+        # ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,

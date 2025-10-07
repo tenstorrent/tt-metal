@@ -362,6 +362,7 @@ class TtModelArgs:
         # Basic memory and layout configs
         model_config["ATTN_W_LAYOUT_TILE"] = ttnn.TILE_LAYOUT
 
+        model_config["MOE_INPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
         model_config["MLP_ACT_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, self.dim // 4 // 16),  # dim / num devices / 16 cores
             core_grid=ttnn.CoreGrid(x=8, y=2),
@@ -632,6 +633,14 @@ class TtModelArgs:
 
         logger.info(f"Loaded experts weights to state dict...")
         return state_dict
+
+    def prune_experts_except_layers(self, state_dict, layers):
+        for layer_idx in range(self.num_hidden_layers):
+            if layer_idx not in layers:
+                for expert_idx in range(8):
+                    del state_dict[f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}.w1.weight"]
+                    del state_dict[f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}.w2.weight"]
+                    del state_dict[f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}.w3.weight"]
 
     def get_state_dict_prefix(self, module_name, layer_num):
         layer_prefix = f"model.layers.{layer_num}" if layer_num is not None else ""
