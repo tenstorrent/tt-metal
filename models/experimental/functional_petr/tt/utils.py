@@ -5,21 +5,50 @@
 import ttnn
 import torch
 import numpy as np
+from loguru import logger
 
 
-def inverse_sigmoid(x, eps: float = 1e-5):
-    x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-    x = ttnn.clamp(x, min=0, max=1)
-    x1 = ttnn.clamp(x, min=eps)
-    if len(x.shape) == 3:
-        x_temp = ttnn.ones(shape=[x.shape[0], x.shape[1], x.shape[2]], layout=ttnn.TILE_LAYOUT, device=x.device())
-    else:
-        x_temp = ttnn.ones(
-            shape=[x.shape[0], x.shape[1], x.shape[2], x.shape[3]], layout=ttnn.TILE_LAYOUT, device=x.device()
-        )
-    x_temp = x_temp - x
-    x2 = ttnn.clamp(x_temp, min=eps)
-    return ttnn.log(ttnn.div(x1, x2))
+def inverse_sigmoid(x, eps: float = 1e-7):
+    # x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+    # x = ttnn.clamp(x, min=0, max=1)
+    # x1 = ttnn.clamp(x, min=eps)
+    # if len(x.shape) == 3:
+    #     x_temp = ttnn.ones(shape=[x.shape[0], x.shape[1], x.shape[2]], layout=ttnn.TILE_LAYOUT, device=x.device())
+    # else:
+    #     x_temp = ttnn.ones(
+    #         shape=[x.shape[0], x.shape[1], x.shape[2], x.shape[3]], layout=ttnn.TILE_LAYOUT, device=x.device()
+    #     )
+    # x_temp = x_temp - x
+    # x2 = ttnn.clamp(x_temp, min=eps)
+    # return ttnn.log(ttnn.div(x1, x2))
+
+    device = x.device()
+
+    # Convert to torch for safe operations
+    x_torch = ttnn.to_torch(x).to(torch.float32)
+
+    # Clamp to valid range with safety margin
+    x_torch = torch.clamp(x_torch, min=eps, max=1.0 - eps)
+
+    # Compute inverse sigmoid: log(x / (1-x))
+    one_minus_x = 1.0 - x_torch
+
+    # Additional safety: ensure denominator is not too small
+    one_minus_x = torch.clamp(one_minus_x, min=eps)
+    x_torch = torch.clamp(x_torch, min=eps)
+
+    result = torch.log(x_torch / one_minus_x)
+
+    # Check for NaN/Inf and handle
+    if torch.isnan(result).any() or torch.isinf(result).any():
+        logger.warning(f"NaN/Inf in inverse_sigmoid! Clamping output")
+        result = torch.nan_to_num(result, nan=0.0, posinf=10.0, neginf=-10.0)
+
+    # Convert back to ttnn
+    result_ttnn = ttnn.from_torch(result, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    result_ttnn = ttnn.to_device(result_ttnn, device)
+
+    return result_ttnn
 
 
 def limit_period(val, offset: float = 0.5, period: float = np.pi):

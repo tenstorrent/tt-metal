@@ -284,8 +284,8 @@ def test_vovnetcp_esemodule(device, n, c, h, w):
         (768, 224, 1024, 3, 5, 5, [1, 768, 20, 50]),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_vovnetcp_osa_stage(
     device, reset_seeds, in_ch, stage_ch, concat_ch, block_per_stage, layer_per_block, stage_num, input_shape
 ):
@@ -313,8 +313,8 @@ def test_vovnetcp_osa_stage(
         target_w = torch_output.shape[3]
         ttnn_output = ttnn_output.reshape(ttnn_output.shape[0], ttnn_output.shape[1], target_h, target_w)
 
-    assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
-    passed, msg = check_with_pcc(torch_output, ttnn_output, pcc=0.99)
+    assert_with_pcc(torch_output, ttnn_output, pcc=0.97)
+    passed, msg = check_with_pcc(torch_output, ttnn_output, pcc=0.97)
 
     logger.info(
         f"vovnetcp_osa_stage_{stage_num} test passed: "

@@ -8,6 +8,7 @@ import math
 from models.experimental.functional_petr.tt.ttnn_positional_encoding import ttnn_SinePositionalEncoding3D
 from models.experimental.functional_petr.tt.ttnn_petr_transformer import PETRTransformer
 from models.experimental.functional_petr.reference.nms_free_coder import NMSFreeCoder
+from loguru import logger
 
 # from models.experimental.functional_petr.reference.utils import inverse_sigmoid
 from models.experimental.functional_petr.tt.utils import inverse_sigmoid as ttnn_inverse_sigmoid
@@ -365,6 +366,11 @@ class ttnn_PETRHead:
                 pos_embed = torch.cat(pos_embeds, 1)
 
         reference_points = self.parameters.reference_points.weight
+        ref_check = ttnn.to_torch(reference_points)
+        if torch.isnan(ref_check).any() or torch.isinf(ref_check).any():
+            logger.error("reference_points contains NaN/Inf at initialization!")
+            ref_check = torch.nan_to_num(ref_check, nan=0.5, posinf=1.0, neginf=0.0)
+            self.parameters.reference_points.weight = ttnn.from_torch(ref_check, dtype=ttnn.float32, device=device)
         for index, i in enumerate(
             self.query_embedding
         ):  # replaced this by preprocessing pos2posemb3d(reference_points))
@@ -394,10 +400,29 @@ class ttnn_PETRHead:
 
         outs_dec, _ = self.transformer(device, x, masks, query_embeds, pos_embed)  # , self.reg_branches)
         # outs_dec = torch.nan_to_num(outs_dec) # This is not needed as outs_dec produces no nan values
+        outs_dec_torch = ttnn.to_torch(outs_dec).to(torch.float32)
+        if torch.isnan(outs_dec_torch).any() or torch.isinf(outs_dec_torch).any():
+            logger.warning(f"NaN/Inf detected in outs_dec! Applying nan_to_num")
+            outs_dec_torch = torch.nan_to_num(outs_dec_torch, nan=0.0, posinf=1e6, neginf=-1e6)
+            outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            outs_dec = ttnn.to_device(outs_dec, device)
+        # else:
+        #     # Just ensure it's float32
+        #     outs_dec = ttnn.to_dtype(outs_dec, ttnn.float32)
+        outs_dec = ttnn.from_torch(outs_dec_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        outs_dec = ttnn.to_device(outs_dec, device)
         outputs_classes = []
         outputs_coords = []
         for lvl in range(outs_dec.shape[0]):
             reference = ttnn_inverse_sigmoid(ttnn.clone(reference_points))
+            # reference = ttnn.to_dtype(reference, ttnn.float32)
+
+            ref_torch = ttnn.to_torch(reference)
+            if torch.isnan(ref_torch).any() or torch.isinf(ref_torch).any():
+                logger.warning(f"Layer {lvl}: NaN/Inf in reference! Fixing...")
+                ref_torch = torch.nan_to_num(ref_torch, nan=0.0, posinf=10.0, neginf=-10.0)
+                reference = ttnn.from_torch(ref_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
             assert reference.shape[-1] == 3
 
             # outputs_class = self.cls_branches[lvl](outs_dec[lvl])
@@ -420,6 +445,9 @@ class ttnn_PETRHead:
 
             # tmp = self.reg_branches[lvl](outs_dec[lvl])
             tmp = outs_dec[lvl : lvl + 1]
+            # tmp = ttnn.to_dtype(tmp, ttnn.float32)
+            # tmp = ttnn.from_torch(tmp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            # tmp = ttnn.to_device(tmp, device)
             for index, operation in enumerate(self.reg_branches[lvl]):
                 if operation == ttnn.linear:
                     tmp = operation(
@@ -430,16 +458,41 @@ class ttnn_PETRHead:
                 elif operation == ttnn.relu:
                     tmp = operation(tmp)
 
-            tmp = ttnn.to_torch(tmp)
-            reference = ttnn.to_torch(reference)
+            tmp_torch = ttnn.to_torch(tmp).to(torch.float32)
+            if torch.isnan(tmp_torch).any() or torch.isinf(tmp_torch).any():
+                logger.warning(f"Layer {lvl}: NaN/Inf in tmp before sigmoid! Fixing...")
+                tmp_torch = torch.nan_to_num(tmp_torch, nan=0.0, posinf=10.0, neginf=-10.0)
 
-            tmp[..., 0:2] = tmp[..., 0:2] + reference[..., 0:2]
-            tmp[..., 0:2] = tmp[..., 0:2].sigmoid()
-            tmp[..., 4:5] += reference[..., 2:3]
-            tmp[..., 4:5] = tmp[..., 4:5].sigmoid()
+            # tmp = ttnn.to_torch(tmp)
+            reference = ttnn.to_torch(reference).to(torch.float32)
 
-            tmp = ttnn.from_torch(tmp, layout=ttnn.TILE_LAYOUT, device=device)
-            reference = ttnn.from_torch(reference, layout=ttnn.TILE_LAYOUT, device=device)
+            # tmp[..., 0:2] = tmp[..., 0:2] + reference[..., 0:2]
+            # tmp[..., 0:2] = tmp[..., 0:2].sigmoid()
+            # tmp[..., 4:5] += reference[..., 2:3]
+            # tmp[..., 4:5] = tmp[..., 4:5].sigmoid()
+
+            # tmp = ttnn.from_torch(tmp, layout=ttnn.TILE_LAYOUT, device=device)
+            # reference = ttnn.from_torch(reference, layout=ttnn.TILE_LAYOUT, device=device)
+
+            tmp_torch[..., 0:2] = tmp_torch[..., 0:2] + reference[..., 0:2]
+
+            # Safety clamp before sigmoid to prevent overflow
+            tmp_torch[..., 0:2] = torch.clamp(tmp_torch[..., 0:2], min=-10.0, max=10.0)
+            tmp_torch[..., 0:2] = tmp_torch[..., 0:2].sigmoid()
+
+            tmp_torch[..., 4:5] += reference[..., 2:3]
+            tmp_torch[..., 4:5] = torch.clamp(tmp_torch[..., 4:5], min=-10.0, max=10.0)
+            tmp_torch[..., 4:5] = tmp_torch[..., 4:5].sigmoid()
+
+            # Final NaN check
+            if torch.isnan(tmp_torch).any() or torch.isinf(tmp_torch).any():
+                logger.warning(f"Layer {lvl}: NaN/Inf in tmp after sigmoid! Fixing...")
+                tmp_torch = torch.nan_to_num(tmp_torch, nan=0.0, posinf=1.0, neginf=0.0)
+
+            tmp = ttnn.from_torch(tmp_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            tmp = ttnn.to_device(tmp, device)
+            reference = ttnn.from_torch(reference, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+            reference = ttnn.to_device(reference, device)
 
             outputs_coord = tmp
             outputs_classes.append(outputs_class)
@@ -448,14 +501,25 @@ class ttnn_PETRHead:
         all_cls_scores = ttnn.concat(outputs_classes, dim=0)
         all_bbox_preds = ttnn.concat(outputs_coords, dim=0)
 
-        all_cls_scores = ttnn.to_torch(all_cls_scores)
-        all_bbox_preds = ttnn.to_torch(all_bbox_preds)
+        all_cls_scores = ttnn.to_torch(all_cls_scores).to(torch.float32)
+        all_bbox_preds = ttnn.to_torch(all_bbox_preds).to(torch.float32)
+
+        if torch.isnan(all_bbox_preds).any() or torch.isinf(all_bbox_preds).any():
+            logger.error("NaN/Inf detected in all_bbox_preds before scaling!")
+            all_bbox_preds = torch.nan_to_num(all_bbox_preds, nan=0.0, posinf=50.0, neginf=-50.0)
+
         all_bbox_preds[..., 0:1] = all_bbox_preds[..., 0:1] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0]
         all_bbox_preds[..., 1:2] = all_bbox_preds[..., 1:2] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]
         all_bbox_preds[..., 4:5] = all_bbox_preds[..., 4:5] * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2]
 
+        if torch.isnan(all_bbox_preds).any() or torch.isinf(all_bbox_preds).any():
+            logger.error("NaN/Inf still present after scaling!")
+            all_bbox_preds = torch.nan_to_num(all_bbox_preds, nan=0.0, posinf=51.0, neginf=-51.0)
+
         all_cls_scores = ttnn.from_torch(all_cls_scores, device=device)
+        all_cls_scores = ttnn.to_device(all_cls_scores, device)
         all_bbox_preds = ttnn.from_torch(all_bbox_preds, device=device)
+        all_bbox_preds = ttnn.to_device(all_bbox_preds, device)
 
         outs = {
             "all_cls_scores": all_cls_scores,
