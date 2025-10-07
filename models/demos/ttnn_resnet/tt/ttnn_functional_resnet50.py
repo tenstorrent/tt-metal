@@ -106,7 +106,8 @@ def _nearest_32(x):
 class resnet50Bottleneck:
     expansion: int = 4
 
-    def __init__(self, parameters, downsample, stride, model_config) -> None:
+    def __init__(self, parameters, downsample, stride, model_config, order=100) -> None:
+        self.order = order
         # init is just to pre-process pytorch weights and bias tensors
         self.conv1_weight_tensor = parameters.conv1.weight
         self.conv1_bias_tensor = parameters.conv1.bias
@@ -247,8 +248,11 @@ class resnet50Bottleneck:
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 force_split_reader=None if height_sharding else True,
+                enable_activation_reuse=True,
             ),
         }
+
+        print("ORDER IS ", self.order)
 
         out, [input_height, input_width], [self.conv1_weight_tensor, self.conv1_bias_tensor] = ttnn.conv2d(
             input_tensor=x,
@@ -296,6 +300,18 @@ class resnet50Bottleneck:
                 enable_weights_double_buffer=True,
                 full_inner_dim=True,
                 force_split_reader=None if height_sharding else True,
+                enable_activation_reuse=True
+                if self.order != 1
+                and self.order != 2
+                and self.order != 10
+                and self.stride == 1
+                and self.order != 21
+                and self.order != 22
+                and self.order != 23
+                and self.order != 24
+                and self.order != 25
+                and out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+                else False,
             ),
         }
 
@@ -342,6 +358,7 @@ class resnet50Bottleneck:
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
                 force_split_reader=None if height_sharding else True,
+                enable_activation_reuse=True,
             ),
         }
 
@@ -426,6 +443,7 @@ class resnet50:
             blocks=layers[0],
             stride=1,
             model_config=model_config,
+            order=0,
         )
         self.layer2 = self._make_layer(
             parameters=parameters.layer2,
@@ -433,6 +451,7 @@ class resnet50:
             blocks=layers[1],
             stride=2,
             model_config=model_config,
+            order=10,
         )
         self.layer3 = self._make_layer(
             parameters=parameters.layer3,
@@ -440,6 +459,7 @@ class resnet50:
             blocks=layers[2],
             stride=2,
             model_config=model_config,
+            order=20,
         )
         self.layer4 = self._make_layer(
             parameters=parameters.layer4,
@@ -447,6 +467,7 @@ class resnet50:
             blocks=layers[3],
             stride=2,
             model_config=model_config,
+            order=30,
         )
 
         # All modules in RN50 are unrolled here. One variable for each module. Only specific number of modules supported - layers MUST equal to [3, 4, 6, 3]
@@ -600,6 +621,7 @@ class resnet50:
         blocks: int,
         stride: int,
         model_config=None,
+        order=100,
     ) -> List[resnet50Bottleneck]:
         layers = []
         layers.append(
@@ -608,18 +630,19 @@ class resnet50:
                 downsample=stride != 1 or self.inplanes != planes * resnet50Bottleneck.expansion,
                 stride=stride,
                 model_config=model_config,
+                order=order,
             )
         )
+        order += 1
         self.inplanes = planes * resnet50Bottleneck.expansion
         for block_num in range(1, blocks):
             layers.append(
                 resnet50Bottleneck(
-                    parameters=parameters[block_num],
-                    downsample=False,
-                    stride=1,
-                    model_config=model_config,
+                    parameters=parameters[block_num], downsample=False, stride=1, model_config=model_config, order=order
                 )
             )
+
+            order += 1
         return layers
 
     def __call__(self, input_tensor, device, ops_parallel_config) -> ttnn.Tensor:
