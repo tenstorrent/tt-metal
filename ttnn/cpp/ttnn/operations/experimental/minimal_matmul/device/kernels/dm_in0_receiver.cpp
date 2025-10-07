@@ -47,7 +47,7 @@ void kernel_main() {
            << ", N_start_block: " << N_start_block << ", N_end_block: " << N_end_block << ENDL();
 
     constexpr uint32_t N_num_blocks = N_end_block - N_start_block + 1;
-    constexpr uint32_t defer_write_k_block = K_num_blocks > 1 ? 1 : 0;
+    constexpr uint32_t defer_write_k_block = K_num_blocks > 2 ? 2 : 0;
 
     bool k_forward = true;
     bool n_forward = true;
