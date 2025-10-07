@@ -78,6 +78,7 @@ def test_vgg_unet_stability(
                 ttnn_output = ttnn_output.reshape(reference_output.shape)
                 pcc_passed, pcc_message = assert_with_pcc(reference_output, ttnn_output, pcc=0.98)
                 logger.info(f"VGG_Unet, PCC={pcc_message}")
+                assert pcc_passed, pcc_message
             check_pcc = False
 
     vgg_unet_trace_2cq.release_vgg_unet_trace_2cqs_inference()
