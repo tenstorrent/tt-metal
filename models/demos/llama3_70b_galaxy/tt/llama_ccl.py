@@ -552,7 +552,7 @@ class TT_CCL:
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=self.weight_cache_path / ("pb_ag_" + key + "_" + str(seqlen)),
+                cache_file_name=self.weight_cache_path / ("pb_ag_" + key + "_32"),
             )
             ag_persistent_buffers[key] = tt_buffer
 
