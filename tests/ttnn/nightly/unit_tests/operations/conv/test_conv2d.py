@@ -682,6 +682,7 @@ def test_conv_features_multi_device(
         ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT),
         ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+        ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6),
     ],
 )
 def test_conv_activation(
@@ -2856,7 +2857,8 @@ def test_shallow_conv_with_tiled_input(device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("tiled_input", [True, False])
 @pytest.mark.parametrize("input_on_device", [True, False])
-def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_device):
+@pytest.mark.parametrize("activation", [None, ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU6)])
+def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_device, activation):
     batch_size = 1
     out_channels, in_channels = 256, 1024
     img_h, img_w = 128, 128
@@ -2884,6 +2886,8 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
     if tiled_input:
         tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
 
+    conv_config = ttnn.Conv2dConfig(activation=activation) if activation else None
+
     tt_out = ttnn.conv2d(
         input_tensor=tt_input,
         weight_tensor=tt_kernel,
@@ -2897,6 +2901,7 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
         batch_size=batch_size,
         input_height=img_h,
         input_width=img_w,
+        conv_config=conv_config,
     )
 
     assert tt_out.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
@@ -2914,6 +2919,10 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input, torch_kernel, bias=None, stride=stride, padding=pad, dilation=dilation, groups=1
     )
+
+    # Apply activation to torch output if specified
+    if activation is not None and activation.op_type == ttnn.UnaryOpType.RELU6:
+        torch_out_golden_tensor = torch.clamp(torch.relu(torch_out_golden_tensor), max=6.0)
 
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.99)
     logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
