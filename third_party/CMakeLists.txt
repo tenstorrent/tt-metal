@@ -73,6 +73,15 @@ CPMAddPackage(
         protobuf_noreturn.patch
 )
 
+set_target_properties(
+    libprotobuf
+    PROPERTIES
+        CXX_VISIBILITY_PRESET
+            "hidden"
+        VISIBILITY_INLINES_HIDDEN
+            TRUE
+)
+
 ############################################################################################################################
 # yaml-cpp
 ############################################################################################################################
