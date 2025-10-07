@@ -311,11 +311,16 @@ jobs:
           fi
       - name: Trigger RC release workflow
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'true' }}
-        uses: ./.github/workflows/package-and-release.yaml
+        uses: benc-uk/workflow-dispatch@v1
         with:
-          ref: stable
-          release-type: rc
-          dry-run: ${{ inputs.dry-run || false }}
+          workflow: package-and-release.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          inputs: |
+            {
+              "ref": "stable",
+              "release-type": "rc",
+              "dry-run": "${{ inputs.dry-run || false }}"
+            }
       - name: Log no action needed
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
         run: |
@@ -332,8 +337,13 @@ jobs:
           echo "RC was built on tag: ${{ needs.create-tag.outputs.version }}"
           echo "Preparing to trigger prod release workflow on the same commit"
       - name: Trigger prod release workflow on same commit
-        uses: ./.github/workflows/package-and-release.yaml
+        uses: benc-uk/workflow-dispatch@v1
         with:
-          ref: ${{ needs.create-tag.outputs.version }}
-          release-type: prod
-          dry-run: ${{ inputs.dry-run || false }}
+          workflow: package-and-release.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          inputs: |
+            {
+              "ref": "${{ needs.create-tag.outputs.version }}",
+              "release-type": "prod",
+              "dry-run": "${{ inputs.dry-run || false }}"
+            }
