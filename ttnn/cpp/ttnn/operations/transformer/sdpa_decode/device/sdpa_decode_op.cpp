@@ -338,7 +338,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         this->k_chunk_size,
         this->share_cache,
         this->use_mla.value_or(false),
-        this->head_dim_v.value_or(0));
+        this->head_dim_v.value_or(0),
+        this->sliding_window);
 }
 
 operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
