@@ -4,6 +4,8 @@
 
 #include "sgd_fused.hpp"
 
+#include <fmt/format.h>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
@@ -15,14 +17,7 @@ namespace ttml::optimizers {
 
 SGDFused::SGDFused(ttml::serialization::NamedParameters parameters, const SGDFusedConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
-    if (m_config.nesterov) {
-        if (m_config.dampening != 0.0) {
-            TT_THROW("Nesterov momentum requires zero dampening! dampening={}", m_config.dampening);
-        }
-        if (m_config.momentum <= 0.0) {
-            TT_THROW("Nesterov momentum requires a positive momentum! momentum={}", m_config.momentum);
-        }
-    }
+    validate_config();
     if (m_config.momentum > 0.0) {
         for (const auto& [name, tensor_ptr] : m_parameters) {
             if (tensor_ptr->get_requires_grad()) {
@@ -45,6 +40,11 @@ void SGDFused::zero_grad() {
 }
 
 void SGDFused::step() {
+    if (m_config_dirty) {
+        validate_config();
+        m_config_dirty = false;
+    }
+
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }
@@ -107,6 +107,56 @@ float SGDFused::get_lr() const {
 
 void SGDFused::set_lr(float lr) {
     m_config.lr = lr;
+    m_config_dirty = true;
+}
+
+float SGDFused::get_momentum() const {
+    return m_config.momentum;
+}
+
+void SGDFused::set_momentum(float momentum) {
+    m_config.momentum = momentum;
+    m_config_dirty = true;
+}
+
+float SGDFused::get_dampening() const {
+    return m_config.dampening;
+}
+
+void SGDFused::set_dampening(float dampening) {
+    m_config.dampening = dampening;
+    m_config_dirty = true;
+}
+
+float SGDFused::get_weight_decay() const {
+    return m_config.weight_decay;
+}
+
+void SGDFused::set_weight_decay(float weight_decay) {
+    m_config.weight_decay = weight_decay;
+    m_config_dirty = true;
+}
+
+bool SGDFused::get_nesterov() const {
+    return m_config.nesterov;
+}
+
+void SGDFused::set_nesterov(bool nesterov) {
+    m_config.nesterov = nesterov;
+    m_config_dirty = true;
+}
+
+void SGDFused::validate_config() const {
+    if (m_config.nesterov) {
+        if (m_config.dampening != 0.0) {
+            throw std::runtime_error(
+                fmt::format("Nesterov momentum requires zero dampening! dampening={}", m_config.dampening));
+        }
+        if (m_config.momentum <= 0.0) {
+            throw std::runtime_error(
+                fmt::format("Nesterov momentum requires a positive momentum! momentum={}", m_config.momentum));
+        }
+    }
 }
 
 }  // namespace ttml::optimizers
