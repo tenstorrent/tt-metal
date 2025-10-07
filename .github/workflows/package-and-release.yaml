@@ -315,6 +315,7 @@ jobs:
         with:
           workflow: package-and-release.yaml
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: stable
           inputs: |
             {
               "ref": "stable",
@@ -341,6 +342,7 @@ jobs:
         with:
           workflow: package-and-release.yaml
           token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ needs.create-tag.outputs.version }}
           inputs: |
             {
               "ref": "${{ needs.create-tag.outputs.version }}",
