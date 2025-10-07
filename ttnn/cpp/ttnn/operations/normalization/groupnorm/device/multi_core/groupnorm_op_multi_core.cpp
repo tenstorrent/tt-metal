@@ -2666,27 +2666,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
         num_channels_per_group % TILE_WIDTH == 0 ? TILE_WIDTH : num_channels_per_group % TILE_WIDTH;
     // split each batch into multiple cores
     uint32_t num_shards_r = H / per_core_M_group_1;
-    if (num_batches > num_shards_r) {
-        // default to no_mcast version
-        return std::visit([&]() -> operation::ProgramWithCallbacks {
-            return groupnorm_multi_core_no_mcast(
-                a,
-                gamma,
-                beta,
-                input_mask,
-                reciprocals,
-                output,
-                eps,
-                num_groups,
-                num_batches,
-                im_data_format,
-                grid_size,
-                inplace,
-                num_out_blocks,
-                compute_kernel_config,
-                use_welford);
-        });
-    }
     uint32_t num_cores_per_batch = num_batches > num_shards_r ? 1 : num_shards_r / num_batches;
     uint32_t num_shards_c = W / per_core_N;
     uint32_t num_cores_per_group = num_groups > num_shards_c ? 1 : num_shards_c / num_groups;
@@ -3311,6 +3290,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_mcast(
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
     CreateKernel(
         program,
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"
