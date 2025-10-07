@@ -56,9 +56,9 @@ def run_max_pool2d_with_indices(
     ttact_device = ttnn.to_device(ttact, device)
     start_time = start_measuring_time()
 
-    # Use height sharding as recommended by colleague - this is critical for MPWI to work properly
-    if sharding is None:
-        sharding = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    # Use auto sharding as recommended by colleague for sweep tests
+    # Let TTNN automatically select the best sharding scheme
+    # sharding remains None for auto sharding
 
     # Call max_pool2d with return_indices=True
     output, indices = ttnn.max_pool2d(
