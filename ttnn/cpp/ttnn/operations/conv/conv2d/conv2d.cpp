@@ -342,7 +342,7 @@ Result conv2d_DRAM(
             .mm_conv = mm_conv,
         },
         device);
-    log_info(tt::LogOp, "Conv2D DRAM with Slice Config {}", dram_slice_config);
+    log_debug(tt::LogOp, "Conv2D DRAM with Slice Config {}", dram_slice_config);
     TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
 
     const uint32_t output_sliced_dim =
@@ -561,7 +561,7 @@ Result conv2d_L1(
 
     // Prepare weights and move to device if necessary
     if (!is_device_tensor(weight_tensor)) {
-        log_info(tt::LogOp, "conv2d: Preprocessing weights on host and moving to device.");
+        log_trace(tt::LogOp, "conv2d: Preprocessing weights on host and moving to device.");
         std::tie(weight_tensor_on_device, bias_tensor_on_device) =
             prepare_conv_weights_biases_and_move_to_device(weight_tensor, bias_tensor, params, device);
     } else {
@@ -583,7 +583,7 @@ Result conv2d_L1(
     // Prepare bias tensor if it exists and is not yet on device
     if (bias_tensor_on_device.has_value()) {
         if (!is_device_tensor(bias_tensor_on_device.value())) {
-            log_info(tt::LogOp, "conv2d: Preprocessing bias on host and moving to device.");
+            log_trace(tt::LogOp, "conv2d: Preprocessing bias on host and moving to device.");
 
             bias_tensor_on_device = prepare_conv_bias_internal(
                 bias_tensor_on_device, out_channels, params, weight_tensor_on_device.dtype(), device);
@@ -831,6 +831,24 @@ std::tuple<Conv2dSliceAttr::IOShape, Conv2dSliceAttr::IOShape> Conv2dSliceAttr::
     input_slice_height_end = std::min<int>(std::get<0>(input_shape), input_slice_height_end);
     input_slice_width_start = std::max<int>(0, input_slice_width_start);
     input_slice_width_end = std::min<int>(std::get<1>(input_shape), input_slice_width_end);
+    auto [output_height, output_width] = calculate_output_image_size(
+        std::array<uint32_t, 2>{std::get<0>(input_shape), std::get<1>(input_shape)},
+        kernel_size,
+        stride,
+        padding_n4,
+        dilation);
+    if (output_slice_height_start == 0) {
+        input_slice_height_start = 0;
+    }
+    if (output_slice_height_end == output_height) {
+        input_slice_height_end = std::get<0>(input_shape);
+    }
+    if (output_slice_width_start == 0) {
+        input_slice_width_start = 0;
+    }
+    if (output_slice_width_end == output_width) {
+        input_slice_width_end = std::get<1>(input_shape);
+    }
     return {{input_slice_height_start, input_slice_width_start}, {input_slice_height_end, input_slice_width_end}};
 }
 uint32_t Conv2dSliceAttr::get_L1_usage() { return 0; }
@@ -915,6 +933,29 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
     input_slice_width_start = std::max<int>(0, input_slice_width_start);
     input_slice_width_end = std::min<int>(std::get<1>(input_shape), input_slice_width_end);
 
+    auto [output_height, output_width] = calculate_output_image_size(
+        std::array<uint32_t, 2>{std::get<0>(input_shape), std::get<1>(input_shape)},
+        kernel_size,
+        stride,
+        padding_n4,
+        dilation);
+    if (output_slice_height_start == 0) {
+        pad_top = padding_n4[0];
+        input_slice_height_start = 0;
+    }
+    if (output_slice_height_end == output_height) {
+        pad_bottom = padding_n4[1];
+        input_slice_height_end = std::get<0>(input_shape);
+    }
+    if (output_slice_width_start == 0) {
+        pad_left = padding_n4[2];
+        input_slice_width_start = 0;
+    }
+    if (output_slice_width_end == output_width) {
+        pad_right = padding_n4[3];
+        input_slice_width_end = std::get<1>(input_shape);
+    }
+
     int input_slice_height = input_slice_height_end - input_slice_height_start;
     int input_slice_width = input_slice_width_end - input_slice_width_start;
 
@@ -930,7 +971,7 @@ ttnn::Tensor Conv2dSliceAttr::run_L1_op(
         output_slice_width += additional_padded_width;
     }
     auto this_op_padding = std::array<uint32_t, 4>({pad_top, pad_bottom, pad_left, pad_right});
-    log_info(
+    log_debug(
         tt::LogOp,
         "Conv input {}, padding {}, dilation {}, kernel {}, stride {}, output slice {}x{}",
         sliced_input_tensor.logical_shape(),
