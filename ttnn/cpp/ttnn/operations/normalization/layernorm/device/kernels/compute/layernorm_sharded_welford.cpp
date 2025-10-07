@@ -293,6 +293,17 @@ void MAIN {
                         last_block_w);
                 },
                 norm::kernel_util::compute::RSqrtPolicy{!(use_two_stage_reduce && !is_second_stage_reader), eps});
+
+            // Just needed to stay in sync with the readers
+            if (use_two_stage_reduce && !is_second_stage_reader) {
+                // Number of second-stage tiles = 2 * (num_blocks_second_stage - 1)
+                // The -1 is the account for the row-column overlap core
+                // between first stage (row) and second stage (column) (if row major).
+                // The factor of 2 is because each block has 2 tiles (mean, var).
+                constexpr uint32_t num_second_stage_tiles = 2 * (num_blocks_second_stage - 1);
+                cb_wait_front(cb_ex_external, num_second_stage_tiles);
+                cb_pop_front(cb_ex_external, num_second_stage_tiles);
+            }
         }
         cb_push_back(cb_ex, 2 * num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, 2 * num_tiles_per_allgather_worker);
