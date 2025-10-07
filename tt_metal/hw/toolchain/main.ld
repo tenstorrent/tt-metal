@@ -144,7 +144,7 @@ SECTIONS
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
 #if defined(TYPE_KERNEL) && defined(COMPILE_FOR_MAIN_AERISC)
-    /* Add padding at the end of the kernel to prevent instruction cacheline sharing between executions
+    /* Add padding at the end of the kernel to prevent instruction cacheline sharing between executions */
     . += 512;
     . = ALIGN(16);
 #endif

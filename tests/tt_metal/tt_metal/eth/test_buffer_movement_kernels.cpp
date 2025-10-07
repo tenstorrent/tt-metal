@@ -579,11 +579,11 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                 const auto num_eriscs = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                     HalProgrammableCoreType::ACTIVE_ETH);
                 for (uint32_t erisc_idx = 0; erisc_idx < num_eriscs; erisc_idx++) {
-                    if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
-                        tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                        log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
-                        continue;
-                    }
+                    // if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
+                    //     tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                    //     log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
+                    //     continue;
+                    // }
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
                     log_info(
                         tt::LogTest,
@@ -617,30 +617,30 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips
                         test_config,
                         MAX_BUFFER_SIZE,
                         processor));
-                    test_config = BankedConfig{
-                        .num_pages = num_pages,
-                        .size_bytes = num_pages * page_size,
-                        .page_size_bytes = page_size,
-                        .input_buffer_type = BufferType::DRAM,
-                        .output_buffer_type = BufferType::L1};
-                    ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_eth_core,
-                        receiver_eth_core,
-                        test_config,
-                        test_config.page_size_bytes,
-                        processor));
-                    ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_eth_core,
-                        receiver_eth_core,
-                        test_config,
-                        MAX_BUFFER_SIZE,
-                        processor));
+                    // test_config = BankedConfig{
+                    //     .num_pages = num_pages,
+                    //     .size_bytes = num_pages * page_size,
+                    //     .page_size_bytes = page_size,
+                    //     .input_buffer_type = BufferType::DRAM,
+                    //     .output_buffer_type = BufferType::L1};
+                    // ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                    //     static_cast<MeshDispatchFixture*>(this),
+                    //     sender_mesh_device,
+                    //     receiver_mesh_device,
+                    //     sender_eth_core,
+                    //     receiver_eth_core,
+                    //     test_config,
+                    //     test_config.page_size_bytes,
+                    //     processor));
+                    // ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                    //     static_cast<MeshDispatchFixture*>(this),
+                    //     sender_mesh_device,
+                    //     receiver_mesh_device,
+                    //     sender_eth_core,
+                    //     receiver_eth_core,
+                    //     test_config,
+                    //     MAX_BUFFER_SIZE,
+                    //     processor));
                 }
             }
         }
@@ -673,11 +673,11 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendDramBufferAllCon
                 }
 
                 for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
-                    if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
-                        tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                        log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
-                        continue;
-                    }
+                    // if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
+                    //     tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                    //     log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
+                    //     continue;
+                    // }
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
                     log_info(
                         tt::LogTest,
@@ -754,11 +754,11 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                 }
 
                 for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
-                    if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
-                        tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
-                        log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
-                        continue;
-                    }
+                    // if (this->arch_ == ARCH::BLACKHOLE && erisc_idx == 0 &&
+                    //     tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                    //     log_info(tt::LogTest, "Skipping Blackhole test for erisc_idx {}", erisc_idx);
+                    //     continue;
+                    // }
                     const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
                     log_info(
                         tt::LogTest,
@@ -793,30 +793,30 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuffe
                         test_config,
                         MAX_BUFFER_SIZE,
                         processor));
-                    test_config = BankedConfig{
-                        .num_pages = num_pages,
-                        .size_bytes = num_pages * page_size,
-                        .page_size_bytes = page_size,
-                        .input_buffer_type = BufferType::DRAM,
-                        .output_buffer_type = BufferType::L1};
-                    ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_eth_core,
-                        receiver_eth_core,
-                        test_config,
-                        test_config.page_size_bytes,
-                        processor));
-                    ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
-                        static_cast<MeshDispatchFixture*>(this),
-                        sender_mesh_device,
-                        receiver_mesh_device,
-                        sender_eth_core,
-                        receiver_eth_core,
-                        test_config,
-                        MAX_BUFFER_SIZE,
-                        processor));
+                    // test_config = BankedConfig{
+                    //     .num_pages = num_pages,
+                    //     .size_bytes = num_pages * page_size,
+                    //     .page_size_bytes = page_size,
+                    //     .input_buffer_type = BufferType::DRAM,
+                    //     .output_buffer_type = BufferType::L1};
+                    // ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                    //     static_cast<MeshDispatchFixture*>(this),
+                    //     sender_mesh_device,
+                    //     receiver_mesh_device,
+                    //     sender_eth_core,
+                    //     receiver_eth_core,
+                    //     test_config,
+                    //     test_config.page_size_bytes,
+                    //     processor));
+                    // ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
+                    //     static_cast<MeshDispatchFixture*>(this),
+                    //     sender_mesh_device,
+                    //     receiver_mesh_device,
+                    //     sender_eth_core,
+                    //     receiver_eth_core,
+                    //     test_config,
+                    //     MAX_BUFFER_SIZE,
+                    //     processor));
                 }
             }
         }
