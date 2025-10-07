@@ -29,7 +29,7 @@ void create_arc_metrics(
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const std::unique_ptr<TopologyTranslation>& topology_translation,
+    const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
     tt::umd::tt_ClusterDescriptor* cluster_descriptor = cluster->get_cluster_description();
 

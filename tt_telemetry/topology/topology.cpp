@@ -12,7 +12,7 @@ static std::unordered_map<Value, Key> invert_map(const std::unordered_map<Key, V
     return inverse_map;
 }
 
-TopologyTranslation::TopologyTranslation(
+TopologyHelper::TopologyHelper(
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor>& psd) :
     my_host_name(psd->my_host_name()) {
@@ -44,7 +44,7 @@ TopologyTranslation::TopologyTranslation(
     }
 }
 
-std::optional<chip_id_t> TopologyTranslation::get_local_chip_id_for_asic_location_and_tray(
+std::optional<chip_id_t> TopologyHelper::get_local_chip_id_for_asic_location_and_tray(
     tt::tt_metal::ASICLocation asic_location, tt::tt_metal::TrayID tray_id) {
     auto it = asic_location_and_tray_id_to_local_chip_id_.find({asic_location, tray_id});
     if (it == asic_location_and_tray_id_to_local_chip_id_.end()) {
@@ -53,7 +53,7 @@ std::optional<chip_id_t> TopologyTranslation::get_local_chip_id_for_asic_locatio
     return it->second;
 }
 
-std::optional<tt::tt_metal::ASICDescriptor> TopologyTranslation::get_asic_descriptor_for_local_chip(chip_id_t chip_id) {
+std::optional<tt::tt_metal::ASICDescriptor> TopologyHelper::get_asic_descriptor_for_local_chip(chip_id_t chip_id) {
     auto it = local_chip_id_to_asic_descriptor_.find(chip_id);
     if (it == local_chip_id_to_asic_descriptor_.end()) {
         return std::nullopt;

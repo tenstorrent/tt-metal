@@ -23,7 +23,7 @@
 #include <telemetry/metric.hpp>
 #include <tt_metal/fabric/physical_system_descriptor.hpp>
 
-class TopologyTranslation;
+class TopologyHelper;
 
 class ARCUintMetric : public UIntMetric {
 public:
@@ -74,5 +74,5 @@ void create_arc_metrics(
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
-    const std::unique_ptr<TopologyTranslation>& topology_translation,
+    const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal);

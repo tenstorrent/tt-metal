@@ -21,7 +21,7 @@ void create_ethernet_metrics(
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const std::unique_ptr<tt::umd::Cluster>& cluster,
     const tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
-    const std::unique_ptr<TopologyTranslation>& topology_translation,
+    const std::unique_ptr<TopologyHelper>& topology_translation,
     const std::unique_ptr<tt::tt_metal::Hal>& hal) {
     // Get all the Ethernet endpoints on this host that should be present in this cluster according
     // to its factory system descriptor

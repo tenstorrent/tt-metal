@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TODO next: verify that the correct connections are being monitored
-// TODO next: do we need to validate any aggregated information against complete FSD?
 /*
  * main.cpp
  * tt-telemetry main server app.
@@ -15,12 +13,42 @@
  *  metal-wh-13 slots=1
  *  metal-wh-14 slots=1
  *
- * 2. Make sure binaries are in the same place on both machines.
+ * 2. We will need a shell script that uses the MPI rank to determine which command line arguments
+ *    to pass. We want to run one machine as aggregator and the rest as collectors. Here is an
+ *    example script:
+ *
+ *      #!/bin/bash
+ *
+ *      #
+ *      # Run using:
+ *      #
+ *      # mpirun -x TT_METAL_HOME -hostfile hosts.txt ./run_telemetry.sh
+ *      #
+ *
+ *      # Get MPI rank
+ *      RANK=${OMPI_COMM_WORLD_RANK:-0}
+ *
+ *      # Common arguments
+ *      COMMON_ARGS="--fsd=/home/btrzynadlowski/factory_system_descriptor_16_n300_lb.textproto"
+ *
+ *      if [ $RANK -eq 0 ]; then
+ *          # Master node (rank 0) - Aggregator mode
+ *          echo "Starting as AGGREGATOR on rank $RANK"
+ *          exec /home/btrzynadlowski/tt-metal/build/tt_telemetry/tt_telemetry_server \
+ *              $COMMON_ARGS \
+ *              --aggregate-from=ws://metal-wh-14:8081
+ *      else
+ *          # Worker nodes (rank > 0) - Collector mode
+ *          echo "Starting as COLLECTOR on rank $RANK"
+ *          exec /home/btrzynadlowski/tt-metal/build/tt_telemetry/tt_telemetry_server \
+ *              $COMMON_ARGS
+ *      fi
+ *
+ * 2. Make sure binaries and the script are in the same place on both machines.
+ *
  * 3. Use mpirun:
  *
- *  mpirun -x TT_METAL_HOME -hostfile hosts.txt \
- *  /home/btrzynadlowski/tt-metal/build/tt_telemetry/tt_telemetry_server \
- *  --fsd=/home/btrzynadlowski/factory_system_descriptor_16_n300_lb.textproto
+ *      mpirun -x TT_METAL_HOME -hostfile hosts.txt /home/btrzynadlowski/tt-metal/run_telemetry.sh
  */
 
 #include <algorithm>
@@ -200,7 +228,7 @@ int main(int argc, char* argv[]) {
 
     auto result = options.parse(argc, argv);
 
-    if (result.count("help")) {
+    if (result.contains("help")) {
         std::cout << options.help() << std::endl;
         return 0;
     }
@@ -210,14 +238,14 @@ int main(int argc, char* argv[]) {
     int port = result["port"].as<int>();
     int collector_port = result["collector-port"].as<int>();
     std::string metal_src_dir = "";
-    if (result.count("metal-src-dir")) {
+    if (result.contains("metal-src-dir")) {
         metal_src_dir = result["metal-src-dir"].as<std::string>();
     }
     bool telemetry_enabled = !result["disable-telemetry"].as<bool>();
 
     // Are we in collector (collect telemetry and export on collection endpoint) or aggregator
     // (connect to collectors and aggregate) mode?
-    bool aggregator_mode = result.count("aggregate-from");
+    bool aggregator_mode = result.contains("aggregate-from");
     if (!aggregator_mode && !telemetry_enabled) {
         log_error(tt::LogAlways, "Local telemetry collection can only be disabled when in aggregator mode");
         return 1;
@@ -227,7 +255,7 @@ int main(int argc, char* argv[]) {
 
     // Parse aggregate-from endpoints
     std::vector<std::string> aggregate_endpoints;
-    if (result.count("aggregate-from")) {
+    if (result.contains("aggregate-from")) {
         std::string endpoints_str = result["aggregate-from"].as<std::string>();
         aggregate_endpoints = split_comma_separated(endpoints_str);
     }
@@ -267,7 +295,11 @@ int main(int argc, char* argv[]) {
         mock_telemetry.run();
     } else {
         // Real telemetry
-        TT_FATAL(result.count("fsd") > 0, "Factory system descriptor must be provided to collect telemetry");
+        if (!result.contains("fsd")) {
+            log_error(
+                tt::LogAlways, "Factory system descriptor must be provided with --fsd option to collect telemetry");
+            return 1;
+        }
         log_info(tt::LogAlways, "Using real hardware telemetry data");
         auto rtoptions = tt::llrt::RunTimeOptions();
         std::string fsd_filepath = result["fsd"].as<std::string>();

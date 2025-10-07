@@ -29,10 +29,10 @@ struct ASICLocationAndTrayIDHash {
     }
 };
 
-// TODO: I hate this name. Maybe: DeviceIdentification, HardwareIdentification, PhysicalIdentification?
-class TopologyTranslation {
+// TODO: Open to a better name for this
+class TopologyHelper {
 public:
-    TopologyTranslation(
+    TopologyHelper(
         const std::unique_ptr<tt::umd::Cluster>& cluster,
         const std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor>& psd);
     std::optional<chip_id_t> get_local_chip_id_for_asic_location_and_tray(
