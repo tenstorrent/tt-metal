@@ -163,6 +163,8 @@ ttnn::Tensor bound_matmul(
             output_tensor = ttnn::gelu(output_tensor, false, parameters.output_mem_config, optional_output_tensor);
         } else if (op_type == UnaryOpType::SILU) {
             output_tensor = ttnn::silu(output_tensor, parameters.output_mem_config, optional_output_tensor);
+        } else if (op_type == UnaryOpType::RELU6) {
+            output_tensor = ttnn::relu6(output_tensor, parameters.output_mem_config, optional_output_tensor);
         } else {
             TT_THROW("ttnn.matmul: Unsupported activation function");
         }
