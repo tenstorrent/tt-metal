@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import torch
 import ttnn
@@ -441,7 +441,7 @@ class ResBlock:
                 padding_right=1,
                 padding_mode="replicate",
                 secondary_cluster_axis=1,
-                secondary_mesh_shape=(4, 2),
+                secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
             )
             x_NTHWC = vae_neighbor_pad(
                 self.ccl_manager,
@@ -452,7 +452,7 @@ class ResBlock:
                 padding_right=1,
                 padding_mode="replicate",
                 secondary_cluster_axis=0,
-                secondary_mesh_shape=(4, 2),
+                secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
             )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
 
@@ -548,7 +548,9 @@ class CausalUpsampleBlock:
             x = ttnn.reshape(x, [B, T * texp, H * sexp, W * sexp, self.out_channels])
             if texp > 1:
                 # Drop the first temporal_offset frames.
-                x = ttnn.slice(x, [0, temporal_offset, 0, 0, 0], [B, T * texp, H * sexp, W * sexp, self.out_channels])
+                x = ttnn.slice(
+                    x, [0, self.temporal_offset, 0, 0, 0], [B, T * texp, H * sexp, W * sexp, self.out_channels]
+                )
             return x
         else:
             # Workaround for 1) issue #17535 for multi-device reshape,

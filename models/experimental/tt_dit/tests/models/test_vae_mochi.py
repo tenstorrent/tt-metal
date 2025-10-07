@@ -770,5 +770,3 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         ref_output_slice = ref_output[:, :, i, :, :]
         tt_output_torch_slice = tt_output_torch[:, :, i, :, :]
         assert_quality(ref_output_slice, tt_output_torch_slice, pcc=0.995)
-
-        logger.info("assert quality")
