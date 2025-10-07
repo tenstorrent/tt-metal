@@ -62,10 +62,11 @@ int main(int argc, char** argv) {
 
         using distributed::MeshBuffer;
 
-        auto src0_buffer = MeshBuffer::create(mesh_config, device_config, device_ptr);
-        auto src1_buffer = MeshBuffer::create(mesh_config, device_config, device_ptr);
-        auto src2_buffer = MeshBuffer::create(mesh_config, device_config, device_ptr);
-        auto dst_buffer = MeshBuffer::create(mesh_config, device_config, device_ptr);
+        auto c0_buffer = MeshBuffer::create(mesh_config, device_config, device_ptr);
+        auto c1_buffer = MeshBuffer::create(mesh_config, device_config, device_ptr);
+        // c2 is reserved for intermediate result
+        auto c3_buffer = MeshBuffer::create(mesh_config, device_config, device_ptr);
+        auto c4_buffer = MeshBuffer::create(mesh_config, device_config, device_ptr);
 
         // Initialize the input buffers with random data.
         std::mt19937 rng(std::random_device{}());
@@ -86,9 +87,9 @@ int main(int argc, char** argv) {
         }
 
         // Upload the data from host to the device.
-        distributed::EnqueueWriteMeshBuffer(cq, src0_buffer, a_data, false);
-        distributed::EnqueueWriteMeshBuffer(cq, src1_buffer, b_data, false);
-        distributed::EnqueueWriteMeshBuffer(cq, src2_buffer, c_data, false);
+        distributed::EnqueueWriteMeshBuffer(cq, c0_buffer, a_data, false);
+        distributed::EnqueueWriteMeshBuffer(cq, c1_buffer, b_data, false);
+        distributed::EnqueueWriteMeshBuffer(cq, c3_buffer, c_data, false);
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1
         // are used to move data from the reader kernel to the compute kernel. cb_dst is used to move data from the
@@ -98,52 +99,52 @@ int main(int argc, char** argv) {
         // circular buffer, the more memory is used. And Circular buffers are backed by L1(SRAM) memory and L1 is a
         // precious resource. The hardware supports up to 32 circular buffers and they all act the same.
         constexpr uint32_t tiles_per_cb = 2;
-        tt::CBIndex src0_cb_index = tt::CBIndex::c_0;
+
+        // tensor A
         CreateCircularBuffer(
             program,
             cores,
             CircularBufferConfig(
                 /*total_size=*/tiles_per_cb * tile_size_bytes,  // The total size of the circular buffer in bytes
                                                                 /*data_format_spec=*/
-                {{src0_cb_index, tt::DataFormat::Float16_b}})   // The circular buffer index and data format it'll hold
-                .set_page_size(src0_cb_index, tile_size_bytes));  // Since we will be sending one tile at a time, we set
-                                                                  // the page size to the tile size (and thus
-                                                                  // total_size / page_size = tiles_per is the number of
-                                                                  // entries in the circular buffer)
-        tt::CBIndex src1_cb_index = tt::CBIndex::c_1;
-        CreateCircularBuffer(
-            program,
-            cores,
-            CircularBufferConfig(
-                /*total_size=*/tiles_per_cb * tile_size_bytes,
-                /*data_format_spec=*/{{src1_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src1_cb_index, tile_size_bytes));
-        tt::CBIndex src2_cb_index = tt::CBIndex::c_2;
-        CreateCircularBuffer(
-            program,
-            cores,
-            CircularBufferConfig(
-                /*total_size=*/tiles_per_cb * tile_size_bytes,
-                /*data_format_spec=*/{{src2_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src2_cb_index, tile_size_bytes));
+                {{tt::c_0, tt::DataFormat::Float16_b}})         // The circular buffer index and data format it'll hold
+                .set_page_size(tt::c_0, tile_size_bytes));      // Since we will be sending one tile at a time, we set
+                                                                // the page size to the tile size (and thus
+                                                                // total_size / page_size = tiles_per is the number of
+                                                                // entries in the circular buffer)
 
-        tt::CBIndex src3_cb_index = tt::CBIndex::c_3;
+        // tensor B
         CreateCircularBuffer(
             program,
             cores,
             CircularBufferConfig(
                 /*total_size=*/tiles_per_cb * tile_size_bytes,
-                /*data_format_spec=*/{{src3_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src3_cb_index, tile_size_bytes));
-
-        tt::CBIndex dst_cb_index = tt::CBIndex::c_4;
+                /*data_format_spec=*/{{tt::c_1, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::c_1, tile_size_bytes));
+        // intermediate result
         CreateCircularBuffer(
             program,
             cores,
             CircularBufferConfig(
                 /*total_size=*/tiles_per_cb * tile_size_bytes,
-                /*data_format_spec=*/{{dst_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(dst_cb_index, tile_size_bytes));
+                /*data_format_spec=*/{{tt::c_2, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::c_2, tile_size_bytes));
+        // tensor C
+        CreateCircularBuffer(
+            program,
+            cores,
+            CircularBufferConfig(
+                /*total_size=*/tiles_per_cb * tile_size_bytes,
+                /*data_format_spec=*/{{tt::c_3, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::c_3, tile_size_bytes));
+        // result tensor
+        CreateCircularBuffer(
+            program,
+            cores,
+            CircularBufferConfig(
+                /*total_size=*/tiles_per_cb * tile_size_bytes,
+                /*data_format_spec=*/{{tt::c_4, tt::DataFormat::Float16_b}})
+                .set_page_size(tt::c_4, tile_size_bytes));
 
         // Create the reader, writer and compute kernels. The kernels do the following:
         // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
@@ -172,19 +173,14 @@ int main(int argc, char** argv) {
         };
 
         reader_compile_time_args.push_back(tiles_per_cycle);
-        pack_into(*src0_buffer, src0_cb_index, reader_compile_time_args, reader_common_runtime_args);
-        pack_into(*src1_buffer, src1_cb_index, reader_compile_time_args, reader_common_runtime_args);
-        pack_into(*src2_buffer, src2_cb_index, reader_compile_time_args, reader_common_runtime_args);
+        pack_into(*c0_buffer, tt::c_0, reader_compile_time_args, reader_common_runtime_args);
+        pack_into(*c1_buffer, tt::c_1, reader_compile_time_args, reader_common_runtime_args);
+        pack_into(*c3_buffer, tt::c_3, reader_compile_time_args, reader_common_runtime_args);
 
         writer_compile_time_args.push_back(tiles_per_cycle);
-        pack_into(*dst_buffer, dst_cb_index, writer_compile_time_args, writer_common_runtime_args);
+        pack_into(*c4_buffer, tt::c_4, writer_compile_time_args, writer_common_runtime_args);
 
         compute_compile_time_args.push_back(tiles_per_cycle);
-        compute_compile_time_args.push_back(static_cast<uint32_t>(src3_cb_index));
-        compute_compile_time_args.push_back(static_cast<uint32_t>(src0_cb_index));
-        compute_compile_time_args.push_back(static_cast<uint32_t>(src1_cb_index));
-        compute_compile_time_args.push_back(static_cast<uint32_t>(src2_cb_index));
-        compute_compile_time_args.push_back(static_cast<uint32_t>(dst_cb_index));
 
         auto reader = CreateKernel(
             program,
@@ -214,27 +210,24 @@ int main(int argc, char** argv) {
         // Set the runtime arguments for the kernels. This also registers
         // the kernels with the program.
         const auto scalar = std::bit_cast<uint32_t>(static_cast<float>(value));
-        const auto set_runtime_args_for =
-            [&](const CoreRangeSet& group, uint32_t num_tiles, uint32_t group_start_id = 0) {
-                for (const auto& range : group.ranges()) {
-                    for (const auto& core : range) {
-                        SetRuntimeArgs(
-                            program,
-                            reader,
-                            core,
-                            {num_tiles,
-                             group_start_id,
-                             src0_buffer->address(),
-                             src1_buffer->address(),
-                             src2_buffer->address()});
-                        SetRuntimeArgs(program, writer, core, {num_tiles, group_start_id, dst_buffer->address()});
-                        SetRuntimeArgs(program, compute, core, {num_tiles, scalar});
-                        group_start_id += num_tiles;
-                    }
+        const auto set_runtime_args_for = [&](const CoreRangeSet& group,
+                                              uint32_t num_tiles,
+                                              uint32_t group_start_id = 0) {
+            for (const auto& range : group.ranges()) {
+                for (const auto& core : range) {
+                    SetRuntimeArgs(
+                        program,
+                        reader,
+                        core,
+                        {num_tiles, group_start_id, c0_buffer->address(), c1_buffer->address(), c3_buffer->address()});
+                    SetRuntimeArgs(program, writer, core, {num_tiles, group_start_id, c4_buffer->address()});
+                    SetRuntimeArgs(program, compute, core, {num_tiles, scalar});
+                    group_start_id += num_tiles;
                 }
+            }
 
-                return group_start_id;
-            };
+            return group_start_id;
+        };
         const auto start_id_group_2 = set_runtime_args_for(core_group_1, num_tiles_per_core_group_1);
         set_runtime_args_for(core_group_2, num_tiles_per_core_group_2, start_id_group_2);
 
@@ -258,7 +251,7 @@ int main(int argc, char** argv) {
 
         // Read the output buffer and compare it with the expected output.
         std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, true);
+        distributed::EnqueueReadMeshBuffer(cq, result_vec, c4_buffer, true);
 
         constexpr float eps = 1e-2f;  // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");

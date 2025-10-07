@@ -22,8 +22,8 @@ constexpr auto init_sfpu() {
     return views::transform<(Is + 1)...>(ckernel::init_sfpu);
 }
 
-template <size_t... Is, typename Compute>
-constexpr auto with_cb_ids(Compute compute) {
+template <size_t... Is, typename... Compute>
+constexpr auto with_cb_ids(Compute... compute) {
     return views::transform<0, (Is + 1)...>([=](auto num_tiles_per_cycle, auto... cb_ids) {
         constexpr uint32_t array[]{cb_ids...};
         constexpr auto last = sizeof...(cb_ids) - 1;
@@ -36,7 +36,7 @@ constexpr auto with_cb_ids(Compute compute) {
 
         ckernel::tile_regs_acquire();
 
-        compute(num_tiles_per_cycle, cb_ids...);
+        (..., compute(num_tiles_per_cycle, cb_ids...));
 
         ckernel::tile_regs_release();
 
