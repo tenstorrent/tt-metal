@@ -3046,6 +3046,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const Tensor& sparsity,
     const std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
+    bool is_input_b_sparse,
     Tensor& output_tensor,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
@@ -3099,7 +3100,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto B_A = is_input_a_sparse ? 1 : get_batch_size(ashape);
+    const auto B_A = (is_input_a_sparse && is_input_b_sparse) ? 1 : get_batch_size(ashape);
     const auto B_B = get_batch_size(bshape);
     const uint32_t Mt = ashape[-2] / in0_tile_shape[0];
     const uint32_t Kt = ashape[-1] / in0_tile_shape[1];
@@ -3250,7 +3251,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)B_A,      // batchA
         // sparsity args
         (std::uint32_t)B_B,                               // batchB
-        (std::uint32_t)B_B * (uint32_t)sizeof(uint32_t),  // sparsity_pagesize
+        (std::uint32_t)B_B * (uint32_t)sizeof(uint16_t),  // sparsity_pagesize
         (std::uint32_t)!is_input_a_sparse,                // bcast_A
         (std::uint32_t)!nnz.has_value(),                  // get_batch_from_reader
         // fuse op args
@@ -3285,7 +3286,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)true,     // bcast_B
         // sparsity args
         (std::uint32_t)B_B,                               // batchB
-        (std::uint32_t)B_B * (uint32_t)sizeof(uint32_t),  // sparsity_pagesize
+        (std::uint32_t)B_B * (uint32_t)sizeof(uint16_t),  // sparsity_pagesize
 
         // WRITER
         // out tensor args
@@ -3509,7 +3510,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     uint32_t sparsity_cb_index0 = tt::CBIndex::c_6;
     uint32_t sparsity_cb_index1 = tt::CBIndex::c_7;
 
-    uint32_t sparsity_cb_size = B_B * sizeof(uint32_t);
+    uint32_t sparsity_cb_size = B_B * sizeof(uint16_t);
     tt_metal::CircularBufferConfig sparsity_cb_config0 =
         tt_metal::CircularBufferConfig(sparsity_cb_size, {{sparsity_cb_index0, tt::DataFormat::Float32}})
             .set_page_size(sparsity_cb_index0, sparsity_cb_size);
