@@ -340,6 +340,7 @@ private:
             case 0: cores = all_cores; break;
             case 1: cores = this->generate_subset_of_cores(all_cores, 2); break;
             case 2: cores = this->generate_subset_of_cores(all_cores, 4); break;
+            default: TT_THROW("Invalid random core selection value {}", num);
         }
 
         TT_FATAL(!cores.empty(), "Generated cores cannot be empty");

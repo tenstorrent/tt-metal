@@ -79,10 +79,7 @@ def main():
         conv_padding = (1, 1)
 
         # Set up TT-NN convolution configuration including activation function
-        conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat16,
-            activation=activation,
-        )
+        conv_config = ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16, activation=activation)
 
         # Optional detailed logging for the first sample (shape, config, etc.)
         if log_first_sample:
