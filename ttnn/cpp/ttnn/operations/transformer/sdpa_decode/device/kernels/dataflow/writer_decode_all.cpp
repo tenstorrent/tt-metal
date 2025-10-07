@@ -10,8 +10,6 @@
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
 
-#include "debug/waypoint.h"
-
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
     constexpr uint32_t PNHt = get_compile_time_arg_val(1);  // padded number of heads in tiles
@@ -84,7 +82,7 @@ void kernel_main() {
     auto k_chunk_size_dynamic = Sk_chunk_t_dynamic * tt::constants::TILE_HEIGHT;
 
     // Sequence length assignment
-    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned] = get_runtime_args(
+    auto [PSt, k_num_chunks, k_chunk_start, k_chunk_end, window_start_unaligned, window_start_chunk] = get_runtime_args(
         cur_pos,
         cur_batch,
         core_num_in_reduce,
@@ -141,6 +139,12 @@ void kernel_main() {
     generate_reduce_scaler(cb_zero_in, zero_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
+    if (k_chunk_start == window_start_chunk && (window_start_unaligned % 32 > 0)) {
+        // If this core processes the first chunk and we need to apply sliding window mask, generate it here
+        generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(
+            k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
+    }
+
     if (is_worker) {
         ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
                                           // should not be more than one head per core
@@ -170,15 +174,6 @@ void kernel_main() {
         // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
-
-    // Generate sliding window mask if sliding window is enabled and window_start > 0
-    WAYPOINT("GSWS");
-    if (sliding_window > 0 && window_start_unaligned > 0) {
-        generate_sliding_window_mask<cb_sliding_window_mask_in, PNHt>(
-            k_num_chunks, Sk_chunk_t_dynamic, window_start_unaligned);
-        // generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
-    }
-    WAYPOINT("GSWE");
 
     noc_async_write_barrier();  // #19201 BH hang workaround
 
