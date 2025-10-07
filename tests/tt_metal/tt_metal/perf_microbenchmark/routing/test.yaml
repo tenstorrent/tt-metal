@@ -1,0 +1,20 @@
+Tests:
+
+  - name: "TorusXYLowLatencyMcastEast2Hops"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+      routing_type: LowLatency
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 512
+      num_packets: 1
+      destination:
+        hops:
+          W: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern

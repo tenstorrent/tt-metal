@@ -1,0 +1,59 @@
+Tests:
+
+  - name: UnicastNoCycle
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 15]
+        patterns:
+          - destination:
+              device: [0, 12]
+      - device: [0, 12]
+        patterns:
+          - destination:
+              device: [1, 0]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [1, 3]
+      - device: [1, 3]
+        patterns:
+          - destination:
+              device: [0, 15]
+
+  # ======================================================================================
+  # Test 2: Unicast Has Cycle -> expected cycles from [0, 15] [0, 14] [0, 13] [0, 12] [1, 0] [1, 1] [1, 2] [1, 3]
+  # ======================================================================================
+
+  - name: UnicastHasCycle
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    senders:
+      - device: [0, 15]
+        patterns:
+          - destination:
+              device: [0, 12]
+      - device: [0, 13]
+        patterns:
+          - destination:
+              device: [1, 1]
+      - device: [1, 0]
+        patterns:
+          - destination:
+              device: [1, 3]
+      - device: [1, 2]
+        patterns:
+          - destination:
+              device: [0, 14]

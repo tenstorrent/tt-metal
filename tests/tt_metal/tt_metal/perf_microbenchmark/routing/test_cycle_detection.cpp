@@ -57,95 +57,121 @@ public:
     // IMPORTANT: Keep this in sync with control_plane.cpp::detect_inter_mesh_cycles
     bool detect_inter_mesh_cycles(
         const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs, const std::string& test_name) const {
-        // Type aliases for cycle detection
-        using NodeGraph = std::unordered_map<FabricNodeId, std::vector<FabricNodeId>>;
-        using CyclePath = std::vector<FabricNodeId>;
+        // Ethernet channel edge: a specific channel on a specific node
+        struct EthChannelEdge {
+            FabricNodeId node;
+            chan_id_t channel;
+
+            bool operator==(const EthChannelEdge& other) const {
+                return node == other.node && channel == other.channel;
+            }
+        };
+
+        struct EthChannelEdgeHash {
+            std::size_t operator()(const EthChannelEdge& edge) const {
+                auto h1 = std::hash<uint32_t>{}(*edge.node.mesh_id);
+                auto h2 = std::hash<uint32_t>{}(edge.node.chip_id);
+                auto h3 = std::hash<uint32_t>{}(static_cast<uint32_t>(edge.channel));
+                return h1 ^ (h2 << 1) ^ (h3 << 2);
+            }
+        };
+
+        using EthChannelGraph = std::unordered_map<EthChannelEdge, std::vector<EthChannelEdge>, EthChannelEdgeHash>;
+        using EthChannelPath = std::vector<EthChannelEdge>;
         enum class DFSState { UNVISITED, VISITING, VISITED };
 
         if (traffic_pairs.empty()) {
             return false;
         }
 
-        // Note: In real implementation this would log_debug, but we skip logging in mock
-
         // Build routing graph from traffic pairs
-        NodeGraph routing_graph;
+        EthChannelGraph routing_graph;
 
         for (const auto& [src, dest] : traffic_pairs) {
             try {
-                // Use channel 0 as default - the routing path structure should be the same regardless of channel
-                auto route = get_fabric_route(src, dest, 0);
+                // Use channel 0 as default - the routing path structure should be the same regardless of starting
+                // channel
+                auto route_with_channels = get_fabric_route(src, dest, 0);
 
-                // Convert route to node-only path (ignore channels for cycle detection)
-                std::vector<FabricNodeId> path;
-                for (const auto& [node, channel] : route) {
-                    path.push_back(node);
+                // Need at least 2 hops to form an edge
+                if (route_with_channels.size() < 2) {
+                    continue;
                 }
 
-                // Add edges to routing graph
-                for (size_t i = 0; i < path.size() - 1; ++i) {
-                    FabricNodeId current_node = path[i];
-                    FabricNodeId next_node = path[i + 1];
+                // Add ethernet channel edges to routing graph
+                for (size_t i = 0; i + 1 < route_with_channels.size(); ++i) {
+                    const auto& [from_node, from_channel] = route_with_channels[i];
+                    const auto& [to_node, to_channel] = route_with_channels[i + 1];
 
-                    // Skip self-loops (don't represent actual deadlock conditions)
-                    if (current_node == next_node) {
+                    // Skip self-loops (same node)
+                    if (from_node == to_node) {
                         continue;
                     }
 
-                    // Avoid duplicate edges in routing graph
-                    auto& neighbors = routing_graph[current_node];
-                    if (std::find(neighbors.begin(), neighbors.end(), next_node) == neighbors.end()) {
-                        neighbors.push_back(next_node);
-                    }
+                    EthChannelEdge from_edge{from_node, from_channel};
+                    EthChannelEdge to_edge{to_node, to_channel};
+
+                    // Add edge to routing graph - even duplicates for cycle detection
+                    auto& neighbors = routing_graph[from_edge];
+                    neighbors.push_back(to_edge);
                 }
 
             } catch (const std::exception& e) {
-                // Note: In real implementation this would log_warning, but we skip logging in mock
                 // Continue with other pairs - partial routing graph is still useful
             }
         }
 
         if (routing_graph.empty()) {
-            // Note: In real implementation this would log_warning, but we skip logging in mock
             return false;
         }
 
-        // DFS cycle detection function
+        // DFS cycle detection function for ethernet channel graph
         std::function<bool(
-            const NodeGraph&,
-            FabricNodeId,
-            std::unordered_map<FabricNodeId, DFSState>&,
-            std::vector<FabricNodeId>&,
-            std::vector<CyclePath>&)>
+            const EthChannelGraph&,
+            const EthChannelEdge&,
+            std::unordered_map<EthChannelEdge, DFSState, EthChannelEdgeHash>&,
+            EthChannelPath&,
+            std::vector<EthChannelPath>&,
+            size_t)>
             has_cycle_dfs = [&has_cycle_dfs](
-                                const NodeGraph& graph,
-                                FabricNodeId node,
-                                std::unordered_map<FabricNodeId, DFSState>& state,
-                                std::vector<FabricNodeId>& path,
-                                std::vector<CyclePath>& cycles) -> bool {
-            if (state[node] == DFSState::VISITING) {
-                // Found a back edge - extract the full path including pre-cycle nodes
-                auto cycle_start = std::find(path.begin(), path.end(), node);
+                                const EthChannelGraph& graph,
+                                const EthChannelEdge& edge,
+                                std::unordered_map<EthChannelEdge, DFSState, EthChannelEdgeHash>& state,
+                                EthChannelPath& path,
+                                std::vector<EthChannelPath>& cycles,
+                                size_t depth) -> bool {
+            // Prevent stack overflow
+            if (depth > 10000) {
+                return false;
+            }
+
+            auto state_it = state.find(edge);
+            if (state_it == state.end()) {
+                return false;
+            }
+
+            if (state_it->second == DFSState::VISITING) {
+                // Found a back edge - extract only the cycle loop
+                auto cycle_start = std::find(path.begin(), path.end(), edge);
                 if (cycle_start != path.end()) {
-                    CyclePath cycle(path.begin(), path.end());  // Include full path, not just cycle portion
-                    cycle.push_back(node);  // Close the cycle
+                    EthChannelPath cycle(cycle_start, path.end());  // Only the cycle, not pre-cycle path
+                    cycle.push_back(edge);
                     cycles.push_back(cycle);
                     return true;
                 }
             }
 
-            if (state[node] == DFSState::VISITED) {
+            if (state_it->second == DFSState::VISITED) {
                 return false;
             }
 
-            state[node] = DFSState::VISITING;
-            path.push_back(node);
-
+            state[edge] = DFSState::VISITING;
+            path.push_back(edge);
             bool found_cycle = false;
-            auto neighbors_it = graph.find(node);
+            auto neighbors_it = graph.find(edge);
             if (neighbors_it != graph.end()) {
                 for (const auto& neighbor : neighbors_it->second) {
-                    if (has_cycle_dfs(graph, neighbor, state, path, cycles)) {
+                    if (has_cycle_dfs(graph, neighbor, state, path, cycles, depth + 1)) {
                         found_cycle = true;
                         // Continue exploring to find all cycles
                     }
@@ -153,74 +179,32 @@ public:
             }
 
             path.pop_back();
-            state[node] = DFSState::VISITED;
+            state[edge] = DFSState::VISITED;
             return found_cycle;
         };
 
-        // Detect cycles using DFS
-        std::vector<CyclePath> cycles;
-        std::unordered_map<FabricNodeId, DFSState> state;
+        // Detect cycles using DFS on ethernet channel graph
+        std::vector<EthChannelPath> cycles;
+        std::unordered_map<EthChannelEdge, DFSState, EthChannelEdgeHash> state;
 
-        // Initialize all nodes as unvisited
-        for (const auto& [node, neighbors] : routing_graph) {
-            state[node] = DFSState::UNVISITED;
+        // Initialize all edges as unvisited
+        for (const auto& [edge, neighbors] : routing_graph) {
+            state[edge] = DFSState::UNVISITED;
             for (const auto& neighbor : neighbors) {
                 state[neighbor] = DFSState::UNVISITED;
             }
         }
 
-        // Run DFS from each unvisited node
-        for (const auto& [node, neighbors] : routing_graph) {
-            if (state[node] == DFSState::UNVISITED) {
-                std::vector<FabricNodeId> path;
-                has_cycle_dfs(routing_graph, node, state, path, cycles);
+        // Run DFS from each unvisited edge
+        for (const auto& [edge, neighbors] : routing_graph) {
+            if (state[edge] == DFSState::UNVISITED) {
+                EthChannelPath path;
+                has_cycle_dfs(routing_graph, edge, state, path, cycles, 0);
             }
         }
 
-        // Filter out cycles where the actual cycle loop (not the pre-cycle path) is entirely within one mesh
-        // We only care about cycles where the loop portion crosses mesh boundaries
-        std::vector<CyclePath> inter_mesh_cycles;
-        for (const auto& cycle : cycles) {
-            if (cycle.empty()) {
-                continue;
-            }
-
-            // Find where the cycle actually starts (where the last node appears earlier in the path)
-            size_t cycle_start_idx = cycle.size() - 1;
-            for (size_t i = 0; i < cycle.size() - 1; ++i) {
-                if (cycle[i] == cycle[cycle.size() - 1]) {
-                    cycle_start_idx = i;
-                    break;
-                }
-            }
-
-            // Check if the actual cycle loop crosses mesh boundaries
-            bool cycle_loop_crosses_meshes = false;
-            if (cycle_start_idx < cycle.size() - 1) {
-                MeshId cycle_loop_mesh_id = cycle[cycle_start_idx].mesh_id;
-                for (size_t i = cycle_start_idx; i < cycle.size(); ++i) {
-                    if (cycle[i].mesh_id != cycle_loop_mesh_id) {
-                        cycle_loop_crosses_meshes = true;
-                        break;
-                    }
-                }
-            }
-
-            if (cycle_loop_crosses_meshes) {
-                // This cycle loop crosses mesh boundaries - keep it
-                inter_mesh_cycles.push_back(cycle);
-            }
-            // Note: In real implementation this would log_debug for filtered cycles, but we skip logging in mock
-        }
-
-        // Use filtered cycles
-        cycles = inter_mesh_cycles;
-
-        bool has_cycles = !cycles.empty();
-
-        // Note: In real implementation this would log cycle details, but we skip logging in mock
-
-        return has_cycles;
+        // No filtering - return true if any cycles found
+        return !cycles.empty();
     }
 
 private:

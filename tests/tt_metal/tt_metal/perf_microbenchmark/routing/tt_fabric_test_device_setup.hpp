@@ -253,6 +253,7 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
     bool is_torus_2d_unicast = (config.parameters.topology == tt::tt_fabric::Topology::Torus) &&
                                (config.parameters.is_2D_routing_enabled) &&
                                (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
+    //&& config.parameters.is_dynamic_routing_enabled;
     if (config.hops.has_value() && !is_torus_2d_unicast) {
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
         outgoing_link_indices =

@@ -1444,9 +1444,6 @@ bool ControlPlane::detect_inter_mesh_cycles(
     const std::vector<std::pair<FabricNodeId, FabricNodeId>>& traffic_pairs,
     std::vector<std::vector<FabricNodeId>>& output_cycles,
     const std::string& test_name) const {
-    // Type aliases for node-level cycle detection
-    using NodeGraph = std::unordered_map<FabricNodeId, std::vector<FabricNodeId>>;
-    using CyclePath = std::vector<FabricNodeId>;
     enum class DFSState { UNVISITED, VISITING, VISITED };
 
     if (traffic_pairs.empty()) {
@@ -1456,32 +1453,55 @@ bool ControlPlane::detect_inter_mesh_cycles(
 
     log_debug(tt::LogFabric, "Detecting cycles in {} traffic pairs for test '{}'", traffic_pairs.size(), test_name);
 
-    // Track which flows use which node edges for filtering bidirectional traffic
-    struct DirectedNodeEdge {
-        FabricNodeId from;
-        FabricNodeId to;
-        bool operator==(const DirectedNodeEdge& other) const { return from == other.from && to == other.to; }
+    // An ethernet channel edge: a specific channel on a specific node
+    struct EthChannelEdge {
+        FabricNodeId node;
+        chan_id_t channel;
+
+        bool operator==(const EthChannelEdge& other) const { return node == other.node && channel == other.channel; }
     };
 
-    struct NodeEdgeHash {
-        std::size_t operator()(const DirectedNodeEdge& edge) const {
-            auto h1 = std::hash<uint32_t>{}(*edge.from.mesh_id);
-            auto h2 = std::hash<uint32_t>{}(edge.from.chip_id);
-            auto h3 = std::hash<uint32_t>{}(*edge.to.mesh_id);
-            auto h4 = std::hash<uint32_t>{}(edge.to.chip_id);
-            return h1 ^ (h2 << 1) ^ (h3 << 2) ^ (h4 << 3);
+    struct EthChannelEdgeHash {
+        std::size_t operator()(const EthChannelEdge& edge) const {
+            auto h1 = std::hash<uint32_t>{}(*edge.node.mesh_id);
+            auto h2 = std::hash<uint32_t>{}(edge.node.chip_id);
+            auto h3 = std::hash<uint32_t>{}(static_cast<uint32_t>(edge.channel));
+            return h1 ^ (h2 << 1) ^ (h3 << 2);
         }
     };
 
-    // Track which flows use which node edges for accurate cycle detection
-    std::unordered_map<DirectedNodeEdge, std::vector<std::pair<FabricNodeId, FabricNodeId>>, NodeEdgeHash>
-        edge_to_flows;
-    NodeGraph routing_graph;
+    using EthChannelGraph = std::unordered_map<EthChannelEdge, std::vector<EthChannelEdge>, EthChannelEdgeHash>;
+    using EthChannelPath = std::vector<EthChannelEdge>;
 
+    // Directed edge representation (from -> to)
+    struct DirectedEdge {
+        EthChannelEdge from;
+        EthChannelEdge to;
+
+        bool operator==(const DirectedEdge& other) const { return from == other.from && to == other.to; }
+    };
+
+    struct DirectedEdgeHash {
+        std::size_t operator()(const DirectedEdge& edge) const {
+            EthChannelEdgeHash hasher;
+            auto h1 = hasher(edge.from);
+            auto h2 = hasher(edge.to);
+            return h1 ^ (h2 << 1);
+        }
+    };
+
+    // First pass: collect all flow paths and identify shared DIRECTED edges
+    std::vector<EthChannelPath> flow_paths;
+    std::unordered_map<DirectedEdge, std::vector<size_t>, DirectedEdgeHash>
+        directed_edge_to_flows;  // Which flows use each directed edge
+
+    log_info(tt::LogFabric, "Building ethernet channel routing graph from {} traffic pairs", traffic_pairs.size());
+
+    int pair_idx = 0;
     for (const auto& [src, dest] : traffic_pairs) {
+        log_info(tt::LogFabric, "Processing traffic pair {}: {} -> {}", pair_idx, src, dest);
         try {
-            // Get routing path by trying available channels
-            // We only need the node sequence, not channel details
+            // Get routing path with channel information
             std::vector<std::pair<FabricNodeId, chan_id_t>> route_with_channels;
 
             // Try to find a valid route on any available channel
@@ -1498,37 +1518,50 @@ bool ControlPlane::detect_inter_mesh_cycles(
 
             // If no route found on any channel, skip this pair
             if (!route_found || route_with_channels.empty()) {
-                log_trace(tt::LogFabric, "No route found on any channel for {}->{} during cycle detection", src, dest);
+                log_warning(tt::LogFabric, "No route found for {} -> {}", src, dest);
+                pair_idx++;
                 continue;
             }
 
-            // Extract node path (discard channel information)
-            std::vector<FabricNodeId> node_path;
-            node_path.reserve(route_with_channels.size());
-            for (const auto& [node, channel] : route_with_channels) {
-                node_path.push_back(node);
+            // Need at least 2 hops to form an edge
+            if (route_with_channels.size() < 2) {
+                log_trace(tt::LogFabric, "Route {} -> {} too short (size {})", src, dest, route_with_channels.size());
+                pair_idx++;
+                continue;
             }
 
-            // Add node edges to routing graph AND track which flow uses each edge
-            for (size_t i = 0; i < node_path.size() - 1; ++i) {
-                const FabricNodeId& current_node = node_path[i];
-                const FabricNodeId& next_node = node_path[i + 1];
-
-                // Skip self-loops (don't represent actual deadlock conditions)
-                if (current_node == next_node) {
-                    continue;
+            // Log the route with detailed breakdown
+            std::stringstream route_str;
+            for (size_t i = 0; i < route_with_channels.size(); ++i) {
+                if (i > 0) {
+                    route_str << " -> ";
                 }
+                const auto& [node, chan] = route_with_channels[i];
+                route_str << "M" << *node.mesh_id << ":C" << node.chip_id << ":ch" << static_cast<int>(chan);
+            }
+            log_info(tt::LogFabric, "Route {} -> {}: {}", src, dest, route_str.str());
+            log_info(
+                tt::LogFabric,
+                "  Route has {} hops, will create {} edges",
+                route_with_channels.size(),
+                route_with_channels.size() - 1);
 
-                // Track which flow uses this node edge
-                DirectedNodeEdge edge{current_node, next_node};
-                edge_to_flows[edge].push_back({src, dest});
+            // Build the flow path and track directed edge usage
+            EthChannelPath flow_path;
+            for (size_t i = 0; i < route_with_channels.size(); ++i) {
+                const auto& [node, chan] = route_with_channels[i];
+                EthChannelEdge vertex{node, chan};
+                flow_path.push_back(vertex);
 
-                // Avoid duplicate edges in routing graph
-                auto& neighbors = routing_graph[current_node];
-                if (std::find(neighbors.begin(), neighbors.end(), next_node) == neighbors.end()) {
-                    neighbors.push_back(next_node);
+                // Track directed edges (from -> to)
+                if (i > 0) {
+                    DirectedEdge directed_edge{flow_path[i - 1], vertex};
+                    directed_edge_to_flows[directed_edge].push_back(pair_idx);
                 }
             }
+
+            flow_paths.push_back(flow_path);
+            pair_idx++;
 
         } catch (const std::exception& e) {
             log_warning(
@@ -1538,7 +1571,99 @@ bool ControlPlane::detect_inter_mesh_cycles(
                 dest,
                 test_name,
                 e.what());
-            // Continue with other pairs - partial routing graph is still useful
+            pair_idx++;
+        }
+    }
+
+    if (flow_paths.empty()) {
+        log_warning(tt::LogFabric, "No valid routing paths found for test '{}'", test_name);
+        return false;
+    }
+
+    // Second pass: build channel dependency graph
+    // Key insight: When flows share edges, they create dependencies between their OTHER edges
+    EthChannelGraph routing_graph;
+
+    log_info(tt::LogFabric, "Building channel dependency graph from {} flows", flow_paths.size());
+
+    for (size_t flow_idx = 0; flow_idx < flow_paths.size(); ++flow_idx) {
+        const auto& flow = flow_paths[flow_idx];
+
+        // Add forward edges within this flow
+        for (size_t i = 0; i + 1 < flow.size(); ++i) {
+            const auto& from_edge = flow[i];
+            const auto& to_edge = flow[i + 1];
+
+            // Skip self-loops
+            if (from_edge == to_edge) {
+                continue;
+            }
+
+            routing_graph[from_edge].push_back(to_edge);
+        }
+
+        // Check for shared DIRECTED edges with other flows - this creates cross-flow dependencies
+        for (size_t i = 0; i + 1 < flow.size(); ++i) {
+            DirectedEdge directed_edge{flow[i], flow[i + 1]};
+            const auto& flows_using_edge = directed_edge_to_flows[directed_edge];
+
+            if (flows_using_edge.size() > 1) {
+                // This DIRECTED edge is shared by multiple flows - creates potential circular wait
+                log_info(
+                    tt::LogFabric,
+                    "  Flow {} uses shared directed edge M{}:C{}:ch{} -> M{}:C{}:ch{} (shared with {} other flows)",
+                    flow_idx,
+                    *directed_edge.from.node.mesh_id,
+                    directed_edge.from.node.chip_id,
+                    static_cast<int>(directed_edge.from.channel),
+                    *directed_edge.to.node.mesh_id,
+                    directed_edge.to.node.chip_id,
+                    static_cast<int>(directed_edge.to.channel),
+                    flows_using_edge.size() - 1);
+
+                // Model channel dependency deadlock:
+                // When flows share the same directed edge, they create dependencies between their adjacent edges
+                for (size_t other_flow_idx : flows_using_edge) {
+                    if (other_flow_idx == flow_idx) {
+                        continue;
+                    }
+
+                    const auto& other_flow = flow_paths[other_flow_idx];
+
+                    // Find where the shared directed edge appears in the other flow
+                    size_t other_shared_pos = 0;
+                    bool found = false;
+                    for (size_t j = 0; j + 1 < other_flow.size(); ++j) {
+                        if (other_flow[j] == directed_edge.from && other_flow[j + 1] == directed_edge.to) {
+                            other_shared_pos = j;
+                            found = true;
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        continue;
+                    }
+
+                    // Add dependency: edge after shared in other flow depends on edge before shared in this flow
+                    // This models: other flow is holding resources past the shared edge, waiting for this flow to
+                    // release resources before the shared edge
+                    if (i > 0 && other_shared_pos + 2 < other_flow.size()) {
+                        const auto& this_before_shared = flow[i - 1];
+                        const auto& other_after_shared = other_flow[other_shared_pos + 2];
+
+                        if (!(this_before_shared == other_after_shared)) {
+                            routing_graph[other_after_shared].push_back(this_before_shared);
+                            log_trace(
+                                tt::LogFabric,
+                                "  Added cross-flow dependency: Flow {} vertex after shared -> Flow {} vertex before "
+                                "shared",
+                                other_flow_idx,
+                                flow_idx);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1547,42 +1672,56 @@ bool ControlPlane::detect_inter_mesh_cycles(
         return false;
     }
 
-    // DFS cycle detection function for node graph
+    log_info(tt::LogFabric, "Routing graph has {} channel edges, starting DFS cycle detection", routing_graph.size());
+
+    // DFS cycle detection function for ethernet channel graph
     std::function<bool(
-        const NodeGraph&,
-        FabricNodeId,
-        std::unordered_map<FabricNodeId, DFSState>&,
-        std::vector<FabricNodeId>&,
-        std::vector<CyclePath>&)>
+        const EthChannelGraph&,
+        const EthChannelEdge&,
+        std::unordered_map<EthChannelEdge, DFSState, EthChannelEdgeHash>&,
+        EthChannelPath&,
+        std::vector<EthChannelPath>&,
+        size_t)>
         has_cycle_dfs = [&has_cycle_dfs](
-                            const NodeGraph& graph,
-                            FabricNodeId node,
-                            std::unordered_map<FabricNodeId, DFSState>& state,
-                            std::vector<FabricNodeId>& path,
-                            std::vector<CyclePath>& cycles) -> bool {
-        if (state[node] == DFSState::VISITING) {
-            // Found a back edge - extract the full path including pre-cycle nodes
-            auto cycle_start = std::find(path.begin(), path.end(), node);
+                            const EthChannelGraph& graph,
+                            const EthChannelEdge& edge,
+                            std::unordered_map<EthChannelEdge, DFSState, EthChannelEdgeHash>& state,
+                            EthChannelPath& path,
+                            std::vector<EthChannelPath>& cycles,
+                            size_t depth) -> bool {
+        // Prevent stack overflow
+        if (depth > 10000) {
+            log_warning(tt::LogFabric, "DFS recursion depth limit exceeded");
+            return false;
+        }
+
+        auto state_it = state.find(edge);
+        if (state_it == state.end()) {
+            return false;
+        }
+
+        if (state_it->second == DFSState::VISITING) {
+            // Found a back edge - extract only the cycle loop
+            auto cycle_start = std::find(path.begin(), path.end(), edge);
             if (cycle_start != path.end()) {
-                CyclePath cycle(path.begin(), path.end());  // Include full path, not just cycle portion
-                cycle.push_back(node);  // Close the cycle
+                EthChannelPath cycle(cycle_start, path.end());  // Only the cycle, not pre-cycle path
+                cycle.push_back(edge);
                 cycles.push_back(cycle);
                 return true;
             }
         }
 
-        if (state[node] == DFSState::VISITED) {
+        if (state_it->second == DFSState::VISITED) {
             return false;
         }
 
-        state[node] = DFSState::VISITING;
-        path.push_back(node);
-
+        state[edge] = DFSState::VISITING;
+        path.push_back(edge);
         bool found_cycle = false;
-        auto neighbors_it = graph.find(node);
+        auto neighbors_it = graph.find(edge);
         if (neighbors_it != graph.end()) {
             for (const auto& neighbor : neighbors_it->second) {
-                if (has_cycle_dfs(graph, neighbor, state, path, cycles)) {
+                if (has_cycle_dfs(graph, neighbor, state, path, cycles, depth + 1)) {
                     found_cycle = true;
                     // Continue exploring to find all cycles
                 }
@@ -1590,102 +1729,90 @@ bool ControlPlane::detect_inter_mesh_cycles(
         }
 
         path.pop_back();
-        state[node] = DFSState::VISITED;
+        state[edge] = DFSState::VISITED;
         return found_cycle;
     };
 
-    // Detect cycles using DFS on node graph
-    std::vector<CyclePath> cycles;
-    std::unordered_map<FabricNodeId, DFSState> state;
+    // Detect cycles using DFS on ethernet channel graph
+    std::vector<EthChannelPath> cycles;
+    std::unordered_map<EthChannelEdge, DFSState, EthChannelEdgeHash> state;
 
-    // Initialize all nodes as unvisited
-    for (const auto& [node, neighbors] : routing_graph) {
-        state[node] = DFSState::UNVISITED;
+    // Initialize all edges as unvisited
+    for (const auto& [edge, neighbors] : routing_graph) {
+        state[edge] = DFSState::UNVISITED;
         for (const auto& neighbor : neighbors) {
             state[neighbor] = DFSState::UNVISITED;
         }
     }
 
-    // Run DFS from each unvisited node
-    for (const auto& [node, neighbors] : routing_graph) {
-        if (state[node] == DFSState::UNVISITED) {
-            std::vector<FabricNodeId> path;
-            has_cycle_dfs(routing_graph, node, state, path, cycles);
+    // Run DFS from each unvisited edge
+    for (const auto& [edge, neighbors] : routing_graph) {
+        if (state[edge] == DFSState::UNVISITED) {
+            EthChannelPath path;
+            has_cycle_dfs(routing_graph, edge, state, path, cycles, 0);
         }
     }
 
-    // Filter out cycles where the actual cycle loop (not the pre-cycle path) is entirely within one mesh
-    // We only care about cycles where the loop portion crosses mesh boundaries
-    std::vector<CyclePath> inter_mesh_cycles;
-    for (const auto& cycle : cycles) {
-        if (cycle.empty()) {
+    log_info(tt::LogFabric, "DFS completed, found {} raw cycles (no filtering applied)", cycles.size());
+
+    // Convert ethernet channel cycles to node-only cycles
+    std::vector<std::vector<FabricNodeId>> node_cycles;
+    for (const auto& eth_cycle : cycles) {
+        if (eth_cycle.empty()) {
             continue;
         }
 
-        // Find where the cycle actually starts (where the last node appears earlier in the path)
-        size_t cycle_start_idx = cycle.size() - 1;
-        for (size_t i = 0; i < cycle.size() - 1; ++i) {
-            if (cycle[i] == cycle[cycle.size() - 1]) {
-                cycle_start_idx = i;
-                break;
+        // Extract unique nodes from the ethernet channel cycle
+        std::vector<FabricNodeId> node_cycle;
+        for (const auto& edge : eth_cycle) {
+            // Avoid consecutive duplicates
+            if (node_cycle.empty() || node_cycle.back() != edge.node) {
+                node_cycle.push_back(edge.node);
             }
         }
 
-        // Check if the actual cycle loop crosses mesh boundaries
-        bool cycle_loop_crosses_meshes = false;
-        if (cycle_start_idx < cycle.size() - 1) {
-            MeshId cycle_loop_mesh_id = cycle[cycle_start_idx].mesh_id;
-            for (size_t i = cycle_start_idx; i < cycle.size(); ++i) {
-                if (cycle[i].mesh_id != cycle_loop_mesh_id) {
-                    cycle_loop_crosses_meshes = true;
-                    break;
-                }
+        if (!node_cycle.empty()) {
+            // Only keep INTER-MESH cycles - intra-mesh routing is cycle-free by design
+            std::unordered_set<uint32_t> meshes_in_cycle;
+            for (const auto& node : node_cycle) {
+                meshes_in_cycle.insert(*node.mesh_id);
             }
-        }
 
-        if (cycle_loop_crosses_meshes) {
-            // This cycle loop crosses mesh boundaries - keep it
-            inter_mesh_cycles.push_back(cycle);
-        } else {
-            log_debug(
-                tt::LogFabric,
-                "Filtering out intra-mesh cycle loop (mesh {}, loop size {}) - only inter-mesh cycle loops are "
-                "relevant",
-                *cycle[cycle_start_idx].mesh_id,
-                cycle.size() - cycle_start_idx);
+            // Only report cycles that span multiple meshes
+            if (meshes_in_cycle.size() >= 2) {
+                node_cycles.push_back(node_cycle);
+            } else {
+                log_trace(tt::LogFabric, "Filtering out intra-mesh cycle (mesh {})", *node_cycle[0].mesh_id);
+            }
         }
     }
 
-    // Use filtered cycles
-    cycles = inter_mesh_cycles;
-
-    bool has_cycles = !cycles.empty();
+    bool has_cycles = !node_cycles.empty();
 
     if (has_cycles) {
         log_warning(
             tt::LogFabric,
             "Cycle detection found {} cycle(s) in traffic for test '{}' ({} traffic pairs)",
-            cycles.size(),
+            node_cycles.size(),
             test_name,
             traffic_pairs.size());
 
         // Log cycle details
-        for (size_t i = 0; i < cycles.size(); ++i) {
+        for (size_t i = 0; i < node_cycles.size(); ++i) {
             std::stringstream cycle_str;
-            for (size_t j = 0; j < cycles[i].size(); ++j) {
+            for (size_t j = 0; j < node_cycles[i].size(); ++j) {
                 if (j > 0) {
                     cycle_str << " -> ";
                 }
-                const auto& node = cycles[i][j];
-                cycle_str << node;
+                cycle_str << node_cycles[i][j];
             }
             log_debug(tt::LogFabric, "Cycle {}: {}", i + 1, cycle_str.str());
         }
 
         // Convert to output format
-        output_cycles = cycles;
+        output_cycles = node_cycles;
     } else {
-        log_debug(
+        log_info(
             tt::LogFabric,
             "No cycles detected in traffic for test '{}' ({} traffic pairs)",
             test_name,
