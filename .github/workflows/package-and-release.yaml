@@ -261,7 +261,7 @@ jobs:
 
   check-stable-for-new-commits:
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
     steps:
       - name: Checkout stable branch
         uses: actions/checkout@v4
@@ -320,7 +320,7 @@ jobs:
             {
               "ref": "stable",
               "release-type": "rc",
-              "dry-run": "${{ inputs.dry-run || false }}"
+              "dry-run": "${{ inputs.dry-run || 'false' }}"
             }
       - name: Log no action needed
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
@@ -347,5 +347,5 @@ jobs:
             {
               "ref": "${{ needs.create-tag.outputs.version }}",
               "release-type": "prod",
-              "dry-run": "${{ inputs.dry-run || false }}"
+              "dry-run": "${{ inputs.dry-run || 'false' }}"
             }
