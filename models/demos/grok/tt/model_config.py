@@ -59,6 +59,10 @@ class TtModelArgs:
 
         self.num_devices_per_group = 8
 
+        # LM head hyperparameters
+        self.vocab_size = 128 * 1024
+        self.padded_vocab_size = 128 * 1024
+
         # Add missing properties
         self.n_heads = self.num_attention_heads
         self.n_kv_heads = self.num_key_value_heads

@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import math
+
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.demos.grok.tt.ccl import tt_all_reduce
+
+
+class LMHead(LightweightModule):
+    def __init__(
+        self,
+        args,
+        mesh_device,
+        tt_ccl,
+        dtype,
+        state_dict,
+        state_dict_prefix,
+        weight_cache_path,
+        max_columns_per_device,
+    ):
+        super().__init__()
+        self.args = args
+        self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
+        self.dtype = dtype
+        self.vocab_size = args.vocab_size
+        self.padded_vocab_size = args.padded_vocab_size
+        self.num_devices = args.num_devices
+
+        size_per_device = self.vocab_size // self.num_devices
+        self.model_config = args.get_model_config()
+
+        size_per_device = self.padded_vocab_size // self.num_devices
+        num_splits = math.ceil(size_per_device / max_columns_per_device)
+
+        split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
+        split_sizes.append(size_per_device - sum(split_sizes))  # remaining columns
+
+        # Split the output weights
+        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+
+        self.output_weights = []
+        cache_file_name = (
+            None if args.dummy_weights else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0"
+        )
+        padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
+        padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
+
+        memory_config = args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
+        self.output_weights.append(  # (2k, 16k) 128* 1024
+            ttnn.as_tensor(
+                padded_lm_head,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, 2), mesh_shape=args.cluster_shape),
+                layout=ttnn.TILE_LAYOUT,
+                dtype=dtype,
+                memory_config=memory_config,
+                cache_file_name=cache_file_name,
+            )
+        )
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self.program_configs = [
+            (
+                args.dram_matmul_config(
+                    args.tile_padded_batch_rows,  # (8k, 128k) -> (2k, 16k)
+                    args.dim // 4,
+                    16 * 1024,
+                    args.lm_head_core_grid.num_cores,
+                )
+            )
+        ]
+
+    def forward(self, x: ttnn.Tensor):
+        outputs = []
+        for weight, pc in zip(self.output_weights, self.program_configs):
+            output = ttnn.linear(
+                x,
+                weight,
+                compute_kernel_config=self.compute_kernel_config,
+                program_config=pc,
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
+            )
+            outputs.append(
+                ttnn.sharded_to_interleaved(
+                    output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+                )
+            )
+
+        # Concatenate the outputs
+        output = ttnn.concat(
+            outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+        )
+
+        output = tt_all_reduce(
+            output,
+            self.mesh_device,
+            self.tt_ccl,
+            cluster_axis=1,
+            dim=3,
+            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+            num_all_gather_links=self.args.num_all_gather_links,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=self.args.ccl_dtype,
+            sharded=False,
+            use_composite=True,
+        )
+
+        return output
