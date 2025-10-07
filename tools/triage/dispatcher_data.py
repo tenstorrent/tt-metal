@@ -62,6 +62,7 @@ class DispatcherData:
         self._a_kernel_path = next(iter(self.kernels.values())).path
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
         idle_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "idle_erisc")
+        active_erisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "active_erisc")
 
         # Check if firmware elf paths exist
         if not os.path.exists(brisc_elf_path):
@@ -70,8 +71,12 @@ class DispatcherData:
         if not os.path.exists(idle_erisc_elf_path):
             raise TTTriageError(f"IDLE ERISC ELF file {idle_erisc_elf_path} does not exist.")
 
+        if not os.path.exists(active_erisc_elf_path):
+            raise TTTriageError(f"ACTIVE ERISC ELF file {active_erisc_elf_path} does not exist.")
+
         self._brisc_elf = elfs_cache[brisc_elf_path]
         self._idle_erisc_elf = elfs_cache[idle_erisc_elf_path]
+        self._active_erisc_elf = elfs_cache[active_erisc_elf_path]
 
         # Check if debug info is obtained correctly
         if not self._brisc_elf:
@@ -81,6 +86,10 @@ class DispatcherData:
         if not self._idle_erisc_elf:
             raise TTTriageError(
                 f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+            )
+        if not self._active_erisc_elf:
+            raise TTTriageError(
+                f"Failed to extract DWARF info from ELF file {active_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
             )
 
         # Access the value of enumerator for supported blocks
@@ -154,7 +163,7 @@ class DispatcherData:
             enum_values = self._enum_values_tenisx
         else:
             # For eth, use the idle erisc elf
-            fw_elf = self._idle_erisc_elf
+            fw_elf = self._active_erisc_elf
             programmable_core_type = self._ProgrammableCoreTypes_IDLE_ETH
             enum_values = self._enum_values_eth
 
@@ -251,7 +260,7 @@ class DispatcherData:
             pass
 
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-            firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
+            firmware_path = self._a_kernel_path + "../../../firmware/active_erisc/active_erisc.elf"
         elif proc_name.lower() == "erisc1":
             firmware_path = self._a_kernel_path + "../../../firmware/subordinate_idle_erisc/subordinate_idle_erisc.elf"
         else:
@@ -260,7 +269,7 @@ class DispatcherData:
 
         if kernel:
             if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+                kernel_path = kernel.path + "/active_erisc/active_erisc.elf"
             elif proc_name.lower() == "erisc1":
                 kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
             else:

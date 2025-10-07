@@ -644,6 +644,9 @@ TEST_F(MeshDeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
                 if (receiver_device->id() != device_id) {
                     continue;
                 }
+    log_info(
+        tt::LogTest,
+        "Testing with sender core {} ({})and receiver core {} ({})", sender_core, sender_device->ethernet_core_from_logical_core(sender_core), receiver_core, receiver_device->ethernet_core_from_logical_core(receiver_core));
                 ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                     static_cast<MeshDispatchFixture*>(this),
                     sender_mesh_device,
@@ -1009,6 +1012,9 @@ TEST_F(UnitMeshCQMultiDeviceProgramFixture, ActiveEthKernelsDirectSendAllConnect
                     for (int it = 0; it < 100; ++it) {
                         std::cout << "Running test " << it << " for erisc_idx " << erisc_idx << std::endl;
                         const auto processor = static_cast<DataMovementProcessor>(erisc_idx);
+    log_info(
+        tt::LogTest,
+        "Testing with sender core {} ({})and receiver core {} ({})", sender_core, sender_device->ethernet_core_from_logical_core(sender_core), receiver_core, receiver_device->ethernet_core_from_logical_core(receiver_core));
                         ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                             static_cast<MeshDispatchFixture*>(this),
                             sender_mesh_device,

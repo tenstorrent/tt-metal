@@ -984,6 +984,8 @@ void MetalContext::initialize_firmware(
         }
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
+            fmt::println(stderr, "Initializing firmware type {} for core {}", core_type, virtual_core);
+
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             const bool is_active_eth = !is_idle_eth;
             TensixSoftResetOptions reset_val = TENSIX_ASSERT_SOFT_RESET;
