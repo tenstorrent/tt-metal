@@ -18,9 +18,9 @@ from typing import Optional, Tuple, Callable
 OPERATION_TIMEOUT_SECONDS = 15
 LLK_HEADER_PATH = "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary.h"
 INSPECTOR_LOG_PATH = "generated/inspector"
-CPP_OPERATION_CHAIN_SOURCE = "tests/tt_metal/tools/triage/run_operation_chain.cpp"
-CPP_OPERATION_CHAIN_BINARY = "build/test/tools/triage/run_operation_chain_cpp"
-CPP_OPERATION_CHAIN_BINARY_STRIPPED = "build/test/tools/triage/run_operation_chain_cpp_stripped"
+CPP_OPERATION_CHAIN_SOURCE = "tests/ttnn/tools/triage/run_operation_chain.cpp"
+CPP_OPERATION_CHAIN_BINARY = "build/test/ttnn/tools/triage/run_operation_chain_cpp"
+CPP_OPERATION_CHAIN_BINARY_STRIPPED = "build/test/ttnn/tools/triage/run_operation_chain_cpp_stripped"
 BUILD_DIR = "build"  # Symlink to actual build directory (build_Release, build_Debug, etc.)
 
 # ============================================================================
@@ -282,7 +282,7 @@ def start_python_operation_chain() -> subprocess.Popen:
     env["PYTHONUNBUFFERED"] = "1"
 
     return subprocess.Popen(
-        ["python", "-u", "tests/tt_metal/tools/triage/run_operation_chain.py"],
+        ["python", "-u", "tests/ttnn/tools/triage/run_operation_chain.py"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -724,7 +724,7 @@ def test_py_normal_operation_chain(clean_llk_header, clean_device):
     log.step(1, "Running normal operation chain with 30s timeout")
     try:
         result = subprocess.run(
-            ["python", "tests/tt_metal/tools/triage/run_operation_chain.py"],
+            ["python", "tests/ttnn/tools/triage/run_operation_chain.py"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -759,7 +759,7 @@ def test_py_timeout_with_rpc_serialization(clean_device):
     _ = clean_device  # Ensure device is reset before test
     run_timeout_serialization_test(
         test_name="Python",
-        command=["python", "tests/tt_metal/tools/triage/run_operation_chain.py"],
+        command=["python", "tests/ttnn/tools/triage/run_operation_chain.py"],
         callstack_type="python",
     )
 
