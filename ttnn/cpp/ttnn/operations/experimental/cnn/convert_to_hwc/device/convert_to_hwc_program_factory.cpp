@@ -14,11 +14,9 @@ namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
 
-// Helper function to compute alignment requirement based on L1 alignment and element size
 uint32_t compute_alignment_requirement_in_elements(const Tensor& input_tensor) {
     const uint32_t element_size_bytes = input_tensor.element_size();
     const uint32_t l1_alignment_bytes = tt::tt_metal::hal::get_l1_alignment();
-    // Calculate alignment requirement in number of elements
     return l1_alignment_bytes / element_size_bytes;
 }
 
@@ -44,6 +42,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_convert_to_hwc(const Te
         "Shard width must be multiple of tile width (was {})",
         l1_input_shard_width);
     const auto alignment_elements = compute_alignment_requirement_in_elements(output);
+    TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     TT_FATAL(
         output_shard_width % alignment_elements == 0,
         "Output shard width must be multiple of {} to satisfy alignment constraints (was {})",

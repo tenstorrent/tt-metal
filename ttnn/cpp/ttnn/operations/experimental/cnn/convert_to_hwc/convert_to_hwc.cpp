@@ -17,12 +17,13 @@ static tt::tt_metal::MemoryConfig infer_hwc_output_memory_config(const ttnn::Ten
         "Input tensor must be width sharded");
 
     const auto& input_shard_spec = input_memory_config.shard_spec().value();
-    const auto input_shard_height = input_shard_spec.shape[0];
-    const auto input_shard_width = input_shard_spec.shape[1];
+    const int input_shard_height = input_shard_spec.shape[0];
+    const int input_shard_width = input_shard_spec.shape[1];
 
-    const auto output_shard_height = input_shard_width;  // HW dimension per core stays the same
-    const auto alignment_elements = detail::compute_alignment_requirement_in_elements(input_tensor);
-    const auto output_shard_width = tt::round_up(input_shard_height, alignment_elements);
+    const int output_shard_height = input_shard_width;  // HW dimension per core stays the same
+    const int alignment_elements = detail::compute_alignment_requirement_in_elements(input_tensor);
+    TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
+    const int output_shard_width = tt::round_up(input_shard_height, alignment_elements);
 
     const std::array<uint32_t, 2> output_shard_shape = {output_shard_height, output_shard_width};
 
@@ -54,6 +55,7 @@ ttnn::Tensor ExecuteConvertToHWC::invoke(
         }
     }
     const auto alignment_elements = detail::compute_alignment_requirement_in_elements(a);
+    TT_FATAL(alignment_elements != 0, "Number of alignment elements cannot be 0");
     TT_FATAL(
         output_memory_config.shard_spec()->shape[1] % alignment_elements == 0,
         "Output shard width must be rounded up to next multiple of {} to satisfy alignment constraints (width was {})",
