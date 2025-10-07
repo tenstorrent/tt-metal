@@ -245,6 +245,9 @@ void kernel_main() {
 #ifdef SPLIT_READER
             // Update reader index for next iteration (split reader increment)
             start_reader_idx = reader_idx + static_cast<uint32_t>(packed_reader_indices_ptr[reader_idx] & 0xffff) + 1;
+            if (skip_work) {
+                continue;
+            }
 #endif
 #ifdef FUSE_BIAS
             if (load_bias) {
