@@ -32,7 +32,7 @@ run_tg_gpt_oss_tests() {
 
   # GPT-OSS weights for 20B and 120B
   gpt_oss=("/mnt/MLPerf/tt_dnn-models/gpt-oss/GPT-OSS-20B/","/mnt/MLPerf/tt_dnn-models/gpt-oss/GPT-OSS-120B/")
-  for gpt_oss_dir in $gpt_oss; do
+  for gpt_oss_dir in "${gpt_oss[@]}"; do
     GPT_OSS_DIR=$gpt_oss_dir pytest -n auto models/demos/gpt_oss/tests/unit ; fail+=$?
   done
 

@@ -75,7 +75,7 @@ class RMSNorm(nn.Module):
                 dtype=ttnn.bfloat16,
                 stats=tt_gathered_stats,
             )
-            ttnn.deallocate(tt_stats)
+            ttnn.deallocate(tt_gathered_stats)
             return tt_output
         else:
             tt_output = ttnn.rms_norm(
