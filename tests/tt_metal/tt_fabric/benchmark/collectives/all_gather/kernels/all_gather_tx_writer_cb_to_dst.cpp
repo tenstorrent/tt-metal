@@ -60,16 +60,8 @@ void kernel_main() {
     // TEMP (2D API): manual packet header. Post-uplift this becomes implicit.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
 
-    // Set multicast route once using Phase-A hop counts (2D temporary API).
+    // We'll program the multicast route per "stripe" (row) below.
     auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-    fabric_set_mcast_route(
-        reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
-        /*dst_dev_id (ignored)*/ 0,
-        /*dst_mesh_id (ignored)*/ 0,
-        /*e_num_hops*/ e_hops,
-        /*w_num_hops*/ w_hops,
-        /*n_num_hops*/ n_hops,
-        /*s_num_hops*/ s_hops);
 
     sender.open<true>();
 
@@ -79,20 +71,54 @@ void kernel_main() {
         cb_wait_front(CB_ID, 1);
         const uint32_t src_l1_addr = get_read_ptr(CB_ID);
 
-        // Pace transmissions so we don’t overrun the fabric send queue.
-        sender.wait_for_empty_write_slot();
-
         // Compute destination NOC address (DRAM or L1 interleaved)
         uint64_t dest_noc_addr = dst_acc.get_noc_addr(/*page_id=*/i, /*offset=*/0, /*noc=*/0);
 
-        // Build the NOC header for this page (mcast route already set above)
+        // -------- Stripe 0: source row (E/W only) --------
+        sender.wait_for_empty_write_slot();
+        fabric_set_mcast_route(
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
+            /*dst_dev_id (ignored)*/ 0,
+            /*dst_mesh_id (ignored)*/ 0,
+            /*e_num_hops*/ e_hops,
+            /*w_num_hops*/ w_hops,
+            /*n_num_hops*/ 0,
+            /*s_num_hops*/ 0);
         header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
-
-        // TEMP (2D API): payload then header. Will be a single call after uplift
-        // 1) send payload (no header)
         sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-        // 2) send header (completes the packet)
         sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+
+        // -------- Stripes north of source row (k = 1..n_hops) --------
+        for (uint16_t k = 1; k <= n_hops; ++k) {
+            sender.wait_for_empty_write_slot();
+            fabric_set_mcast_route(
+                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
+                /*dst_dev_id (ignored)*/ 0,
+                /*dst_mesh_id (ignored)*/ 0,
+                /*e_num_hops*/ e_hops,
+                /*w_num_hops*/ w_hops,
+                /*n_num_hops*/ k,
+                /*s_num_hops*/ 0);
+            header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+        }
+
+        // -------- Stripes south of source row (k = 1..s_hops) --------
+        for (uint16_t k = 1; k <= s_hops; ++k) {
+            sender.wait_for_empty_write_slot();
+            fabric_set_mcast_route(
+                reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
+                /*dst_dev_id (ignored)*/ 0,
+                /*dst_mesh_id (ignored)*/ 0,
+                /*e_num_hops*/ e_hops,
+                /*w_num_hops*/ w_hops,
+                /*n_num_hops*/ 0,
+                /*s_num_hops*/ k);
+            header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+            sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
+            sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+        }
 
         cb_pop_front(CB_ID, 1);
     }
@@ -103,19 +129,65 @@ void kernel_main() {
     ASSERT(sem_l1_addr != 0);
     const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
+    // Send completion INC along the same stripes.
+    const uint32_t total_groups = 1u + (uint32_t)n_hops + (uint32_t)s_hops;
+    uint32_t group_idx = 0;
+
+    // Source row
+    sender.wait_for_empty_write_slot();
     fabric_set_mcast_route(
         reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
         /*dst_dev_id (ignored)*/ 0,
         /*dst_mesh_id (ignored)*/ 0,
         /*e_num_hops*/ e_hops,
         /*w_num_hops*/ w_hops,
-        /*n_num_hops*/ n_hops,
-        /*s_num_hops*/ s_hops);
-
+        /*n_num_hops*/ 0,
+        /*s_num_hops*/ 0);
     header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+    // Block or flush depending if this is the last group
+    if (++group_idx == total_groups) {
+        sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+    } else {
+        sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+    }
 
-    sender.wait_for_empty_write_slot();
-    sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+    // North rows
+    for (uint16_t k = 1; k <= n_hops; ++k) {
+        sender.wait_for_empty_write_slot();
+        fabric_set_mcast_route(
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
+            /*dst_dev_id (ignored)*/ 0,
+            /*dst_mesh_id (ignored)*/ 0,
+            /*e_num_hops*/ e_hops,
+            /*w_num_hops*/ w_hops,
+            /*n_num_hops*/ k,
+            /*s_num_hops*/ 0);
+        header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+        if (++group_idx == total_groups) {
+            sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
+
+    // South rows
+    for (uint16_t k = 1; k <= s_hops; ++k) {
+        sender.wait_for_empty_write_slot();
+        fabric_set_mcast_route(
+            reinterpret_cast<volatile tt_l1_ptr LowLatencyMeshPacketHeader*>(mh),
+            /*dst_dev_id (ignored)*/ 0,
+            /*dst_mesh_id (ignored)*/ 0,
+            /*e_num_hops*/ e_hops,
+            /*w_num_hops*/ w_hops,
+            /*n_num_hops*/ 0,
+            /*s_num_hops*/ k);
+        header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
+        if (++group_idx == total_groups) {
+            sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
 
     sender.close();
 }
