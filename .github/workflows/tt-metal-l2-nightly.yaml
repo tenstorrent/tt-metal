@@ -159,6 +159,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      invoking-workflow: l2nightly
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_APC_cpp_tests }}
