@@ -128,4 +128,5 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/run_dual_galaxy_tests.sh
+            source ./python_env/bin/activate
+            tt-run --rank-binding tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml --mpi-args "--host g10glx04,g10glx03 --map-by rankfile:file=/etc/mpirun/rankfile --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output" bash -c "source ./python_env/bin/activate && pytest -svv "models/demos/ttnn_resnet/tests/test_perf_e2e_resnet50.py::test_perf""
