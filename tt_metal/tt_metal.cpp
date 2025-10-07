@@ -1126,7 +1126,7 @@ void CreateKernel(
     Program& program,
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const UniversalKernelConfigBuilder& config_builder) {
+    const UnifiedKernelConfigBuilder& config_builder) {
     auto circular_buffers = config_builder.compute_circular_buffers();
     for (const auto& circular_buffer : circular_buffers) {
         CreateCircularBuffer(program, core_spec, circular_buffer);

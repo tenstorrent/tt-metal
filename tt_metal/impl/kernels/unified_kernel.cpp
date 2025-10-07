@@ -1,14 +1,14 @@
-#include <tt-metalium/universal_kernel.hpp>
+#include <tt-metalium/unified_kernel.hpp>
 
 #include <sstream>
 
 namespace tt::tt_metal {
 
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
     std::string name, const Buffer& buffer, tt::DataFormat data_format) {
     return add_buffer(std::move(name), &buffer, data_format);
 }
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
     std::string name, const Buffer* buffer, tt::DataFormat data_format) {
     tensor_data_.emplace_back(
         std::move(name),
@@ -16,15 +16,15 @@ UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
             TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0, data_format});
     return *this;
 }
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
     std::string name, const std::shared_ptr<Buffer>& buffer, tt::DataFormat data_format) {
     return add_buffer(std::move(name), buffer.get(), data_format);
 }
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
     std::string name, const distributed::MeshBuffer& buffer, tt::DataFormat data_format) {
     return add_buffer(std::move(name), &buffer, data_format);
 }
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
     std::string name, const distributed::MeshBuffer* buffer, tt::DataFormat data_format) {
     tensor_data_.emplace_back(
         std::move(name),
@@ -32,12 +32,12 @@ UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
             TensorAccessorArgs(buffer), buffer ? buffer->address() : 0, buffer ? buffer->page_size() : 0, data_format});
     return *this;
 }
-UniversalKernelConfigBuilder& UniversalKernelConfigBuilder::add_buffer(
+UnifiedKernelConfigBuilder& UnifiedKernelConfigBuilder::add_buffer(
     std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer, tt::DataFormat data_format) {
     return add_buffer(std::move(name), buffer.get(), data_format);
 }
 
-size_t UniversalKernelConfigBuilder::get_runtime_arg_idx(const char* name) const {
+size_t UnifiedKernelConfigBuilder::get_runtime_arg_idx(const char* name) const {
     for (size_t i = 0; i < runtime_args_.size(); ++i) {
         if (runtime_args_[i].first == name) {
             return i;
@@ -45,7 +45,7 @@ size_t UniversalKernelConfigBuilder::get_runtime_arg_idx(const char* name) const
     }
     TT_THROW("Runtime argument {} not found", name);
 }
-size_t UniversalKernelConfigBuilder::get_common_runtime_arg_idx(const char* name) const {
+size_t UnifiedKernelConfigBuilder::get_common_runtime_arg_idx(const char* name) const {
     for (size_t i = 0; i < common_runtime_args_.size(); ++i) {
         if (common_runtime_args_[i].first == name) {
             return i;
@@ -53,9 +53,9 @@ size_t UniversalKernelConfigBuilder::get_common_runtime_arg_idx(const char* name
     }
     TT_THROW("Common runtime argument {} not found", name);
 }
-size_t UniversalKernelConfigBuilder::buffer_addresses_start_runtime_arg_idx() const { return runtime_args_.size(); }
+size_t UnifiedKernelConfigBuilder::buffer_addresses_start_runtime_arg_idx() const { return runtime_args_.size(); }
 
-UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
+UnifiedKernelConfig UnifiedKernelConfigBuilder::build() const {
     std::map<std::string, std::string> defines = defines_;
     std::vector<uint32_t> runtime_args;
     std::vector<uint32_t> common_runtime_args;
@@ -137,7 +137,7 @@ UniversalKernelConfig UniversalKernelConfigBuilder::build() const {
     };
 }
 
-std::vector<CircularBufferConfig> UniversalKernelConfigBuilder::compute_circular_buffers() const {
+std::vector<CircularBufferConfig> UnifiedKernelConfigBuilder::compute_circular_buffers() const {
     std::vector<CircularBufferConfig> circular_buffers;
     circular_buffers.reserve(tensor_data_.size());
     for (size_t tensor_idx = 0; tensor_idx < tensor_data_.size(); ++tensor_idx) {

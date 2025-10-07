@@ -80,7 +80,7 @@ int main(int argc, char** argv) {
         distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
         distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
 
-        auto universal_config = UniversalKernelConfigBuilder({.math_fidelity = MathFidelity::HiFi4})
+        auto unified_config = UnifiedKernelConfigBuilder({.math_fidelity = MathFidelity::HiFi4})
             .add_runtime_arg("n_tiles", n_tiles)
             .add_buffer("in0", src0_dram_buffer, tt::DataFormat::Float16_b)
             .add_buffer("in1", src1_dram_buffer, tt::DataFormat::Float16_b)
@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/tiles_add.cpp",
             core,
-            universal_config);
+            unified_config);
 
         // We have setup the program. Now we queue the kernel for execution. The final argument is set to false. This indicates
         // to Metalium that the operation is non-blocking. The function is allowed to return upon the kernel being queued. We must

@@ -8,7 +8,7 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api.h"
 
-#include "universal_common.h"
+#include "unified_common.h"
 
 KERNEL_MAIN {
     INIT_ARGUMENTS

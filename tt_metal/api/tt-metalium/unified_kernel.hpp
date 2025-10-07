@@ -29,7 +29,7 @@ struct MathConfig {
     bool math_approx_mode = false;
 };
 
-struct UniversalKernelConfig {
+struct UnifiedKernelConfig {
     ReaderDataMovementConfig reader_config;
     WriterDataMovementConfig writer_config;
     ComputeConfig compute_config;
@@ -43,65 +43,64 @@ struct GeneratedTileConstant {
     std::string generator_code;
 };
 
-class UniversalKernelConfigBuilder {
+class UnifiedKernelConfigBuilder {
 public:
-    UniversalKernelConfigBuilder(MathConfig math_config = MathConfig{}) : math_config_(std::move(math_config)) {}
+    UnifiedKernelConfigBuilder(MathConfig math_config = MathConfig{}) : math_config_(std::move(math_config)) {}
 
-    UniversalKernelConfigBuilder& set_compile_time_args(
-        std::vector<std::pair<std::string, uint32_t>> compile_time_args) {
+    UnifiedKernelConfigBuilder& set_compile_time_args(std::vector<std::pair<std::string, uint32_t>> compile_time_args) {
         compile_time_args_ = std::move(compile_time_args);
         return *this;
     }
-    UniversalKernelConfigBuilder& add_compile_time_arg(std::string name, uint32_t value) {
+    UnifiedKernelConfigBuilder& add_compile_time_arg(std::string name, uint32_t value) {
         compile_time_args_.emplace_back(std::move(name), value);
         return *this;
     }
-    UniversalKernelConfigBuilder& set_runtime_args(std::vector<std::pair<std::string, uint32_t>> runtime_args) {
+    UnifiedKernelConfigBuilder& set_runtime_args(std::vector<std::pair<std::string, uint32_t>> runtime_args) {
         runtime_args_ = std::move(runtime_args);
         return *this;
     }
-    UniversalKernelConfigBuilder& add_runtime_arg(std::string name, uint32_t value) {
+    UnifiedKernelConfigBuilder& add_runtime_arg(std::string name, uint32_t value) {
         runtime_args_.emplace_back(std::move(name), value);
         return *this;
     }
-    UniversalKernelConfigBuilder& set_common_runtime_args(
+    UnifiedKernelConfigBuilder& set_common_runtime_args(
         std::vector<std::pair<std::string, uint32_t>> common_runtime_args) {
         common_runtime_args_ = std::move(common_runtime_args);
         return *this;
     }
-    UniversalKernelConfigBuilder& add_common_runtime_arg(std::string name, uint32_t value) {
+    UnifiedKernelConfigBuilder& add_common_runtime_arg(std::string name, uint32_t value) {
         common_runtime_args_.emplace_back(std::move(name), value);
         return *this;
     }
-    UniversalKernelConfigBuilder& set_defines(std::map<std::string, std::string> defines) {
+    UnifiedKernelConfigBuilder& set_defines(std::map<std::string, std::string> defines) {
         defines_ = std::move(defines);
         return *this;
     }
-    UniversalKernelConfigBuilder& add_define(std::string name, std::string value) {
+    UnifiedKernelConfigBuilder& add_define(std::string name, std::string value) {
         defines_.emplace(std::move(name), std::move(value));
         return *this;
     }
-    UniversalKernelConfigBuilder& add_generated_tile_constant(GeneratedTileConstant generated_tile_constant) {
+    UnifiedKernelConfigBuilder& add_generated_tile_constant(GeneratedTileConstant generated_tile_constant) {
         generated_tile_constants_.push_back(std::move(generated_tile_constant));
         return *this;
     }
 
-    UniversalKernelConfigBuilder& add_buffer(std::string name, const Buffer& buffer, tt::DataFormat data_format);
-    UniversalKernelConfigBuilder& add_buffer(std::string name, const Buffer* buffer, tt::DataFormat data_format);
-    UniversalKernelConfigBuilder& add_buffer(
+    UnifiedKernelConfigBuilder& add_buffer(std::string name, const Buffer& buffer, tt::DataFormat data_format);
+    UnifiedKernelConfigBuilder& add_buffer(std::string name, const Buffer* buffer, tt::DataFormat data_format);
+    UnifiedKernelConfigBuilder& add_buffer(
         std::string name, const std::shared_ptr<Buffer>& buffer, tt::DataFormat data_format);
-    UniversalKernelConfigBuilder& add_buffer(
+    UnifiedKernelConfigBuilder& add_buffer(
         std::string name, const distributed::MeshBuffer& buffer, tt::DataFormat data_format);
-    UniversalKernelConfigBuilder& add_buffer(
+    UnifiedKernelConfigBuilder& add_buffer(
         std::string name, const distributed::MeshBuffer* buffer, tt::DataFormat data_format);
-    UniversalKernelConfigBuilder& add_buffer(
+    UnifiedKernelConfigBuilder& add_buffer(
         std::string name, const std::shared_ptr<distributed::MeshBuffer>& buffer, tt::DataFormat data_format);
 
     size_t get_runtime_arg_idx(const char* name) const;
     size_t get_common_runtime_arg_idx(const char* name) const;
     size_t buffer_addresses_start_runtime_arg_idx() const;
 
-    UniversalKernelConfig build() const;
+    UnifiedKernelConfig build() const;
     std::vector<CircularBufferConfig> compute_circular_buffers() const;
 
 private:

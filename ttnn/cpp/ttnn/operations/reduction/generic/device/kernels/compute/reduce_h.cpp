@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/reduce.h"
-#include "universal_common.h"
+#include "unified_common.h"
 #include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 

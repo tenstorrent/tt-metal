@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/universal_kernel.hpp>
+#include <tt-metalium/unified_kernel.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -51,46 +51,45 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
     };
-    auto universal_config_base =
-        UniversalKernelConfigBuilder(math_config)
-            .set_defines(reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H))
-            .add_compile_time_arg("Ht", Ht)
-            .add_compile_time_arg("Wt", Wt)
-            .add_compile_time_arg("row_chunk", chunk_size)
-            .add_compile_time_arg("packed_scaler_value", packed_scaler_value)
-            .add_runtime_arg("start_write_page_id", 0)
-            .add_runtime_arg("col_start_tile_id", 0)
-            .add_runtime_arg("curr_col_in_batch", 0)
-            .add_buffer("src0", a.buffer(), src0_data_format)
-            .add_buffer("out", output.buffer(), dst_data_format)
-            .add_generated_tile_constant(GeneratedTileConstant{
-                .name = "scaler_tile",
-                .data_format = DataFormat::Float16_b,
-                .generator_code = "generate_reduce_scaler(scaler_tile_cb, packed_scaler_value)",
-            });
+    auto unified_config_base = UnifiedKernelConfigBuilder(math_config)
+                                   .set_defines(reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H))
+                                   .add_compile_time_arg("Ht", Ht)
+                                   .add_compile_time_arg("Wt", Wt)
+                                   .add_compile_time_arg("row_chunk", chunk_size)
+                                   .add_compile_time_arg("packed_scaler_value", packed_scaler_value)
+                                   .add_runtime_arg("start_write_page_id", 0)
+                                   .add_runtime_arg("col_start_tile_id", 0)
+                                   .add_runtime_arg("curr_col_in_batch", 0)
+                                   .add_buffer("src0", a.buffer(), src0_data_format)
+                                   .add_buffer("out", output.buffer(), dst_data_format)
+                                   .add_generated_tile_constant(GeneratedTileConstant{
+                                       .name = "scaler_tile",
+                                       .data_format = DataFormat::Float16_b,
+                                       .generator_code = "generate_reduce_scaler(scaler_tile_cb, packed_scaler_value)",
+                                   });
 
-    size_t start_write_page_id_idx = universal_config_base.get_runtime_arg_idx("start_write_page_id");
-    size_t col_start_tile_id_idx = universal_config_base.get_runtime_arg_idx("col_start_tile_id");
-    size_t curr_col_in_batch_idx = universal_config_base.get_runtime_arg_idx("curr_col_in_batch");
-    size_t buffer_addresses_start_idx = universal_config_base.buffer_addresses_start_runtime_arg_idx();
+    size_t start_write_page_id_idx = unified_config_base.get_runtime_arg_idx("start_write_page_id");
+    size_t col_start_tile_id_idx = unified_config_base.get_runtime_arg_idx("col_start_tile_id");
+    size_t curr_col_in_batch_idx = unified_config_base.get_runtime_arg_idx("curr_col_in_batch");
+    size_t buffer_addresses_start_idx = unified_config_base.buffer_addresses_start_runtime_arg_idx();
 
-    auto universal_config_group_1 = universal_config_base;
-    universal_config_group_1.add_compile_time_arg("num_cols", num_cols_per_core_group_1);
-    auto universal_config_group_2 = universal_config_base;
-    universal_config_group_2.add_compile_time_arg("num_cols", num_cols_per_core_group_2);
+    auto unified_config_group_1 = unified_config_base;
+    unified_config_group_1.add_compile_time_arg("num_cols", num_cols_per_core_group_1);
+    auto unified_config_group_2 = unified_config_base;
+    unified_config_group_2.add_compile_time_arg("num_cols", num_cols_per_core_group_2);
 
     tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
         core_group_1,
-        universal_config_group_1);
+        unified_config_group_1);
 
     if (!core_group_2.ranges().empty()) {
         tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
             core_group_2,
-            universal_config_group_2);
+            unified_config_group_2);
     }
 
     const auto& cores =

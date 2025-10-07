@@ -27,7 +27,7 @@ using namespace ckernel;
 #define KERNEL_MAIN void kernel_main()
 #endif
 
-namespace universal_kernel::detail {
+namespace unified_kernel::detail {
 
 #ifdef COMPILE_FOR_TRISC
 uint32_t read_pages[TOTAL_NUM_CIRCULAR_BUFFERS];
@@ -113,14 +113,13 @@ FORCE_INLINE void write_tile_impl(
 #endif
 }
 
-}  // namespace universal_kernel::detail
+}  // namespace unified_kernel::detail
 
-#define read_tile(tensor, id) \
-    universal_kernel::detail::read_tile_impl(tensor##_cb, id, tensor, tensor##_page_size_bytes)
+#define read_tile(tensor, id) unified_kernel::detail::read_tile_impl(tensor##_cb, id, tensor, tensor##_page_size_bytes)
 #define write_tile(from_dst_idx, tensor, into_page_id) \
-    universal_kernel::detail::write_tile_impl(from_dst_idx, tensor##_cb, into_page_id, tensor, tensor##_page_size_bytes)
-using ReadTile = universal_kernel::detail::ReadTile;
-using ConstantTile = universal_kernel::detail::ConstantTile;
+    unified_kernel::detail::write_tile_impl(from_dst_idx, tensor##_cb, into_page_id, tensor, tensor##_page_size_bytes)
+using ReadTile = unified_kernel::detail::ReadTile;
+using ConstantTile = unified_kernel::detail::ConstantTile;
 
 template <typename TileA, typename TileB>
 FORCE_INLINE void add_tiles(const TileA& in0, const TileB& in1, uint32_t dst_idx) {
