@@ -168,9 +168,7 @@ def run_broadcast_impl(
             else:
                 device_tensors.append(torch.zeros_like(sender_tensor))
         # Concatenate along cluster_axis to form the mesh tensor
-        print("shape of device_tensors: ", device_tensors[0].shape)
         mesh_tensor_torch = torch.cat(device_tensors, dim=-1)
-        print("shape of mesh_tensor_torch: ", mesh_tensor_torch.shape)
         input_tensor_mesh = ttnn.from_torch(
             mesh_tensor_torch,
             device=mesh_device,
@@ -182,12 +180,10 @@ def run_broadcast_impl(
                 mesh_mapper_config,
             ),
         )
-        print("shape of input_tensor_mesh: ", input_tensor_mesh.shape)
         input_tensor_mesh_list.append(input_tensor_mesh)
 
     tt_out_tensor_list = []
     if trace_mode:
-        print("running trace mode")
         tt_out_tensor = run_with_trace(
             mesh_device,
             sender_coord,
@@ -199,10 +195,8 @@ def run_broadcast_impl(
             subdevice_id=worker_sub_device_id,
         )
         tt_out_tensor_list.append(tt_out_tensor)
-        print("tt_out_tensor_list len here: ", len(tt_out_tensor_list))
     else:
         for i in range(num_iters):
-            print("input of broadcast op shape: ", input_tensor_mesh_list[i].shape)
             tt_out_tensors = ttnn.experimental.broadcast(
                 input_tensor_mesh_list[i],
                 sender_coord=sender_coord,
@@ -211,7 +205,6 @@ def run_broadcast_impl(
                 topology=all_broadcast_topology,
                 subdevice_id=worker_sub_device_id,
             )
-            print("output of broadcast op shape: ", tt_out_tensors.shape)
             tt_out_tensor_list.append(tt_out_tensors)
 
         logger.info(f"Waiting for op")
@@ -220,7 +213,6 @@ def run_broadcast_impl(
 
     passed = True
     # compare tensors
-    print("tt_out_tensor_list length: ", len(tt_out_tensor_list))
     for iter_idx in range(len(tt_out_tensor_list)):
         output_tensor_torch = ttnn.to_torch(
             tt_out_tensor_list[iter_idx],
@@ -238,8 +230,6 @@ def run_broadcast_impl(
             assert (
                 received.shape == sender_tensor.shape
             ), f"Shape mismatch: received {received.shape}, expected {sender_tensor.shape}"
-            print("received tensor: ", received)
-            print("expected tensor: ", sender_tensor)
             if input_dtype == ttnn.bfloat16:
                 eq, output = comp_equal(received, sender_tensor)
             else:
@@ -300,7 +290,6 @@ def test_all_broadcast(
 
     mesh_device = t3k_mesh_device
     mesh_shape = tuple(mesh_device.shape)
-    print(mesh_shape)
     sender_coord_tuple = (0, sender_idx)
     sender_coord = ttnn.MeshCoordinate(sender_coord_tuple)
 
@@ -358,7 +347,6 @@ def test_all_broadcast_trace(
 
     mesh_device = t3k_mesh_device
     mesh_shape = tuple(mesh_device.shape)
-    print(mesh_shape)
     sender_coord_tuple = (0, sender_idx)
     sender_coord = ttnn.MeshCoordinate(sender_coord_tuple)
 
@@ -487,7 +475,6 @@ def test_broadcast_sharded(
         pytest.skip("bfloat8_b not supported for row-major")
     mesh_device = t3k_mesh_device
     mesh_shape = tuple(mesh_device.shape)
-    print(mesh_shape)
     sender_coord_tuple = (0, sender_idx)
     sender_coord = ttnn.MeshCoordinate(sender_coord_tuple)
 
@@ -561,7 +548,6 @@ def test_broadcast_sharded_2x4(
 
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     mesh_shape = tuple(submesh_device.shape)
-    print(mesh_shape)
     sender_coord_tuple = (0, sender_idx)
     sender_coord = ttnn.MeshCoordinate(sender_coord_tuple)
     run_broadcast_impl(

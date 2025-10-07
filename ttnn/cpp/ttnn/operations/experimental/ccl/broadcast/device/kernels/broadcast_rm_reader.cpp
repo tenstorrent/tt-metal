@@ -30,7 +30,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-    DPRINT << "READER RM is sender: " << (uint32_t)is_sender << ENDL();
     if (is_sender) {
         size_t arg_idx = 0;
         // Load the input tensor spec
@@ -79,5 +78,4 @@ void kernel_main() {
             cb_push_back(cb0_id, num_rows_per_packet);
         }
     }
-    DPRINT << "READER RM done" << ENDL();
 }

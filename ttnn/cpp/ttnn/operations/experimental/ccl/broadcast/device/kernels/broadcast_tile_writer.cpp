@@ -44,7 +44,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-    DPRINT << "WRITER tile is sender: " << (uint32_t)is_sender << ENDL();
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
@@ -128,7 +127,6 @@ void kernel_main() {
             fabric_connection,
             sem_route_id,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
-        DPRINT << "num total targets: " << num_total_targets << ENDL();
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
@@ -212,5 +210,4 @@ void kernel_main() {
 
             noc_async_write_barrier();
         }
-    DPRINT << "WRITER tile done" << ENDL();
 }
