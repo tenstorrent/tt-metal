@@ -97,7 +97,7 @@ jobs:
                 echo "create-new-comment=false" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=true" >> $GITHUB_OUTPUT
                 # echo "send-slack-notification=true" >> $GITHUB_OUTPUT  # Slack temporarily disabled
-                echo "send-slack-notification=false" >> $GITHUB_OUTPUT
+                echo "send-slack-notification=true" >> $GITHUB_OUTPUT
                 echo "Command: ping owners"
               else
                 # Default: update existing comment
@@ -563,7 +563,10 @@ jobs:
             SEND_SLACK="${{ needs.parse-comment.outputs.send-slack-notification }}"
           fi
 
-          echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK"
+          # Use hardcoded Slack channel ID
+          SLACK_CHANNEL="C09HT5VSXRB"
+
+          echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
           # Get team members for teams that need approval
           TEAM_MEMBERS=""
@@ -1074,4 +1077,117 @@ jobs:
             fi
           else
             echo "No pending owners to ping"
+          fi
+
+          # Send Slack notification if enabled
+          if [ "$SEND_SLACK" = "true" ] && [ -n "$SELECTED_OWNERS" ]; then
+            echo "Sending Slack notification to channel: $SLACK_CHANNEL"
+
+            # Function to find Slack user ID by full name
+            find_slack_user_id() {
+              local full_name="$1"
+              local github_username="$2"
+
+              # Try to find user by display name first
+              USER_SEARCH_RESPONSE=$(curl -s -X GET \
+                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+                -H "Content-Type: application/json" \
+                "https://slack.com/api/users.list?limit=1000")
+
+              # Check if API call was successful
+              if [ "$(echo "$USER_SEARCH_RESPONSE" | jq -r '.ok')" = "true" ]; then
+                # Try to match by real_name (full name)
+                USER_ID=$(echo "$USER_SEARCH_RESPONSE" | jq -r --arg name "$full_name" '.members[] | select(.real_name == $name or .profile.real_name == $name) | .id' | head -n1)
+
+                # If not found by full name, try by display name
+                if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                  USER_ID=$(echo "$USER_SEARCH_RESPONSE" | jq -r --arg name "$full_name" '.members[] | select(.profile.display_name == $name) | .id' | head -n1)
+                fi
+
+                # If still not found, try by GitHub username in profile
+                if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                  USER_ID=$(echo "$USER_SEARCH_RESPONSE" | jq -r --arg username "$github_username" '.members[] | select(.name == $username or .profile.display_name == $username) | .id' | head -n1)
+                fi
+
+                if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
+                  echo "$USER_ID"
+                else
+                  echo ""
+                fi
+              else
+                echo "Error: Failed to search Slack users: $(echo "$USER_SEARCH_RESPONSE" | jq -r '.error // "Unknown error"')"
+                echo ""
+              fi
+            }
+
+            # Build Slack message with user mentions
+            SLACK_MESSAGE="🔔 *CodeOwners Review Request*\n\nHi"
+            SLACK_USER_MENTIONS=""
+
+            IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_OWNERS"
+            for owner in "${SELECTED_ARRAY[@]}"; do
+              if [ -n "$owner" ]; then
+                # Get full name for this owner (reuse existing logic)
+                USER_API="https://api.github.com/users/$owner"
+                USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_READ_GITHUB_TOKEN }}" \
+                               -H "Accept: application/vnd.github.v3+json" \
+                               "$USER_API" 2>/dev/null)
+                USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                if [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ]; then
+                  USER_NAME="$owner"
+                fi
+
+                # Find Slack user ID
+                SLACK_USER_ID=$(find_slack_user_id "$USER_NAME" "$owner")
+
+                if [ -n "$SLACK_USER_ID" ]; then
+                  SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS <@$SLACK_USER_ID>"
+                else
+                  # Fallback to GitHub username if Slack user not found
+                  SLACK_USER_MENTIONS="$SLACK_USER_MENTIONS @$owner"
+                fi
+              fi
+            done
+
+            SLACK_MESSAGE="$SLACK_MESSAGE$SLACK_USER_MENTIONS!\n\n"
+            SLACK_MESSAGE="$SLACK_MESSAGE📋 *PR:* <${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER|$PR_TITLE>\n"
+            SLACK_MESSAGE="$SLACK_MESSAGE👤 *Author:* $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN)\n"
+            SLACK_MESSAGE="$SLACK_MESSAGE🔍 *Action Required:* This PR needs your code review/approval to proceed with merging.\n\n"
+            SLACK_MESSAGE="$SLACK_MESSAGE_Please review when you have a moment. Thank you! 🚀_"
+
+            # Prepare Slack API payload
+            SLACK_PAYLOAD=$(jq -n \
+              --arg channel "$SLACK_CHANNEL" \
+              --arg text "$SLACK_MESSAGE" \
+              --arg username "CodeOwners Bot" \
+              --arg icon_emoji ":gear:" \
+              '{
+                channel: $channel,
+                text: $text,
+                username: $username,
+                icon_emoji: $icon_emoji,
+                unfurl_links: false,
+                unfurl_media: false
+              }')
+
+            # Send message to Slack
+            SLACK_RESPONSE=$(curl -s -X POST \
+              -H "Authorization: Bearer ${{ secrets.CODEOWNERS_PING_BOT }}" \
+              -H "Content-Type: application/json" \
+              -d "$SLACK_PAYLOAD" \
+              "https://slack.com/api/chat.postMessage")
+
+            # Check if message was sent successfully
+            if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
+              SLACK_TS=$(echo "$SLACK_RESPONSE" | jq -r '.ts')
+              echo "✅ Successfully sent Slack notification to #$SLACK_CHANNEL (message ts: $SLACK_TS)"
+            else
+              SLACK_ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "Unknown error"')
+              echo "❌ Failed to send Slack notification: $SLACK_ERROR"
+              echo "Response: $SLACK_RESPONSE"
+            fi
+          elif [ "$SEND_SLACK" = "true" ] && [ -z "$SELECTED_OWNERS" ]; then
+            echo "Slack notification enabled but no pending owners to notify"
+          else
+            echo "Slack notification disabled"
           fi
