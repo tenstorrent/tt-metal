@@ -557,7 +557,8 @@ void ControlPlane::validate_mesh_connections() const {
 // TODO: update logical_mesh_chip_id_to_physical_chip_id_mapping_ to be updated here probably
 std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     const tt::tt_metal::distributed::MeshContainer<chip_id_t>& mesh_container,
-    std::optional<chip_id_t> nw_corner_chip_id) const {
+    std::optional<chip_id_t> nw_corner_chip_id,
+    std::optional<chip_id_t> ne_corner_chip_id) const {
     // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
     const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
     TT_FATAL(
@@ -592,7 +593,7 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     }
 
     // Handle 2D meshes
-    return convert_2d_mesh_adjacency_to_row_major_vector(topology_info, nw_corner_chip_id);
+    return convert_2d_mesh_adjacency_to_row_major_vector(topology_info, nw_corner_chip_id, ne_corner_chip_id);
 }
 
 std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chip_mapping(
@@ -644,6 +645,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id);
 
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
+            std::optional<chip_id_t> ne_chip_physical_id = std::nullopt;
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             // TODO: remove once we use global physical graph to map logical big mesh to physical chips
             // NOTE: This nw chip may not be set the same for UBB devices when using the Mock Cluster Descriptor
@@ -674,9 +676,16 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
                 nw_chip_physical_id =
                     tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(
                         min_coord.second);
+
+                auto ne_chip_coord = min_coord.second;
+                ne_chip_coord.x += 1;
+                ne_chip_physical_id =
+                    tt::tt_metal::MetalContext::instance().get_cluster().get_physical_chip_id_from_eth_coord(
+                        ne_chip_coord);
             }
 
-            const auto& physical_chip_ids = this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id);
+            const auto& physical_chip_ids =
+                this->get_mesh_physical_chip_ids(mesh_container, nw_chip_physical_id, ne_chip_physical_id);
             std::uint32_t i = 0;
             for (const auto& [_, fabric_chip_id] : mesh_container) {
                 logical_mesh_chip_id_to_physical_chip_id_mapping.emplace(
