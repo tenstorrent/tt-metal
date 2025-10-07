@@ -58,6 +58,8 @@ class TtPanopticDeepLab:
         norm: str = "SyncBN",  # Synchronized Batch Normalization
         # Training configuration
         train_size: Optional[Tuple[int, int]] = None,
+        # Model configurations
+        model_configs=None,
     ):
         """
         Initialize the Panoptic-DeepLab model with unified parameter loading.
@@ -87,7 +89,9 @@ class TtPanopticDeepLab:
         logger.debug("Initializing ResNet backbone with preprocessed parameters")
         # Handle both dict and object parameter formats
         backbone_params = parameters["backbone"] if isinstance(parameters, dict) else parameters.backbone
-        self.backbone = TtResNet(parameters=backbone_params, device=device, dtype=ttnn.bfloat16)
+        self.backbone = TtResNet(
+            parameters=backbone_params, device=device, dtype=ttnn.bfloat16, model_configs=model_configs
+        )
         logger.debug("ResNet backbone initialization complete")
 
         # Define feature map specifications based on ResNet output
@@ -108,6 +112,7 @@ class TtPanopticDeepLab:
             decoder_channels=decoder_channels,
             common_stride=common_stride,
             train_size=train_size,
+            model_configs=model_configs,
         )
         logger.debug("Semantic segmentation head initialization complete")
 
@@ -125,6 +130,7 @@ class TtPanopticDeepLab:
             common_stride=common_stride,
             norm=norm,
             train_size=train_size,
+            model_configs=model_configs,
         )
         logger.debug("Instance embedding head initialization complete")
         logger.debug("TtPanopticDeepLab model initialization complete")

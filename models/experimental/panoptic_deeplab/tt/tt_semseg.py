@@ -32,6 +32,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
         norm: str,
         train_size: Optional[Tuple],
         num_classes: Optional[int] = None,
+        model_configs=None,
     ):
         super().__init__()
         sorted_input_shape = sorted(input_shape.items(), key=lambda x: x[1].stride)
@@ -47,6 +48,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
         self.common_stride = common_stride
         self.decoder_only = num_classes is None
         self.device = device
+        self.model_configs = model_configs
         self.activation = get_ttnn_activation("relu")
 
         self.decoder = {}
@@ -82,6 +84,7 @@ class TtDeepLabV3PlusHead(LightweightModule):
                     activation="relu",
                     dropout=aspp_dropout,
                     parameters=project_conv_params,
+                    model_configs=self.model_configs,
                 )
                 decoder_stage["project_conv"] = project_conv
                 decoder_stage["fuse_conv_0"] = None
@@ -102,7 +105,13 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 )
                 proj_weight = proj_conv_path["weight"] if isinstance(proj_conv_path, dict) else proj_conv_path.weight
                 proj_params = TtConv2dParameters(weight=proj_weight, bias=proj_bias, device=self.device)
-                project_conv = TtConv2d.create(proj_params, stride=(1, 1), padding=(0, 0))
+                project_conv = TtConv2d.create(
+                    proj_params,
+                    stride=(1, 1),
+                    padding=(0, 0),
+                    conv_path=f"decoder.{feature_name}.project_conv",
+                    model_configs=self.model_configs,
+                )
 
                 # Fuse Conv 0
                 fuse_conv_params = base_path["fuse_conv"] if isinstance(base_path, dict) else base_path.fuse_conv
@@ -115,15 +124,61 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 fuse0_weight = fuse0_path["weight"] if isinstance(fuse0_path, dict) else fuse0_path.weight
                 fuse0_params = TtConv2dParameters(weight=fuse0_weight, bias=fuse0_bias, device=self.device)
 
-                fuse_conv_0_no_slice = TtConv2d.create(fuse0_params, stride=(1, 1), padding=(1, 1))
-                if fuse0_params.in_channels == 160:
-                    fuse_conv_0_slice = TtConv2d.create_with_channel_slicing(
-                        fuse0_params, num_slices=5, stride=(1, 1), padding=(1, 1)
+                fuse_conv_0_no_slice = TtConv2d.create(
+                    fuse0_params,
+                    stride=(1, 1),
+                    padding=(1, 1),
+                    conv_path=f"decoder.{feature_name}.fuse_conv.0",
+                    model_configs=self.model_configs,
+                )
+                # Get slice config from model_configs for fuse_conv.0
+                if self.model_configs is not None:
+                    decoder_slice_config = self.model_configs.get_decoder_slice_config(
+                        f"decoder.{feature_name}.fuse_conv.0", iteration_index=0
                     )
+                    if decoder_slice_config["mode"] == "channel":
+                        fuse_conv_0_slice = TtConv2d.create_with_channel_slicing(
+                            fuse0_params,
+                            num_slices=decoder_slice_config["num_slices"],
+                            stride=(1, 1),
+                            padding=(1, 1),
+                            conv_path=f"decoder.{feature_name}.fuse_conv.0",
+                            model_configs=self.model_configs,
+                        )
+                    elif decoder_slice_config["mode"] == "height":
+                        fuse_conv_0_slice = TtConv2d.create_with_height_slicing(
+                            fuse0_params,
+                            num_slices=decoder_slice_config["num_slices"],
+                            stride=(1, 1),
+                            padding=(1, 1),
+                            conv_path=f"decoder.{feature_name}.fuse_conv.0",
+                            model_configs=self.model_configs,
+                        )
+                    else:
+                        fuse_conv_0_slice = fuse_conv_0_no_slice
                 else:
-                    fuse_conv_0_slice = TtConv2d.create_with_height_slicing(
-                        fuse0_params, num_slices=4, stride=(1, 1), padding=(1, 1)
+                    # Fallback to original logic
+                    logger.warning(
+                        f"FALLBACK SEMSEG FUSE_CONV.0: Using original hardcoded logic for decoder.{feature_name}.fuse_conv.0 instead of model_configs"
                     )
+                    if fuse0_params.in_channels == 160:
+                        fuse_conv_0_slice = TtConv2d.create_with_channel_slicing(
+                            fuse0_params,
+                            num_slices=5,
+                            stride=(1, 1),
+                            padding=(1, 1),
+                            conv_path=f"decoder.{feature_name}.fuse_conv.0",
+                            model_configs=self.model_configs,
+                        )
+                    else:
+                        fuse_conv_0_slice = TtConv2d.create_with_height_slicing(
+                            fuse0_params,
+                            num_slices=4,
+                            stride=(1, 1),
+                            padding=(1, 1),
+                            conv_path=f"decoder.{feature_name}.fuse_conv.0",
+                            model_configs=self.model_configs,
+                        )
 
                 # Fuse Conv 1
                 fuse1_path = fuse_conv_params[1]
@@ -135,10 +190,42 @@ class TtDeepLabV3PlusHead(LightweightModule):
                 fuse1_weight = fuse1_path["weight"] if isinstance(fuse1_path, dict) else fuse1_path.weight
                 fuse1_params = TtConv2dParameters(weight=fuse1_weight, bias=fuse1_bias, device=self.device)
 
-                fuse_conv_1_no_slice = TtConv2d.create(fuse1_params, stride=(1, 1), padding=(1, 1))
-                fuse_conv_1_height_slice = TtConv2d.create_with_height_slicing(
-                    fuse1_params, num_slices=2, stride=(1, 1), padding=(1, 1)
+                fuse_conv_1_no_slice = TtConv2d.create(
+                    fuse1_params,
+                    stride=(1, 1),
+                    padding=(1, 1),
+                    conv_path=f"decoder.{feature_name}.fuse_conv.1",
+                    model_configs=self.model_configs,
                 )
+                # Get slice config from model_configs for fuse_conv.1
+                if self.model_configs is not None:
+                    decoder_slice_config = self.model_configs.get_decoder_slice_config(
+                        f"decoder.{feature_name}.fuse_conv.1", iteration_index=0
+                    )
+                    if decoder_slice_config["mode"] == "height":
+                        fuse_conv_1_height_slice = TtConv2d.create_with_height_slicing(
+                            fuse1_params,
+                            num_slices=decoder_slice_config["num_slices"],
+                            stride=(1, 1),
+                            padding=(1, 1),
+                            conv_path=f"decoder.{feature_name}.fuse_conv.1",
+                            model_configs=self.model_configs,
+                        )
+                    else:
+                        fuse_conv_1_height_slice = fuse_conv_1_no_slice
+                else:
+                    # Fallback to original logic
+                    logger.warning(
+                        f"FALLBACK SEMSEG FUSE_CONV.1: Using original hardcoded logic for decoder.{feature_name}.fuse_conv.1 instead of model_configs"
+                    )
+                    fuse_conv_1_height_slice = TtConv2d.create_with_height_slicing(
+                        fuse1_params,
+                        num_slices=2,
+                        stride=(1, 1),
+                        padding=(1, 1),
+                        conv_path=f"decoder.{feature_name}.fuse_conv.1",
+                        model_configs=self.model_configs,
+                    )
 
                 decoder_stage["project_conv"] = project_conv
                 decoder_stage["fuse_conv_0_no_slice"] = fuse_conv_0_no_slice
@@ -260,6 +347,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
         decoder_channels: List[int],
         common_stride: int,
         train_size: Optional[Tuple],
+        model_configs=None,
     ):
         # Handle both dict and object parameter formats
         decoder_params = parameters["decoder"] if isinstance(parameters, dict) else parameters.decoder
@@ -275,6 +363,7 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             decoder_channels=decoder_channels,
             common_stride=common_stride,
             train_size=train_size,
+            model_configs=model_configs,
         )
         assert self.decoder_only
         use_bias = norm == ""
@@ -296,7 +385,30 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             bias=head0_bias,
             device=self.device,
         )
-        self.head_0 = TtConv2d.create_with_height_slicing(head0_params, num_slices=2, stride=(1, 1), padding=(1, 1))
+        # Get slice config from model_configs for head.0
+        if self.model_configs is not None:
+            head_slice_config = self.model_configs.get_head_slice_config("semantic")
+            self.head_0 = TtConv2d.create_with_height_slicing(
+                head0_params,
+                num_slices=head_slice_config["num_slices"],
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="semantic_head.head.0",
+                model_configs=self.model_configs,
+            )
+        else:
+            # Fallback to original logic
+            logger.warning(
+                "FALLBACK SEMSEG HEAD.0: Using original hardcoded logic for semantic_head.head.0 instead of model_configs"
+            )
+            self.head_0 = TtConv2d.create_with_height_slicing(
+                head0_params,
+                num_slices=2,
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="semantic_head.head.0",
+                model_configs=self.model_configs,
+            )
 
         # Head 1
         head1_path = head_params[1]
@@ -311,7 +423,30 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             bias=head1_bias,
             device=self.device,
         )
-        self.head_1 = TtConv2d.create_with_height_slicing(head1_params, num_slices=2, stride=(1, 1), padding=(1, 1))
+        # Get slice config from model_configs for head.1
+        if self.model_configs is not None:
+            head_slice_config = self.model_configs.get_head_slice_config("semantic")
+            self.head_1 = TtConv2d.create_with_height_slicing(
+                head1_params,
+                num_slices=head_slice_config["num_slices"],
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="semantic_head.head.1",
+                model_configs=self.model_configs,
+            )
+        else:
+            # Fallback to original logic
+            logger.warning(
+                "FALLBACK SEMSEG HEAD.1: Using original hardcoded logic for semantic_head.head.1 instead of model_configs"
+            )
+            self.head_1 = TtConv2d.create_with_height_slicing(
+                head1_params,
+                num_slices=2,
+                stride=(1, 1),
+                padding=(1, 1),
+                conv_path="semantic_head.head.1",
+                model_configs=self.model_configs,
+            )
 
         # Predictor
         predictor_params = parameters["predictor"] if isinstance(parameters, dict) else parameters.predictor
@@ -327,7 +462,13 @@ class TtPanopticDeepLabSemSegHead(TtDeepLabV3PlusHead):
             bias=predictor_bias,
             device=self.device,
         )
-        self.predictor = TtConv2d.create(predictor_params, stride=(1, 1), padding=(0, 0))
+        self.predictor = TtConv2d.create(
+            predictor_params,
+            stride=(1, 1),
+            padding=(0, 0),
+            conv_path="semantic_head.predictor",
+            model_configs=self.model_configs,
+        )
 
         self.final_upsample = TtUpsample.create(device=device, scale_factor=common_stride, mode="nearest")
         logger.debug("TtPanopticDeepLabSemSegHead initialization complete")
