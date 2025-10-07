@@ -208,7 +208,6 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
 }
 
 void MeshGraph::initialize_from_mgd(const MeshGraphDescriptor& mgd) {
-    legacy_mode_ = true;
     static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
@@ -409,7 +408,6 @@ const std::vector<std::unordered_map<port_id_t, chip_id_t, hash_pair>>& MeshGrap
 }
 
 void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
-    legacy_mode_ = true;
     std::ifstream fdesc(mesh_graph_desc_file_path);
     TT_FATAL(not fdesc.fail(), "Failed to open file: {}", mesh_graph_desc_file_path);
 
