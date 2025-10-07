@@ -196,10 +196,14 @@ class CompositeOperation(Operation):
         var_names, code_lines, arg_names, consts = self.get_code_lines_and_args()
         args_not_in_var_names = list(dict.fromkeys(arg for arg in arg_names if arg not in var_names))
         args_not_in_var_names = list(args_not_in_var_names) + consts
-        if not self.is_duplicate(fun_body) or not CompositeOperation.prune:
+        if self.id == "main":
+            args_not_in_var_names = [var_name for var_name in args_not_in_var_names if var_name not in consts]
             result = f"{self.output_var_name()} = {self.fun_name}({','.join(args_not_in_var_names)  if len(args_not_in_var_names) > 0 else ''})"
         else:
-            result = f"{self.output_var_name()} = {CompositeOperation.generated_code[fun_body]}({','.join(args_not_in_var_names) if len(args_not_in_var_names) > 0 else ''})"
+            if not self.is_duplicate(fun_body) or not CompositeOperation.prune:
+                result = f"{self.output_var_name()} = {self.fun_name}({','.join(args_not_in_var_names)  if len(args_not_in_var_names) > 0 else ''})"
+            else:
+                result = f"{self.output_var_name()} = {CompositeOperation.generated_code[fun_body]}({','.join(args_not_in_var_names) if len(args_not_in_var_names) > 0 else ''})"
         return result
 
     def get_fun_body(self) -> str:
@@ -211,11 +215,18 @@ class CompositeOperation(Operation):
         args_not_in_var_names = list(args_not_in_var_names)
         new_line = "\n    "
 
-        orig_func = (
-            f"def {self.fun_name}({','.join(args_not_in_var_names) + ', ' if len(args_not_in_var_names) > 0 else ''}{'*args' if len(consts) > 0 else ''}):\n"
-            f"    {new_line.join(code_lines)}\n"
-            f"    return {self.output_var_name()}\n"
-        )
+        if self.id == "main":
+            orig_func = (
+                f"def {self.fun_name}({','.join(args_not_in_var_names) + ', ' if len(args_not_in_var_names) > 0 else ''}{'state_dict' if len(consts) > 0 else ''}):\n"
+                f"    {new_line.join(code_lines)}\n"
+                f"    return {self.output_var_name()}\n"
+            )
+        else:
+            orig_func = (
+                f"def {self.fun_name}({','.join(args_not_in_var_names) + ', ' if len(args_not_in_var_names) > 0 else ''}{'*args' if len(consts) > 0 else ''}):\n"
+                f"    {new_line.join(code_lines)}\n"
+                f"    return {self.output_var_name()}\n"
+            )
 
         new_func = orig_func
         if self.id == "main":
@@ -225,8 +236,12 @@ class CompositeOperation(Operation):
         replace_map = {}
         for idx, arg in enumerate(args_not_in_var_names + var_names):
             replace_map[arg] = f"var{idx}"
-        for idx, arg in enumerate(consts):
-            replace_map[arg] = f"args[{idx}]"
+        if self.id != "main":
+            for idx, arg in enumerate(consts):
+                replace_map[arg] = f"args[{idx}]"
+        else:
+            for idx, arg in enumerate(consts):
+                replace_map[arg] = f"state_dict[{arg}]"
 
         # --- Regex replace in one pass ---
         # Match identifiers whether in code or inside strings
@@ -271,7 +286,10 @@ class CompositeOperation(Operation):
             import_code.extend(op.generate_import_code())
         if not self.is_duplicate():
             CompositeOperation.generated_code[fun_body] = self.fun_name
-            import_code.append("@track_input_output(_tensor_io_log=_tensor_io_log)\n" + new_func)
+            func = new_func
+            if self.id != "main":
+                func = "@track_input_output(_tensor_io_log=_tensor_io_log)\n" + new_func
+            import_code.append(func)
         else:
             CompositeOperation.duplicate_ops[self.fun_name] = CompositeOperation.generated_code[fun_body]
             if not CompositeOperation.prune:
@@ -993,6 +1011,7 @@ def trace_model_structure(
     wrap_operations=True,
     save_original_tensors=True,
     track_params=True,
+    input_tensors=None,
 ) -> OperationGraph:
     """
     Trace the PyTorch model with the given input tensor.
@@ -1019,7 +1038,7 @@ def trace_model_structure(
         model.load_state_dict(wrapped_state_dict, assign=True)
     else:
         Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
-    input_tensors = get_input_tensors(input_shapes, input_dtypes)
+    input_tensors = get_input_tensors(input_shapes, input_dtypes, input_tensors)
     module_calls = {}
     handles = register_module_hooks(model, module_calls=module_calls)
     outputs = model(*input_tensors)

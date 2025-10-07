@@ -89,7 +89,7 @@ def get_parser():
         type=int,
         nargs="+",
         action="append",
-        required=True,
+        required=False,
         help="List of input tensor shapes as space-separated integers (e.g., --input-shape 1 3 640 640 --input-shape 1 3 320 320)",
     )
     parser.add_argument(
@@ -131,7 +131,7 @@ def get_parser():
 def main(args_dict):
     """Main function to trace the model."""
     args = argparse.Namespace(**args_dict)
-
+    input_tensors = None
     if args.model == "yolov8s":
         from ultralytics import YOLO
 
@@ -279,32 +279,39 @@ def main(args_dict):
 
         model_name = "meta-llama/Llama-2-7b-hf"
         torch_model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto")
-
+    if input_tensors is None:
+        input_shapes = args.input_shape
+        assert input_shapes is not None, "Input shapes must be provided."
+    else:
+        assert args.input_shape is None, "Input shapes should not be provided when input tensors are given."
+        input_shapes = [list(tensor.shape) for tensor in input_tensors]
     # torch_model = CustomClass()
     torch_model.eval()
     if not args.model == "sentence_bert" and not args.disable_torch_summary:
         print("Started torch summary: ")
-        summary(torch_model, input_size=args.input_shape, dtypes=[eval(f"torch.{dtype}") for dtype in args.input_dtype])
+        summary(torch_model, input_size=input_shapes, dtypes=[eval(f"torch.{dtype}") for dtype in args.input_dtype])
         print("Finished torch summary.\n\n\n")
     print("Started info tracing: ")
     if args.maintain_module_structure:
         operation_graph = trace_model_structure(
             torch_model,
-            args.input_shape,
+            input_shapes,
             input_dtypes=args.input_dtype,
             dump_visualization=True,
             save_original_tensors=not args.no_infer,
             track_params=not args.no_track_params,
+            input_tensors=input_tensors,
         )
         file_name = "clustered_graph.py"
     else:
         operation_graph = trace_torch_model(
             torch_model,
-            args.input_shape,
+            input_shapes,
             input_dtypes=args.input_dtype,
             dump_visualization=True,
             save_original_tensors=not args.no_infer,
             track_params=not args.no_track_params,
+            input_tensors=input_tensors,
         )
         file_name = "graph.py"
     if not args.maintain_module_structure:

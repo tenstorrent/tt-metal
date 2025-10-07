@@ -80,7 +80,7 @@ class LazyParams:
                 self.meta = json.load(f)
 
     def __getitem__(self, const_name):
-        if self.fake:
+        if self.fake or (self.data is not None and const_name not in self.data):
             const_meta = self.meta[const_name]
             shape = const_meta["shape"]
             if len(shape) == 0:

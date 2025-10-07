@@ -172,6 +172,7 @@ class TracerData:
             if (
                 self.graph_output_to_node[elem]["op_type"][-1] == "_"
                 or self.graph_output_to_node[elem]["op_type"].split(".Tensor")[0][-1] == "_"
+                or self.graph_output_to_node[elem]["op_type"].split(".src")[0][-1] == "_"
             ):
                 for parent in data:
                     indirection[parent] = elem
@@ -419,54 +420,17 @@ class Trackable_Tensor(torch.Tensor):
                 self.module_name = module_name
 
     @classmethod
-    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+    def initialize_tracking_info(cls, args, kwargs, rs, func_name, func_module):
+        if "_." in func_name:
+            print(
+                f"Warning: found inplace operation {func_name}. Connections may be incorrect. Please rewrite to avoid inplace operation."
+            )
         tracer = cls.get_tracer_data()  # Use the tracer data instance
-
         id, graph_output_to_input, graph_output_to_node = (
             tracer.get_next_id(),
             tracer.graph_output_to_input,
             tracer.graph_output_to_node,
         )
-
-        def unwrap(e):
-            res = e
-            if isinstance(e, Trackable_Tensor):
-                if Trackable_Tensor.tracer_data.save_original_tensors:
-                    res = e.elem
-                else:
-                    if e.numel() <= 1 and len(e.trackable_shape) == 0:
-                        res = torch.empty(1, device="meta", dtype=e.trackable_dtype)
-                    else:
-                        res = torch.empty(*e.trackable_shape, device="meta", dtype=e.trackable_dtype)
-            else:
-                if isinstance(e, torch.Tensor) and not Trackable_Tensor.tracer_data.save_original_tensors:
-                    res = torch.empty(*e.shape, device="meta", dtype=e.dtype)
-            return res
-
-        def wrap(e):
-            return Trackable_Tensor(e) if isinstance(e, torch.Tensor) else e
-
-        # no_dispatch is only needed if you use enable_python_mode.
-        # It prevents infinite recursion.
-        with no_dispatch():
-            if func.name() == "aten::_local_scalar_dense":
-                print(
-                    "Found item() operation. Please rewrite it to avoid non-deterministic behavior. Tracer tool will continue, but result will be for different graph input."
-                )
-                if Trackable_Tensor.tracer_data.save_original_tensors:
-                    # If the tensor is a Trackable_Tensor, return its elem
-                    return args[0].elem.item() if isinstance(args[0], Trackable_Tensor) else args[0].item()
-                else:
-                    return (
-                        torch.zeros(args[0].trackable_shape, dtype=args[0].trackable_dtype).item()
-                        if isinstance(args[0], Trackable_Tensor)
-                        else args[0].item()
-                    )
-            else:
-                func_args = tree_map(unwrap, args)
-                func_kwargs = tree_map(unwrap, kwargs)
-                func_res = func(*func_args, **func_kwargs)
-                rs = tree_map(wrap, func_res)
         local_id = str(id)
         graph_output_to_input[local_id] = []
         input_shapes = []
@@ -533,15 +497,15 @@ class Trackable_Tensor(torch.Tensor):
             meta["o_dtypes"] = output_dtypes
             graph_output_to_node[local_id] = {
                 "name": None,
-                "op_type": func.name(),
-                "torch_op": {func.__module__},
+                "op_type": func_name,
+                "torch_op": {func_module},
                 "id": local_id,
                 "args": args,
                 "kwargs": kwargs,
                 "meta": meta,
                 "res": new_tensor,
             }
-            return rs
+            return
         else:
             print(f"could not set id for result of operation {id}, not a Trackable_Tensor")
         meta = {}
@@ -551,14 +515,96 @@ class Trackable_Tensor(torch.Tensor):
         meta["o_dtypes"] = output_dtypes
         graph_output_to_node[local_id] = {
             "name": None,
-            "op_type": func.name(),
-            "torch_op": {func.__module__},
+            "op_type": func_name,
+            "torch_op": {func_module},
             "id": local_id,
             "args": args,
             "kwargs": kwargs,
             "meta": meta,
             "res": rs,
         }
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        def unwrap(e):
+            res = e
+            if isinstance(e, Trackable_Tensor):
+                if Trackable_Tensor.tracer_data.save_original_tensors:
+                    res = e.elem
+                else:
+                    if e.numel() <= 1 and len(e.trackable_shape) == 0:
+                        res = torch.empty(1, device="meta", dtype=e.trackable_dtype)
+                    else:
+                        res = torch.empty(*e.trackable_shape, device="meta", dtype=e.trackable_dtype)
+            else:
+                if isinstance(e, torch.Tensor) and not Trackable_Tensor.tracer_data.save_original_tensors:
+                    res = torch.empty(*e.shape, device="meta", dtype=e.dtype)
+            return res
+
+        def wrap(e):
+            return Trackable_Tensor(e) if isinstance(e, torch.Tensor) else e
+
+        # no_dispatch is only needed if you use enable_python_mode.
+        # It prevents infinite recursion.
+        with no_dispatch():
+            if func.name() == "aten::_local_scalar_dense":
+                example = """
+                try:
+                    output = hidden_states.new_trackable_tensor(
+                        hidden_states,
+                        router_indices,
+                        routing_weights,
+                        self.gate_up_proj,
+                        self.gate_up_proj_bias,
+                        self.down_proj,
+                        self.down_proj_bias,
+                        self.alpha,
+                        self.limit,
+                        func_name="gpt_oss_experts",
+                        func_module=self.forward.__module__,
+                        output_shape=hidden_states.shape,
+                        output_dtype=hidden_states.dtype
+                    )
+                    return output
+                except:
+                    pass
+                """
+                print(
+                    "Found item() operation. Please rewrite it to avoid non-deterministic behavior. Tracer tool will continue, but result will be for different graph input."
+                )
+                print("See example below:", example)
+                if Trackable_Tensor.tracer_data.save_original_tensors:
+                    # If the tensor is a Trackable_Tensor, return its elem
+                    return args[0].elem.item() if isinstance(args[0], Trackable_Tensor) else args[0].item()
+                else:
+                    return (
+                        torch.zeros(args[0].trackable_shape, dtype=args[0].trackable_dtype).item()
+                        if isinstance(args[0], Trackable_Tensor)
+                        else args[0].item()
+                    )
+            else:
+                func_args = tree_map(unwrap, args)
+                func_kwargs = tree_map(unwrap, kwargs)
+                func_res = func(*func_args, **func_kwargs)
+                rs = tree_map(wrap, func_res)
+        cls.initialize_tracking_info(args, kwargs, rs, func.name(), func.__module__)
+        return rs
+
+    def new_trackable_tensor(self, *args, func_name, func_module, output_shape, output_dtype, **kwargs):
+        rs = Trackable_Tensor(*args, **kwargs)
+        assert output_shape is not None, "output_shape must be provided"
+        assert output_dtype is not None, "output_dtype must be provided"
+        rs.trackable_shape = output_shape
+        rs.trackable_dtype = output_dtype
+        rs.elem = (
+            torch.ones(*rs.trackable_shape, dtype=rs.trackable_dtype)
+            if Trackable_Tensor.tracer_data.save_original_tensors
+            else None
+        )
+        rs.module_name = None  # Initialize module_name
+        rs.id = "-1"
+        rs.const_name = None
+        self.initialize_tracking_info(args, kwargs, rs, func_name, func_module)
         return rs
 
     def to_frozen(self):
@@ -1103,22 +1149,33 @@ def wrap_state_dict(state_dict):
     return wrapped_state_dict
 
 
-def get_input_tensors(input_shapes, input_dtypes=None):
+def wrap_input_tensor(input_tensors, tensor, index):
+    input_tensor = Trackable_Tensor(tensor)
+    input_tensor.set_id(f"{(index+2)*-1}")
+    input_tensor.elem = tensor.to(input_tensor.device)
+    input_tensor.set_module_name(f"input_tensor_{index}")
+    input_tensors.append(input_tensor)
+
+
+def get_input_tensors(input_shapes, input_dtypes=None, sample_input_tensors=None):
     input_tensors = []
     if input_dtypes is None:
         input_dtypes = [torch.float32] * len(input_shapes)
-    for index, input_shape in enumerate(input_shapes):
-        rand_tensor = (torch.rand(tuple(input_shape))) * 10
-        # create torch dtype from string if input_dtypes is a list of strings
-        if isinstance(input_dtypes[index % len(input_dtypes)], str):
-            input_dtypes[index % len(input_dtypes)] = getattr(torch, input_dtypes[index % len(input_dtypes)])
-        if isinstance(input_dtypes[index % len(input_dtypes)], torch.dtype):
-            rand_tensor = rand_tensor.to(dtype=input_dtypes[index % len(input_dtypes)])
-        input_tensor = Trackable_Tensor(rand_tensor)
-        input_tensor.set_id(f"{(index+2)*-1}")
-        input_tensor.elem = rand_tensor.to(input_tensor.device)
-        input_tensor.set_module_name(f"input_tensor_{index}")
-        input_tensors.append(input_tensor)
+    assert (
+        len(input_shapes) > 0 or sample_input_tensors is not None
+    ), "Input shapes or sample input tensors must be provided"
+    if sample_input_tensors is not None:
+        for index, tensor in enumerate(sample_input_tensors):
+            wrap_input_tensor(input_tensors, tensor, index)
+    else:
+        for index, input_shape in enumerate(input_shapes):
+            rand_tensor = (torch.rand(tuple(input_shape))) * 10
+            # create torch dtype from string if input_dtypes is a list of strings
+            if isinstance(input_dtypes[index % len(input_dtypes)], str):
+                input_dtypes[index % len(input_dtypes)] = getattr(torch, input_dtypes[index % len(input_dtypes)])
+            if isinstance(input_dtypes[index % len(input_dtypes)], torch.dtype):
+                rand_tensor = rand_tensor.to(dtype=input_dtypes[index % len(input_dtypes)])
+            wrap_input_tensor(input_tensors, rand_tensor, index)
     return input_tensors
 
 
@@ -1160,6 +1217,7 @@ def trace_torch_model(
     wrap_operations=True,
     save_original_tensors=True,
     track_params=True,
+    input_tensors=None,
 ) -> OperationGraph:
     """
     Trace the PyTorch model with the given input tensor.
@@ -1186,7 +1244,7 @@ def trace_torch_model(
         model.load_state_dict(wrapped_state_dict, assign=True)
     else:
         Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
-    input_tensors = get_input_tensors(input_shapes, input_dtypes)
+    input_tensors = get_input_tensors(input_shapes, input_dtypes, input_tensors)
     module_calls = {}
     handles = register_module_hooks(model, module_calls=module_calls)
     outputs = model(*input_tensors)

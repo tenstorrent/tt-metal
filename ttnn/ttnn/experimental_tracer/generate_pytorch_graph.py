@@ -94,6 +94,7 @@ class CompositePytorchGraph(PytorchGraph):
         )
         code_lines["main"] = ""
         main_op_code = main_op.generate_code()
+        main_op_code = main_op_code.replace(")", ", params)")
         imports["main"] = [
             "import gzip",
             "import torch",
@@ -129,13 +130,6 @@ class CompositePytorchGraph(PytorchGraph):
             # dump const meta
             with open("const_meta.json", "w") as f:
                 json.dump(const_meta, f, indent=2)
-        for const in CompositeOperation.ALL_CONSTANTS:
-            main_op_code = main_op_code.replace(f" {const},", f"params['{const}'],")
-            main_op_code = main_op_code.replace(f" {const})", f"params['{const}'])")
-            main_op_code = main_op_code.replace(f"({const})", f"(params['{const}'])")
-            main_op_code = main_op_code.replace(f'"{const}",', f"params['{const}'],")
-            main_op_code = main_op_code.replace(f'"{const}")', f"params['{const}'])")
-            main_op_code = main_op_code.replace(f'("{const}")', f"(params['{const}'])")
         code_lines[
             "main"
         ] += f"""
