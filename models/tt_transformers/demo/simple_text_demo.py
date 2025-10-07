@@ -557,6 +557,23 @@ def prepare_generator_args(
             False,  # stress_test
             False,  # enable_trace -> Teacher forcing does not work if it is on
         ),
+        (  # Device Performance Run - Measures the prefill device performance
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            1,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            True,  # token_accuracy
+            False,  # stress_test
+            False,  # enable_trace -> Teacher forcing does not work if it is on
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -576,6 +593,7 @@ def prepare_generator_args(
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
         "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
+        "ci-token-matching",  # device performance testing,
     ],
 )
 @pytest.mark.parametrize(
