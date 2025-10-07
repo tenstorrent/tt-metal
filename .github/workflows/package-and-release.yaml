@@ -1,12 +1,5 @@
 name: Package and release
 on:
-  workflow_call:
-    inputs:
-      dry-run:
-        description: "Dry-run: If true, do not upload tag or draft release."
-        required: false
-        default: false
-        type: boolean
   workflow_dispatch:
     inputs:
       dry-run:
@@ -14,6 +7,12 @@ on:
         required: false
         default: false
         type: boolean
+      release-type:
+        description: "Type of release to create. One of 'dev', 'rc', or 'prod'. If not provided, the type will be inferred from the git ref."
+        required: false
+        default: "dev"
+        type: string
+
   schedule:
     # Create dev every day at EOD of PST Mon-Fri + night of Sunday to kick off
     # dev testing and builds for beginning of work week
@@ -45,27 +44,26 @@ jobs:
       - name: Get is-release-candidate and tag-type
         id: get-is-release-candidate-and-tag-type
         run: |
-          # A workflow dispatch on a tag is considered a release run for us.
-          isReleaseCandidate=${{ !(github.ref_type == 'tag' && github.event_name == 'workflow_dispatch') }}
-          echo "is-release-candidate=$isReleaseCandidate" >> "$GITHUB_OUTPUT"
-
-          # Set tag-type
-          echo "Determining tag-type for GITHUB_REF: ${GITHUB_REF}"
-          echo "isReleaseCandidate: $isReleaseCandidate"
-
-          if [[ "${GITHUB_REF}" == "refs/heads/stable" ]] || [[ "${GITHUB_REF}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+-rc[0-9]+$ ]]; then
-            echo "Matched stable branch or RC tag pattern"
-            if [[ "$isReleaseCandidate" == "true" ]]; then
-              echo "Setting tag-type=rc (release candidate)"
+          if [[ "${{ inputs.release-type }}" != "" && "${{ inputs.release-type }}" != "null" ]]; then
+            if [[ "${{ inputs.release-type }}" != "dev" && "${{ inputs.release-type }}" != "rc" && "${{ inputs.release-type }}" != "prod" ]]; then
+              echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
+              exit 1
+            fi
+            echo "Using provided release-type: ${{ inputs.release-type }}"
+            if [[ "${{ inputs.release-type }}" == "prod" ]]; then
+              echo "is-release-candidate=false" >> "$GITHUB_OUTPUT"
+              echo "tag-type=" >> "$GITHUB_OUTPUT"
+            elif [[ "${{ inputs.release-type }}" == "rc" ]]; then
+              echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
               echo "tag-type=rc" >> "$GITHUB_OUTPUT"
             else
-              echo "Setting tag-type= (production release)"
-              echo "tag-type=" >> "$GITHUB_OUTPUT"
+              echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
+              echo "tag-type=dev" >> "$GITHUB_OUTPUT"
             fi
-          else
-            echo "No stable/RC match - setting tag-type=dev (development build)"
-            echo "tag-type=dev" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "Invalid release-type input: ${{ inputs.release-type }}. Must be one of 'dev', 'rc', or 'prod'."
+          exit 1
 
       - name: Get should-create-release
         id: get-should-create-release
@@ -141,7 +139,7 @@ jobs:
 
 
   create-changelog:
-    needs: [create-tag, build-test-publish]
+    needs: [create-tag]
     permissions: read-all
     runs-on: ubuntu-latest
     steps:
@@ -194,11 +192,11 @@ jobs:
 
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-test-publish]
+    needs: [create-tag, create-release-notes]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -235,3 +233,95 @@ jobs:
             models/docs/MODEL_UPDATES.md
             tt-metalium.tar.gz
           fail_on_unmatched_files: true
+
+  check-stable-for-new-commits:
+    runs-on: ubuntu-latest
+    #Only run on schedule or main branch pushes
+    if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Checkout stable branch
+        uses: actions/checkout@v4
+        with:
+          ref: stable
+          fetch-depth: 0
+      - name: Fetch all tags
+        run: git fetch --tags --force origin
+      - name: Get latest release version
+        id: get-latest-release
+        run: |
+          latestReleaseVersion=$(curl -s https://api.github.com/repos/tenstorrent/tt-metal/releases/latest | jq -r .tag_name)
+          echo "Latest release version: $latestReleaseVersion"
+          echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
+      - name: Check for new commits since latest release
+        id: check-new-commits
+        run: |
+          latestReleaseVersion="${{ steps.get-latest-release.outputs.latest-release-version }}"
+          echo "Latest release version: $latestReleaseVersion"
+
+          # Get the commit hash of the latest release tag
+          latestReleaseCommit=$(git rev-list -n 1 "$latestReleaseVersion" 2>/dev/null || echo "")
+
+          if [ -z "$latestReleaseCommit" ]; then
+            echo "Could not find commit for latest release tag: $latestReleaseVersion"
+            echo "Assuming there are new commits to be safe"
+            echo "has-new-commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Get the latest commit on stable branch
+          stableLatestCommit=$(git rev-parse HEAD)
+
+          echo "Latest release commit: $latestReleaseCommit"
+          echo "Stable branch latest commit: $stableLatestCommit"
+
+          # Check if there are any commits on stable since the latest release
+          newCommitsCount=$(git rev-list --count "$latestReleaseCommit..HEAD" 2>/dev/null || echo "0")
+          echo "Number of new commits since latest release: $newCommitsCount"
+
+          if [ "$newCommitsCount" -gt 0 ]; then
+            echo "Found $newCommitsCount new commits since latest release"
+            echo "has-new-commits=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No new commits found since latest release"
+            echo "has-new-commits=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Trigger RC release workflow
+        #This is only run if there are new commits on stable
+        if: ${{ steps.check-new-commits.outputs.has-new-commits == 'true' }}
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: package-and-release.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: stable
+          inputs: |
+            {
+              "release-type": "rc",
+              "dry-run": "${{ inputs.dry-run || 'false' }}"
+            }
+      - name: Log no action needed
+        if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
+        run: |
+          echo "No new commits found since latest release. No RC release needed."
+
+  trigger-prod-after-rc-success:
+    needs: [build-test-publish, release-precheck, create-tag]
+    runs-on: ubuntu-latest
+    # Only trigger if we are on an RC and the RC build-test-publish succeeded
+    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+    steps:
+      - name: Wait for RC workflow completion
+        run: |
+          echo "RC build-test-publish completed successfully"
+          echo "RC was built on tag: ${{ needs.create-tag.outputs.version }}"
+          echo "Preparing to trigger prod release workflow on the same commit"
+      - name: Trigger prod release workflow on same commit
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: package-and-release.yaml
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ needs.create-tag.outputs.version }}
+          inputs: |
+            {
+              "release-type": "prod",
+              "dry-run": "${{ inputs.dry-run || 'false' }}"
+            }
