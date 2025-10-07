@@ -22,6 +22,7 @@ void py_bind_llama_rs_create_heads(py::module& module) {
                 subdevice_id (ttnn.SubDeviceId): the subdevice id.
                 cluster_axis (number): the cluster axis.
                 mesh_device (ttnn.MeshDevice): the mesh device.
+                topology (ttnn.Topology): Communication topology for the reduce-scatter stage.
                 num_links (number, optional): the number of links. Defaults to `3`.
 
             Keyword Args:
