@@ -3,7 +3,7 @@
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/reduce.h"
-#include "/localdev/vbabic/tt-metal/tt_metal/hw/inc/debug/dprint_tensix.h"
+#include "tt_metal/hw/inc/debug/dprint_tensix.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary.h"
@@ -92,33 +92,26 @@ ALWI void fused_eltwise_binary_reduce(
               EltwiseBinaryReuseDestType::NONE>(i)));
     }
 
-    // for(uint32_t i = 0; i < 8; ++i) { // ispis ok
-    //     dprint_tensix_dest_reg(i);
-    // }
-
     // Step 2: Reset counters before reduce operation
     MATH((_fused_eltwise_binary_uninit_()));
 
     // Step 3: Prepare data for reduce operation
-    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0));  // Move tile 0 to srcA
+    MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0));  // Move tile 0 to srcA
     MATH(ckernel::sfpu::_populate_first_tile_with_ones_());                               // Fill tile 0 with ones
-    // for(uint32_t i = 0; i < 8; ++i) { // ispis ok
-    //     dprint_tensix_dest_reg(i);
-    // }
-    MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0));  // Move tile 0 to srcB
+    MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0));  // Move tile 0 to srcB
 
     // Step 4: Initialize reduce operation
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>()));
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 
     // Step 5: Perform reduce operation (result stored in tile 0)
+    // Note: This compute processes up to 8 tiles in a loop
     uint32_t reduce_dst_idx = 0;
     for (uint32_t i = 0; i < tile_cnt; ++i) {
         if (i != 0) {
-            MATH(eltwise_binary_reuse_dest_as_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i));
+            MATH(eltwise_binary_reuse_dest_as_src_tile<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i));
         }
-        dprint_tensix_dest_reg(0);
-        MATH((llk_math_reduce_fused<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(
+        MATH((llk_math_reduce_column<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(
             reduce_dst_idx)));
         UNPACK((llk_unpack_AB_but_fused_so_no_mop(0, 0, 0, 0)));
     }

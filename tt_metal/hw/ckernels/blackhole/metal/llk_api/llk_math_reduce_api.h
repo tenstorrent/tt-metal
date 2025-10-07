@@ -70,5 +70,23 @@ inline void llk_math_reduce_fused(const uint dst_index, const uint num_faces = 4
         false>(dst_index, false, num_faces);
 }
 
+template <
+    PoolType type,
+    ReduceDim dim,
+    bool is_fp32_dest_acc_en,
+    int num_fidelity_phases = 0,
+    bool is_int_fpu_en = false,
+    bool enforce_fp32_accumulation = false>
+inline void llk_math_reduce_column(const uint dst_index, const uint num_faces = 4) {
+    // For fused operations, set clear_dvalid = false since data valid flags were never set
+    _llk_math_reduce_column_<
+        type,
+        dim,
+        is_fp32_dest_acc_en,
+        num_fidelity_phases,
+        is_int_fpu_en,
+        enforce_fp32_accumulation>(dst_index, false, num_faces);
+}
+
 // **NEW: Clear data valid flags after for loop - used in fused operations**
 inline void llk_math_reduce_clear_dvalid_after_for_loop() { _llk_math_reduce_clear_dvalid_after_for_loop_(); }

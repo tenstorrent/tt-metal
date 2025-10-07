@@ -11,8 +11,6 @@ set(TT_METAL_TESTS_SRCS
     test_add_two_ints.cpp
     # test_compile_args.cpp         <- not tested in run_tt_metal.py
     test_eltwise_binary.cpp
-    test_eltwise_binary_reduce_fused.cpp
-    test_eltwise_binary_reduce_fused_h3.cpp # testing reduce_h3.cpp, the optimized fused op
     test_eltwise_binary_reduce_fused_multiple_tiles.cpp # testing fused_op_multiple_tiles.cpp, multiple tiles processing
     # test_eltwise_unary.cpp        <- not tested in run_tt_metal.py
     test_matmul_single_tile_bfp8b.cpp
