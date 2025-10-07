@@ -124,7 +124,11 @@ def parametrize_mesh_with_fabric():
     """Universal mesh parametrization with automatic FABRIC_1D_RING - always uses 4x8 base mesh like original tests"""
     # Always use 4x8 base mesh like original working tests
     mesh_params = [pytest.param((4, 8), id="4x8_base")]
-    fabric_params = [pytest.param({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="fabric_1d_ring")]
+    fabric_params = [
+        pytest.param(
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 20000000}, id="fabric_1d_ring"
+        ),
+    ]
 
     # Return a single decorator that combines both parametrizations
     def decorator(func):

@@ -36,38 +36,6 @@ class Model:
             mesh_config,
         )
 
-        # Setup sliding window attention mask like tt_transformers
-        if True:
-            from models.demos.gpt_oss.utils.general_utils import get_decode_mask
-
-            # Create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
-            self.decode_sliding_mask_mat = get_decode_mask(
-                self.hf_config,
-                self.mesh_device,
-                paged_attention_config=paged_attention_config,
-            )
-            # Create device tensor for sliding window mask
-            self.device_decode_sliding_mask = ttnn.as_tensor(
-                torch.concat(
-                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(1)],  # batch_size=1
-                    axis=0,
-                ).transpose(1, 2),
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-        else:
-            self.decode_sliding_mask_mat = None
-            self.device_decode_sliding_mask = None
-
-        # Ensure attributes exist even if sliding window is not configured
-        if not hasattr(self, "decode_sliding_mask_mat"):
-            self.decode_sliding_mask_mat = None
-        if not hasattr(self, "device_decode_sliding_mask"):
-            self.device_decode_sliding_mask = None
-
     @classmethod
     def create_transformer_compatible(
         cls,
@@ -171,7 +139,7 @@ class Model:
         )
 
         # Initialize attention masks and rope embeddings storage for decode
-        self._current_attention_masks = None
+        self.device_decode_sliding_mask = get_decode_mask(0, self.hf_config.sliding_window)
         self._current_rope_stuff = None
 
     def __call__(
@@ -259,19 +227,10 @@ class Model:
             hidden_states = input_embeds
 
         # Use pre-prepared rope embeddings (stored in instance during prepare_decode_inputs_host)
-        if hasattr(self, "_current_rope_stuff") and self._current_rope_stuff is not None:
-            rope_stuff = self._current_rope_stuff
-        else:
-            # Fallback (shouldn't happen in normal flow)
-            rope_stuff = self._create_rope_for_position(current_pos)
+        rope_stuff = self._current_rope_stuff
 
         # Use pre-prepared attention masks (stored in instance during prepare_decode_inputs_host)
-        if hasattr(self, "_current_attention_masks") and self._current_attention_masks is not None:
-            attention_masks = self._current_attention_masks
-        else:
-            # Fallback if masks not available - shouldn't happen with proper flow
-            tt_mask = ttnn.ones((1, 1, 1, 1), device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-            attention_masks = {"full_attention": tt_mask, "sliding_attention": tt_mask}
+        attention_masks = self.device_decode_sliding_mask
 
         for i, decoder_layer in enumerate(self.layers):
             # Each layer picks its appropriate attention mask based on layer type
@@ -385,17 +344,7 @@ class Model:
         """
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-        tt_sliding_mask_device = copy_host_to_device(
-            [self._current_attention_masks["sliding_attention"]], mesh_device=self.mesh_device
-        )
-        tt_cos_device = copy_host_to_device([self._current_rope_stuff[1]], mesh_device=self.mesh_device)
-        tt_sin_device = copy_host_to_device([self._current_rope_stuff[2]], mesh_device=self.mesh_device)
-        rope_stuff = (self.apply_rope, tt_cos_device[0], tt_sin_device[0])
-        attention_masks = {"full_attention": None, "sliding_attention": tt_sliding_mask_device[0]}
 
-        # Store references to the DEVICE tensors - these will be automatically updated during trace execution
-        self._current_attention_masks = attention_masks
-        self._current_rope_stuff = rope_stuff
         # Return 4 values to match tt_transformers interface:
         # tokens, current_pos, rope_idxs, page_table
         return (
@@ -472,7 +421,7 @@ class Model:
         attention_masks = {"full_attention": None, "sliding_attention": tt_sliding_mask_host}
 
         # Store references to the DEVICE tensors - these will be automatically updated during trace execution
-        self._current_attention_masks = attention_masks
+        self.device_decode_sliding_mask = attention_masks
         # Store the rope setup and cos/sin tensors for use in the model
         # Use self.apply_rope (ApplyRotaryPosEmb) not self.rope_embeddings (GptOssRotaryEmbedding)
         self._current_rope_stuff = (self.apply_rope, tt_cos, tt_sin)
@@ -492,19 +441,17 @@ class Model:
         """
         Update sliding window attention mask for decode mode - matches tt_transformers interface
         """
-        if self.device_decode_sliding_mask is not None:
-            torch_mask = torch.concat(
-                [
-                    self.decode_sliding_mask_mat[i, :, current_pos[i].item() : current_pos[i].item() + 1, :].unsqueeze(
-                        0
-                    )
-                    for i in range(self.decode_sliding_mask_mat.shape[0])
-                ],
-                axis=0,
-            ).transpose(1, 2)
+        tt_sliding_mask_device = copy_host_to_device(
+            [self.device_decode_sliding_mask["sliding_attention"]], mesh_device=self.mesh_device
+        )
+        tt_cos_device = copy_host_to_device([self._current_rope_stuff[1]], mesh_device=self.mesh_device)
+        tt_sin_device = copy_host_to_device([self._current_rope_stuff[2]], mesh_device=self.mesh_device)
+        rope_stuff = (self.apply_rope, tt_cos_device[0], tt_sin_device[0])
+        attention_masks = {"full_attention": None, "sliding_attention": tt_sliding_mask_device[0]}
 
-            # Update the device tensor
-            ttnn.update_tensor(self.device_decode_sliding_mask, torch_mask)
+        # Store references to the DEVICE tensors - these will be automatically updated during trace execution
+        self.device_decode_sliding_mask = attention_masks
+        self._current_rope_stuff = rope_stuff
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
