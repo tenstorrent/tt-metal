@@ -3,6 +3,61 @@ import math
 from models.common.lightweightmodule import LightweightModule
 
 
+# class TTNNMultiheadAttention:
+#     def __init__(self, d_model, nhead, device):
+#         self.d_model = d_model
+#         self.nhead = nhead
+#         self.head_dim = d_model // nhead
+#         self.device = device
+
+#         # These will be set from PyTorch weights
+#         self.q_weight = None
+#         self.k_weight = None
+#         self.v_weight = None
+#         self.q_bias = None
+#         self.k_bias = None
+#         self.v_bias = None
+#         self.out_weight = None
+#         self.out_bias = None
+
+#     def __call__(self, query, key, value, attn_mask=None):
+#         batch_size, seq_len, hidden_size = query.shape
+
+#         # Linear projection for Q, K, V using fused weights
+#         q = ttnn.linear(query, self.q_weight, bias=self.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+#         k = ttnn.linear(key, self.k_weight, bias=self.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+#         v = ttnn.linear(value, self.v_weight, bias=self.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+#         import pdb; pdb.set_trace()
+#         qkv = ttnn.concat([q, k, v], dim=2)
+
+#         # Split and reshape for multi-head attention
+#         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+#             qkv,
+#             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+#             num_heads=self.nhead,
+#             transpose_key=False,
+#         )
+
+#         # Use SDPA instead of manual attention computation
+#         context = ttnn.transformer.scaled_dot_product_attention(
+#             q,
+#             k,
+#             v,
+#             is_causal=False,  # Set to False if you don't want causal masking
+#             scale=1.0 / math.sqrt(self.head_dim),
+#             attn_mask=attn_mask,
+#             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+#         )
+
+#         # Concatenate heads
+#         context = ttnn.transformer.concatenate_heads(context, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+#         # Output projection
+#         output = ttnn.linear(context, self.out_weight, bias=self.out_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+#         return output
+
+
 class TTNNMultiheadAttention:
     def __init__(self, d_model, nhead, device):
         self.d_model = d_model
@@ -21,35 +76,39 @@ class TTNNMultiheadAttention:
         self.out_bias = None
 
     def __call__(self, query, key, value, attn_mask=None):
-        batch_size, seq_len, hidden_size = query.shape
-
-        # Linear projection for Q, K, V using fused weights
+        # Apply linear projections separately to avoid concat issues
         q = ttnn.linear(query, self.q_weight, bias=self.q_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         k = ttnn.linear(key, self.k_weight, bias=self.k_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.linear(value, self.v_weight, bias=self.v_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        qkv = ttnn.concat([q, k, v], dim=2)
+        # Get dimensions for reshaping
+        batch_size = q.shape[0]
+        q_seq_len = q.shape[1]
+        k_seq_len = k.shape[1]
 
-        # Split and reshape for multi-head attention
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            qkv,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            num_heads=self.nhead,
-            transpose_key=False,
-        )
+        # Reshape each tensor separately for multi-head attention
+        # [batch, seq_len, d_model] -> [batch, seq_len, num_heads, head_dim] -> [batch, num_heads, seq_len, head_dim]
+        q = ttnn.reshape(q, (batch_size, q_seq_len, self.nhead, self.head_dim))
+        q = ttnn.permute(q, (0, 2, 1, 3))
 
-        # Use SDPA instead of manual attention computation
+        k = ttnn.reshape(k, (batch_size, k_seq_len, self.nhead, self.head_dim))
+        k = ttnn.permute(k, (0, 2, 1, 3))
+
+        v = ttnn.reshape(v, (batch_size, k_seq_len, self.nhead, self.head_dim))
+        v = ttnn.permute(v, (0, 2, 1, 3))
+
+        # Use SDPA for attention computation
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
-            is_causal=False,  # Set to False if you don't want causal masking
+            is_causal=False,
             scale=1.0 / math.sqrt(self.head_dim),
             attn_mask=attn_mask,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # Concatenate heads
+        # Concatenate heads back to original format
         context = ttnn.transformer.concatenate_heads(context, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Output projection
@@ -387,3 +446,125 @@ class TTTransformerEncoderLayer(LightweightModule):
         if return_attn_weights:
             return src, None
         return src
+
+
+class TTTransformerDecoder(LightweightModule):
+    def __init__(
+        self,
+        device,
+        decoder_layer_config,
+        num_layers,
+        norm_fn_name="ln",
+        return_intermediate=False,
+        parameters=None,
+    ):
+        super().__init__()
+        self.device = device
+        self.num_layers = num_layers
+        self.return_intermediate = return_intermediate
+
+        # Create multiple decoder layers
+        self.layers = []
+        for i in range(num_layers):
+            layer_params = parameters[f"layers.{i}"] if parameters else None
+            layer = TTTransformerDecoderLayer(
+                device=device,
+                d_model=decoder_layer_config["d_model"],
+                nhead=decoder_layer_config["nhead"],
+                dim_feedforward=decoder_layer_config["dim_feedforward"],
+                dropout=decoder_layer_config.get("dropout", 0.0),
+                normalize_before=decoder_layer_config.get("normalize_before", True),
+                parameters=layer_params,
+            )
+            self.layers.append(layer)
+
+        # Final layer norm
+        self.norm = None
+        if norm_fn_name is not None:
+            self.norm_weights = parameters.get("norm", {}).get("weight") if parameters else None
+            self.norm_bias = parameters.get("norm", {}).get("bias") if parameters else None
+
+    def forward(
+        self,
+        tgt,
+        memory,
+        tgt_mask=None,
+        memory_mask=None,
+        tgt_key_padding_mask=None,
+        memory_key_padding_mask=None,
+        pos=None,
+        query_pos=None,
+        transpose_swap=False,
+        return_attn_weights=False,
+    ):
+        # Handle transpose_swap for memory tensor
+        if transpose_swap:
+            # memory: bs, c, h, w -> t, b, c
+            memory = ttnn.reshape(memory, (memory.shape[0], memory.shape[1], -1))
+            memory = ttnn.permute(memory, (2, 0, 1))
+            if pos is not None:
+                pos = ttnn.reshape(pos, (pos.shape[0], pos.shape[1], -1))
+                pos = ttnn.permute(pos, (2, 0, 1))
+
+        output = tgt
+        intermediate = []
+        attns = []
+
+        # Pass through each decoder layer
+        for layer in self.layers:
+            output, attn = layer(
+                output,
+                memory,
+                tgt_mask=tgt_mask,
+                memory_mask=memory_mask,
+                tgt_key_padding_mask=tgt_key_padding_mask,
+                memory_key_padding_mask=memory_key_padding_mask,
+                pos=pos,
+                query_pos=query_pos,
+                return_attn_weights=return_attn_weights,
+            )
+
+            if self.return_intermediate and self.norm_weights is not None:
+                intermediate.append(ttnn.layer_norm(output, weight=self.norm_weights, bias=self.norm_bias))
+
+            if return_attn_weights:
+                attns.append(attn)
+
+        # Apply final layer norm
+        if self.norm_weights is not None:
+            output = ttnn.layer_norm(output, weight=self.norm_weights, bias=self.norm_bias)
+            if self.return_intermediate:
+                # Replace last intermediate result with final normed output
+                if intermediate:
+                    intermediate[-1] = output
+
+        # Stack results if needed
+        if return_attn_weights and attns:
+            # TTNN doesn't support torch.stack directly, so we'd need to handle this differently
+            # For now, return list of attention weights
+            pass
+
+        if self.return_intermediate:
+            # TTNN doesn't support torch.stack directly, return list for now
+            return intermediate, attns if return_attn_weights else None
+        return output, attns if return_attn_weights else None
+
+
+def build_ttnn_decoder(args, device, parameters):
+    """TTNN decoder builder function"""
+    decoder_layer_config = {
+        "d_model": args.dec_dim,
+        "nhead": args.dec_nhead,
+        "dim_feedforward": args.dec_ffn_dim,
+        "dropout": args.dec_dropout,
+        "normalize_before": True,  # Match the reference implementation
+    }
+
+    decoder = TTTransformerDecoder(
+        device=device,
+        decoder_layer_config=decoder_layer_config,
+        num_layers=args.dec_nlayers,
+        return_intermediate=True,
+        parameters=parameters,
+    )
+    return decoder
