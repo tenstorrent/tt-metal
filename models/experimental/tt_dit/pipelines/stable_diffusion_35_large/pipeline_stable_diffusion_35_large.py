@@ -219,7 +219,8 @@ class StableDiffusion3Pipeline:
 
         # Create encoder parallel config
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=4, mesh_axis=1)  # 1x4 submesh, parallel on axis 1
+            tensor_parallel=ParallelFactor(factor=encoder_device.shape[1], mesh_axis=1),
+            data_parallel=ParallelFactor(factor=encoder_device.shape[0], mesh_axis=0),
         )
 
         self.encoder_parallel_config = encoder_parallel_config

@@ -64,6 +64,7 @@ def test_clip_encoder(
 
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=parallel_factor, mesh_axis=1),
+        data_parallel=ParallelFactor(factor=encoder_submesh.shape[0], mesh_axis=0),
     )
     logger.info(f"Parallel factor: {parallel_factor}")
     ccl_manager = CCLManager(

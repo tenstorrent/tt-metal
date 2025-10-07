@@ -20,17 +20,24 @@ def get_cache_path(model_name, subfolder, parallel_config, dtype="bf16"):
 
     model_path = os.path.join(cache_dir, model_name)
     model_path = os.path.join(model_path, subfolder)
-    tp_factor, tp_mesh_axis = (
-        (parallel_config.tensor_parallel.factor, parallel_config.tensor_parallel.mesh_axis)
-        if hasattr(parallel_config, "tensor_parallel") and parallel_config.tensor_parallel is not None
-        else (None, None)
-    )
-    sp_factor, sp_mesh_axis = (
-        (parallel_config.sequence_parallel.factor, parallel_config.sequence_parallel.mesh_axis)
-        if hasattr(parallel_config, "sequence_parallel") and parallel_config.sequence_parallel is not None
-        else (None, None)
-    )
-    parallel_name = f"tp{tp_factor}_{tp_mesh_axis}_sp{sp_factor}_{sp_mesh_axis}_{dtype}"
+
+    name_parts = []
+
+    if hasattr(parallel_config, "tensor_parallel") and parallel_config.tensor_parallel is not None:
+        factor, axis = parallel_config.tensor_parallel.factor, parallel_config.tensor_parallel.mesh_axis
+        name_parts.append(f"tp{factor}_{axis}")
+
+    if hasattr(parallel_config, "sequence_parallel") and parallel_config.sequence_parallel is not None:
+        factor, axis = parallel_config.sequence_parallel.factor, parallel_config.sequence_parallel.mesh_axis
+        name_parts.append(f"sp{factor}_{axis}")
+
+    if hasattr(parallel_config, "data_parallel") and parallel_config.data_parallel is not None:
+        factor, axis = parallel_config.data_parallel.factor, parallel_config.data_parallel.mesh_axis
+        name_parts.append(f"dp{factor}_{axis}")
+
+    name_parts.append(dtype)
+    parallel_name = "_".join(name_parts)
+
     cache_path = os.path.join(model_path, parallel_name) + os.sep
 
     return cache_path

@@ -3,26 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
-from pathlib import Path
 import time
+from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[6]))
 
-import torch
 import pytest
+import torch
 import ttnn
 from loguru import logger
-from transformers import CLIPTextModelWithProjection, CLIPTokenizer
-
 from models.experimental.tt_dit.encoders.clip.model_clip import (
-    CLIPStack,
     CLIPConfig,
+    CLIPStack,
     TextEmbeddings,
     create_4d_causal_attention_mask,
 )
-from models.experimental.tt_dit.parallel.manager import CCLManager
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+from models.experimental.tt_dit.parallel.manager import CCLManager
 from models.experimental.tt_dit.utils.check import assert_quality
+from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 
 
 @pytest.mark.parametrize(
@@ -64,6 +63,7 @@ def test_clip_stack_all_layers(
 
     parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=encoder_submesh.shape[1], mesh_axis=1),
+        data_parallel=ParallelFactor(factor=encoder_submesh.shape[0], mesh_axis=0),
     )
     ccl_manager = CCLManager(
         mesh_device=encoder_submesh,
@@ -167,10 +167,10 @@ def test_clip_stack_all_layers(
 
         for layer_idx in range(hf_model.config.num_hidden_layers):
             layer_output = hf_model.text_model.encoder.layers[layer_idx](
-                current_hidden_states, None, hf_causal_mask  # hidden_states, attention_mask, causal_attention_mask
-            )[
-                0
-            ]  # HF returns tuple (hidden_states, attentions)
+                current_hidden_states,
+                None,
+                hf_causal_mask,  # hidden_states, attention_mask, causal_attention_mask
+            )[0]  # HF returns tuple (hidden_states, attentions)
             hf_all_hidden_states.append(layer_output)
             current_hidden_states = layer_output
 
