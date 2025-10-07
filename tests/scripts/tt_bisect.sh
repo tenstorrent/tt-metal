@@ -20,7 +20,7 @@ bad_commit=""
 tracy_enabled=0
 retries=3
 
-while getopts ":f:g:b:t:p:r" opt; do
+while getopts ":f:g:b:t:p:r:" opt; do
   case "$opt" in
     f) test="$OPTARG" ;;
     g) good_commit="$OPTARG" ;;
