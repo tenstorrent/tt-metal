@@ -317,7 +317,7 @@ def run_dump_ops() -> Tuple[str, bool]:
 
     try:
         result = subprocess.run(
-            ["python", "./scripts/debugging_scripts/dump_ops.py"],
+            ["python", "./tools/triage/dump_ops.py"],
             capture_output=True,
             text=True,
             timeout=30,
@@ -326,8 +326,12 @@ def run_dump_ops() -> Tuple[str, bool]:
 
         if result.stdout and Logger.verbose:
             print(result.stdout)  # Only print in verbose mode
-        if result.stderr and "Error" in result.stderr:
-            log.error(f"dump_ops.py errors: {result.stderr}")
+        if result.stderr:
+            log.error(f"dump_ops.py stderr: {result.stderr}")
+        if result.returncode != 0:
+            log.error(f"dump_ops.py failed with return code: {result.returncode}")
+            if result.stdout:
+                log.error(f"stdout: {result.stdout}")
 
         log.separator()
         return result.stdout, result.returncode == 0
