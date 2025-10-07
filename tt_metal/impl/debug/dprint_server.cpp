@@ -76,7 +76,7 @@ string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
             case 0: return abbreviated ? "ER" : "ERISC";
             case 1:
                 return abbreviated ? "ER1" : "ERISC1";
-                // Default case falls through and handled at end.
+            default: return fmt::format("ERROR: UNSUPPORTED RISC_ID({}) for ETH", risc_id);
         }
     } else {
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -88,7 +88,7 @@ string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
                     case 0: return abbreviated ? "BR" : "BRISC";
                     case 1:
                         return abbreviated ? "NC" : "NCRISC";
-                        // Default case falls through and handled at end.
+                    default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_TYPE({}) for DM", processor_type);
                 }
                 break;
             case tt::tt_metal::HalProcessorClassType::COMPUTE:
@@ -97,9 +97,10 @@ string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
                     case 1: return abbreviated ? "TR1" : "TRISC1";
                     case 2:
                         return abbreviated ? "TR2" : "TRISC2";
-                        // Default case falls through and handled at end.
+                    default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_TYPE({}) for COMPUTE", processor_type);
                 }
                 break;
+            default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_CLASS({})", processor_class);
         }
     }
     return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
