@@ -583,8 +583,8 @@ jobs:
             AUTHOR_NOTES="${{ needs.parse-comment.outputs.author-notes }}"
           fi
 
-          # Use hardcoded Slack channel ID
-          SLACK_CHANNEL="C09HT5VSXRB"
+          # Use #tt-metal-pr-review-requests Slack channel
+          SLACK_CHANNEL="C07G47JMQHM"
 
           echo "Using parameters: CREATE_NEW=$CREATE_NEW, PING_OWNERS=$PING_OWNERS, SEND_SLACK=$SEND_SLACK, SLACK_CHANNEL=$SLACK_CHANNEL"
 
@@ -873,8 +873,8 @@ jobs:
           SEND_SLACK="${{ steps.generate-comment.outputs.send-slack }}"
           AUTHOR_NOTES="${{ steps.generate-comment.outputs.author-notes }}"
 
-          # Use hardcoded Slack channel ID
-          SLACK_CHANNEL="C09HT5VSXRB"
+          # Use #tt-metal-pr-review-requests Slack channel
+          SLACK_CHANNEL="C07G47JMQHM"
 
           # Define API endpoint
           COMMENTS_API="https://api.github.com/repos/${{ github.repository }}/issues/$PR_NUMBER/comments"
