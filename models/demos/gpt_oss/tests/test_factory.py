@@ -9,7 +9,7 @@ import torch
 
 import ttnn
 
-from ..moe import MeshConfig
+from ..config import MeshConfig
 from ..reference.configuration_gpt_oss import GptOssConfig
 from ..tt.ccl import CCLManager
 from ..tt.model_config import ModelArgs

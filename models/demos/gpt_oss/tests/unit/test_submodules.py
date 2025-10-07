@@ -2,16 +2,37 @@
 Minimal utility component tests - RoPE and SDPA only
 """
 
-import math
 
 import torch
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 
 from ...reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from ...tt.rope import ApplyRotaryPosEmb
 from ...tt.sdpa import sdpa as tt_sdpa
 from ..test_factory import TestFactory, parametrize_batch_seq, parametrize_mesh_with_fabric
+
+
+def reference_sdpa(Q, K, V, S, sm_scale, sliding_window=0):
+    # sliding_window == 0 means no sliding window
+    n_tokens, n_heads, q_mult, d_head = Q.shape
+    assert K.shape == (n_tokens, n_heads, d_head)
+    assert V.shape == (n_tokens, n_heads, d_head)
+    K = K[:, :, None, :].expand(-1, -1, q_mult, -1)
+    V = V[:, :, None, :].expand(-1, -1, q_mult, -1)
+    S = S.reshape(n_heads, q_mult, 1, 1).expand(-1, -1, n_tokens, -1)
+    mask = torch.triu(Q.new_full((n_tokens, n_tokens), -float("inf")), diagonal=1)
+    if sliding_window > 0:
+        mask += torch.tril(mask.new_full((n_tokens, n_tokens), -float("inf")), diagonal=-sliding_window)
+    QK = torch.einsum("qhmd,khmd->hmqk", Q, K)
+    QK *= sm_scale
+    QK += mask[None, None, :, :]
+    QK = torch.cat([QK, S], dim=-1)
+    W = torch.softmax(QK, dim=-1)
+    W = W[..., :-1]
+    attn = torch.einsum("hmqk,khmd->qhmd", W, V)
+    return attn.reshape(n_tokens, -1)
 
 
 @parametrize_mesh_with_fabric()
@@ -91,12 +112,6 @@ def test_rope_embeddings(mesh_device, batch_size, seq_len, reset_seeds):
     ).permute(0, 2, 1, 3)[
         :1
     ]  # Back to [batch, num_heads, seq_len, head_dim]
-
-    # Debug: Print shapes to understand the mismatch
-
-    # Compare with reference using PCC like original
-    from models.common.utility_functions import comp_pcc
-
     passing, pcc_message = comp_pcc(q_tt_rotated_torch, q_rope_torch)
     mse = torch.nn.functional.mse_loss(q_tt_rotated_torch, q_rope_torch)
     assert passing, f"q_tt_rotated_torch: {pcc_message}"
@@ -112,33 +127,82 @@ def test_scaled_dot_product_attention(mesh_device, device_params, reset_seeds):
 
     setup = TestFactory.setup_test(mesh_device)
     config = setup["config"]
+    nh = setup["mesh_config"].shard_size(config.num_attention_heads)
+    nkv = setup["mesh_config"].shard_size(config.num_key_value_heads)
+    dim = config.head_dim
+    sliding_window = 128
+    dtype = ttnn.bfloat16
+    device = mesh_device
 
-    batch_size, seq_len = 1, 32
-    num_heads = setup["mesh_config"].shard_size(config.num_attention_heads)
-    num_kv_heads = setup["mesh_config"].shard_size(config.num_key_value_heads)
-    head_dim = config.head_dim
+    q, k, v = None, None, None
+    tt_cache = None
+    all_passing = True
+    num_iters = 5
+    num_tokens = 128
+    for n in range(num_iters):
+        cur_seq_len = num_tokens + n
 
-    # Generate Q, K, V with correct shapes for SDPA function
-    queries = torch.randn(seq_len, batch_size, num_heads, head_dim)
-    keys = torch.randn(seq_len, num_kv_heads, head_dim)
-    values = torch.randn(seq_len, num_kv_heads, head_dim)
-    sinks = torch.randn(num_heads)
+        # Torch input
+        q = torch.randn(num_tokens, nkv, nh // nkv, dim) if n == 0 else q
+        k = torch.randn(num_tokens, nkv, dim) if k is None else k
+        v = torch.randn(num_tokens, nkv, dim) if v is None else v
+        s = torch.randn(1, nh, 1, 1)
+        sm_scale = 1.0 / (dim**0.5)
 
-    # Convert to TTNN tensors
-    tt_q = ttnn.from_torch(queries, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_k = ttnn.from_torch(keys, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_v = ttnn.from_torch(values, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_sink = ttnn.from_torch(sinks, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        if n > 0:
+            q = torch.cat([q, torch.randn(1, nkv, nh // nkv, dim)], dim=0)
+            k = torch.cat([k, torch.randn(1, nkv, dim)], dim=0)
+            v = torch.cat([v, torch.randn(1, nkv, dim)], dim=0)
 
-    # Test SDPA
-    output, cache = tt_sdpa(tt_q, tt_k, tt_v, tt_sink, sm_scale=1.0 / math.sqrt(head_dim))
+        mask = torch.triu(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=1)
+        if sliding_window > 0:
+            mask += torch.tril(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=-sliding_window)
 
-    # Verify shape and output
-    expected_shape = (1, 1, seq_len, head_dim * num_heads)
-    assert output.shape == expected_shape
+        if n > 0:
+            mask = mask[:, :, -1:, :]
 
-    mesh_shape = mesh_device.shape
-    output_torch = ttnn.to_torch(
-        output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(-2, -1))
-    )
-    assert torch.isfinite(output_torch).all()
+        # Torch output
+        reference_out = reference_sdpa(q, k, v, s, sm_scale, sliding_window)
+
+        # TT input
+        if n == 0:
+            q_in = q.view(num_tokens, 1, nh, dim)
+            k_in = k
+            v_in = v
+        else:
+            q_in = q[-1:, ...].view(1, 1, nh, dim)
+            k_in = k[-1:, ...]
+            v_in = v[-1:, ...]
+
+        tt_q = ttnn.from_torch(
+            q_in, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_k = ttnn.from_torch(
+            k_in, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_v = ttnn.from_torch(
+            v_in, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_sink = ttnn.from_torch(
+            s, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        tt_mask = ttnn.from_torch(
+            mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # TT output
+        tt_out, tt_cache = tt_sdpa(tt_q, tt_k, tt_v, tt_sink, sm_scale=sm_scale, tt_mask=tt_mask, tt_cache=tt_cache)
+        tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+
+        # Only compare the last token
+        if n > 0:
+            reference_out = reference_out[-1:, ...]
+
+        # Compare outputs
+        pcc = 0.99
+        passed, pcc_message = comp_pcc(reference_out, tt_out_torch, pcc)
+        if not passed:
+            print(f"Iteration {n} | Test passed: {passed}, PCC: {pcc_message}")
+        all_passing = all_passing and passed
+
+    assert all_passing, "Test failed: Outputs do not match"
