@@ -225,22 +225,72 @@ jobs:
         run: |
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
 
-          # Get PR reviews using GitHub API
-          REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews"
-          REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                           -H "Accept: application/vnd.github.v3+json" \
-                           "$REVIEWS_API" 2>/dev/null)
+          # Get ALL PR reviews using GitHub API with pagination
+          ALL_REVIEWS_DATA="[]"
+          PAGE=1
 
-          # Check if API call was successful
-          REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                           -H "Accept: application/vnd.github.v3+json" \
-                           "$REVIEWS_API")
+          while true; do
+            REVIEWS_API="https://api.github.com/repos/${{ github.repository }}/pulls/$PR_NUMBER/reviews?per_page=100&page=$PAGE"
+            REVIEWS_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                             -H "Accept: application/vnd.github.v3+json" \
+                             "$REVIEWS_API" 2>/dev/null)
 
-          # Extract approved reviews (state: APPROVED)
-          if [ "$REVIEWS_HTTP_CODE" = "200" ] && [ -n "$REVIEWS_DATA" ] && [ "$REVIEWS_DATA" != "null" ]; then
-            APPROVED_REVIEWERS=$(echo "$REVIEWS_DATA" | jq -r '.[] | select(.state == "APPROVED") | .user.login' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+            # Check if API call was successful
+            REVIEWS_HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                             -H "Accept: application/vnd.github.v3+json" \
+                             "$REVIEWS_API")
+
+            if [ "$REVIEWS_HTTP_CODE" = "200" ] && [ -n "$REVIEWS_DATA" ] && [ "$REVIEWS_DATA" != "null" ] && [ "$REVIEWS_DATA" != "[]" ]; then
+              # Merge this page with existing reviews
+              ALL_REVIEWS_DATA=$(echo "$ALL_REVIEWS_DATA $REVIEWS_DATA" | jq -s '.[0] + .[1]')
+
+              # Check if we got a full page (100 items), if not, we're done
+              PAGE_COUNT=$(echo "$REVIEWS_DATA" | jq '. | length')
+              if [ "$PAGE_COUNT" -lt 100 ]; then
+                break
+              fi
+
+              PAGE=$((PAGE + 1))
+
+              # Safety check to avoid infinite loop
+              if [ $PAGE -gt 10 ]; then
+                echo "Warning: Too many review pages, stopping at page $PAGE"
+                break
+              fi
+            else
+              if [ $PAGE -eq 1 ]; then
+                echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
+              fi
+              break
+            fi
+          done
+
+          echo "Fetched $(echo "$ALL_REVIEWS_DATA" | jq '. | length') total reviews across $((PAGE-1)) pages"
+
+          # Extract approved reviews (get the LATEST review from each user)
+          if [ "$(echo "$ALL_REVIEWS_DATA" | jq '. | length')" -gt 0 ]; then
+            # First, let's see all reviewers for debugging
+            echo "All reviews found:"
+            echo "$ALL_REVIEWS_DATA" | jq -r '.[] | "\(.user.login): \(.state) (\(.submitted_at))"' 2>/dev/null || echo "Failed to parse reviews"
+
+            # Get latest review from each user, then filter for APPROVED
+            APPROVED_REVIEWERS=$(echo "$ALL_REVIEWS_DATA" | jq -r '
+              [.[] | {user: .user.login, state: .state, date: .submitted_at}] |
+              group_by(.user) |
+              map(
+                # For each user, get their latest state-changing review (ignore COMMENTED)
+                map(select(.state != "COMMENTED")) |
+                sort_by(.date) |
+                reverse |
+                .[0] // empty
+              ) |
+              map(select(.state == "APPROVED")) |
+              .[].user
+            ' 2>/dev/null | tr '\n' ',' | sed 's/,$//')
+
+            echo "Final approved reviewers: $APPROVED_REVIEWERS"
           else
-            echo "Warning: Could not fetch PR reviews (HTTP $REVIEWS_HTTP_CODE)"
+            echo "Warning: No reviews found"
             APPROVED_REVIEWERS=""
           fi
 
