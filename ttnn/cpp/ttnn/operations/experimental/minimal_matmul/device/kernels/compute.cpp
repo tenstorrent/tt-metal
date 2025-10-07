@@ -117,8 +117,9 @@ void MAIN {
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
-    constexpr uint32_t out_cb = tt::CBIndex::c_2;
-    constexpr uint32_t intermediate_cb = tt::CBIndex::c_3;
+    constexpr uint32_t in0_dm_out_cb = tt::CBIndex::c_2;
+    constexpr uint32_t in1_dm_out_cb = tt::CBIndex::c_3;
+    constexpr uint32_t intermediate_cb = tt::CBIndex::c_4;
 
     mm_init(in0_cb, in1_cb, intermediate_cb);
 
@@ -185,13 +186,20 @@ void MAIN {
                 reuse_in0_block = false;
                 reuse_in1_block = false;
             }
+            /**
+             * Depending on the direction we're striding, either in0 or in1 DM will write the output.
+             * The CB pointers must match each other.
+             * Push both of them.
+             */
 
             cb_push_back(intermediate_cb, out_block_num_tiles);
             cb_wait_front(intermediate_cb, out_block_num_tiles);
             // safe_print_full_tile(intermediate_cb);
-            cb_reserve_back(out_cb, out_block_num_tiles);
-            copy_block(intermediate_cb, out_cb, out_block_num_tiles);
-            cb_push_back(out_cb, out_block_num_tiles);
+            cb_reserve_back(in0_dm_out_cb, out_block_num_tiles);
+            cb_reserve_back(in1_dm_out_cb, out_block_num_tiles);
+            copy_block(intermediate_cb, in0_dm_out_cb, out_block_num_tiles);
+            cb_push_back(in0_dm_out_cb, out_block_num_tiles);
+            cb_push_back(in1_dm_out_cb, out_block_num_tiles);
             cb_pop_front(intermediate_cb, out_block_num_tiles);
         }
     }
