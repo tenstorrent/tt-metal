@@ -137,7 +137,7 @@ def test_single_transformer_block(
     )
 
     signpost("performance")
-    itr = 10
+    itr = 1
     start = time()
     for _ in range(itr):
         tt_spatial_out, tt_prompt_out = tt_model.forward(
@@ -279,7 +279,7 @@ def test_transformer_block(
     )
 
     signpost("performance")
-    itr = 10
+    itr = 1
     start = time()
     for _ in range(itr):
         tt_spatial_out, tt_prompt_out = tt_model.forward(
