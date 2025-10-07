@@ -1,6 +1,6 @@
-# 3-Tier Hierarchical Parallel Training
+# 3-Tier Architecture Training
 
-This directory contains a Python implementation of the 3-tier hierarchical parallel training architecture
+This directory contains a Python implementation of the 3-tier architecture training
 
 ## Architecture Overview
 
@@ -79,7 +79,7 @@ Use `training.py` which automatically dispatches to the correct worker type:
 
 ```bash
 # For num_workers=2, you need 4 total ranks: 2 workers + 1 aggregator + 1 optimizer
-mpirun -n 4 python training.py -c config.yaml
+./runner.sh
 ```
 
 The script automatically determines worker type based on rank:
