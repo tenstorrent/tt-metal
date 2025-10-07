@@ -71,6 +71,7 @@ CPMAddPackage(
         "CMAKE_POSITION_INDEPENDENT_CODE ON"
 )
 
+# Setting visibility to hidden to avoid symbol conflicts with other protobuf libraries when tt-metal package is used
 set_target_properties(
     libprotobuf
     PROPERTIES
@@ -80,6 +81,8 @@ set_target_properties(
             TRUE
 )
 
+# Setting link and compile flags to avoid symbol conflicts with other protobuf libraries when tt-metal package is used.
+# Ensures that tt-metal package only uses its own protobuf library and not the one from the system.
 target_link_options(libprotobuf PRIVATE -Wl,-Bsymbolic)
 target_compile_options(libprotobuf PRIVATE -fno-semantic-interposition)
 
