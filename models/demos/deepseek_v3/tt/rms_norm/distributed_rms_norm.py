@@ -62,34 +62,46 @@ class DistributedRMSNorm(RMSNormBase):
         }
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL
+    ) -> ModelPrefillConfig:
         """Generate prefill configuration for this module.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL object for semaphore management
 
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
+        # Set the phase for CCL operations
+        ccl.set_phase("prefill")
+
         return cls._model_config(
             hf_config=hf_config,
             mesh_device=mesh_device,
+            ccl=ccl,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             rms_norm_stats_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mode="prefill",
         )  # type: ignore
 
     @classmethod
-    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelDecodeConfig:
+    def decode_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> ModelDecodeConfig:
         """Generate decode configuration for this module.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL object for semaphore management
 
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
         """
+        # Set the phase for CCL operations
+        ccl.set_phase("decode")
+
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
@@ -108,12 +120,14 @@ class DistributedRMSNorm(RMSNormBase):
         return cls._model_config(
             hf_config=hf_config,
             mesh_device=mesh_device,
+            ccl=ccl,
             memory_config=memory_config,
             rms_norm_stats_memory_config=ttnn.create_sharded_memory_config(
                 shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * mesh_device.shape[1]],
                 core_grid=ttnn.CoreGrid(y=1, x=1),
                 strategy=ttnn.ShardStrategy.WIDTH,
             ),
+            mode="decode",
         )  # type: ignore
 
     @classmethod
@@ -121,8 +135,10 @@ class DistributedRMSNorm(RMSNormBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        ccl: CCL,
         memory_config: ttnn.MemoryConfig,
         rms_norm_stats_memory_config: ttnn.MemoryConfig,
+        mode: str,
     ) -> dict[str, OpConfigBase]:
         """Generate model configuration for RMSNorm."""
         return {
@@ -136,6 +152,7 @@ class DistributedRMSNorm(RMSNormBase):
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 memory_config=rms_norm_stats_memory_config,
                 topology=ttnn.Topology.Linear,
+                **ccl.get_all_gather_params(1),
             ),
             "rms_norm_post_all_gather": RMSNormPostAllGatherConfig(
                 epsilon=hf_config.rms_norm_eps,
@@ -145,23 +162,18 @@ class DistributedRMSNorm(RMSNormBase):
         }
 
     @classmethod
-    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> ModelState:
+    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelState:
         """Create the model state for this module.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            ccl: CCL instance for async CCLs
 
         Returns:
             ModelState containing the state information for this module
         """
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-            },
         }
 
     @classmethod

@@ -155,16 +155,22 @@ class MLP(AbstractModule):
             return dim, hidden_dim
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL
+    ) -> ModelPrefillConfig:
         """Generate prefill configuration for this module.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL object for semaphore management
 
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
+        # Set the phase for CCL operations
+        ccl.set_phase("prefill")
+
         matmul_core_grid_size = ttnn.CoreCoord(
             mesh_device.core_grid.x,
             mesh_device.core_grid.y,
@@ -191,6 +197,7 @@ class MLP(AbstractModule):
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+                **ccl.get_all_gather_params(1),
             ),
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
             "linear_pc_gen": MLP.ProgramConfigData(
@@ -208,6 +215,7 @@ class MLP(AbstractModule):
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+                **ccl.get_reduce_scatter_params(1),
             ),
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
         }
@@ -217,6 +225,7 @@ class MLP(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        ccl: CCL,
         input_num_cores: int | None = None,
         output_num_cores: int | None = None,
     ) -> ModelDecodeConfig:
@@ -225,6 +234,7 @@ class MLP(AbstractModule):
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL object for semaphore management
             input_num_cores (optional): Number of cores the input tensor is sharded on.
                 Must be a divisor of the tile width of the input tensor (i.e. sharding cannot be padded)
             output_num_cores (optional): Number of cores the output tensor is sharded on.
@@ -233,6 +243,9 @@ class MLP(AbstractModule):
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
         """
+        # Set the phase for CCL operations
+        ccl.set_phase("decode")
+
         # Extract dimensions from HF config
         dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
 
@@ -272,6 +285,7 @@ class MLP(AbstractModule):
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+                **ccl.get_all_gather_params(1),
             ),
             "all_gather_reshard": ReshardConfig(
                 memory_config=cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
@@ -313,6 +327,7 @@ class MLP(AbstractModule):
                 dim=3,  # We are scattering across the feature dimension (last one)
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
+                **ccl.get_reduce_scatter_params(1),
             ),
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
         }
@@ -354,29 +369,18 @@ class MLP(AbstractModule):
         )
 
     @classmethod
-    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL) -> ModelState:
+    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelState:
         """Create the model state for this module.
 
         Args:
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
-            ccl: CCL instance for async CCLs
 
         Returns:
             ModelState containing the state information for this module
         """
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "all_gather": {
-                "multi_device_global_semaphore": ccl.get_gather_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
-            "reduce_scatter_async": {
-                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(1),
-                "barrier_semaphore": ccl.get_barrier_sem(1),
-                "num_links": ccl.get_max_links(1),
-            },
         }
 
     @classmethod
