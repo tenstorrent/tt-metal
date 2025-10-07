@@ -18,7 +18,7 @@ on:
       ttsim-ref:
         required: false
         type: string
-        default: "6f5a357da16b3d0f9a4f70cdae2b4b7485723612"
+        default: "d20e792d7b2ae18de3743d4df35d72a9259c65db"
 
 jobs:
   ttsim-integration:
@@ -97,8 +97,11 @@ jobs:
             "add_2_integers_in_compute"
             "add_2_integers_in_riscv"
             "eltwise_binary"
+            "eltwise_sfpu"
             "hello_world_compute_kernel"
             "hello_world_datamovement_kernel"
+            "matmul_multi_core"
+            "matmul_multicore_reuse"
           )
           for example_name in "${working_examples[@]}"; do
             example_path="/usr/share/tt-metalium/examples/${example_name}"
