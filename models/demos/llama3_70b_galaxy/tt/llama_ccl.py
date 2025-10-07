@@ -593,9 +593,9 @@ class TT_CCL:
                 use_noc1_only=use_noc1_only,
                 use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
             )
-
             if lm_head:
                 persistent_buffer.deallocate(True)
+
         else:
             if lm_head:
                 ttnn_tensor_gathered = self.line_all_gather(
@@ -1035,7 +1035,6 @@ class TT_CCL:
             all_gather_function = ttnn.experimental.all_gather_async
         ttnn_tensor_out = all_gather_function(
             input_tensor=input_tensor_mesh,
-            persistent_intermediate_buffer=persistent_buffers["intermediate"],
             persistent_output_buffer=persistent_buffers,
             dim=dim,
             multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
