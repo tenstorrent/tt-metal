@@ -1143,6 +1143,50 @@ jobs:
                 USER_ID=$(echo "$ALL_USERS" | jq -r --arg username "$github_username" '.[] | select(.name == $username or .profile.display_name == $username) | .id' | head -n1)
               fi
 
+              # If still not found, try partial name matching (fuzzy search)
+              if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+                echo "Trying partial name matching for: $full_name"
+
+                # Split the full name into words and try to find users containing those words
+                IFS=' ' read -ra NAME_WORDS <<< "$full_name"
+                POTENTIAL_MATCHES=""
+
+                for word in "${NAME_WORDS[@]}"; do
+                  # Skip very short words (like initials)
+                  if [ ${#word} -ge 3 ]; then
+                    # Find users whose real_name or display_name contains this word (case insensitive)
+                    WORD_MATCHES=$(echo "$ALL_USERS" | jq -r --arg word "$word" '.[] | select((.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))) | .id + "|" + (.real_name // .profile.real_name // .name)')
+
+                    if [ -n "$WORD_MATCHES" ]; then
+                      if [ -z "$POTENTIAL_MATCHES" ]; then
+                        POTENTIAL_MATCHES="$WORD_MATCHES"
+                      else
+                        # Find intersection of matches (users that match multiple words)
+                        POTENTIAL_MATCHES=$(comm -12 <(echo "$POTENTIAL_MATCHES" | sort) <(echo "$WORD_MATCHES" | sort))
+                      fi
+                    fi
+                  fi
+                done
+
+                # Count how many potential matches we have
+                if [ -n "$POTENTIAL_MATCHES" ]; then
+                  MATCH_COUNT=$(echo "$POTENTIAL_MATCHES" | wc -l)
+                  if [ "$MATCH_COUNT" -eq 1 ]; then
+                    # Exactly one match found - use it
+                    USER_ID=$(echo "$POTENTIAL_MATCHES" | cut -d'|' -f1)
+                    MATCHED_NAME=$(echo "$POTENTIAL_MATCHES" | cut -d'|' -f2)
+                    echo "✅ Found partial match: $full_name -> $MATCHED_NAME ($USER_ID)"
+                  elif [ "$MATCH_COUNT" -gt 1 ]; then
+                    echo "⚠️  Multiple partial matches found for $full_name, skipping to avoid confusion:"
+                    echo "$POTENTIAL_MATCHES" | cut -d'|' -f2 | sed 's/^/    - /'
+                  else
+                    echo "⚠️  No partial matches found for $full_name"
+                  fi
+                else
+                  echo "⚠️  No partial matches found for $full_name"
+                fi
+              fi
+
               if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
                 echo "$USER_ID"
               else
