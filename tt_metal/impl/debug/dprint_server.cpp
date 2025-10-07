@@ -43,8 +43,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_backend_api_types.hpp"
 
-using std::cout;
-using std::endl;
 using std::flush;
 using std::int32_t;
 using std::ofstream;
@@ -78,7 +76,7 @@ string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
             case 0: return abbreviated ? "ER" : "ERISC";
             case 1:
                 return abbreviated ? "ER1" : "ERISC1";
-                // Default case falls through and handled at end.
+            default: return fmt::format("ERROR: UNSUPPORTED RISC_ID({}) for ETH", risc_id);
         }
     } else {
         const auto& hal = tt::tt_metal::MetalContext::instance().hal();
@@ -90,7 +88,7 @@ string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
                     case 0: return abbreviated ? "BR" : "BRISC";
                     case 1:
                         return abbreviated ? "NC" : "NCRISC";
-                        // Default case falls through and handled at end.
+                    default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_TYPE({}) for DM", processor_type);
                 }
                 break;
             case tt::tt_metal::HalProcessorClassType::COMPUTE:
@@ -99,9 +97,10 @@ string GetRiscName(CoreType core_type, int risc_id, bool abbreviated = false) {
                     case 1: return abbreviated ? "TR1" : "TRISC1";
                     case 2:
                         return abbreviated ? "TR2" : "TRISC2";
-                        // Default case falls through and handled at end.
+                    default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_TYPE({}) for COMPUTE", processor_type);
                 }
                 break;
+            default: return fmt::format("ERROR: UNSUPPORTED PROCESSOR_CLASS({})", processor_class);
         }
     }
     return fmt::format("UNKNOWN_RISC_ID({})", risc_id);
@@ -528,7 +527,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
     }
-    stream_ = outfile_ ? outfile_ : &cout;
+    stream_ = outfile_ ? outfile_ : &std::cout;
 
     // Spin off the thread that runs the print server.
     print_server_thread_ = new std::thread([this] { poll_print_data(); });
@@ -872,7 +871,7 @@ void DPrintServer::Impl::clear_log_file() {
         string file_name = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_file_name(
             tt::llrt::RunTimeDebugFeatureDprint);
         outfile_ = new ofstream(file_name);
-        stream_ = outfile_ ? outfile_ : &cout;
+        stream_ = outfile_ ? outfile_ : &std::cout;
     }
 }  // clear_log_file
 

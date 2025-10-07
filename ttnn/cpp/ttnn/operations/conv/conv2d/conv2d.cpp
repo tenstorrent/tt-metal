@@ -39,7 +39,6 @@
 namespace ttnn {
 namespace operations::conv {
 using namespace tt;
-using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
