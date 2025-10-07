@@ -130,18 +130,37 @@ while [[ "$found" == "false" ]]; do
   attempt=1
   output_file="bisect_test_output.log"
   while [ $attempt -le $max_retries ]; do
-    echo "Attempt $attempt on $(git rev-parse HEAD)"
-    echo "Run: $test"
-    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+    echo "Attempt $attempt on $(git rev-parse HEAD) - need $attempt consecutive successes"
+    consecutive_successes=0
+    required_successes=$attempt
+
+    # Run the test $attempt times and count consecutive successes from the end
+    for run in $(seq 1 $attempt); do
+      echo "Run $run/$attempt: $test"
+      if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test" 2>&1 | tee "$output_file"; then
+        consecutive_successes=$((consecutive_successes + 1))
+        echo "Success $consecutive_successes/$required_successes"
+      else
+        timeout_rc=$?
+        echo "Test failed (code $timeout_rc) - resetting consecutive count"
+        echo "--- Logs (run $run) ---"
+        sed -n '1,200p' "$output_file" || true
+        echo "------------------------------"
+        consecutive_successes=0
+        # Continue running remaining tests to get more diagnostic info
+      fi
+    done
+
+    if [ $consecutive_successes -eq $required_successes ]; then
       timeout_rc=0
-      echo "--- Logs (attempt $attempt) ---"
+      echo "PASSED: Got $consecutive_successes consecutive successes as required"
+      echo "--- Final Logs ---"
       sed -n '1,200p' "$output_file" || true
       echo "------------------------------"
       break
     else
-      timeout_rc=$?
-      echo "Test failed (code $timeout_rc), retrying…"
-      echo "--- Logs (attempt $attempt) ---"
+      echo "FAILED: Only got $consecutive_successes consecutive successes, needed $required_successes"
+      echo "--- Final Logs ---"
       sed -n '1,200p' "$output_file" || true
       echo "------------------------------"
       attempt=$((attempt+1))
