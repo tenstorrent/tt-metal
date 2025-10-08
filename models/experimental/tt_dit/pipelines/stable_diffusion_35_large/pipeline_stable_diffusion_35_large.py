@@ -290,7 +290,6 @@ class StableDiffusion3Pipeline:
                 mesh_device=submesh_device,
                 ccl_manager=self.ccl_managers[i],
                 parallel_config=self.dit_parallel_config,
-                init=False,
                 padding_config=padding_config,
             )
 

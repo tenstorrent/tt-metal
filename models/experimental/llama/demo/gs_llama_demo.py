@@ -7,7 +7,7 @@ import pytest
 import ttnn
 from loguru import logger
 
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+from models.common.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from models.experimental.llama.llama_utils import (

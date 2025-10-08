@@ -20,7 +20,7 @@ from ttnn import unsqueeze_to_4D
 
 def compare(tensor, name, transpose=False, unpad=False):
     return
-    from models.utility_functions import comp_pcc
+    from models.common.utility_functions import comp_pcc
 
     tensor = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
     tensor = ttnn.from_device(tensor)

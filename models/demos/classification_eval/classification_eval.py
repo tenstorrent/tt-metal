@@ -10,7 +10,7 @@ from loguru import logger
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
+from models.demos.mobilenetv2.common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.utils.common_demo_utils import get_data_loader, load_imagenet_dataset
 from models.experimental.efficientnetb0.common import EFFICIENTNETB0_L1_SMALL_SIZE
 from models.experimental.swin_s.common import SWIN_S_L1_SMALL_SIZE
@@ -250,7 +250,7 @@ def test_vit_image_classification_eval(
 def run_resnet50_image_classification_eval(
     device, model_type, batch_size_per_device, act_dtype, weight_dtype, model_location_generator, resolution=224
 ):
-    from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
+    from models.demos.ttnn_resnet.tests.common.resnet50_test_infra import create_test_infra
     from models.demos.utils.common_demo_utils import get_batch
     from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 

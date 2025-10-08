@@ -19,7 +19,7 @@ from models.experimental.grok.tt.grok_mlp import TtGrokMLP
 from models.experimental.grok.tt.grok_moe import TtMoeLayer
 from models.experimental.grok.reference.model import MoeBlock
 from models.experimental.grok.tt.model_config import TtModelArgs
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )

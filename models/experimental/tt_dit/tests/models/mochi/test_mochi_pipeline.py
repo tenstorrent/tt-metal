@@ -129,7 +129,7 @@ def test_tt_mochi_pipeline(
     """
     try:
         from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
-        from ....parallel.config import DiTParallelConfig, ParallelFactor
+        from ....parallel.config import DiTParallelConfig, MochiVAEParallelConfig, ParallelFactor
     except ImportError as e:
         pytest.skip(f"Required TT modules not available: {e}")
 
@@ -145,13 +145,23 @@ def test_tt_mochi_pipeline(
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
+    h_parallel_factor = 4
+    vae_parallel_config = MochiVAEParallelConfig(
+        time_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+        h_parallel=ParallelFactor(factor=h_parallel_factor, mesh_axis=1),
+        w_parallel=ParallelFactor(factor=mesh_device.shape[1] // h_parallel_factor, mesh_axis=1),
+    )
+    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[1]
+    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
 
     # Create the TT Mochi pipeline
     tt_pipe = TTMochiPipeline(
         mesh_device=mesh_device,
         parallel_config=parallel_config,
+        vae_parallel_config=vae_parallel_config,
         num_links=num_links,
         use_cache=True,
+        use_reference_vae=False,
         model_name="genmo/mochi-1-preview",
     )
 
@@ -165,9 +175,9 @@ def test_tt_mochi_pipeline(
         prompt,
         num_inference_steps=50,  # Reduced for faster testing
         guidance_scale=3.5,
-        num_frames=48,  # Reduced for faster testing
-        height=320,  # Reduced resolution for faster testing
-        width=400,  # Reduced resolution for faster testing
+        num_frames=168,  # Reduced for faster testing
+        height=480,  # Reduced resolution for faster testing
+        width=848,  # Reduced resolution for faster testing
     ).frames[0]
 
     # Validate output

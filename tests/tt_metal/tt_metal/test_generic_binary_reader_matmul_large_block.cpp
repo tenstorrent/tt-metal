@@ -27,7 +27,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -65,7 +65,7 @@ std::vector<std::uint32_t> transpose_tiles(
     for (int c = 0; c < col_tiles; c += in0_block_w) {
         for (int r = 0; r < row_tiles; r++) {
             for (int k = 0; k < in0_block_w; k++) {
-                int offset = tile_size * col_tiles * r + c * tile_size + k * tile_size;
+                int offset = (tile_size * col_tiles * r) + (c * tile_size) + (k * tile_size);
                 for (int i = 0; i < tile_size; i++) {
                     result.push_back(data.at(offset + i));
                 }
@@ -90,7 +90,7 @@ void print_faces(std::vector<bfloat16> data, const std::string& name) {
                 face_index = 0;
             }
         }
-        std::cout << data.at(i).to_float() << ", ";
+        std::cout << static_cast<float>(data.at(i)) << ", ";
         if ((i + 1) % 16 == 0) {
             std::cout << std::endl;
         }

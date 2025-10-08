@@ -25,8 +25,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include "umd/device/types/arch.h"
-#include <tt-metalium/utils.hpp>
+#include <umd/device/types/arch.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -37,13 +36,13 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
-void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -170,6 +169,12 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
                 } else {
                     k_id_s = "";
                 }
+                std::string erisc1_s = "   X";
+                if (device->arch() == ARCH::BLACKHOLE &&
+                    tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+                    // There is a second erisc on Blackhole
+                    erisc1_s = "   W";
+                }
                 expected = fmt::format(
                     "Device {} {}eth core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
                     device->id(),
@@ -181,11 +186,11 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
                     waypoint,
                     // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
                     // Active eth core only has one available erisc to test on.
-                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
+                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : erisc1_s);
                 if (device->arch() == ARCH::BLACKHOLE) {
-                    expected += fmt::format("rmsg:???|?? h_id:  0 smsg:? k_ids:{}", k_id_s);
+                    expected += fmt::format("rmsg:???|?? h_id:  ? smsg:? k_ids:{}", k_id_s);
                 } else {
-                    expected += fmt::format("rmsg:???|? h_id:  0 k_ids:{}", k_id_s);
+                    expected += fmt::format("rmsg:???|? h_id:  ? k_ids:{}", k_id_s);
                 }
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
@@ -199,8 +204,7 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
                 }
                 expected = fmt::format(
                     "Device {} worker core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},{},{},{}  rmsg:???|??? h_id:  "
-                    "0 "
-                    "smsg:???? k_ids:{}",
+                    "? smsg:???? k_ids:{}",
                     device->id(),
                     logical_core.x,
                     logical_core.y,

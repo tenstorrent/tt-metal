@@ -8,14 +8,14 @@ This is the simplest example of using the TT-Metal API. A data movement core in 
 
 We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/loopback`` directory.
 
-Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``loopback`` executable in the ``build/programming_examples`` directory. For example:
+Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``metal_example_loopback`` executable in the ``build/programming_examples`` directory. For example:
 
 .. code-block:: bash
 
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     # To run the example
-    ./build/programming_examples/loopback
+    ./build/programming_examples/metal_example_loopback
 
 Device initialization
 ---------------------
@@ -23,21 +23,21 @@ Device initialization
 .. code-block:: cpp
 
    constexpr int device_id = 0;
-   auto device = CreateDevice(device_id);
+   auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-First we open a device. This is our gateway to all operations on the accelerator. The device ID is simply an index into the list of available devices (from 0 to N-1). Thus device 0 is the first device and always available if one is installed.
+First, create a mesh device. For these introductory examples, all programs run on a single device. However in TT-Metal, all operations use a mesh abstraction - even a single device is represented as a 1x1 mesh. This approach keeps the API consistent and makes it easy to scale from one device to many. The device ID is an index into the list of available devices (starting from 0). Device 0 is always present if any device is installed.
 
 Program setup
 -------------
 
 .. code-block:: cpp
 
-   CommandQueue& cq = device->command_queue();
+   distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
    Program program = CreateProgram();
 
-Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. And commands are operations that are run on the device, including but not limited to upload/download of data and program execution.
+Operations in Metalium are almost always capable to be run asynchronously and the ordering of operations is managed by a command queue. The command queue, like the name suggests, is a FIFO queue of commands that are executed in order. Commands include operations run on the device such as upload/download of data and program execution. The mesh command queue handles operations across the entire mesh (in this case, our single device).
 
-Next, we create a ``Program`` object that we will fill in later. A program is a set of kernels that are executed on the device. If you are familiar with OpenCL, the program in Metalium is different from OpenCL in that All Tensix cores need to to run the exact same kernel at the same time. However in this example, we are only going to use one of all the cores in the device.
+Next, we create a ``Program`` object that we will fill in later. A program is a set of kernels that are executed on the device. Unlike OpenCL where all cores must run identical kernels simultaneously, Metalium allows different kernels on different cores at the same time. However in this example, we're only using one core.
 
 Create buffers in DRAM and L1 (SRAM)
 ------------------------------------
@@ -54,54 +54,54 @@ There are two types of buffers in the Tensix: L1 and DRAM. L1 is a misnomer as i
 
 Note that almost all operations on the Tensix are aligned with tiles. And a tile is a 32x32 grid of values. The data type used in this example is bfloat16 as it is what the math engine uses internally (though we won't touch the math engine in this example). Making each tile 32 x 32 x 2 bytes = 2048 bytes. And we wish to allocate 50 tiles in for each (input and output) DRAM buffer. Thus the total size of each DRAM buffer is 50 * 2048 = 102400 bytes. And a single tile worth of buffer on the L1 is 2048 bytes as well. So that we can copy a single tile at a time.
 
-Note the ``page_size`` argument in the buffer config and the ``Interleaved`` in the buffer type. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. Interleaved buffers simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enabels easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
+Note the ``page_size`` argument in the buffer config. Both L1 and DRAM are split into banks. Each bank is a physical memory unit that can be accessed independently. However, managing banks separately is tricky and not scalable. The default buffer allocation strategy simply round-robin the data across all banks every ``page_size`` bytes. This allows the programmer to treat the buffer as a single unit, while taking advantage of the parallelism of the banks for higher bandwidth. Usually the page size is set to the tile size, which is 2048 bytes in this case. This enables easy programming while still maintaining high performance. Other values are also supported, but the programmer is then responsible for the performance implications and programming complexity.
 
-The L1 buffer is created with a size equal to the size of a single tile, which will act as a buffer for old temporary data. Then be written back to DRAM.
+Mesh buffers use two configuration layers: ``DeviceLocalBufferConfig`` specifies properties like page size and buffer type, while ``ReplicatedBufferConfig`` handles distribution across the mesh. Since we're using a unit mesh (single device), "replicated" simply means allocated on that device.
+
+The L1 buffer is created with a size equal to the size of a single tile (2048 bytes), which will act as a temporary buffer for copying data one tile at a time from input DRAM to output DRAM.
 
 .. code-block:: cpp
 
   constexpr uint32_t num_tiles = 50;
-  constexpr uint32_t tile_size = TILE_WIDTH * TILE_HEIGHT;
-  constexpr uint32_t single_tile_size = sizeof(bfloat16) * tile_size;
-  constexpr uint32_t dram_buffer_size = single_tile_size * num_tiles;
-  tt_metal::InterleavedBufferConfig l1_config{
-      .device=device,
-      .size = single_tile_size,
-      .page_size = single_tile_size,
-      .buffer_type = tt_metal::BufferType::L1
+  constexpr uint32_t elements_per_tile = tt::constants::TILE_WIDTH * tt::constants::TILE_HEIGHT;
+  constexpr uint32_t tile_size_bytes = sizeof(bfloat16) * elements_per_tile;
+  constexpr uint32_t dram_buffer_size = tile_size_bytes * num_tiles;
+
+  // allocation properties within a device
+  distributed::DeviceLocalBufferConfig l1_config{
+      .page_size = tile_size_bytes,
+      .buffer_type = tt::tt_metal::BufferType::L1
   };
 
-  Buffer l1_buffer = CreateBuffer(l1_config);
+  // overall buffer size across all device in mesh
+  distributed::ReplicatedBufferConfig l1_buffer_config{.size = tile_size_bytes};
+  auto l1_buffer = distributed::MeshBuffer::create(l1_buffer_config, l1_config, mesh_device.get());
 
-The only difference between the L1 and DRAM buffer is the ``BufferType``. The L1 buffer is created with a ``BufferType::L1`` and the DRAM buffer is created with a ``BufferType::DRAM``.
+The DRAM buffers differ from the L1 buffer in two ways: the ``BufferType`` (``BufferType::DRAM`` instead of ``BufferType::L1``) and the size (50 tiles for DRAM vs. 1 tile for L1). The L1 buffer acts as a temporary single-tile buffer while the kernel copies data tile-by-tile from input to output DRAM.
 
 .. code-block:: cpp
 
-  tt_metal::InterleavedBufferConfig dram_config{
-      .device=device,
-      .size = dram_buffer_size,
-      .page_size = single_tile_size,
-      .buffer_type = tt_metal::BufferType::DRAM
+  distributed::DeviceLocalBufferConfig dram_config{
+      .page_size = tile_size_bytes,
+      .buffer_type = tt::tt_metal::BufferType::DRAM
   };
 
-  Buffer input_dram_buffer = CreateBuffer(dram_config);
-  const uint32_t input_dram_buffer_addr = input_dram_buffer.address();
-
-  Buffer output_dram_buffer = CreateBuffer(dram_config);
-  const uint32_t output_dram_buffer_addr = output_dram_buffer.address();
+  distributed::ReplicatedBufferConfig dram_buffer_config{.size = dram_buffer_size};
+  auto input_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
+  auto output_dram_buffer = distributed::MeshBuffer::create(dram_buffer_config, dram_config, mesh_device.get());
 
 Sending real data into DRAM
 ---------------------------
 
 .. code-block:: cpp
 
-  std::vector<bfloat16> input_vec(num_tiles * tile_size);
+  std::vector<bfloat16> input_vec(elements_per_tile * num_tiles);
   std::mt19937 rng(std::random_device{}());
   std::uniform_real_distribution<float> distribution(0.0f, 100.0f);
   for (auto& val : input_vec) {
       val = bfloat16(distribution(rng));
   }
-  EnqueueWriteBuffer(cq, input_dram_buffer, input_vec, false);
+  distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
 
 Send in a randomly-generated BFP16 (Brain 16bit floating point) vector that will act as our input data tensor.
 
@@ -115,15 +115,18 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 .. code-block:: cpp
 
     constexpr CoreCoord core = {0, 0};
-    std::vector<uint32_t> compile_args;
-    TensorAccessorArgs(*input_dram_buffer).append_to(compile_args);
-    TensorAccessorArgs(*output_dram_buffer).append_to(compile_args);
+    std::vector<uint32_t> dram_copy_compile_time_args;
+    TensorAccessorArgs(*input_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
+    TensorAccessorArgs(*output_dram_buffer->get_backing_buffer()).append_to(dram_copy_compile_time_args);
 
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+        "loopback/kernels/loopback_dram_copy.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = compile_args}
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = dram_copy_compile_time_args}
     );
 
 .. note::
@@ -136,7 +139,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
     Metalium will search for the kernel source file in order of the above. In this case the kernel will be found relative to ``TT_METAL_HOME``. If the file is not found, an error will be thrown.
 
-The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
+The kernel itself is simple. It takes the buffer addresses and the number of tiles to copy. It copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
 
 The ``TensorAccessor`` object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
 
@@ -167,7 +170,7 @@ The ``TensorAccessor`` object handles bank addressing and page size automaticall
     }
 
 .. note::
-  ``TensorAccessor`` handles address generation for all kinds of buffers automatically. Without the helper, the kernel implementation would be:
+  ``TensorAccessor`` handles address generation for all kinds of buffers automatically, including the complexity of bank interleaving. Without the helper, the kernel implementation would need to manually calculate NoC addresses for each tile, taking into account how data is distributed across DRAM banks. The ``TensorAccessor`` abstraction greatly simplifies this by handling all the bank addressing and page size calculations internally. Here's what the manual implementation would look like:
 
   .. code-block:: cpp
 
@@ -195,18 +198,13 @@ Setting runtime arguments for the data movement kernel
 .. code-block:: cpp
 
   const std::vector<uint32_t> runtime_args = {
-      l1_buffer.address(),
-      input_dram_buffer.address(),
-      output_dram_buffer.address(),
+      l1_buffer->address(),
+      input_dram_buffer->address(),
+      output_dram_buffer->address(),
       num_tiles
   };
 
-  SetRuntimeArgs(
-      program,
-      dram_copy_kernel_id,
-      core,
-      runtime_args
-  );
+  SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
 We now set runtime arguments for our data movement kernel. The kernel can then access these arguments at runtime. For this specific kernel, we need to pass in the following arguments:
 
@@ -220,13 +218,17 @@ Running the program
 
 .. code-block:: cpp
 
-    EnqueueProgram(cq, program, false);
-    Finish(cq);
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    distributed::Finish(cq);
     // Equivalently, we could have done:
-    // EnqueueProgram(cq, program, true);
+    // distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
 
+Finally, we launch our program. First, we create a ``MeshWorkload`` representing a collection of programs to be executed across the mesh. Each program in the workload is associated with a range of devices where it should run. In our case, we have a single program running on our entire (unit) mesh.
 
-Finally, we launch our program. The ``Finish`` call waits for the the host program only continues execution after everything in the command queue has been completed. The final argument in ``EnqueueProgram`` indicates that the program is non-blocking. Setting it to ``true`` would cause the program to block until the program is finished. Efficiently, this is the same as calling ``Finish`` after the program is enqueued.
+The ``distributed::Finish`` call waits for the host program—execution only continues after everything in the command queue has been completed. The final argument in ``EnqueueMeshWorkload`` indicates that the execution is non-blocking. Setting it to ``true`` would cause the program to block until the workload is finished. This is effectively the same as calling ``distributed::Finish`` after the workload is enqueued.
 
 Download the result and verify output
 -------------------------------------
@@ -237,7 +239,7 @@ it matches what we sent. Again the final ``true`` argument causes the data trans
 .. code-block:: cpp
 
   std::vector<bfloat16> result_vec;
-  EnqueueReadBuffer(cq,output_dram_buffer, result_vec, true);
+  distributed::EnqueueReadMeshBuffer(cq, result_vec, output_dram_buffer, true);
 
   for (int i = 0; i < input_vec.size(); i++) {
     if (input_vec[i] != result_vec[i]) {
@@ -251,8 +253,8 @@ Validation and teardown
 
 .. code-block:: cpp
 
-   pass &= CloseDevice(device);
+   pass &= mesh_device->close();
 
-We now use ``CloseDevice`` to teardown our device. This releases resources associated with the device.
+We now use ``mesh_device->close()`` to teardown our mesh device. This releases resources associated with the device.
 
 Now we can start adding some compute to our program. Please refer to the :ref:`Eltwise binary example<Eltwise binary example>`.

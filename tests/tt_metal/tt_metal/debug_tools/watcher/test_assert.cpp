@@ -14,7 +14,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "debug_tools_fixture.hpp"
 #include "hal_types.hpp"
 #include <tt-metalium/device.hpp>
@@ -23,7 +23,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/utils.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher asserts.
@@ -34,7 +33,7 @@ using namespace tt::tt_metal;
 namespace CMAKE_UNIQUE_NAMESPACE {
 static void RunTest(
     MeshWatcherFixture* fixture,
-    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     HalProgrammableCoreType programmable_core_type,
     HalProcessorClassType processor_class,
     int processor_id,
@@ -44,7 +43,7 @@ static void RunTest(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
 
@@ -202,7 +201,7 @@ static void RunTest(
     std::string exception = "";
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
-    } while (exception == "");
+    } while (exception.empty());
     EXPECT_EQ(expected, MetalContext::instance().watcher_server()->exception_message());
 }
 }
@@ -231,8 +230,14 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
         GTEST_SKIP();
     }
     this->RunTestOnDevice(
-        [&params](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
-            RunTest(fixture, mesh_device, params.core_type, params.processor_class, params.processor_id, params.assert_type);
+        [&params](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTest(
+                fixture,
+                mesh_device,
+                params.core_type,
+                params.processor_class,
+                params.processor_id,
+                params.assert_type);
         },
         this->devices_[0]);
 }

@@ -9,7 +9,7 @@ import torch.nn as nn
 import ttnn
 
 from tt_lib.fallback_ops import fallback_ops
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt2torch_tensor,
 )
 from models.experimental.roberta.roberta_common import torch2tt_tensor

@@ -65,6 +65,7 @@ class CodeGen:
         self.struct_ids: Dict[str, int] = {}
         self.includes: List[str] = []
         self.enums: List[str] = []
+        self.constants: List[str] = []
         self.scalar_types: set[str] = set(self.SCALAR_TYPES)
         self.driver_ns = driver_ns
         self.driver_include_path = driver_include_path
@@ -112,7 +113,10 @@ class CodeGen:
 
     def parse(self):
         while line := self.getline():
-            if re.match(r"(?:static )?constexpr|static_assert", line):
+            if line.startswith("static_assert"):
+                continue
+            if re.match(r"(?:static )?constexpr ", line):
+                self.constants.append(line)
                 continue
             match = re.match(r"enum(?: class)? (\w+) (?:: \w+ )?{", line)
             if match:
@@ -155,7 +159,9 @@ class CodeGen:
             if re.fullmatch(r"(?:struct|union) {", line):
                 level += 1
                 continue
-            match = re.fullmatch(r"(?:volatile )?(?:struct | union )?([\w<>: ]+) +(\w+)(?:\[(\w+)\])? *(?:=.*)?;", line)
+            match = re.fullmatch(
+                r"(?:volatile )?(?:struct | union )?([\w<>: ]+) +(\w+)(?:\[([\w:]+)\])? *(?:=.*)?;", line
+            )
             if not match:
                 self.parse_error(line, "expect struct field definition")
             type_name = match.group(1)
@@ -185,6 +191,8 @@ class CodeGen:
         print(*my_includes, sep="\n")
         if self.interface_ns:
             print(f"namespace {self.interface_ns} {{")
+        for constant in self.constants:
+            print(constant)
         self.emit_types()
         self.emit_factory()
         print("using namespace types;\n")

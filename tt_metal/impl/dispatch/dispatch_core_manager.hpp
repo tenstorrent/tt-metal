@@ -14,9 +14,9 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/core_descriptor.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <umd/device/tt_core_coordinates.h>
-#include <umd/device/tt_xy_pair.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/xy_pair.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -64,7 +64,6 @@ public:
     /// @param dispatch_core_config specfies the core type that is designated for dispatch functionality
     dispatch_core_manager(const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs);
 
-    // TODO: this should probably be in command_queue_interface.hpp, but it's here for now due to circular dependency
     static constexpr uint8_t MAX_NUM_HW_CQS = 2;
 
     /// @brief Gets the location of the kernel desginated to read from the issue queue region from a particular command

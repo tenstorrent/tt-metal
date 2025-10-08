@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -25,7 +25,7 @@ protected:
     }
 };
 
-TEST_F(NoOpFullTest, NoOpTest) {
+TEST_F(NoOpFullTest, NIGHTLY_NoOpTest) {
     using namespace ttml::ops;
     ttml::autograd::ctx().set_seed(123U);
     auto* device = &ttml::autograd::ctx().get_device();

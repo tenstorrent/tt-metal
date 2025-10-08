@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,10 +15,6 @@
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "jit_build_options.hpp"
-
-namespace tt {
-enum class ARCH;
-}  // namespace tt
 
 namespace tt::tt_metal {
 

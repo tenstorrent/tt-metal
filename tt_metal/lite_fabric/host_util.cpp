@@ -13,13 +13,7 @@
 #include <tt-metalium/hal_types.hpp>
 
 namespace {
-uint32_t GetStateAddressMetal() {
-    uint32_t state_addr =
-        tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LITE_FABRIC_CONFIG) +
-        offsetof(lite_fabric::FabricLiteMemoryMap, config) + offsetof(lite_fabric::FabricLiteConfig, current_state);
-    return state_addr;
-}
+
 uint32_t GetStateAddress() { return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteConfig, current_state); }
 
 lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemDescriptor& desc) {
@@ -173,8 +167,8 @@ void LaunchLiteFabric(
             "Wrote lite fabric. Core: {}, Config: {:#x}, Binary: {:#x}, Size: {} B",
             tunnel_1x.mmio_core_logical,
             config_addr,
-            config.binary_addr,
-            config.binary_size);
+            static_cast<uint32_t>(config.binary_addr),
+            static_cast<uint32_t>(config.binary_size));
     }
 
     cluster.l1_barrier(0);

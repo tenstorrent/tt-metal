@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -8,8 +8,6 @@
 
 namespace ttsl {
 namespace {
-
-using ::testing::ElementsAre;
 
 TEST(OptionalReferenceTest, DefaultConstruction) {
     optional_reference<int> ref;
@@ -92,6 +90,7 @@ TEST(OptionalReferenceTest, MoveConstruction) {
     EXPECT_TRUE(ref2.has_value());
     EXPECT_EQ(*ref2, 42);
     // Note: ref1 should still be valid after move (it's just a pointer copy)
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     EXPECT_TRUE(ref1.has_value());
 }
 

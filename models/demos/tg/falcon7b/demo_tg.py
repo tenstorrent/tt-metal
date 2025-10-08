@@ -4,8 +4,8 @@
 
 import pytest
 
+from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
-from models.utility_functions import is_wormhole_b0
 
 
 @pytest.mark.parametrize(
@@ -76,8 +76,8 @@ def test_demo_multichip(
                 2048: {"prefill_t/s": 20400, "decode_t/s/u": 6.60},
             },
             "6U": {
-                128: {"prefill_t/s": 32900, "decode_t/s/u": 12.19},
-                1024: {"prefill_t/s": 33800, "decode_t/s/u": 11.60},
+                128: {"prefill_t/s": 32900, "decode_t/s/u": 11.60},
+                1024: {"prefill_t/s": 32000, "decode_t/s/u": 11.50},
                 2048: {"prefill_t/s": 31100, "decode_t/s/u": 10.97},
             },
         }

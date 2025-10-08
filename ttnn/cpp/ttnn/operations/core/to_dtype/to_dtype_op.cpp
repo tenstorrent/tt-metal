@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
@@ -81,11 +81,7 @@ tt::tt_metal::HostStorage transform_storage(
             auto data = buffer.view_as<const SrcType>();
             std::vector<DstType> output_vector(data.size());
             std::transform(data.begin(), data.end(), output_vector.begin(), [](SrcType value) {
-                if constexpr (std::is_same_v<DstType, bfloat16>) {
-                    return bfloat16(static_cast<float>(value));
-                } else {
-                    return static_cast<DstType>(value);
-                }
+                return static_cast<DstType>(value);
             });
             return tt::tt_metal::HostBuffer(std::move(output_vector));
         };

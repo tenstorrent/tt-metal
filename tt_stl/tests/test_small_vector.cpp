@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 //===----------------------------------------------------------------------===//
@@ -63,7 +63,6 @@ struct Tracked {
     Tracked& operator=(const Tracked& other) = default;
     Tracked& operator=(Tracked&& other) noexcept = default;
     ~Tracked() { ++dtorCount; }
-    friend bool operator==(const Tracked& lhs, const Tracked& rhs) { return lhs.value == rhs.value; }
 };
 
 int Tracked::ctorCount = 0;
@@ -77,7 +76,6 @@ int Tracked::dtorCount = 0;
 struct alignas(64) OverAligned {
     int payload;
     OverAligned(int v = 0) : payload(v) {}
-    friend bool operator==(const OverAligned& lhs, const OverAligned& rhs) { return lhs.payload == rhs.payload; }
 };
 
 // Fixture for tests using `SmallVector<int, kInlineCapacity>`.  Provides convenience
@@ -188,6 +186,7 @@ TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
         EXPECT_EQ(moved.size(), 2u);
         EXPECT_EQ(moved[0].value, 10);
         EXPECT_EQ(moved[1].value, 20);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_TRUE(small.empty());
     }
     {
@@ -203,6 +202,7 @@ TEST_F(SmallVectorTrackedTest, MoveConstructorSmallAndLarge) {
         EXPECT_GE(moved.capacity(), oldCapacity);
         // When moved, it is typical for the heap storage to be transferred.
         EXPECT_EQ(moved.data(), oldData);
+        // NOLINTNEXTLINE(bugprone-use-after-move)
         EXPECT_TRUE(large.empty());
         // The moved-from vector may have shrunk its capacity but should be
         // functional; pushing into it should work.
@@ -396,9 +396,6 @@ TEST_F(SmallVectorIntTest, SwapExchangesContentsAndStorage) {
     for (int i = 0; i < kInlineCapacity + 2; ++i) {
         large.push_back(i + 10);
     }
-    auto smallPtr = small.data();
-    auto largePtr = large.data();
-    std::size_t smallCap = small.capacity();
     std::size_t largeCap = large.capacity();
 
     std::size_t small_size = small.size();

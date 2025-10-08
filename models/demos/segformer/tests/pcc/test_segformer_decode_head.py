@@ -17,7 +17,6 @@ from models.demos.segformer.tests.pcc.test_segformer_mlp import (
 from models.demos.segformer.tt.common import fold_batch_norm2d_into_conv2d
 from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -57,7 +56,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None):
     return custom_mesh_preprocessor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_decode_head(device, model_location_generator):
     batch_size = 1

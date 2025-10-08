@@ -128,7 +128,7 @@ def test_t5_encoder(
 
     assert hf_outputs.shape == tt_output_torch.shape
 
-    assert_quality(hf_outputs, tt_output_torch, pcc=0.93)
+    assert_quality(hf_outputs, tt_output_torch, pcc=0.99)
 
 
 if __name__ == "__main__":

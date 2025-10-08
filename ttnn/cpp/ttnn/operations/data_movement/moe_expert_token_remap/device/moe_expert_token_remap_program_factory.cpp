@@ -5,6 +5,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_align.hpp>
 
 #include "moe_expert_token_remap_device_operation.hpp"
 
@@ -130,7 +131,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CreateCircularBuffer(program, total_cores, cb_output_reduced_config);
 
     const auto& mesh_view = mesh_device->get_view();
-    const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+    const uint32_t flat_mesh_idx = (mesh_coordinate[0] * mesh_view.num_cols()) + mesh_coordinate[1];
 
     // slightly abusing this functionality since here we also have a single page if any experts are activated
     constexpr bool local_reduce = true;
@@ -190,13 +191,11 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto [core_page_increments, all_cores] =
         tt::tt_metal::split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
-    const auto mapping_tensor_addr = mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
-    const auto metadata_tensor_addr = metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
-    const auto topk_tensor_addr = topk_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
-    const auto output_mapping_tensor_addr =
-        output_mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
-    const auto output_reduced_tensor_addr =
-        output_reduced_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
+    const auto mapping_tensor_addr = mapping_tensor.buffer()->address();
+    const auto metadata_tensor_addr = metadata_tensor.buffer()->address();
+    const auto topk_tensor_addr = topk_tensor.buffer()->address();
+    const auto output_mapping_tensor_addr = output_mapping_tensor.buffer()->address();
+    const auto output_reduced_tensor_addr = output_reduced_tensor.buffer()->address();
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     constexpr auto num_reader_rt_args = 5, num_writer_rt_args = 5;
@@ -253,12 +252,12 @@ void MoeExpertTokenRemapDeviceOperation::Multicore::override_runtime_arguments(
             auto& reader_runtime_args = GetRuntimeArgs(program, ternary_reader_kernel_id, c);
             auto& writer_runtime_args = GetRuntimeArgs(program, binary_writer_kernel_id, c);
 
-            reader_runtime_args.at(0) = tensor_args.mapping_tensor.mesh_buffer()->get_device_buffer(coord)->address();
-            reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->get_device_buffer(coord)->address();
-            reader_runtime_args.at(2) = tensor_args.topk_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+            reader_runtime_args.at(0) = tensor_args.mapping_tensor.buffer()->address();
+            reader_runtime_args.at(1) = tensor_args.metadata_tensor.buffer()->address();
+            reader_runtime_args.at(2) = tensor_args.topk_tensor.buffer()->address();
 
-            writer_runtime_args.at(0) = output_mapping_tensor.mesh_buffer()->get_device_buffer(coord)->address();
-            writer_runtime_args.at(3) = output_reduced_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+            writer_runtime_args.at(0) = output_mapping_tensor.buffer()->address();
+            writer_runtime_args.at(3) = output_reduced_tensor.buffer()->address();
         }
     }
 };

@@ -13,6 +13,9 @@
 #include <fmt/format.h>
 #include "tt_cluster.hpp"
 
+// TODO: Cleanup this file
+// https://github.com/tenstorrent/tt-metal/issues/28324
+
 namespace {
 std::string GetToolchainPath(const std::string& root_dir) {
     const std::array<std::string, 2> sfpi_roots = {
@@ -80,9 +83,10 @@ int CompileFabricLite(
         root_dir / "tt_metal/hw/inc/ethernet",
         root_dir / "tt_metal/hostdevcommon/api",
         root_dir / "tt_metal/hw/inc/debug",
-        root_dir / "tt_metal/hw/inc/blackhole",
-        root_dir / "tt_metal/hw/inc/blackhole/blackhole_defines",
-        root_dir / "tt_metal/hw/inc/blackhole/noc",
+        root_dir / "tt_metal/hw/inc/tt-1xx/",
+        root_dir / "tt_metal/hw/inc/tt-1xx/blackhole",
+        root_dir / "tt_metal/hw/inc/tt-1xx/blackhole/blackhole_defines",
+        root_dir / "tt_metal/hw/inc/tt-1xx/blackhole/noc",
         root_dir / "tt_metal/hw/ckernels/blackhole/metal/common",
         root_dir / "tt_metal/hw/ckernels/blackhole/metal/llk_io",
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc",
@@ -111,12 +115,14 @@ int CompileFabricLite(
         // We do not access the PCIe cores
         "PCIE_NOC_X=0",
         "PCIE_NOC_Y=0",
+        // Lite Fabric is intended to run on risc1
+        "PROCESSOR_INDEX=1",
     };
 
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
     std::ostringstream oss;
-    oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
+    oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-g++ ";
     oss << GetCommonOptions() << " ";
 
     for (const auto& include : includes) {
@@ -152,7 +158,7 @@ int LinkFabricLite(
     const std::filesystem::path output_ld = out_dir / "lite_fabric_preprocessed.ld";
 
     std::ostringstream preprocess_oss;
-    preprocess_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
+    preprocess_oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-g++ ";
     preprocess_oss << fmt::format("-I{} ", tunneling_dir.string());  // Include path for the memory defs header
     preprocess_oss << "-E -P -x c ";                                 // Preprocess only, no line markers, treat as C
     preprocess_oss << fmt::format("-o {} ", output_ld.string());
@@ -169,7 +175,7 @@ int LinkFabricLite(
 
     // Now link using the preprocessed linker script
     std::ostringstream link_oss;
-    link_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
+    link_oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-g++ ";
     link_oss << GetCommonOptions() << " ";
     link_oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
     link_oss << fmt::format("-T{} ", output_ld.string());  // Use preprocessed linker script
@@ -192,7 +198,7 @@ int LinkFabricLite(
     bin_path.replace_extension(".bin");
 
     std::ostringstream objcopy_oss;
-    objcopy_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-objcopy -O binary ";
+    objcopy_oss << GetToolchainPath(root_dir.string()) << "riscv-tt-elf-objcopy -O binary ";
     objcopy_oss << elf_out << " " << bin_path;
 
     std::string objcopy_cmd = objcopy_oss.str();

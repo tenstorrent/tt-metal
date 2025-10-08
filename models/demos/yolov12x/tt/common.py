@@ -62,7 +62,6 @@ class TtYOLOv12xConv2D:
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
-            enable_split_reader=False,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
@@ -107,6 +106,7 @@ class TtYOLOv12xConv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:

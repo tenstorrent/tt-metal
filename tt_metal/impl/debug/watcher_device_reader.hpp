@@ -11,8 +11,8 @@
 #include <string>
 #include <vector>
 
-#include <umd/device/tt_soc_descriptor.h>
-#include <umd/device/types/cluster_descriptor_types.h>
+#include <umd/device/soc_descriptor.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -32,7 +32,6 @@ private:
     struct DumpData;
     FILE* f;
     chip_id_t device_id;
-    uint32_t num_erisc_cores{0};
     const std::vector<std::string>& kernel_names;
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
 };

@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from dataclasses import dataclass
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
 )

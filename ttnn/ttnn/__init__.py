@@ -12,12 +12,6 @@ from types import ModuleType
 
 from loguru import logger
 
-# Sets env and updates shared libs rpath
-# This is a tweak required for a proper wheel functioning
-import ttnn.library_tweaks
-
-library_tweaks.setup_ttnn_so()
-
 import ttnn._ttnn
 
 
@@ -138,7 +132,7 @@ from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
-from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
+from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, FabricTensixConfig, set_fabric_config
 
 # Import cluster functions and types
 from ttnn._ttnn import cluster
@@ -182,7 +176,6 @@ from ttnn.types import (
     L1_WIDTH_SHARDED_MEMORY_CONFIG,
     ShardStrategy,
     ShardOrientation,
-    ShardMode,
     ShardSpec,
     NdShardSpec,
     CoreRangeSet,
@@ -253,8 +246,8 @@ from ttnn.device import (
     SubDevice,
     SubDeviceId,
     SubDeviceManagerId,
-    DefaultQueueId,
     init_device_compute_kernel_config,
+    SetRootDir,
 )
 
 from ttnn.profiler import start_tracy_zone, stop_tracy_zone, tracy_message, tracy_frame
@@ -277,6 +270,7 @@ from ttnn.core import (
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
+    get_current_command_queue_id_for_thread,
 )
 
 import ttnn.reflection
@@ -284,6 +278,7 @@ import ttnn.database
 
 from ttnn.decorators import (
     attach_golden_function,
+    command_queue,
     create_module_if_not_exists,
     dump_operations,
     get_golden_function,
@@ -352,6 +347,7 @@ from ttnn.operations.normalization import (
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
+    create_group_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     dram_group_norm_params_from_torch,
 )
@@ -374,8 +370,10 @@ from ttnn.operations.conv2d import (
     Conv2dConfig,
     get_conv_output_dim,
     Conv2dSliceConfig,
-    Conv2dSliceHeight,
-    Conv2dSliceWidth,
+    Conv2dDRAMSliceHeight,
+    Conv2dDRAMSliceWidth,
+    Conv2dL1Full,
+    Conv2dL1FullSliceConfig,
     prepare_conv_weights,
     prepare_conv_bias,
     prepare_conv_transpose2d_weights,
@@ -408,3 +406,8 @@ from ttnn._ttnn.device import get_arch_name as _get_arch_name
 
 def get_arch_name():
     return _get_arch_name()
+
+
+if "TT_METAL_HOME" not in os.environ:
+    this_dir = os.path.dirname(__file__)
+    SetRootDir(os.path.abspath(this_dir))

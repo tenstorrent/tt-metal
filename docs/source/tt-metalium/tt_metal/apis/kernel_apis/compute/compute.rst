@@ -199,6 +199,7 @@ Trigonometric functions
   atan_tile
   acos_tile
   acosh_tile
+  selu_tile
 
 Activation functions
 ^^^^^^^^^^^^^^^^^^^^

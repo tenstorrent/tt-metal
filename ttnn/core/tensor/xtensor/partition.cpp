@@ -249,7 +249,7 @@ Tensor concat_impl(const std::vector<Tensor>& tensors, const tt::tt_metal::Tenso
 }  // namespace adaptor
 
 Tensor concat(const std::vector<Tensor>& tensors, int dim) {
-    TT_FATAL(tensors.size() > 0, "Cannot concatenate an empty list of tensors");
+    TT_FATAL(!tensors.empty(), "Cannot concatenate an empty list of tensors");
     const auto& reference_layout = tensors.front().tensor_spec().tensor_layout();
     switch (reference_layout.get_data_type()) {
         case tt::tt_metal::DataType::BFLOAT4_B:

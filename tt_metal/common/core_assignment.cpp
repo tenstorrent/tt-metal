@@ -7,10 +7,10 @@
 #include <limits>
 #include <numeric>
 
-#include "assert.hpp"
+#include <tt_stl/assert.hpp>
 #include "core_assignment.hpp"
-#include <umd/device/types/arch.h>
-#include <umd/device/types/xy_pair.h>
+#include <umd/device/types/arch.hpp>
+#include <umd/device/types/xy_pair.hpp>
 
 namespace tt {
 namespace tt_metal {

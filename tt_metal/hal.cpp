@@ -1,19 +1,21 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <hal.hpp>
 #include <tt_backend_api_types.hpp>
-#include <umd/device/types/arch.h>
+#include <umd/device/types/arch.hpp>
 #include <cstdint>
 #include <string>
 
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 
+// NOLINTBEGIN(misc-unused-using-decls)
 using tt::tt_metal::HalL1MemAddrType;
 using tt::tt_metal::HalMemType;
 using tt::tt_metal::HalProgrammableCoreType;
+// NOLINTEND(misc-unused-using-decls)
 
 namespace tt::tt_metal::hal {
 

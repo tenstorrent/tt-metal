@@ -12,14 +12,13 @@ import os
 import ttnn
 
 from models.experimental.gemma3_4b.tt.mlp import MLP
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [

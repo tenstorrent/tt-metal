@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,6 +23,7 @@
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
 #include "serialization/serializable.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "utils.hpp"
 
 using ttml::autograd::TensorPtr;
@@ -168,6 +169,10 @@ int main(int argc, char **argv) {
         dataset.training_images, dataset.training_labels);
     ttml::datasets::InMemoryDataset<std::vector<uint8_t>, uint8_t> test_dataset(
         dataset.test_images, dataset.test_labels);
+
+    if (enable_tp) {
+        ttml::ttnn_fixed::distributed::enable_fabric(2U);
+    }
 
     auto *device = &ttml::autograd::ctx().get_device();
     device->enable_program_cache();

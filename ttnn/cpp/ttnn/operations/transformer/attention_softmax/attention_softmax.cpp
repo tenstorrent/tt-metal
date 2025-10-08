@@ -5,7 +5,6 @@
 
 #include "attention_softmax.hpp"
 
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_device_operation.hpp"
 #include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
@@ -23,36 +22,38 @@ ttnn::Tensor ExecuteAttentionSoftmax<in_place>::invoke(
     const float head_size = head_size_arg.has_value() ? 1.0f / std::sqrt(head_size_arg.value()) : 1.0f;
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
 
+    // TODO: switch to stable softmax once accuracy issue in tutorial is fixed
+    // See issue: #28525
+    const bool numeric_stable = false;
+
     if constexpr (in_place) {
         TT_FATAL(
             attention_mask.has_value(),
             "Cannot apply divide by sqrt(head_size) using in-place version when attention_mask is not set.");
         return normalization::softmax::scale_mask_softmax_in_place(
-            DefaultQueueId,
             input_tensor,
             head_size,
             attention_mask,
             normalization::SoftmaxDefaultProgramConfig{},
             causal_mask.value_or(false),
             compute_kernel_config,
-            false);
+            numeric_stable);
     } else {
         if (not attention_mask.has_value()) {
             auto output_tensor = ttnn::multiply(input_tensor, head_size);
             return ttnn::operations::normalization::softmax::softmax(
-                DefaultQueueId, output_tensor, -1, memory_config.value_or(input_tensor.memory_config()));
+                output_tensor, -1, memory_config.value_or(input_tensor.memory_config()));
         }
     }
 
     return normalization::softmax::scale_mask_softmax(
-        DefaultQueueId,
         input_tensor,
         head_size,
         attention_mask,
         memory_config.value_or(input_tensor.memory_config()),
         causal_mask.value_or(false),
         compute_kernel_config,
-        false);
+        numeric_stable);
 }
 
 template struct ExecuteAttentionSoftmax<false>;

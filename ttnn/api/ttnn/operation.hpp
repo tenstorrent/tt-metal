@@ -136,7 +136,7 @@ struct OpPerformanceModelGeneral {
     std::vector<int> inputs_bytes = {};
     std::vector<int> outputs_bytes = {};
 
-    OpPerformanceModelGeneral(Tensors input_tensors, OutputTensors output_tensors, int ideal_compute_cycles) :
+    OpPerformanceModelGeneral(Tensors input_tensors, const OutputTensors& output_tensors, int ideal_compute_cycles) :
         ideal_compute_cycles(ideal_compute_cycles) {
         const auto& t = input_tensors.at(0);
         const auto arch = t.storage_type() == StorageType::DEVICE ? t.device()->arch() : ARCH::WORMHOLE_B0;
@@ -574,8 +574,7 @@ public:
         const Tensors& input_tensors,
         const OptionalConstTensors& optional_input_tensors,
         const OptionalTensors& optional_output_tensors) const {
-        return this->validate_impl_(
-            this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
+        this->validate_impl_(this->type_erased_storage, input_tensors, optional_input_tensors, optional_output_tensors);
     }
 
     ComputedSpecs compute_output_specs(const Tensors& input_tensors, const OptionalTensors& output_tensors) const {

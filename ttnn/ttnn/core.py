@@ -356,4 +356,6 @@ def create_sharded_memory_config_(
     return memory_config
 
 
+get_current_command_queue_id_for_thread = ttnn._ttnn.core.get_current_command_queue_id_for_thread
+
 __all__ = []

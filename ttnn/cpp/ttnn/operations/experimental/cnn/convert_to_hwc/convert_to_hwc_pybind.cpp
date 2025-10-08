@@ -20,7 +20,22 @@ void bind_convert_to_hwc(py::module& module) {
     const auto doc = R"doc(
     Convert a tensor from CHW channel ordering to HWC channel ordering.
 
-    The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM. The output is a row-major height-sharded tensor.
+    The input tensor is expected to be in row-major layout and width-sharded in L1 or DRAM.
+    The output is a row-major height-sharded tensor.
+
+    When C is not a multiple of the device alignment requirement, the output shard width is automatically padded up
+    to the next multiple of the alignment requirement to satisfy alignment constraints.
+
+    Args:
+        input (ttnn.Tensor): Input tensor in CHW format, width-sharded in L1 or DRAM.
+        memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration.
+                                                     Required only for DRAM inputs. If omitted for L1 inputs, the output memory_config is automatically inferred.
+                                                     The output shard width will be rounded up to the next multiple of the alignment requirement for proper memory alignment.
+        dtype (Optional[ttnn.DataType]): Output data type (defaults to input dtype)
+
+    Returns:
+        ttnn.Tensor: Output tensor in HWC format, height-sharded
+
     )doc";
 
     ttnn::bind_registered_operation(
@@ -31,13 +46,11 @@ void bind_convert_to_hwc(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input,
                const std::optional<MemoryConfig>& memory_config,
-               const std::optional<DataType> dtype,
-               QueueId queue_id) { return self(queue_id, input, memory_config, dtype); },
+               const std::optional<DataType> dtype) { return self(input, memory_config, dtype); },
             py::arg("input"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("dtype") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::cnn::detail
