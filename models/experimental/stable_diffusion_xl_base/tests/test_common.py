@@ -414,6 +414,7 @@ def retrieve_timesteps(
     sigmas: Optional[List[float]] = None,
     **kwargs,
 ):
+    print("Scheduler we are calling this with is: ", scheduler)
     r"""
     Calls the scheduler's `set_timesteps` method and retrieves timesteps from the scheduler after the call. Handles
     custom timesteps. Any kwargs will be supplied to `scheduler.set_timesteps`.
@@ -463,6 +464,47 @@ def retrieve_timesteps(
         scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
         timesteps = scheduler.timesteps
     return timesteps, num_inference_steps
+
+
+# Copied from sdxl inpaint/img2img pipelines
+def get_timesteps(scheduler, num_inference_steps, strength, denoising_start=None):
+    assert denoising_start is None, "denoising_start is not supported in this version"
+
+    # get the original timestep using init_timestep
+    # if denoising_start is None:
+    init_timestep = min(int(num_inference_steps * strength), num_inference_steps)
+    t_start = max(num_inference_steps - init_timestep, 0)
+
+    timesteps = scheduler.timesteps[t_start * scheduler.order :]
+    scheduler.set_begin_index(t_start * scheduler.order)
+    return timesteps, num_inference_steps - t_start
+
+    # else:
+    #     # Strength is irrelevant if we directly request a timestep to start at;
+    #     # that is, strength is determined by the denoising_start instead.
+    #     discrete_timestep_cutoff = int(
+    #         round(
+    #             self.scheduler.config.num_train_timesteps
+    #             - (denoising_start * self.scheduler.config.num_train_timesteps)
+    #         )
+    #     )
+
+    #     num_inference_steps = (self.scheduler.timesteps < discrete_timestep_cutoff).sum().item()
+    #     if self.scheduler.order == 2 and num_inference_steps % 2 == 0:
+    #         # if the scheduler is a 2nd order scheduler we might have to do +1
+    #         # because `num_inference_steps` might be even given that every timestep
+    #         # (except the highest one) is duplicated. If `num_inference_steps` is even it would
+    #         # mean that we cut the timesteps in the middle of the denoising step
+    #         # (between 1st and 2nd derivative) which leads to incorrect results. By adding 1
+    #         # we ensure that the denoising process always ends after the 2nd derivate step of the scheduler
+    #         num_inference_steps = num_inference_steps + 1
+
+    #     # because t_n+1 >= t_n, we slice the timesteps starting from the end
+    #     t_start = len(self.scheduler.timesteps) - num_inference_steps
+    #     timesteps = self.scheduler.timesteps[t_start:]
+    #     if hasattr(self.scheduler, "set_begin_index"):
+    #         self.scheduler.set_begin_index(t_start)
+    #   return timesteps, num_inference_steps
 
 
 def run_tt_iteration(
@@ -614,6 +656,7 @@ def run_tt_image_gen(
     ttnn.synchronize_device(ttnn_device)
 
     # reset scheduler
+    tt_scheduler.set_begin_index(0)
     tt_scheduler.set_step_index(0)
 
     profiler.end("denoising_loop")

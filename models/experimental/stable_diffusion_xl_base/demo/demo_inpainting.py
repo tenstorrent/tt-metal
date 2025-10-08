@@ -7,6 +7,7 @@ import pytest
 import ttnn
 import torch
 from diffusers import DiffusionPipeline
+from diffusers.utils import load_image
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
@@ -18,7 +19,10 @@ import os
 from models.common.utility_functions import profiler
 from conftest import is_galaxy
 
-from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
+from models.experimental.stable_diffusion_xl_base.tt.tt_sdxl_inpainting_pipeline import (
+    TtSDXLInpaintingPipeline,
+    TtSDXLInpaintingPipelineConfig,
+)
 
 MAX_SEQUENCE_LENGTH = 77
 TEXT_ENCODER_2_PROJECTION_DIM = 1280
@@ -37,42 +41,29 @@ def run_demo_inference(
     evaluation_range,
     capture_trace,
     guidance_scale,
+    strength,
     use_cfg_parallel,
     fixed_seed_for_batch,
-    prompt_2=None,
-    negative_prompt_2=None,
-    crop_coords_top_left=(0, 0),
-    guidance_rescale=0.0,
-    timesteps=None,
-    sigmas=None,
 ):
     batch_size = list(ttnn_device.shape)[1] if use_cfg_parallel else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
 
-    assert 0.0 <= guidance_rescale <= 1.0, f"guidance_rescale must be in [0.0, 1.0], got {guidance_rescale}"
-
-    assert not (timesteps is not None and sigmas is not None), "Cannot pass both timesteps and sigmas. Choose one."
-
     if isinstance(prompts, str):
         prompts = [prompts]
-
-    if prompt_2 is not None and isinstance(prompt_2, str):
-        prompt_2 = [prompt_2]
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     if isinstance(negative_prompts, list):
         assert len(negative_prompts) == len(prompts), "prompts and negative_prompt lists must be the same length"
 
     prompts = prompts + [""] * needed_padding
-    if prompt_2 is not None:
-        prompt_2 = prompt_2 + [""] * needed_padding
     if isinstance(negative_prompts, list):
         negative_prompts = negative_prompts + [""] * needed_padding
 
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = DiffusionPipeline.from_pretrained(
+        # should be "diffusers/stable-diffusion-xl-1.0-inpainting-0.1" for inpainting
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
@@ -84,30 +75,34 @@ def run_demo_inference(
         pipeline.text_encoder_2, CLIPTextModelWithProjection
     ), "pipeline.text_encoder_2 is not a CLIPTextModelWithProjection"
 
-    tt_sdxl = TtSDXLPipeline(
+    print("Using inpainting pipeline :)")
+    tt_sdxl = TtSDXLInpaintingPipeline(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
-        pipeline_config=TtSDXLPipelineConfig(
+        pipeline_config=TtSDXLInpaintingPipelineConfig(
             capture_trace=capture_trace,
             vae_on_device=vae_on_device,
             encoders_on_device=encoders_on_device,
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
+            strength=strength,
             is_galaxy=is_galaxy(),
             use_cfg_parallel=use_cfg_parallel,
-            crop_coords_top_left=crop_coords_top_left,
-            guidance_rescale=guidance_rescale,
         ),
     )
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
 
+    img_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo.png"
+    mask_url = "https://raw.githubusercontent.com/CompVis/latent-diffusion/main/data/inpainting_examples/overture-creations-5sI6fQgYIuo_mask.png"
+
+    image = load_image(img_url).resize((1024, 1024))
+    mask_image = load_image(mask_url).resize((1024, 1024))
+
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
         all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
         torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
-        timesteps=timesteps,
-        sigmas=sigmas,
     )
 
     tt_sdxl.compile_image_processing()
@@ -137,19 +132,10 @@ def run_demo_inference(
             else negative_prompts
         )
 
-        prompts_2_batch = (
-            prompt_2[iter * batch_size : (iter + 1) * batch_size] if isinstance(prompt_2, list) else prompt_2
-        )
-        negative_prompts_2_batch = (
-            negative_prompt_2[iter * batch_size : (iter + 1) * batch_size]
-            if isinstance(negative_prompt_2, list)
-            else negative_prompt_2
-        )
-
         (
             all_prompt_embeds_torch,
             torch_add_text_embeds,
-        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch, prompts_2_batch, negative_prompts_2_batch)
+        ) = tt_sdxl.encode_prompts(prompts_batch, negative_prompts_batch)
 
         # This is a hack to get things working, but essentially:
         # We start with num_inference_steps == 20 say, generate_input_tensors() will reduce this to 19, and it will
@@ -160,8 +146,6 @@ def run_demo_inference(
             torch_add_text_embeds,
             start_latent_seed=0,
             fixed_seed_for_batch=fixed_seed_for_batch,
-            timesteps=timesteps,
-            sigmas=sigmas,
         )
 
         tt_sdxl.prepare_input_tensors(
@@ -209,6 +193,10 @@ def prepare_device(mesh_device, use_cfg_parallel):
         mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
+# Note: need to add denoising_start to the pipeline config
+# Currently assert that it is None
+
+
 # Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
 # as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
@@ -254,6 +242,10 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ((5.0),),
 )
 @pytest.mark.parametrize(
+    "strength",
+    ((0.99),),
+)
+@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
@@ -277,13 +269,6 @@ def prepare_device(mesh_device, use_cfg_parallel):
     ],
     ids=("with_trace", "no_trace"),
 )
-@pytest.mark.parametrize(
-    "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",
-    [
-        (None, None, (0, 0), 0.0, None, None),
-    ],
-    ids=["default_additional_parameters"],
-)
 def test_demo(
     validate_fabric_compatibility,
     mesh_device,
@@ -296,14 +281,9 @@ def test_demo(
     capture_trace,
     evaluation_range,
     guidance_scale,
+    strength,
     use_cfg_parallel,
     fixed_seed_for_batch,
-    prompt_2,
-    negative_prompt_2,
-    crop_coords_top_left,
-    guidance_rescale,
-    timesteps,
-    sigmas,
 ):
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
@@ -317,12 +297,7 @@ def test_demo(
         evaluation_range,
         capture_trace,
         guidance_scale,
+        strength,
         use_cfg_parallel,
         fixed_seed_for_batch,
-        prompt_2,
-        negative_prompt_2,
-        crop_coords_top_left,
-        guidance_rescale,
-        timesteps,
-        sigmas,
     )

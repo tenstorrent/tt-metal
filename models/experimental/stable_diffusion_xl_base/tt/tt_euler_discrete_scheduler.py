@@ -36,6 +36,7 @@ class TtEulerDiscreteScheduler(LightweightModule):
     ):
         # implements the Euler Discrete Scheduler with default params as in
         # https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/blob/main/scheduler/scheduler_config.json
+        self.order = 1
         self.num_train_timesteps = num_train_timesteps
         self.beta_start = beta_start
         self.beta_end = beta_end
@@ -76,6 +77,9 @@ class TtEulerDiscreteScheduler(LightweightModule):
         self.device = device
         self.create_ttnn_timesteps(timesteps)
         self.create_ttnn_sigmas("sigmas")
+
+    def set_begin_index(self, begin_index: int):
+        self.begin_index = begin_index
 
     def inc_step_index(self):
         self.set_step_index(self.step_index + 1)
@@ -321,6 +325,11 @@ class TtEulerDiscreteScheduler(LightweightModule):
         Ensures interchangeability with schedulers that need to scale the denoising model input depending on the
         current timestep. Scales the denoising model input by `(sigma**2 + 1) ** 0.5` to match the Euler algorithm.
         """
+        if self.step_index == 0:
+            print("Scheduler timesteps are: ", self.timesteps)
+            print(f"Setting step index to begin index = {self.begin_index}")
+            self.step_index = self.begin_index
+
         # timestep is not used in this implementation, step_index is already initialized at set_timesteps()
         # Note: Don't use inplace op here since UNet deallocates its input
         #       Permanent input is required for tracing
@@ -361,6 +370,8 @@ class TtEulerDiscreteScheduler(LightweightModule):
         # this is a potential accuracy pitfall
         # Upcast to avoid precision issues when computing prev_sample
         # sample = sample.to(torch.float32)
+
+        print(f"Scheduler call with step index {self.step_index}")
 
         sigma = self.sigmas[self.step_index]
         gamma = min(s_churn / (len(self.sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigma <= s_tmax else 0.0
