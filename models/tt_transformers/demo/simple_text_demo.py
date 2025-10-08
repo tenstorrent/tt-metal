@@ -1336,7 +1336,7 @@ def test_demo_text(
         for i, (batch1_idx, batch2_idx) in enumerate(comparisons):
             output1 = test_demo_text.batch_outputs[batch1_idx]
             output2 = test_demo_text.batch_outputs[batch2_idx]
-            
+
             if output1 == output2:
                 logger.info(
                     f"{comparison_names[i]} comparison PASSED: Batches {batch1_idx+1} and {batch2_idx+1} outputs match"
@@ -1348,7 +1348,7 @@ def test_demo_text(
                 logger.info(f"  Batch {batch1_idx+1} output: {output1[:100]}...")
                 logger.info(f"  Batch {batch2_idx+1} output: {output2[:100]}...")
                 all_matches = False
-        
+
         assert all_matches, "Repeat batch outputs should be identical"
 
     if (
@@ -1364,7 +1364,7 @@ def test_demo_text(
         logger.info(f"Comparing {num_batches} batches with {num_users} users each")
 
         consistency_checks = []
-        
+
         for batch_idx in range(num_batches - 1):
             current_batch = test_demo_text.batch32_outputs[batch_idx]
             next_batch = test_demo_text.batch32_outputs[batch_idx + 1]
@@ -1379,7 +1379,7 @@ def test_demo_text(
                 next_output = next_batch[next_user_idx]
 
                 expected_prompt_idx = (user_offset + batch_idx + 1) % num_users
-                
+
                 if current_output == next_output:
                     consistency_checks.append(True)
                     logger.info(
@@ -1392,7 +1392,7 @@ def test_demo_text(
                     )
                     logger.info(f"  Batch {batch_idx} User {current_user_idx}: {current_output[:50]}...")
                     logger.info(f"  Batch {batch_idx + 1} User {next_user_idx}: {next_output[:50]}...")
-        
+
         all_consistent = all(consistency_checks)
         failed_checks = sum(1 for check in consistency_checks if not check)
         total_checks = len(consistency_checks)
