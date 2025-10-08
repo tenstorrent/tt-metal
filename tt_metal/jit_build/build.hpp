@@ -49,7 +49,7 @@ public:
     JitBuildEnv();
     void init(
         uint32_t build_key,
-        uint32_t fw_compile_hash,
+        size_t fw_compile_hash,
         tt::ARCH arch,
         const std::map<std::string, std::string>& device_kernel_defines);
 
