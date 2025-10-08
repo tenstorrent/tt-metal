@@ -284,7 +284,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
 
         // Num pages allocated based on number of input cores selected for this link
         uint32_t num_pages_allocated =
-            (end_core_idx - start_core_idx) * input_tensor_shard_num_pages - input_tensor_tile_offset;
+            ((end_core_idx - start_core_idx) * input_tensor_shard_num_pages) - input_tensor_tile_offset;
 
         // Update overflow
         num_pages_overflow = num_pages_allocated - num_pages_this_link;
@@ -416,7 +416,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     // Now prepare rt args for the reader and writer kernels
 
     std::vector<uint32_t> reader_writer_runtime_args_template;
-    reader_writer_runtime_args_template.reserve(7 + 2 * q_num_cores + 2 * k_num_cores + 2 * v_num_cores);
+    reader_writer_runtime_args_template.reserve(7 + (2 * q_num_cores) + (2 * k_num_cores) + (2 * v_num_cores));
     reader_writer_runtime_args_template = {
         q_base_addr,
         k_base_addr,

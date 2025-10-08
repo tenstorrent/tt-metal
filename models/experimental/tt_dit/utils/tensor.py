@@ -31,7 +31,9 @@ def bf16_tensor_host(
     return from_torch(x, device=device, layout=layout, mesh_mapping={mesh_axis: shard_dim}, on_host=True)
 
 
-def bf16_tensor_2dshard(x: torch.Tensor, device: ttnn.Device, shard_mapping: dict[int, int]) -> ttnn.Tensor:
+def bf16_tensor_2dshard(
+    x: torch.Tensor, device: ttnn.Device, shard_mapping: dict[int, int], layout=ttnn.TILE_LAYOUT
+) -> ttnn.Tensor:
     assert len(shard_mapping) == 2
     return from_torch(x, device=device, layout=ttnn.Layout.TILE, mesh_mapping=shard_mapping)
 

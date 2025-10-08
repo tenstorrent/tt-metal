@@ -513,7 +513,7 @@ bool validation_mixed_df(
         uint32_t num_blocks_till_fifo_limit = (cb_size_block_aligned - fifo_wr_ptr) / block_size;
         // start pointer addr of current layer
         fifo_wr_ptr =
-            fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - num_blocks_till_fifo_limit * block_size;
+            fifo_wr_ptr_exceed_fifo_limit ? 0 : cb_size_block_aligned - (num_blocks_till_fifo_limit * block_size);
         // start index to read, fifo_wr_ptr / 2 because fp16 format
         start_index = fifo_wr_ptr == cb_size_block_aligned ? 0 : fifo_wr_ptr / 2;
         // end pointer addr of current layer
@@ -527,7 +527,7 @@ bool validation_mixed_df(
     for (int k = 0; k < kt; ++k) {
         for (int n = 0; n < num_receivers; ++n) {
             for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
-                values_fp16_split[n][i + k * nt * 32 * 32 / num_receivers] = to_float(values_fp16[index]);
+                values_fp16_split[n][i + (k * nt * 32 * 32 / num_receivers)] = to_float(values_fp16[index]);
                 index++;
             }
         }
@@ -552,7 +552,7 @@ bool validation_mixed_df(
     for (int k = 0; k < kt / num_blocks * cb_num_blocks; ++k) {
         for (int n = 0; n < num_receivers; ++n) {
             for (int i = 0; i < nt * 32 * 32 / num_receivers; ++i) {
-                golden_vec[index] = golden_vec_split[n][i + k * nt * 32 * 32 / num_receivers];
+                golden_vec[index] = golden_vec_split[n][i + (k * nt * 32 * 32 / num_receivers)];
                 index++;
             }
         }

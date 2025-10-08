@@ -44,26 +44,9 @@ static void BM_ThreadPool(benchmark::State& state, ThreadPoolCreator create_thre
     state.SetComplexityN(state.range(0));
 }
 
-static void BM_BoostThreadPool(benchmark::State& state) {
-    BM_ThreadPool(state, [](uint32_t num_threads) { return tt::tt_metal::create_boost_thread_pool(num_threads); });
-}
-
-static void BM_DistributedBoostThreadPool(benchmark::State& state) {
-    BM_ThreadPool(
-        state, [](uint32_t num_threads) { return tt::tt_metal::create_distributed_boost_thread_pool(num_threads); });
-}
-
 static void BM_DeviceBoundThreadPool(benchmark::State& state) {
     BM_ThreadPool(
         state, [](uint32_t num_threads) { return tt::tt_metal::create_device_bound_thread_pool(num_threads); });
 }
-
-BENCHMARK(BM_BoostThreadPool)->RangeMultiplier(2)->Range(1, 1 << 18)->Complexity(benchmark::oN)->UseRealTime();
-
-BENCHMARK(BM_DistributedBoostThreadPool)
-    ->RangeMultiplier(2)
-    ->Range(1, 1 << 18)
-    ->Complexity(benchmark::oN)
-    ->UseRealTime();
 
 BENCHMARK(BM_DeviceBoundThreadPool)->RangeMultiplier(2)->Range(1, 1 << 18)->Complexity(benchmark::oN)->UseRealTime();
