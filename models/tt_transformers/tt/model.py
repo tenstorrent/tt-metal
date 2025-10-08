@@ -41,8 +41,6 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
-        self.tt_rot_mats_prefill_global = None
-        self.tt_rot_mats_prefill_local = None
 
         self.tt_ccl = TT_CCL(self.mesh_device)
 
@@ -155,13 +153,13 @@ class Transformer(LightweightModule):
             self.decode_sliding_mask_mat = None
             self.device_decode_sliding_mask = None
 
-    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None, start_pos=0):
+    def prepare_prefill_inputs_host(self, tokens, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
         host_inputs = self.prepare_inputs_prefill(
-            tokens, start_pos=start_pos, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
+            tokens, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
         )
         return host_inputs
 
@@ -177,14 +175,19 @@ class Transformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
-        actual_device = None if trace_enabled else self.mesh_device
+        # We set the device to None if trace is enabled so we keep the tensors on host instead of sending it to the device
+        # We do that because if we called this function with device != None, the tensors will be allocated on device on different adresses, which we don't want for tracing
+        # We prepare all tensors on host first, and then using copy_host_to_device copy them to the device
+        # We copy the tensors to memory locations on the device where tensors resided during the capturing of the trace
+        # That way, the tensors will be on the same memory locations as the tensors during the capturing of the trace, so the ops will use good data instead of corrupted data
+        device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
-            device=actual_device,
+            device=device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -200,39 +203,27 @@ class Transformer(LightweightModule):
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
 
+        # We need to use the whole cos_matrix and sin_matrix for tracing because we can't pass the start_pos and end_pos to the trace, so we use the whole matrix for all seq_lens when using trace
         start_pos = 0 if trace_enabled else start_pos
-        if trace_enabled:
-            if self.tt_rot_mats_prefill_global is None:
-                # the matrices will always have a fixed size if used during tracing
-                self.tt_rot_mats_prefill_global = [
-                    self.rope_setup.cos_matrix[:, :, start_pos : start_pos + self.args.max_seq_len, :],
-                    self.rope_setup.sin_matrix[:, :, start_pos : start_pos + self.args.max_seq_len, :],
-                ]
-        else:
-            self.tt_rot_mats_prefill_global = [
-                self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-                self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
-            ]
+        end_pos = self.args.max_seq_len if trace_enabled else start_pos + S
+
+        tt_rot_mats_prefill_global = [
+            self.rope_setup.cos_matrix[:, :, start_pos:end_pos, :],
+            self.rope_setup.sin_matrix[:, :, start_pos:end_pos, :],
+        ]
 
         if hasattr(self, "rope_local_setup"):
-            if trace_enabled:
-                if self.tt_rot_mats_prefill_local is None:
-                    self.tt_rot_mats_prefill_local = [
-                        self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + self.args.max_seq_len, :],
-                        self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + self.args.max_seq_len, :],
-                    ]
-            else:
-                self.tt_rot_mats_prefill_local = [
-                    self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-                    self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
-                ]
+            tt_rot_mats_prefill_local = [
+                self.rope_local_setup.cos_matrix[:, :, start_pos:end_pos, :],
+                self.rope_local_setup.sin_matrix[:, :, start_pos:end_pos, :],
+            ]
         else:
-            self.tt_rot_mats_prefill_local = None
+            tt_rot_mats_prefill_local = None
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
-                device=actual_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -243,7 +234,7 @@ class Transformer(LightweightModule):
         if chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
-                device=actual_device,
+                device=device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
@@ -253,8 +244,8 @@ class Transformer(LightweightModule):
 
         return (
             tokens if trace_enabled else tokens_embd,
-            self.tt_rot_mats_prefill_global,
-            self.tt_rot_mats_prefill_local,
+            tt_rot_mats_prefill_global,
+            tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
         )

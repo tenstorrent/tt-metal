@@ -71,14 +71,17 @@ class Generator:
         model_id=-1,
     ):
         host_inputs = self.model[model_id].prepare_prefill_inputs_host(prefill_ids, page_table=page_table)
+        # We don't need to copy these matrices since they are already on device (we took care of that in prepare_prefill_inputs_host)
+        tt_rot_mats_prefill_global = host_inputs[1]
+        tt_rot_mats_prefill_local = host_inputs[2]
         host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
-            rot_mats_global=self.model[model_id].tt_rot_mats_prefill_global,
-            rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
+            rot_mats_global=tt_rot_mats_prefill_global,
+            rot_mats_local=tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
@@ -91,8 +94,8 @@ class Generator:
         transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
         tt_out_trace = self.model[model_id].ttnn_prefill_forward(
             x=transformed_inputs[0],
-            rot_mats_global=self.model[model_id].tt_rot_mats_prefill_global,
-            rot_mats_local=self.model[model_id].tt_rot_mats_prefill_local,
+            rot_mats_global=tt_rot_mats_prefill_global,
+            rot_mats_local=tt_rot_mats_prefill_local,
             page_table=transformed_inputs[1],
             chunk_page_table=transformed_inputs[2],
             kv_cache=kv_cache,
@@ -163,7 +166,7 @@ class Generator:
         Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
         If we have chunked prefill, we disable tracing because there is no support to pass parameters such as chunk_start and chunk_end to trace.
         There is no support to pass them as a tensor, and then inside the trace read it as a number.
-        This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (Llama-8B).
+        # TODO: Support sliding window attention - This PR disabled tracing if a model uses sliding window attention, because this PR mainly covers models without sliding window attention. (for example,Llama-8B).
         """
         if prefill_seq_len not in [128, 256, 512, 1024, 2048, 4096, 8192]:
             return False
@@ -214,10 +217,10 @@ class Generator:
                 [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
 
-            enable_trace = enable_trace and self.can_enable_trace(prefill_seq_len)
+            enable_trace_current_prompt = enable_trace and self.can_enable_trace(prefill_seq_len)
 
             logger.info(
-                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, enable trace: {enable_trace}"
+                f"Prefill seq len: {prefill_seq_len}, max_prefill_chunk_size: {self.model_args[0].max_prefill_chunk_size}, trace: {enable_trace_current_prompt}"
             )
 
             page_table_user = (
@@ -225,7 +228,7 @@ class Generator:
                     page_table[idx : idx + 1],
                     kv_cache[model_id],
                     seq_len,
-                    trace_enabled=enable_trace,
+                    trace_enabled=enable_trace_current_prompt,
                     prefill_seq_len=prefill_seq_len,
                 )
                 if page_table is not None
@@ -239,7 +242,7 @@ class Generator:
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
 
-            if enable_trace:
+            if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
                     prefill_ids,
                     page_table=page_table_user,
@@ -260,11 +263,15 @@ class Generator:
                     model_id=model_id,
                     **local_kwargs,
                 )
-            if enable_trace:
+            if enable_trace_current_prompt:
+                # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
+                # We need to do this here, because we can't do this part in forward() if we have trace enabled
+                # The reason we can't do it in trace is because we can't pass the correct get_last_token to trace
+                get_last_token = (last_token_idx // 32) * 32
                 logits = ttnn.slice(
                     logits,
-                    (0, 0, (last_token_idx // 32) * 32, 0),
-                    (1, 1, (last_token_idx // 32) * 32 + 32, logits.shape[-1]),
+                    (0, 0, get_last_token, 0),
+                    (1, 1, get_last_token + 32, logits.shape[-1]),
                 )
                 logits = self.model[model_id].norm(logits, mode="prefill")
                 if self.model[model_id].model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
