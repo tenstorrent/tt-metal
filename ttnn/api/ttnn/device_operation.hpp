@@ -349,24 +349,72 @@ void launch_operation_with_adapter(
     }
 }
 
+// Default TensorTopology for output tensors will have the same distribution shape as the input tensor with the greatest
+// distribution rank (highest number of dimensions). The placement for each distribution dimension will be Shard if at
+// least one input tensor has a Shard placement for that dimension, otherwise it will be Replicate. Duplicate Shard
+// placements are disallowed, Replicate is used instead.
 template <DeviceOperationConcept device_operation_t>
-tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> get_final_placements(
+std::pair<
+    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    tt::tt_metal::distributed::MeshShape>
+get_final_placements_and_shape(
     const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
-    auto result = first_tensor.tensor_topology().placements();
+    auto result_shape = first_tensor.tensor_topology().distribution_shape();
+    auto result_placements = first_tensor.tensor_topology().placements();
+    std::unordered_set<int> shard_dims;
     tt::stl::reflection::visit_object_of_type<Tensor>(
-        [&result](const Tensor& tensor) {
+        [&](const Tensor& tensor) {
+            const auto& tensor_distribution_shape = tensor.tensor_topology().distribution_shape();
+            tt::stl::SmallVector<uint32_t> new_shape;
+
+            size_t i = 0;
+            for (; i < std::min(result_shape.dims(), tensor_distribution_shape.dims()); i++) {
+                new_shape.push_back(std::max(result_shape[i], tensor_distribution_shape[i]));
+            }
+            if (i < tensor_distribution_shape.dims()) {
+                for (size_t j = i; j < tensor_distribution_shape.dims(); j++) {
+                    new_shape.push_back(tensor_distribution_shape[j]);
+                }
+            } else if (i < result_shape.dims()) {
+                for (size_t j = i; j < result_shape.dims(); j++) {
+                    new_shape.push_back(result_shape[j]);
+                }
+            }
+            result_shape = tt::tt_metal::distributed::MeshShape(new_shape);
+
             const auto& tensor_placements = tensor.tensor_topology().placements();
-            for (size_t i = 0; i < tensor_placements.size(); i++) {
-                if (i >= result.size()) {
-                    result.push_back(tensor_placements[i]);
-                } else if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
-                               tensor_placements[i])) {
-                    result[i] = tensor_placements[i];
+            i = 0;
+            for (; i < tensor_placements.size(); i++) {
+                tt::tt_metal::distributed::MeshMapperConfig::Placement output_placement = result_placements[i];
+                if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i])) {
+                    auto new_shard_placement =
+                        std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i]);
+                    if (!shard_dims.contains(new_shard_placement.dim)) {
+                        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
+                                output_placement)) {
+                            auto existing_shard_placement =
+                                std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(output_placement);
+                            TT_FATAL(
+                                new_shard_placement.dim == existing_shard_placement.dim,
+                                "Output tensor cannot shard different tensor dimensions across the same distribution "
+                                "dimension: tensor dims {} and {} across distribution dim {}",
+                                existing_shard_placement.dim,
+                                new_shard_placement.dim,
+                                i);
+                        }
+                        shard_dims.insert(new_shard_placement.dim);
+                        output_placement = new_shard_placement;
+                    }
+                }
+                if (i >= result_placements.size()) {
+                    result_placements.push_back(output_placement);
+                } else {
+                    result_placements[i] = output_placement;
                 }
             }
         },
         tensor_args);
-    return result;
+    return {result_placements, result_shape};
 }
 
 template <DeviceOperationConcept device_operation_t>
@@ -383,15 +431,13 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     auto mesh_device = first_tensor.device();
-    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement> final_placements =
-        detail::get_final_placements<device_operation_t>(tensor_args, first_tensor);
+    auto [final_placements, final_shape] =
+        detail::get_final_placements_and_shape<device_operation_t>(tensor_args, first_tensor);
 
     tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-        [&final_placements](const Tensor& output_tensor) {
+        [&final_placements, &final_shape](const Tensor& output_tensor) {
             auto topology = tt::tt_metal::TensorTopology(
-                output_tensor.tensor_topology().distribution_shape(),
-                final_placements,
-                output_tensor.tensor_topology().mesh_coords());
+                final_shape, final_placements, output_tensor.tensor_topology().mesh_coords());
             return output_tensor.with_tensor_topology(topology);
         },
         tensor_return_value);
