@@ -18,6 +18,7 @@ Description:
 """
 
 from dataclasses import dataclass
+
 from triage import ScriptConfig, TTTriageError, log_check, recurse_field, triage_field, hex_serializer, run_script
 from dispatcher_data import run as get_dispatcher_data, DispatcherData, DispatcherCoreData
 from elfs_cache import run as get_elfs_cache, ElfsCache
@@ -27,7 +28,7 @@ from ttexalens.context import Context
 from ttexalens.gdb.gdb_server import GdbServer, ServerSocket
 from ttexalens.hardware.risc_debug import CallstackEntry, ParsedElfFile
 from ttexalens.tt_exalens_lib import top_callstack, callstack
-from utils import BLUE, GREEN, ORANGE, RST
+from utils import BLUE, GREEN, ORANGE, RED, RST
 
 import re
 import socket
@@ -201,7 +202,10 @@ def get_callstack(
     try:
         if not full_callstack:
             pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
-            return KernelCallstackWithMessage(callstack=top_callstack(pc, elfs, offsets, context), message=None)
+            try:
+                return KernelCallstackWithMessage(callstack=top_callstack(pc, elfs, offsets, context), message=None)
+            except Exception as e:
+                return KernelCallstackWithMessage(callstack=[], message=str(e))
         else:
             try:
                 return KernelCallstackWithMessage(callstack=callstack(location, elfs, offsets, risc_name), message=None)
@@ -209,20 +213,20 @@ def get_callstack(
                 try:
                     # If full callstack failed, we default to top callstack
                     pc = location._device.get_block(location).get_risc_debug(risc_name).get_pc()
+                    error_message = str(e) + " - defaulting to top callstack"
                     return KernelCallstackWithMessage(
-                        callstack=top_callstack(pc, elfs, offsets, context),
-                        message=str(e) + " - defaulting to top callstack",
+                        callstack=top_callstack(pc, elfs, offsets, context), message=error_message
                     )
                 except Exception as e:
-                    return KernelCallstackWithMessage(callstack=[], message=str(e))
+                    return KernelCallstackWithMessage(callstack=[], message="\n".join([error_message, str(e)]))
     except Exception as e:
         return KernelCallstackWithMessage(callstack=[], message=str(e))
 
 
-def _format_callstack(callstack: list[CallstackEntry]) -> str:
+def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
-    result = [""]
+    result = []
     for i, frame in enumerate(callstack):
         line = f"  #{i:<{frame_number_width}} "
         if frame.pc is not None:
@@ -236,15 +240,17 @@ def _format_callstack(callstack: list[CallstackEntry]) -> str:
                 if frame.column is not None:
                     line += f"{GREEN}:{frame.column}{RST}"
         result.append(line)
-    return "\n".join(result)
+    return result
 
 
 def format_callstack_with_message(callstack_with_message: KernelCallstackWithMessage) -> str:
-    """Return string representation of the callstack with optional error message."""
+    """Return string representation of the callstack with optional error message. Adding empty line at the beginning for prettier look."""
     if callstack_with_message.message is not None:
-        return f"\n{callstack_with_message.message}{_format_callstack(callstack_with_message.callstack)}"
+        return "\n".join(
+            ["", f"{RED}{callstack_with_message.message}{RST}"] + _format_callstack(callstack_with_message.callstack)
+        )
     else:
-        return _format_callstack(callstack_with_message.callstack)
+        return "\n".join([""] + _format_callstack(callstack_with_message.callstack))
 
 
 @dataclass
@@ -279,15 +285,36 @@ def dump_callstacks(
                 return result
 
             if risc_name == "ncrisc":
-                # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
-                callstack_with_message = KernelCallstackWithMessage(
-                    callstack=[], message="Cannot attach to NCRISC process due to lack of debug hardware"
+                # Cannot attach to NCRISC process due to lack of debug hardware so we are defaulting to top callstack
+                error_message = (
+                    "Cannot attach to NCRISC process due to lack of debug hardware - defaulting to top callstack"
+                )
+                # Default to top callstack
+                callstack_with_message = get_callstack(
+                    location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+                )
+                callstack_with_message.message = (
+                    error_message
+                    if callstack_with_message.message is None
+                    else "\n".join([error_message, callstack_with_message.message])
                 )
             else:
                 assert gdb_server is not None and process_ids is not None
                 callstack_with_message = get_gdb_callstack(
                     location, risc_name, dispatcher_core_data, gdb_server.server.port, process_ids
                 )
+                # If GDB failed to get callstack, we default to top callstack
+                if len(callstack_with_message.callstack) == 0:
+                    error_message = "Failed to get callstack from GDB. Look for error message above the table."
+                    callstack_with_message = get_callstack(
+                        location, risc_name, dispatcher_core_data, elfs_cache, full_callstack=False
+                    )
+                    callstack_with_message.message = (
+                        error_message
+                        if callstack_with_message.message is None
+                        else "\n".join([error_message, callstack_with_message.message])
+                    )
+
             # If GDB has not recoreded PC we do that ourselves, this also provides PC for NCRISC case
             if len(callstack_with_message.callstack) > 0 and callstack_with_message.callstack[0].pc is None:
                 try:
