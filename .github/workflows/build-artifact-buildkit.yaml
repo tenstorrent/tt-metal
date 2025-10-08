@@ -169,6 +169,6 @@ jobs:
             --build-arg TRACY=${{ inputs.tracy }} \
             --build-arg BUILD_UMD_TESTS=${{ inputs.build-umd-tests }} \
             --build-arg TOOLCHAIN_FILE=${{ inputs.toolchain }} \
-            --build-arg PROFILE=${{ inputs.profile }} \\
+            --build-arg PROFILE=${{ inputs.profile }} \
             --build-arg SKIP_TT_TRAIN=${{ inputs.skip-tt-train }}
           ls outputs
