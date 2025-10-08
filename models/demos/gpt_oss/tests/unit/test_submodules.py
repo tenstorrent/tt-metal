@@ -7,11 +7,11 @@ Minimal utility component tests - RoPE and SDPA only
 
 
 import torch
+from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding, apply_rotary_pos_emb
 
 import ttnn
 from models.common.utility_functions import comp_pcc
 
-from ...reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from ...tt.rope import ApplyRotaryPosEmb
 from ...tt.sdpa import sdpa as tt_sdpa
 from ..test_factory import TestFactory, parametrize_batch_seq, parametrize_mesh_with_fabric
@@ -57,7 +57,18 @@ def test_rope_embeddings(mesh_device, batch_size, seq_len, reset_seeds):
     k_torch = torch.randn(batch_size, config.num_key_value_heads, seq_len, config.head_dim)
 
     # Get reference outputs using original apply_rotary_pos_emb
-    from models.demos.gpt_oss.reference.modeling_gpt_oss import apply_rotary_pos_emb
+    # # Use HuggingFace model for RoPE reference
+    # from transformers import AutoModelForCausalLM
+
+    # # Simple RoPE implementation for testing
+    # def apply_rotary_pos_emb(q, k, cos, sin):
+    #     q_embed = (q * cos) + (rotate_half(q) * sin)
+    #     k_embed = (k * cos) + (rotate_half(k) * sin)
+    #     return q_embed, k_embed
+
+    # def rotate_half(x):
+    #     x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+    #     return torch.cat((-x2, x1), dim=-1)
 
     q_rope_torch, k_rope_torch = apply_rotary_pos_emb(q_torch, k_torch, cos, sin)
 

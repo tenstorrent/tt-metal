@@ -173,7 +173,7 @@ def test_full_model_accuracy(mesh_device, device_params, reset_seeds):
         logger.info("Generating reference tokens (this may take a while)...")
 
         # Create reference model for comparison (use full model like demo)
-        from models.demos.gpt_oss.reference.modeling_gpt_oss import GptOssForCausalLM
+        from transformers.models.gpt_oss.modeling_gpt_oss import GptOssForCausalLM
 
         # Load the same weights that the TTNN model uses
         logger.info("Loading reference model weights...")

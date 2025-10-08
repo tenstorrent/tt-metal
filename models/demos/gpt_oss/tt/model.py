@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from transformers.models.gpt_oss.modeling_gpt_oss import GptOssRotaryEmbedding
 
 import ttnn
 from models.demos.gpt_oss.config import MeshConfig
@@ -9,7 +10,6 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_de
 from models.experimental.tt_dit.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device
 
-from ..reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
 from .rope import ApplyRotaryPosEmb

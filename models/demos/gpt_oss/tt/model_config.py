@@ -7,14 +7,16 @@ GPT-OSS ModelArgs class that's compatible with tt_transformers interface
 """
 
 import os
+from glob import glob
 from pathlib import Path
 
 import torch
 from loguru import logger
-from transformers import AutoConfig
+from safetensors.torch import load_file
+from tqdm import tqdm
+from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
-from models.demos.gpt_oss.reference.hf_utils import get_state_dict, load_tokenizer
 
 
 class ModelArgs:
@@ -93,7 +95,7 @@ class ModelArgs:
             self.processor = None
         else:
             # Load tokenizer
-            self.tokenizer = load_tokenizer(self.weights_path)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
             # Add meta-compatible stop token list to the HF tokenizer (like tt_transformers does)
@@ -131,8 +133,31 @@ class ModelArgs:
             # Return dummy state dict for testing
             return {}
         else:
-            # Load actual GPT-OSS weights
-            return get_state_dict(self.weights_path, "", dtype=torch.bfloat16)
+            # Load actual GPT-OSS weights directly from safetensors files
+            # Check if we have a cached torch_state_dict.pt file
+            torch_state_dict_path = os.path.join(self.weights_path, "torch_state_dict.pt")
+
+            if os.path.exists(torch_state_dict_path):
+                # Load from cached file
+                weights_dict = torch.load(torch_state_dict_path)
+            else:
+                # Load from safetensors files
+                safetensors_filepaths = sorted(glob(f"{self.weights_path}/*.safetensors"))
+                weights_dict = {}
+                for filepath in tqdm(safetensors_filepaths, desc="Loading weights"):
+                    weights_dict.update(load_file(filepath))
+
+                # Cache for future use
+                torch.save(weights_dict, torch_state_dict_path)
+
+            # Convert to bfloat16 if needed
+            if torch.bfloat16 != torch.float32:
+                weights_dict = {
+                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+                    for k, v in tqdm(weights_dict.items(), desc="Converting to bfloat16")
+                }
+
+            return weights_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""

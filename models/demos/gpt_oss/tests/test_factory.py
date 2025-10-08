@@ -6,11 +6,11 @@ from typing import Dict
 
 import pytest
 import torch
+from transformers import AutoConfig
 
 import ttnn
 
 from ..config import MeshConfig
-from ..reference.configuration_gpt_oss import GptOssConfig
 from ..tt.ccl import CCLManager
 from ..tt.model_config import ModelArgs
 
@@ -43,7 +43,7 @@ class TestFactory:
         # Setup CCL
         ccl_manager = CCLManager(mesh_device)
 
-        config = GptOssConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
+        config = AutoConfig.from_pretrained(model_args.model_path, trust_remote_code=True)
         # state_dict = TestFactory._generate_dummy_state_dict(config)
 
         return {
