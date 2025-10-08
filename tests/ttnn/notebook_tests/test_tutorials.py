@@ -64,9 +64,21 @@ def prepare_test_data(model_location_generator) -> None:
         # Skip if local path exists and has content
         local_path_obj = Path(tt_metal_path) / Path(local_path)
         print(f"!!! Local path: {local_path_obj}, external path: {external_path}")
+        # Debug: iterate over /work directory and print content
+        work_path = Path("/work")
+        if work_path.exists():
+            print(f"!!! Contents of {work_path}:")
+            for item in work_path.iterdir():
+                symlink_info = " (symlink)" if item.is_symlink() else ""
+                print(f"!!!   {item.name} ({'dir' if item.is_dir() else 'file'}){symlink_info}")
+        else:
+            print(f"!!! {work_path} does not exist")
+
         a = local_path_obj.exists()
         b = any(local_path_obj.iterdir()) if a else False
         print(f"!!! Local path exists: {a}, has content: {b}")
+        print(f"!!! issymlink {local_path_obj.is_symlink()}")
+        print(f"!!! lstat {local_path_obj.lstat()}")
         if local_path_obj.exists() and any(local_path_obj.iterdir()):
             print("!!!! local_path_obj exists")
             continue
