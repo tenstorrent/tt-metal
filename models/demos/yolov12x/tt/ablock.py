@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tracy import signpost
-
 import ttnn
 from models.demos.yolov12x.tt.aattn import TtnnAattn
 from models.demos.yolov12x.tt.common import TtYOLOv12xConv2D
@@ -50,7 +48,6 @@ class TtnnABlock:
         )
 
     def __call__(self, x, i=0, j=0):
-        signpost("ABlock Start")
         x = x + self.attn(x, i=i, j=j)
         x_0 = self.mlp_0(x)
         if x.is_sharded():
@@ -60,5 +57,4 @@ class TtnnABlock:
         x = x + x_1
         ttnn.deallocate(x_0)
         ttnn.deallocate(x_1)
-        signpost("ABlock End")
         return x

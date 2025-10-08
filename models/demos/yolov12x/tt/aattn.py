@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from tracy import signpost
-
 import ttnn
 from models.demos.yolov12x.tt.common import TtYOLOv12xConv2D
 
@@ -45,7 +43,6 @@ class TtnnAattn:
         )
 
     def __call__(self, x, i=0, j=0):
-        signpost("Attn Start")
         batch_size, qkv_height, qkv_width, qkv_chan = x.shape
         qkv_n = qkv_height * qkv_width
         qkv = self.qkv(x)
@@ -161,7 +158,5 @@ class TtnnAattn:
         # Ensure output is in TILE layout to match input expectations
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-
-        signpost("Attn end")
 
         return x

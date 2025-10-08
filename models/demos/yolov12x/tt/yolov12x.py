@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from tracy import signpost
-
 import ttnn
 from models.demos.yolov12x.tt.a2c2f import TtnnA2C2f
 from models.demos.yolov12x.tt.c3k2 import TtnnC3k2
@@ -184,41 +182,28 @@ class YoloV12x:
         ttnn.deallocate(input)
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
-        signpost("0")
         x = self.conv1(x)  # 0
-        signpost("1")
         x = self.conv2(x)  # 1
-        signpost("2")
         x = self.c3k2_1(x, i=4)  # 2
-        signpost("3")
         x = self.conv3(x)  # 3
-        signpost("4")
         x = self.c3k2_2(x, i=6)  # 4
-        signpost("5")
         x4 = x
         x = self.conv4(x)  # 5
-        signpost("6")
         x = self.a2c2f_1(x, i=8)  # 6
-        signpost("7")
         x6 = x
         x = self.conv5(x)  # 7
-        signpost("8")
         x = self.a2c2f_2(x, i=10)  # 8
-        signpost("9")
         x8 = x
 
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 9
 
-        signpost("10")
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
         x = concat(-1, True, x, x6)  # 10
-        signpost("11")
         ttnn.deallocate(x6)
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = self.a2c2f_3(x, i=13)  # 11
-        signpost("12")
         x11 = x
         x11 = ttnn.to_memory_config(x11, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -226,7 +211,6 @@ class YoloV12x:
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 12
-        signpost("13")
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[-1]))
 
         if x.is_sharded():
@@ -234,33 +218,25 @@ class YoloV12x:
         if x4.is_sharded():
             x4 = ttnn.sharded_to_interleaved(x4, ttnn.L1_MEMORY_CONFIG)
         x = concat(-1, True, x, x4)  # 13
-        signpost("14")
         ttnn.deallocate(x4)
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         x = self.a2c2f_4(x, i=16)  # 14
-        signpost("15")
         x14 = x
         x14 = ttnn.to_memory_config(x14, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv6(x)  # 15
-        signpost("16")
 
         x11 = ttnn.to_memory_config(x11, ttnn.L1_MEMORY_CONFIG)
 
         x = concat(-1, False, x, x11)  # 16
-        signpost("17")
         ttnn.deallocate(x11)
         x = self.a2c2f_5(x, i=19)  # 17
-        signpost("18")
         x17 = x
         x17 = ttnn.to_memory_config(x17, ttnn.DRAM_MEMORY_CONFIG)
         x = self.conv7(x)  # 18
-        signpost("19")
         x8 = ttnn.to_memory_config(x8, ttnn.L1_MEMORY_CONFIG)
         x = concat(-1, False, x, x8)  # 19
-        signpost("20")
         ttnn.deallocate(x8)
         x = self.c3k2_3(x, i=22)  # 20
-        signpost("21")
         x20 = x
         x14 = ttnn.to_memory_config(x14, ttnn.L1_MEMORY_CONFIG)
         x17 = ttnn.to_memory_config(x17, ttnn.L1_MEMORY_CONFIG)

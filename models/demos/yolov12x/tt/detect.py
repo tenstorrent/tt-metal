@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from tracy import signpost
-
 import ttnn
 from models.demos.yolov12x.tt.common import TtYOLOv12xConv2D
 from models.experimental.yolo_common.yolo_utils import concat
@@ -189,7 +187,6 @@ class TtnnDetect:
         self.strides = conv_pt.strides
 
     def __call__(self, y1, y2, y3):
-        signpost("Detect Start")
         x4 = self.cv3_0_0_0(y1)
         x4 = self.cv3_0_0_1(x4)
         x4 = self.cv3_0_1_0(x4)
@@ -298,6 +295,5 @@ class TtnnDetect:
         out = concat(1, False, z, yb)
         ttnn.deallocate(z)
         ttnn.deallocate(yb)
-        signpost("Detect End")
 
         return out

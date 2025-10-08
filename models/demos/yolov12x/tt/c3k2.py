@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from tracy import signpost
-
 import ttnn
 from models.demos.yolov12x.tt.common import TtnnBottleneck, TtYOLOv12xConv2D
 from models.experimental.yolo_common.yolo_utils import concat
@@ -44,7 +42,6 @@ class TtnnC3k:
         self.k2 = TtnnBottleneck(device, parameter.m[1], conv_pt.m[1], block_sharded=block_sharded)
 
     def __call__(self, x, i=0, j=0):
-        signpost("C3k Start")
         x1 = self.cv1(x)
         x2 = self.cv2(x)
         k1 = self.k1(x1)
@@ -59,7 +56,6 @@ class TtnnC3k:
         ttnn.deallocate(k2)
 
         x = self.cv3(x)
-        signpost("C3k End")
         return x
 
 
@@ -107,7 +103,6 @@ class TtnnC3k2:
             self.m_1 = TtnnC3k(device, parameter[1], conv_pt.m[1], block_sharded=block_sharded)
 
     def __call__(self, x, i=0):
-        signpost("C3k2 Start")
         x = self.cv1(x)
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b)
@@ -127,5 +122,4 @@ class TtnnC3k2:
         ttnn.deallocate(y2)
         ttnn.deallocate(y3)
         x = self.cv2(x)
-        signpost("C3k2 End")
         return x
