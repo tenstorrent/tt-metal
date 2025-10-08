@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from diffusers import StableDiffusionXLInpaintPipeline
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     get_timesteps,
-    prepare_latents_inpainting,
+    prepare_image_latents,
     prepare_mask_latents_inpainting,
     run_tt_image_gen_inpainting,
 )
@@ -32,20 +32,27 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
 
         self.num_in_channels_unet = 9
         self.num_channels_image_latents = 4
+
+        # Refers to combined latents shape:
+        # [1, 4, H, W] of image latents
+        # [1, 1, H, W] of mask
+        # [1, 4, H, W] of masked image latents
+        # These are concatenated together over channel dimension to form the latent input to the unet of shape [1, 9, H, W]
         B, C, H, W = 1, self.num_in_channels_unet, 128, 128
         self.tt_latents_shape = [B, C, H, W]
 
+        B, C, H, W = 1, self.num_channels_image_latents, 128, 128
+        self.tt_image_latents_shape = [B, C, H, W]
+
         assert self.pipeline_config.strength != 1.0, "Max strength is not supported for inpainting pipeline atm"
-        # to support it, we need to modify prepare_latents function
+        # to support it, we need to modify prepare_latents function, and several other functions
 
     def _prepare_timesteps(self):
         super()._prepare_timesteps()
 
         self.ttnn_timesteps, self.pipeline_config.num_inference_steps = get_timesteps(
-            self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.pipeline_config.strength, None
+            self.tt_scheduler, self.pipeline_config.num_inference_steps, self.pipeline_config.strength, None
         )
-
-        print("Num timesteps after prepare timesteps is: ", self.pipeline_config.num_inference_steps)
 
         if self.pipeline_config.num_inference_steps < 1:
             raise ValueError(
@@ -81,13 +88,13 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         ), "start_latent_seed must be an integer or None"
 
         img_latents_list = []
-        noise_list = []
         mask_list = []
         masked_image_latents_list = []
         for index in range(self.batch_size):
             if start_latent_seed is not None:
                 torch.manual_seed(start_latent_seed if fixed_seed_for_batch else start_latent_seed + index)
-            img_latents, noise = prepare_latents_inpainting(
+            # the function returns img_latents, noise but we don't use noise at the moment, so discard it
+            img_latents = prepare_image_latents(
                 self.torch_pipeline,
                 self,
                 1,
@@ -101,20 +108,12 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
                 True,  # Make this configurable
                 None,  # passed in latents
             )
-            print("Done with generating latents, shape is: ", img_latents.shape)
-            print("Done with generating noise, shape is: ", noise.shape)
             B, C, H, W = img_latents.shape  # 1, 4, 128, 128
             img_latents = torch.permute(img_latents, (0, 2, 3, 1))  # [1, H, W, C]
             img_latents = img_latents.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
             img_latents_list.append(img_latents)
 
-            B, C, H, W = noise.shape
-            noise = torch.permute(noise, (0, 2, 3, 1))  # [1, H, W, C]
-            noise = noise.reshape(B, 1, H * W, C)  # [1, 1, H*W, C]
-            noise_list.append(noise)
-
             mask, masked_image_latents = prepare_mask_latents_inpainting(
-                self.torch_pipeline,
                 self,
                 torch_mask,
                 torch_masked_image,
@@ -137,8 +136,6 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             masked_image_latents_list.append(masked_image_latents)
 
         tt_img_latents = torch.cat(img_latents_list, dim=0)  # [batch_size, 1, H*W, C]
-        # might not need noise?
-        tt_noise = torch.cat(noise_list, dim=0)  # [batch_size, 1, H*W, C]
         tt_mask = torch.cat(mask_list, dim=0)  # [batch_size, 1, H*W, C]
         tt_masked_image_latents = torch.cat(masked_image_latents_list, dim=0)  # [batch_size, 1, H*W, C]
 
@@ -207,8 +204,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
                 self.ttnn_device,
                 self.tt_unet,
                 self.tt_scheduler,
-                # fix me
-                self.tt_image_latents_device,
+                self.tt_latents_device,
                 self.tt_masked_image_latents_device,
                 self.tt_mask_device,
                 self.tt_prompt_embeds_device,
@@ -218,8 +214,8 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
                 self.extra_step_kwargs,
                 self.guidance_scale,
                 self.scaling_factor,
-                # fix me
-                self.tt_latents_shape,  # should be renamd to something else, but keep for now
+                self.tt_latents_shape,
+                self.tt_image_latents_shape,
                 self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
                 self.batch_size,
                 self.ag_persistent_buffer,
@@ -231,7 +227,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             profiler.end("warmup_run")
 
             if self.pipeline_config.capture_trace:
-                self.__trace_image_processing()
+                self._TtSDXLPipeline__trace_image_processing()
 
             self.image_processing_compiled = True
 
@@ -243,7 +239,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         logger.info("Preparing input tensors for TT model...")
         profiler.start("prepare_input_tensors")
         device_tensors = [
-            self.tt_image_latents_device,
+            self.tt_latents_device,
             self.tt_masked_image_latents_device,
             self.tt_mask_device,
             self.tt_prompt_embeds_device,
@@ -266,8 +262,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             self.ttnn_device,
             self.tt_unet,
             self.tt_scheduler,
-            # fix me
-            self.tt_image_latents_device,
+            self.tt_latents_device,
             self.tt_masked_image_latents_device,
             self.tt_mask_device,
             self.tt_prompt_embeds_device,
@@ -277,8 +272,8 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
-            # fix me
-            self.tt_latents_shape,  # should be renamed to something else, but keep for now
+            self.tt_latents_shape,
+            self.tt_image_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
             self.ag_persistent_buffer,
@@ -298,7 +293,7 @@ class TtSDXLInpaintingPipeline(TtSDXLPipeline):
         if not self.allocated_device_tensors:
             profiler.start("allocate_input_tensors")
 
-            self.tt_image_latents_device = ttnn.allocate_tensor_on_device(
+            self.tt_latents_device = ttnn.allocate_tensor_on_device(
                 tt_image_latents.shape,
                 tt_image_latents.dtype,
                 tt_image_latents.layout,

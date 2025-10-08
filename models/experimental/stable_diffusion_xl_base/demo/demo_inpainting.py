@@ -63,8 +63,7 @@ def run_demo_inference(
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = DiffusionPipeline.from_pretrained(
-        "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",  # for inpainting
-        # "stabilityai/stable-diffusion-xl-base-1.0",
+        "diffusers/stable-diffusion-xl-1.0-inpainting-0.1",
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
@@ -80,7 +79,6 @@ def run_demo_inference(
 
     # First make a demo to run with a lot of prompts and one mask and one image
 
-    print("Using inpainting pipeline :)")
     tt_sdxl = TtSDXLInpaintingPipeline(
         ttnn_device=ttnn_device,
         torch_pipeline=pipeline,
@@ -119,12 +117,9 @@ def run_demo_inference(
     # - masked_image_latents == None
     # - init_image.shape[1] != 4 (in tested cases, it is 3 (RGB))
     masked_image = init_image * (mask < 0.5)
-    is_strength_max = strength == 1.0
-    assert not is_strength_max, "Strength max is not supported for inpainting pipeline atm"
 
     # 1. prepare masked image latents
     # 2. prepare mask latents
-
     (
         tt_image_latents,
         tt_masked_image_latents,
@@ -182,8 +177,8 @@ def run_demo_inference(
             tt_prompt_embeds,
             tt_add_text_embeds,
         ) = tt_sdxl.generate_input_tensors(
-            all_prompt_embeds_torch=torch.randn(batch_size, 2, MAX_SEQUENCE_LENGTH, CONCATENATED_TEXT_EMBEDINGS_SIZE),
-            torch_add_text_embeds=torch.randn(batch_size, 2, TEXT_ENCODER_2_PROJECTION_DIM),
+            all_prompt_embeds_torch=all_prompt_embeds_torch,
+            torch_add_text_embeds=torch_add_text_embeds,
             torch_image=init_image,
             torch_masked_image=masked_image,
             torch_mask=mask,
@@ -229,7 +224,6 @@ def run_demo_inference(
                 img.save(f"output/output{len(images) + start_from}.png")
                 logger.info(f"Image saved to output/output{len(images) + start_from}.png")
 
-    print("Successfuly ran the demo :)")
     return images
 
 
@@ -332,7 +326,6 @@ def test_demo(
     fixed_seed_for_batch,
 ):
     prepare_device(device, use_cfg_parallel)
-    assert vae_on_device == False, "Host VAE is supported for inpainting pipeline atm"
     assert capture_trace == False, "Capture trace is not supported for inpainting pipeline atm"
     return run_demo_inference(
         device,

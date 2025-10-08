@@ -589,8 +589,6 @@ class TtSDXLPipeline(LightweightModule):
     def _prepare_timesteps(self, timesteps=None, sigmas=None):
         # Helper method for timestep preparation.
 
-        print("torch pipeline scheduler is: ", self.torch_pipeline.scheduler)
-
         self.ttnn_timesteps, self.pipeline_config.num_inference_steps = retrieve_timesteps(
             self.torch_pipeline.scheduler, self.pipeline_config.num_inference_steps, self.cpu_device, timesteps, sigmas
         )

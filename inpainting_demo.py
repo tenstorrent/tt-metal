@@ -28,7 +28,6 @@ image = pipe(
     guidance_scale=8.0,
     num_inference_steps=20,  # steps between 15 and 30 work well for us
     strength=0.99,  # make sure to use `strength` below 1.0
-    generator=generator,
 ).images[0]
 
 # Create output directory if it doesn't exist
