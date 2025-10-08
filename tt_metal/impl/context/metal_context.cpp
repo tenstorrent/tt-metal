@@ -659,7 +659,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             }
             // Only send reset to subordinate cores
             // Assert all cores except ERISC0, which is running base firmware.
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL & ~tt::umd::RiscType::ERISC0;
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
             tt::tt_metal::MetalContext::instance().get_cluster().assert_risc_reset_at_core(
                 tt_cxy_pair(device_id, virtual_core), reset_val);
         }
@@ -747,7 +747,7 @@ void MetalContext::assert_cores(chip_id_t device_id) {
             }
             // Stop subordinate
             // Assert all cores except ERISC0, which is running base firmware.
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL & ~tt::umd::RiscType::ERISC0;
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX & ~tt::umd::RiscType::ERISC0;
             cluster_->assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_eth_core), reset_val);
         };
 
@@ -985,7 +985,7 @@ void MetalContext::initialize_firmware(
         case HalProgrammableCoreType::IDLE_ETH: {
             const bool is_idle_eth = core_type == HalProgrammableCoreType::IDLE_ETH;
             const bool is_active_eth = !is_idle_eth;
-            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL;
+            tt::umd::RiscType reset_val = tt::umd::RiscType::ALL_TENSIX;
             if (is_active_eth) {
                 // On idle eth, don't assert ERISC0, which is running base firmware.
                 reset_val &= ~tt::umd::RiscType::ERISC0;
